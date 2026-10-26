@@ -146,9 +146,6 @@ use objc2_metal::{
     MTLVertexStepFunction, MTLViewport, MTLVisibilityResultMode, MTLVisibleFunctionTable,
     MTLVisibleFunctionTableDescriptor, MTLWinding,
 };
-/// The Metal level this side answers at: the host's own, since Metal answers as the release it runs
-/// on.
-const METAL_LEVEL: &str = crate::recording::ORACLE_OS_VERSION;
 
 /// Native Metal, with the objects the case has made.
 pub struct MetalSide {
@@ -2185,7 +2182,6 @@ impl Side for MetalSide {
             device: self.device.name().to_string(),
             driver: "Metal".to_owned(),
             api: "Metal".to_owned(),
-            metal_level: METAL_LEVEL.to_owned(),
         }
     }
 

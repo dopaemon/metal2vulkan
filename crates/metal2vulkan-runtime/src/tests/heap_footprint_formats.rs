@@ -33,14 +33,11 @@ use super::super::texture_descriptor::{
 };
 use super::super::values::{ResourceOptions, StorageMode};
 use crate::heap::SizeAndAlign;
-use crate::MetalLevel;
 use metal2vulkan::metal::{PixelFormat as P, TextureType as T, TextureUsage};
 
-/// The device the probe ran on, as the descriptor rules see it: an Apple GPU answering at macOS
-/// 27.0.1's Metal level.
+/// The device the probe ran on, as the descriptor rules see it: an Apple GPU.
 const APPLE: TextureRules = TextureRules {
     sample_counts: super::super::texture_descriptor::APPLE_SAMPLE_COUNTS,
-    level: MetalLevel::MacOS27_0_1,
 };
 
 /// The sides the 2D sweep walks: every one from 1 to 20, then the powers of two and their
@@ -297,7 +294,7 @@ fn answer(d: &TextureDescriptor) -> SizeAndAlign {
     match d.check_made(Creator::SizeQuery, APPLE) {
         Err(Refused::Nil(_)) => SizeAndAlign {
             size: 0,
-            align: no_texture_alignment(d.pixel_format, d.texture_type, APPLE.level),
+            align: no_texture_alignment(d.pixel_format, d.texture_type),
         },
         Err(refused) => panic!("{:?} {:?}: {refused:?}", d.pixel_format, d.texture_type),
         Ok(layout) => footprint_answer(

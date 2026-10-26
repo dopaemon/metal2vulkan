@@ -544,7 +544,6 @@ mod tests {
     /// shows as the input that moved rather than as a lane that stops passing on one Mac.
     #[test]
     fn metals_recorded_codes_are_the_rule_the_lane_measured() {
-        use metal2vulkan_runtime::MetalLevel;
         let inputs = values();
         for case in all() {
             let Ok(recording) = crate::recording::read(case.name()) else {
@@ -552,7 +551,7 @@ mod tests {
                 continue;
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name));
             let taken = answer
                 .deterministic()

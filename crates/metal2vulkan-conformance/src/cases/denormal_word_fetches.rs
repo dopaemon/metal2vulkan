@@ -493,15 +493,12 @@ mod tests {
     /// recorded answer, so a driver that starts flushing shows as the texel that moved.
     #[test]
     fn metals_recorded_words_are_the_texels_the_lane_pins() {
-        use metal2vulkan_runtime::MetalLevel;
         let case = DenormalWordFetches;
         let Ok(recording) = crate::recording::read(case.name()) else {
             // Recorded in a later commit of this batch.
             return;
         };
-        let answer = recording
-            .answer(MetalLevel::NEWEST)
-            .unwrap_or_else(|why| panic!("{why}"));
+        let answer = recording.answer().unwrap_or_else(|why| panic!("{why}"));
         let taken = answer.deterministic().expect("one outcome");
         let words = taken.root.child("words").expect("the words site");
         let read = |name: &str| -> Vec<u32> {

@@ -33,7 +33,7 @@
 #
 #   case        the case's name.
 #   venue       `*` for every venue, or words held (without case, as a substring) against the
-#               venue's own description: its device name, driver, API version and Metal level.
+#               venue's own description: its device name, driver and API version.
 #               `*` is the STRONGER claim, not the looser one -- the second direction then holds
 #               the row on every venue the run selected the case on -- so widening a row's scope
 #               makes it harder to satisfy, which is what stops a venue-scoped row from becoming a

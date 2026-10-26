@@ -51,8 +51,9 @@
 //!   7x5x3 and 8x8x2): a PVRTC texture is square with a power-of-two side, and a 4:2:2 one has
 //!   an even width. Metal stops either at creation, validation on or off. No other format has
 //!   an extent rule there: the other compressed formats take 1x1, 3x3 and 7x5 textures.
-//! - A format the device's Metal level does not describe ([`MetalLevel::describes`](crate::MetalLevel::describes),
-//!   [`TextureRules::level`]) takes no texture: Metal's validation stops it from the device's
+//! - A format Metal does not describe ([`Device::pixel_format_info`](crate::Device::pixel_format_info)
+//!   answers [`PixelFormatInfo::INVALID`](crate::PixelFormatInfo::INVALID)) takes no texture:
+//!   Metal's validation stops it from the device's
 //!   creator as it stops `Invalid` ("has invalid pixelFormat"), and the runtime stops it from every
 //!   creator and the heap size query alike.
 
@@ -61,7 +62,7 @@ use super::capabilities::sample_count_supported;
 use super::copy_plan::block_extent;
 use super::error::{invalid, nil, Error, Problem, RuntimeGap};
 use super::image_plan::block_family;
-use super::metal_level::MetalLevel;
+use super::pixel_format_info::describes;
 use super::resource_ids::IdPlacement;
 use super::values::{ResourceOptions, StorageMode};
 use metal2vulkan::metal::format::{
@@ -403,9 +404,9 @@ impl TextureDescriptor {
         let ty = self.texture_type;
         let multisample = matches!(ty, T::Type2DMultisample | T::Type2DMultisampleArray);
         let pf = self.pixel_format;
-        // Plain Metal ends its process over a texture of a format its release describes none of,
-        // as it does over `Invalid`, before any other rule (`TextureProblem::NotAFormat`).
-        if !rules.level.describes(pf) {
+        // Plain Metal ends its process over a texture of a format it describes none of, as it
+        // does over `Invalid`, before any other rule (`TextureProblem::NotAFormat`).
+        if !describes(pf) {
             return Err(TextureProblem::NotAFormat.into());
         }
         // Metal stops a two-plane YCbCr multisample texture, plain too ("does not support
@@ -653,8 +654,9 @@ pub(super) struct TextureLayout {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureProblem {
-    /// `Invalid`, or a format the device's Metal level describes none of
-    /// ([`MetalLevel::describes`](crate::MetalLevel::describes)): plain Metal's own descriptor
+    /// `Invalid`, or a format Metal describes none of
+    /// ([`Device::pixel_format_info`](crate::Device::pixel_format_info) answers
+    /// [`PixelFormatInfo::INVALID`](crate::PixelFormatInfo::INVALID)): plain Metal's own descriptor
     /// validation ends its process over either, the API validation layer off.
     /// `newTextureWithDescriptor:` and `heapTextureSizeAndAlignWithDescriptor:` both assert in
     /// `-[MTLTextureDescriptorInternal validateWithDevice:]` ("MTLTextureDescriptor has invalid
@@ -1056,8 +1058,6 @@ fn type_for_format(pf: PixelFormat, ty: TextureType) -> Result<(), Refused> {
 pub(super) struct TextureRules {
     /// The sample counts its textures take (`supportsTextureSampleCount:`).
     pub(super) sample_counts: SampleCountFlags,
-    /// The Metal level it answers at, whose formats a texture takes.
-    pub(super) level: MetalLevel,
 }
 
 /// The sample counts an Apple GPU's textures take: 1, 2 and 4 (an M3 Max under macOS 26.7 and an

@@ -46,9 +46,9 @@ use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferError, CommandBufferStatus,
     ComputeCommandEncoder, ComputePipelineState, Degradation, Device, Error, EventRef,
-    HeapDescriptor, HeapType, IndirectCommandBuffer, IndirectCommandBufferDescriptor, Invalid,
-    LoadAction, MetalLevel, Origin, PipelineOptions, Problem, RenderPassDescriptor,
-    ResourceOptions, Size, StoreAction, TextureDescriptor,
+    HeapDescriptor, HeapType, IndirectCommandBuffer, IndirectCommandBufferDescriptor, LoadAction,
+    Origin, PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction,
+    TextureDescriptor,
 };
 use std::sync::Arc;
 
@@ -223,22 +223,6 @@ fn complete(command_buffer: &CommandBuffer) {
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-}
-
-/// Run `test` on a validated device at Metal level `level`, then require that the layer reported
-/// nothing.
-fn on_device_at(level: MetalLevel, test: impl FnOnce(&Device)) {
-    let cache = ScratchCache::new().unwrap();
-    let messages = Messages::default();
-    {
-        let at = |options: &mut metal2vulkan_runtime::DeviceOptions| {
-            options.metal_level = Some(level);
-        };
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at).unwrap();
-        println!("PRD device {} at {level}", device.name());
-        test(&device);
-    }
-    layer_reported_nothing_at_all(&messages);
 }
 
 /// Run `test` on a validated device, then, where it has device addresses, on one made without
@@ -1834,75 +1818,70 @@ fn a_loop_without_bound_runs_on_after_its_queue_is_let_go() {
     });
 }
 
-/// The shapes of [`a_runs_first_indirect_dispatch_of_another_type_ends_the_process_at_26_7`]:
-/// each the consumer's name for it, its script, and the tag of the dispatch at which macOS 26.7
-/// ends the process (`None`: it runs on).
-const INDIRECT_SHAPES: [(&str, &str, Option<u32>); 18] = [
-    ("C Direct, S G", "% T1 | G2", Some(2)),
-    ("C Direct, S T", "% T1 | H2", Some(2)),
-    ("S Direct, C G", "| T1 % G2", Some(2)),
-    ("S Direct, C T", "| T1 % H2", Some(2)),
-    ("C Direct, type 0 G", "% T1 | G2", Some(2)),
-    ("C nothing, S G", "% | G2", Some(2)),
-    ("C Direct, S Direct, S G", "% T1 | T2 | G3", Some(3)),
-    ("C G, S Direct", "% G1 | T2", None),
-    ("C Direct, C G", "% T1 % G2", None),
-    ("S Direct, S G", "| T1 | G2", None),
-    ("type 2 Direct, S G", "| T1 | G2", None),
-    ("C Direct, Blit, S G", "% T1 B | G2", None),
-    ("C Direct, Signal, S G", "% T1 S | G2", None),
-    ("C Direct, Wait, S G", "% T1 A | G2", None),
-    ("C G, S Direct, S G", "% G1 | T2 | G3", None),
-    ("S Direct, C Direct, S G", "| T1 % T2 | G3", None),
-    ("S G, C T", "| G1 % H2", None),
-    ("C G, S Direct, C G", "% G1 | T2 % G3", None),
+/// The shapes of [`a_runs_first_indirect_dispatch_of_another_type_runs_every_dispatch`]: each
+/// the consumer's name for it and its script.
+const INDIRECT_SHAPES: [(&str, &str); 18] = [
+    ("C Direct, S G", "% T1 | G2"),
+    ("C Direct, S T", "% T1 | H2"),
+    ("S Direct, C G", "| T1 % G2"),
+    ("S Direct, C T", "| T1 % H2"),
+    ("C Direct, type 0 G", "% T1 | G2"),
+    ("C nothing, S G", "% | G2"),
+    ("C Direct, S Direct, S G", "% T1 | T2 | G3"),
+    ("C G, S Direct", "% G1 | T2"),
+    ("C Direct, C G", "% T1 % G2"),
+    ("S Direct, S G", "| T1 | G2"),
+    ("type 2 Direct, S G", "| T1 | G2"),
+    ("C Direct, Blit, S G", "% T1 B | G2"),
+    ("C Direct, Signal, S G", "% T1 S | G2"),
+    ("C Direct, Wait, S G", "% T1 A | G2"),
+    ("C G, S Direct, S G", "% G1 | T2 | G3"),
+    ("S Direct, C Direct, S G", "| T1 % T2 | G3"),
+    ("S G, C T", "| G1 % H2"),
+    ("C G, S Direct, C G", "% G1 | T2 % G3"),
 ];
 
 /// A run of compute encoders' first indirect dispatch in an encoder of another dispatch type than
-/// the run's first encoder's, at each Metal level, with no predication record: at `MacOS26_7` the
-/// 7 of the consumer's 18 shapes (its M3 Max under macOS 26.7) whose process ended at that
-/// dispatch are refused there (`Invalid`, `Problem::IndirectDispatchOfAnotherType`), recording
-/// nothing, and the 11 others run every dispatch; at `MacOS27_0_1` all 18 run every dispatch, as
-/// our M3 Max probe's 12 such shapes ran. `|` and `%` open a serial and a concurrent encoder (Metal
-/// counts a raw type that is neither as serial, so the consumer's types 0 and 2 are `|`); `Tn`
-/// marks `n` directly, `Gn` and `Hn` by the two indirect dispatches; `B` encodes a blit, `S` an
-/// event signal and `A` an event wait between.
+/// the run's first encoder's, with no predication record, runs every dispatch: each of the
+/// consumer's 18 shapes, as our M3 Max probe's 12 such shapes ran (macOS 27.0.1). `|` and `%` open
+/// a serial and a concurrent encoder (Metal counts a raw type that is neither as serial, so the
+/// consumer's types 0 and 2 are `|`); `Tn` marks `n` directly, `Gn` and `Hn` by the two indirect
+/// dispatches; `B` encodes a blit, `S` an event signal and `A` an event wait between.
 #[test]
-fn a_runs_first_indirect_dispatch_of_another_type_ends_the_process_at_26_7() {
-    for level in [MetalLevel::MacOS26_7, MetalLevel::MacOS27_0_1] {
-        on_device_at(level, |device| {
-            let streams = Streams::new(device);
-            let event = device.new_shared_event().unwrap();
-            event.set_signaled_value(5);
-            for (name, script, dies) in INDIRECT_SHAPES {
-                let dies = dies.filter(|_| level == MetalLevel::MacOS26_7);
-                let (ran, refused) = run_shape(&streams, &event, script);
-                let tags: Vec<u32> = (script.split_whitespace())
-                    .filter_map(|token| token[1..].parse().ok())
-                    .collect();
-                let expected = match dies {
-                    Some(at) => (tags.into_iter().filter(|&tag| tag < at).collect(), Some(at)),
-                    None => (tags, None),
-                };
-                assert_eq!((ran, refused), expected, "{level}: {name} `{script}`");
-            }
-        });
+fn a_runs_first_indirect_dispatch_of_another_type_runs_every_dispatch() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        println!("PRD device {}", device.name());
+        let streams = Streams::new(&device);
+        let event = device.new_shared_event().unwrap();
+        event.set_signaled_value(5);
+        for (name, script) in INDIRECT_SHAPES {
+            let tags: Vec<u32> = (script.split_whitespace())
+                .filter_map(|token| token[1..].parse().ok())
+                .collect();
+            assert_eq!(
+                run_shape(&streams, &event, script),
+                tags,
+                "{name} `{script}`"
+            );
+        }
     }
+    layer_reported_nothing_at_all(&messages);
 }
 
-/// [`a_runs_first_indirect_dispatch_of_another_type_ends_the_process_at_26_7`]'s run of `script`:
-/// the tags that ran, and the tag of the indirect dispatch refused as Metal's process end, after
-/// which nothing more is encoded (the encoder ends and the command buffer commits).
+/// [`a_runs_first_indirect_dispatch_of_another_type_runs_every_dispatch`]'s run of `script`: the
+/// tags that ran.
 fn run_shape(
     streams: &Streams,
     event: &metal2vulkan_runtime::SharedEvent,
     script: &str,
-) -> (Vec<u32>, Option<u32>) {
+) -> Vec<u32> {
     let marks = &streams.marks;
     write_words(&marks.log, &[0; LOG_WORDS]);
     let command_buffer = streams.queue.command_buffer().unwrap();
     let mut open: Option<ComputeCommandEncoder> = None;
-    let mut refused = None;
     for token in script.split_whitespace() {
         if matches!(token, "|" | "%" | "B" | "S" | "A") {
             if let Some(encoder) = open.take() {
@@ -1941,17 +1920,7 @@ fn run_shape(
                     "G" => encoder.dispatch_threadgroups_indirect(&streams.arguments, 0, one()),
                     _ => encoder.dispatch_threads_indirect(&streams.arguments, 16),
                 };
-                match dispatched {
-                    Ok(()) => {}
-                    Err(Error::Invalid(Invalid {
-                        problem: Problem::IndirectDispatchOfAnotherType,
-                        ..
-                    })) => {
-                        refused = Some(tag);
-                        break;
-                    }
-                    Err(error) => panic!("{script}: {error:?}"),
-                }
+                dispatched.unwrap_or_else(|error| panic!("{script}: {error:?}"));
             }
         }
     }
@@ -1960,8 +1929,7 @@ fn run_shape(
     }
     complete(&command_buffer);
     let counts = marks.counts();
-    let ran = (0..LOG_WORDS as u32)
+    (0..LOG_WORDS as u32)
         .filter(|&tag| counts[tag as usize] != 0)
-        .collect();
-    (ran, refused)
+        .collect()
 }

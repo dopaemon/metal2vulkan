@@ -5,29 +5,23 @@
 //! that hold the format's block (for a compressed format: its block's bytes, width, height and
 //! depth). Private Metal is Metal: a program that asks it gets Metal's answer.
 //!
-//! The answers are our own measurements on an Apple M3 Max (at macOS 26.7 and 27.0.1: every raw
-//! value from 0 to 2047, plain Metal), one table per [`MetalLevel`]. Both releases describe the
-//! same 264 values, with the same names and four words; the cast classes are numbered anew at
-//! 27.0.1 (classes were inserted, the order kept), and the flags of five formats differ (the
-//! `_sRGB`, `_PQ` and `_HLG` forms of `RGB10A2Unorm` and `BGR10A2Unorm`). An Apple M4 at 27.0.1
-//! answers the M3 Max's every one of those, and also describes the 16 values from 630 to 645,
-//! which the runtime does not (`docs/FAST-PATHS.md`, known gaps). A value a level does not
-//! describe answers [`PixelFormatInfo::INVALID`], as Metal answers it: `MTLPixelFormatInvalid`,
-//! every word 0.
+//! The answers are our own measurements on an Apple M3 Max at the release every device answers as
+//! (`metal_release.rs`; every raw value from 0 to 2047, plain Metal): 264 values described. An
+//! Apple M4 at that release answers the M3 Max's every one of those, and also describes the 16
+//! values from 630 to 645, which the runtime does not (`docs/FAST-PATHS.md`, known gaps). A value
+//! the table does not describe answers [`PixelFormatInfo::INVALID`], as Metal answers it:
+//! `MTLPixelFormatInvalid`, every word 0.
 //!
-//! The answer is Metal's description of the format on an Apple GPU at the level's release, which
-//! the device answers as ([`DeviceProperties::metal_level`](crate::DeviceProperties::metal_level)).
-//! Its flags are Apple's, whose bits no document names: they state what Metal does with the format
-//! on that GPU, not what this Vulkan device does. The device's own answers are its typed queries
-//! ([`Device::pixel_format_capabilities`], the creators' refusals).
+//! The answer is Metal's description of the format on an Apple GPU, which every device answers
+//! as. Its flags are Apple's, whose bits no document names: they state what Metal does with the
+//! format on that GPU, not what this Vulkan device does. The device's own answers are its typed
+//! queries ([`Device::pixel_format_capabilities`], the creators' refusals).
 //!
-//! [`MetalLevel::describes`] reads it: a level describes a format exactly where the table has a
-//! row for it at that level.
+//! `describes` reads it: Metal describes a format exactly where the table has a row for it.
 //!
 //! `MTLGetTextureLevelInfoForDeviceWithOptions`, Metal's layout of one level of a texture, is
-//! computed from the description ([`MetalLevel::texture_level_info`]).
+//! computed from the description ([`Device::texture_level_info`]).
 
-use crate::metal_level::MetalLevel;
 use crate::Device;
 use metal2vulkan::metal::PixelFormat;
 use PixelFormat as P;
@@ -75,44 +69,69 @@ impl PixelFormatInfo {
     }
 }
 
-impl MetalLevel {
-    /// `MTLPixelFormatGetInfoForDevice(device, raw)` as the level's release answers it on its
-    /// Apple GPU (the module docs): the measured row for `raw`, else
-    /// [`PixelFormatInfo::INVALID`].
-    pub fn pixel_format_info(self, raw: u64) -> PixelFormatInfo {
-        let Ok(index) = DESCRIBED.binary_search_by_key(&raw, |row| u64::from(row.format.as_raw()))
-        else {
-            return PixelFormatInfo::INVALID;
-        };
-        let row = &DESCRIBED[index];
-        let At { flags, cast_class } = match self {
-            MetalLevel::MacOS26_7 => row.macos_26_7,
-            MetalLevel::MacOS27_0_1 => row.macos_27_0_1,
-        };
-        PixelFormatInfo {
-            name: row.format.name(),
-            flags: u64::from(flags),
-            cast_class: u64::from(cast_class),
-            words: row.words.map(u64::from),
-        }
+/// `MTLPixelFormatGetInfoForDevice(device, raw)` as Metal answers it on its Apple GPU (the module
+/// docs): the measured row for `raw`, else [`PixelFormatInfo::INVALID`].
+pub(crate) fn pixel_format_info(raw: u64) -> PixelFormatInfo {
+    let Ok(index) = DESCRIBED.binary_search_by_key(&raw, |row| u64::from(row.format.as_raw()))
+    else {
+        return PixelFormatInfo::INVALID;
+    };
+    let row = &DESCRIBED[index];
+    PixelFormatInfo {
+        name: row.format.name(),
+        flags: u64::from(row.flags),
+        cast_class: u64::from(row.cast_class),
+        words: row.words.map(u64::from),
     }
+}
+
+/// Whether Metal describes `pf`: `MTLPixelFormatGetInfoForDevice` answers a format for it
+/// ([`pixel_format_info`], the measured table, which holds no row for `Invalid`). Plain Metal ends
+/// its process over every texture of a format it describes none of, and its alignment queries
+/// assert on one, which the runtime answers alike (`Invalid`, `TextureProblem::NotAFormat` and
+/// `BufferTextureProblem::NotLinear`), and so does its render pipeline descriptor's validation for
+/// an attachment of one ("is not a valid MTLPixelFormat", `Problem::AttachmentNotAFormat`). An
+/// Apple GPU, whose Metal every device answers as, describes neither `Depth24Unorm_Stencil8` nor
+/// `X24_Stencil8` (an M4 stops a texture, a depth and a stencil attachment of each as of no
+/// format; our probe and the consumer's M3 run), so `isDepth24Stencil8PixelFormatSupported`
+/// answers no.
+pub(crate) fn describes(pf: PixelFormat) -> bool {
+    pixel_format_info(u64::from(pf.as_raw())).describes_a_format()
 }
 
 impl Device {
     /// `MTLPixelFormatGetInfoForDevice(device, raw)` (Apple SPI): Metal's description of the raw
-    /// pixel format value `raw` at the device's Metal level
-    /// ([`MetalLevel::pixel_format_info`]). Any value is taken, as Metal takes any: one it
-    /// describes no format for answers [`PixelFormatInfo::INVALID`]. The flags are those of
-    /// Apple's GPU at that release, not this device's (the module docs).
+    /// pixel format value `raw` on an Apple GPU at the release every device answers as (the
+    /// module docs). Any value is taken, as Metal takes any: one it describes no format for
+    /// answers [`PixelFormatInfo::INVALID`]. The flags are those of Apple's GPU, not this
+    /// device's.
     pub fn pixel_format_info(&self, raw: u64) -> PixelFormatInfo {
-        self.properties().metal_level.pixel_format_info(raw)
+        pixel_format_info(raw)
     }
 
     /// `MTLGetTextureLevelInfoForDeviceWithOptions(device, ...)` (Apple SPI): the layout Metal
-    /// gives one level of a texture, at the device's Metal level
-    /// ([`MetalLevel::texture_level_info`]).
+    /// gives one level of a texture on an Apple GPU, computed from the format's description
+    /// ([`Device::pixel_format_info`]) by the rule our probes fit with no exception, alike on an
+    /// Apple M3 Max under macOS 26.7 and an Apple M4 under 27.0.1 (on each: every described
+    /// format over 20 sizes; 16 formats over levels 0 to 17, 31, 32, 63, 64, 1000 and 2^32 by
+    /// six plane values, eight shapes each; every value `PixelFormat` names by plane values 0 to
+    /// 7 at four shapes; values no format has; zero sizes; 34, 306 and 34, 626 answers):
+    ///
+    /// - the level's size is the texture's shifted right by the level's low 6 bits (Metal shifts
+    ///   by the level modulo 64), each at least 1 (a 0 is 1);
+    /// - a block is the block of a format whose flags hold bit `0x400` (the description's second
+    ///   and third words), else one texel; the blocks cover the size rounded up, as
+    ///   `(extent + block - 1) / block` with an add that wraps (a 4-wide block's count at a width
+    ///   of `u64::MAX` is 0);
+    /// - a block's bytes are the description's first word (0 for a value it describes no format
+    ///   of), but where the depth-and-stencil formats answer by the plane argument (`planes`:
+    ///   `Depth32Float_Stencil8` and `Depth24Unorm_Stencil8` 0 for 0, 4 for 1, 1 for 2;
+    ///   `X24_Stencil8` 1 for 0 and 2), times the array length;
+    /// - a row is the blocks across times a block's bytes, an image the rows, the level the
+    ///   images times its depth, and the size the blocks cover the blocks times the block, all
+    ///   in 64-bit arithmetic that wraps.
     pub fn texture_level_info(&self, query: &TextureLevelQuery) -> TextureLevelInfo {
-        self.properties().metal_level.texture_level_info(query)
+        texture_level_info(query)
     }
 }
 
@@ -120,7 +139,7 @@ impl Device {
 /// Metal's order. Metal's argument list, so it does not grow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextureLevelQuery {
-    /// The raw pixel format value (any value, as for [`MetalLevel::pixel_format_info`]).
+    /// The raw pixel format value (any value, as for [`Device::pixel_format_info`]).
     pub pixel_format: u64,
     /// The texture's width.
     pub width: u64,
@@ -133,7 +152,7 @@ pub struct TextureLevelQuery {
     /// The mipmap level (the sixth argument).
     pub level: u64,
     /// Which plane of a depth-and-stencil format (the seventh argument): 1 its depth, 2 its
-    /// stencil (`MetalLevel::texture_level_info` says how each format answers it).
+    /// stencil ([`Device::texture_level_info`] says how each format answers it).
     pub planes: u64,
 }
 
@@ -230,66 +249,45 @@ fn plane_bytes(format: Option<PixelFormat>, planes: u64, described: u64) -> u64 
     }
 }
 
-impl MetalLevel {
-    /// `MTLGetTextureLevelInfoForDeviceWithOptions` as the level's release answers it on its
-    /// Apple GPU: computed from the format's description ([`MetalLevel::pixel_format_info`]) by
-    /// the rule our probes fit with no exception, alike on an Apple M3 Max under macOS 26.7 and an
-    /// Apple M4 under 27.0.1 (on each: every described format over 20
-    /// sizes; 16 formats over levels 0 to 17, 31, 32, 63, 64, 1000 and 2^32 by six plane values,
-    /// eight shapes each; every value `PixelFormat` names by plane values 0 to 7 at four shapes;
-    /// values no format has; zero sizes; 34, 306 and 34, 626 answers):
-    ///
-    /// - the level's size is the texture's shifted right by the level's low 6 bits (Metal shifts
-    ///   by the level modulo 64), each at least 1 (a 0 is 1);
-    /// - a block is the block of a format whose flags hold bit `0x400` (the description's second
-    ///   and third words), else one texel; the blocks cover the size rounded up, as
-    ///   `(extent + block - 1) / block` with an add that wraps (a 4-wide block's count at a width
-    ///   of `u64::MAX` is 0);
-    /// - a block's bytes are the description's first word (0 for a value it describes no format
-    ///   of), but where the depth-and-stencil formats answer by the plane argument (`planes`:
-    ///   `Depth32Float_Stencil8` and `Depth24Unorm_Stencil8` 0 for 0, 4 for 1, 1 for 2;
-    ///   `X24_Stencil8` 1 for 0 and 2), times the array length;
-    /// - a row is the blocks across times a block's bytes, an image the rows, the level the
-    ///   images times its depth, and the size the blocks cover the blocks times the block, all
-    ///   in 64-bit arithmetic that wraps.
-    pub fn texture_level_info(self, query: &TextureLevelQuery) -> TextureLevelInfo {
-        let info = self.pixel_format_info(query.pixel_format);
-        let shift = query.level & 63;
-        let at_level = |extent: u64| (extent >> shift).max(1);
-        let (width, height, depth) = (
-            at_level(query.width),
-            at_level(query.height),
-            at_level(query.depth),
-        );
-        let (block_width, block_height) = if info.flags & BLOCKS != 0 {
-            (info.words[1].max(1), info.words[2].max(1))
-        } else {
-            (1, 1)
-        };
-        let format = u32::try_from(query.pixel_format)
-            .ok()
-            .and_then(|raw| PixelFormat::try_from(raw).ok());
-        let block_bytes = plane_bytes(format, query.planes, info.words[0]);
-        let blocks_across = blocks(width, block_width);
-        let blocks_down = blocks(height, block_height);
-        let bytes_per_block = block_bytes.wrapping_mul(query.array_length);
-        let bytes_per_row = blocks_across.wrapping_mul(bytes_per_block);
-        let bytes_per_image = bytes_per_row.wrapping_mul(blocks_down);
-        TextureLevelInfo {
-            width,
-            height,
-            depth,
-            blocks_across,
-            blocks_down,
-            blocks_deep: depth,
-            aligned_width: blocks_across.wrapping_mul(block_width),
-            aligned_height: blocks_down.wrapping_mul(block_height),
-            aligned_depth: depth,
-            bytes_per_block,
-            bytes_per_row,
-            bytes_per_image,
-            bytes: bytes_per_image.wrapping_mul(depth),
-        }
+/// `MTLGetTextureLevelInfoForDeviceWithOptions` as Metal answers it on its Apple GPU
+/// ([`Device::texture_level_info`] says how).
+pub(crate) fn texture_level_info(query: &TextureLevelQuery) -> TextureLevelInfo {
+    let info = pixel_format_info(query.pixel_format);
+    let shift = query.level & 63;
+    let at_level = |extent: u64| (extent >> shift).max(1);
+    let (width, height, depth) = (
+        at_level(query.width),
+        at_level(query.height),
+        at_level(query.depth),
+    );
+    let (block_width, block_height) = if info.flags & BLOCKS != 0 {
+        (info.words[1].max(1), info.words[2].max(1))
+    } else {
+        (1, 1)
+    };
+    let format = u32::try_from(query.pixel_format)
+        .ok()
+        .and_then(|raw| PixelFormat::try_from(raw).ok());
+    let block_bytes = plane_bytes(format, query.planes, info.words[0]);
+    let blocks_across = blocks(width, block_width);
+    let blocks_down = blocks(height, block_height);
+    let bytes_per_block = block_bytes.wrapping_mul(query.array_length);
+    let bytes_per_row = blocks_across.wrapping_mul(bytes_per_block);
+    let bytes_per_image = bytes_per_row.wrapping_mul(blocks_down);
+    TextureLevelInfo {
+        width,
+        height,
+        depth,
+        blocks_across,
+        blocks_down,
+        blocks_deep: depth,
+        aligned_width: blocks_across.wrapping_mul(block_width),
+        aligned_height: blocks_down.wrapping_mul(block_height),
+        aligned_depth: depth,
+        bytes_per_block,
+        bytes_per_row,
+        bytes_per_image,
+        bytes: bytes_per_image.wrapping_mul(depth),
     }
 }
 
@@ -300,321 +298,301 @@ fn blocks(extent: u64, block: u64) -> u64 {
     extent.wrapping_add(block - 1) / block
 }
 
-/// The flags bit Metal sets on exactly the formats of blocks in both levels' tables (every BC,
-/// ETC2, EAC, ASTC and PVRTC format, and the 4:2:2 formats `GBGR422` and `BGRG422`, whose blocks
-/// are 2 by 1), whose description's words are then the block's.
+/// The flags bit Metal sets on exactly the formats of blocks in the table (every BC, ETC2, EAC,
+/// ASTC and PVRTC format, and the 4:2:2 formats `GBGR422` and `BGRG422`, whose blocks are 2 by 1),
+/// whose description's words are then the block's.
 const BLOCKS: u64 = 0x400;
 
-/// The flags bits Metal sets on exactly its depth (`0x20`) and stencil (`0x40`) formats in both
-/// levels' tables: `Depth16Unorm`, `Depth32Float`, `Stencil8`, `Depth32Float_Stencil8`,
-/// `X32_Stencil8`, `AnyDepth` and `AnyStencil`.
+/// The flags bits Metal sets on exactly its depth (`0x20`) and stencil (`0x40`) formats in the
+/// table: `Depth16Unorm`, `Depth32Float`, `Stencil8`, `Depth32Float_Stencil8`, `X32_Stencil8`,
+/// `AnyDepth` and `AnyStencil`.
 const DEPTH_OR_STENCIL: u64 = 0x60;
 
-/// One level's flags and cast class of a described format.
-#[derive(Clone, Copy)]
-struct At {
+/// One format's measured description: its four words, its flags and its cast class.
+struct Described {
+    format: PixelFormat,
+    words: [u16; 4],
     flags: u32,
     cast_class: u8,
 }
 
-/// One format's measured description: its four words, alike at every level, and its flags and
-/// cast class at each level.
-struct Described {
-    format: PixelFormat,
-    words: [u16; 4],
-    macos_26_7: At,
-    macos_27_0_1: At,
-}
-
 /// A row of [`DESCRIBED`].
-const fn d(
-    format: PixelFormat,
-    words: [u16; 4],
-    macos_26_7: (u32, u8),
-    macos_27_0_1: (u32, u8),
-) -> Described {
+const fn d(format: PixelFormat, words: [u16; 4], flags: u32, cast_class: u8) -> Described {
     Described {
         format,
         words,
-        macos_26_7: At {
-            flags: macos_26_7.0,
-            cast_class: macos_26_7.1,
-        },
-        macos_27_0_1: At {
-            flags: macos_27_0_1.0,
-            cast_class: macos_27_0_1.1,
-        },
+        flags,
+        cast_class,
     }
 }
 
-/// Every format the measured levels describe, by raw value (an Apple M3 Max at macOS 26.7, build
-/// 25G229, and at 27.0.1, build 26A434, whose answers are an Apple M4's but for the 16 values from
-/// 630 to 645), each as `d(format, words, (flags, castClass) at 26.7, (flags, castClass) at
-/// 27.0.1)`. Sorted by raw value (`pixel_format_info` searches it).
+/// Every format Metal describes, by raw value (an Apple M3 Max at macOS 27.0.1, build 26A434,
+/// whose answers are an Apple M4's but for the 16 values from 630 to 645), each as
+/// `d(format, words, flags, castClass)`. Sorted by raw value (`pixel_format_info` searches it).
 #[rustfmt::skip]
 const DESCRIBED: &[Described] = &[
-    d(P::A8Unorm, [1, 257, 1, 1], (0x0403019f, 1), (0x0403019f, 1)),
-    d(P::R8Unorm, [1, 257, 1, 1], (0x0703019f, 1), (0x0703019f, 1)),
-    d(P::R8UnormSRGB, [1, 257, 1, 1], (0x0703099f, 1), (0x0703099f, 1)),
-    d(P::R8Snorm, [1, 257, 1, 1], (0x0403019f, 1), (0x0403019f, 1)),
-    d(P::R8Uint, [1, 257, 1, 1], (0x04280113, 1), (0x04280113, 1)),
-    d(P::R8Sint, [1, 257, 1, 1], (0x04140113, 1), (0x04140113, 1)),
-    d(P::R16Unorm, [2, 513, 2, 2], (0x0703019f, 2), (0x0703019f, 2)),
-    d(P::R16Snorm, [2, 513, 2, 2], (0x0703019f, 2), (0x0703019f, 2)),
-    d(P::R16Uint, [2, 513, 2, 2], (0x07280113, 2), (0x07280113, 2)),
-    d(P::R16Sint, [2, 513, 2, 2], (0x07140113, 2), (0x07140113, 2)),
-    d(P::R16Float, [2, 513, 2, 2], (0x0703019f, 2), (0x0703019f, 2)),
-    d(P::R16Bfloat, [2, 513, 2, 2], (0x00030013, 2), (0x00030013, 2)),
-    d(P::RG8Unorm, [2, 258, 2, 2], (0x0503019f, 2), (0x0503019f, 2)),
-    d(P::RG8UnormSRGB, [2, 258, 2, 2], (0x0503099f, 2), (0x0503099f, 2)),
-    d(P::RG8Snorm, [2, 258, 2, 2], (0x0503019f, 2), (0x0503019f, 2)),
-    d(P::RG8Uint, [2, 258, 2, 2], (0x05280113, 2), (0x05280113, 2)),
-    d(P::RG8Sint, [2, 258, 2, 2], (0x05140113, 2), (0x05140113, 2)),
-    d(P::B5G6R5Unorm, [2, 515, 6, 6], (0x0003019d, 2), (0x0003019d, 2)),
-    d(P::A1BGR5Unorm, [2, 516, 8, 8], (0x0003019d, 2), (0x0003019d, 2)),
-    d(P::ABGR4Unorm, [2, 516, 8, 8], (0x0003019d, 2), (0x0003019d, 2)),
-    d(P::BGR5A1Unorm, [2, 516, 8, 8], (0x0003019d, 2), (0x0003019d, 2)),
-    d(P::BGRA4Unorm, [2, 516, 8, 8], (0x0003019d, 2), (0x0003019d, 2)),
-    d(P::R32Uint, [4, 1025, 4, 4], (0x04080113, 3), (0x04080113, 4)),
-    d(P::R32Sint, [4, 1025, 4, 4], (0x04040113, 3), (0x04040113, 4)),
-    d(P::R32Float, [4, 1025, 4, 4], (0x0403019f, 3), (0x0403019f, 4)),
-    d(P::RG16Unorm, [4, 514, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RG16Snorm, [4, 514, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RG16Uint, [4, 514, 4, 4], (0x07280113, 3), (0x07280113, 4)),
-    d(P::RG16Sint, [4, 514, 4, 4], (0x07140113, 3), (0x07140113, 4)),
-    d(P::RG16Float, [4, 514, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RG16Bfloat, [4, 514, 4, 4], (0x00030013, 3), (0x00030013, 4)),
-    d(P::RGBA8Unorm, [4, 260, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RGBA8UnormSRGB, [4, 260, 4, 4], (0x0703099f, 3), (0x0703099f, 4)),
-    d(P::RGBA8Snorm, [4, 260, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RGBA8Uint, [4, 260, 4, 4], (0x07280113, 3), (0x07280113, 4)),
-    d(P::RGBA8Sint, [4, 260, 4, 4], (0x07140113, 3), (0x07140113, 4)),
-    d(P::BGRA8Unorm, [4, 260, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::BGRA8UnormSRGB, [4, 260, 4, 4], (0x0703099f, 3), (0x0703099f, 4)),
-    d(P::ARGB8Unorm, [4, 260, 4, 4], (0x0003019f, 3), (0x0003019f, 4)),
-    d(P::ARGB8UnormSRGB, [4, 260, 4, 4], (0x0003099f, 3), (0x0003099f, 4)),
-    d(P::RGB10A2Unorm, [4, 1028, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RGB10A2Uint, [4, 516, 8, 8], (0x07280113, 3), (0x07280113, 4)),
-    d(P::RG11B10Float, [4, 1027, 4, 4], (0x0003019f, 3), (0x0003019f, 4)),
-    d(P::RGB9E5Float, [4, 1027, 4, 4], (0x0003819f, 3), (0x0003819f, 4)),
-    d(P::BGR10A2Unorm, [4, 1028, 4, 4], (0x0703019f, 3), (0x0703019f, 4)),
-    d(P::RG32Uint, [8, 1026, 8, 8], (0x24080113, 4), (0x24080113, 6)),
-    d(P::RG32Sint, [8, 1026, 8, 8], (0x04040113, 4), (0x04040113, 6)),
-    d(P::RG32Float, [8, 1026, 8, 8], (0x0403019f, 4), (0x0403019f, 6)),
-    d(P::RGBA16Unorm, [8, 516, 8, 8], (0x0703019f, 4), (0x0703019f, 6)),
-    d(P::RGBA16Snorm, [8, 516, 8, 8], (0x0703019f, 4), (0x0703019f, 6)),
-    d(P::RGBA16Uint, [8, 516, 8, 8], (0x07280113, 4), (0x07280113, 6)),
-    d(P::RGBA16Sint, [8, 516, 8, 8], (0x07140113, 4), (0x07140113, 6)),
-    d(P::RGBA16Float, [8, 516, 8, 8], (0x0703019f, 4), (0x0703019f, 6)),
-    d(P::RGBA16Bfloat, [8, 516, 8, 8], (0x00030013, 4), (0x00030013, 6)),
-    d(P::RGBA32Uint, [16, 1028, 16, 16], (0x04080113, 5), (0x04080113, 8)),
-    d(P::RGBA32Sint, [16, 1028, 16, 16], (0x04040113, 5), (0x04040113, 8)),
-    d(P::RGBA32Float, [16, 1028, 16, 16], (0x0403019f, 5), (0x0403019f, 8)),
-    d(P::BC1RGBA, [8, 4, 4, 1], (0x00430405, 6), (0x00430405, 9)),
-    d(P::BC1RGBASRGB, [8, 4, 4, 1], (0x00430c05, 6), (0x00430c05, 9)),
-    d(P::BC2RGBA, [16, 4, 4, 1], (0x00430405, 7), (0x00430405, 10)),
-    d(P::BC2RGBASRGB, [16, 4, 4, 1], (0x00430c05, 7), (0x00430c05, 10)),
-    d(P::BC3RGBA, [16, 4, 4, 1], (0x00430405, 8), (0x00430405, 11)),
-    d(P::BC3RGBASRGB, [16, 4, 4, 1], (0x00430c05, 8), (0x00430c05, 11)),
-    d(P::BC4RUnorm, [8, 4, 4, 1], (0x00430405, 9), (0x00430405, 12)),
-    d(P::BC4RSnorm, [8, 4, 4, 1], (0x00430405, 9), (0x00430405, 12)),
-    d(P::BC5RGUnorm, [16, 4, 4, 1], (0x00430405, 10), (0x00430405, 13)),
-    d(P::BC5RGSnorm, [16, 4, 4, 1], (0x00430405, 10), (0x00430405, 13)),
-    d(P::BC6HRGBFloat, [16, 4, 4, 1], (0x00430405, 11), (0x00430405, 14)),
-    d(P::BC6HRGBUfloat, [16, 4, 4, 1], (0x00430405, 11), (0x00430405, 14)),
-    d(P::BC7RGBAUnorm, [16, 4, 4, 1], (0x00430405, 12), (0x00430405, 15)),
-    d(P::BC7RGBAUnormSRGB, [16, 4, 4, 1], (0x00430c05, 12), (0x00430c05, 15)),
-    d(P::PVRTCRGB2BPP, [8, 8, 4, 1], (0x00032405, 13), (0x00032405, 16)),
-    d(P::PVRTCRGB2BPPSRGB, [8, 8, 4, 1], (0x00032c05, 13), (0x00032c05, 16)),
-    d(P::PVRTCRGB4BPP, [8, 4, 4, 1], (0x00032405, 14), (0x00032405, 17)),
-    d(P::PVRTCRGB4BPPSRGB, [8, 4, 4, 1], (0x00032c05, 14), (0x00032c05, 17)),
-    d(P::PVRTCRGBA2BPP, [8, 8, 4, 1], (0x00032405, 15), (0x00032405, 18)),
-    d(P::PVRTCRGBA2BPPSRGB, [8, 8, 4, 1], (0x00032c05, 15), (0x00032c05, 18)),
-    d(P::PVRTCRGBA4BPP, [8, 4, 4, 1], (0x00032405, 16), (0x00032405, 19)),
-    d(P::PVRTCRGBA4BPPSRGB, [8, 4, 4, 1], (0x00032c05, 16), (0x00032c05, 19)),
-    d(P::EACR11Unorm, [8, 4, 4, 1], (0x00030405, 17), (0x00030405, 20)),
-    d(P::EACR11Snorm, [8, 4, 4, 1], (0x00030405, 17), (0x00030405, 20)),
-    d(P::EACRG11Unorm, [16, 4, 4, 1], (0x00030405, 18), (0x00030405, 21)),
-    d(P::EACRG11Snorm, [16, 4, 4, 1], (0x00030405, 18), (0x00030405, 21)),
-    d(P::EACRGBA8, [16, 4, 4, 1], (0x00030405, 19), (0x00030405, 22)),
-    d(P::EACRGBA8SRGB, [16, 4, 4, 1], (0x00030c05, 19), (0x00030c05, 22)),
-    d(P::ETC2RGB8, [8, 4, 4, 1], (0x00030405, 20), (0x00030405, 23)),
-    d(P::ETC2RGB8SRGB, [8, 4, 4, 1], (0x00030c05, 20), (0x00030c05, 23)),
-    d(P::ETC2RGB8A1, [8, 4, 4, 1], (0x00030405, 21), (0x00030405, 24)),
-    d(P::ETC2RGB8A1SRGB, [8, 4, 4, 1], (0x00030c05, 21), (0x00030c05, 24)),
-    d(P::ASTC4x2SRGB, [16, 4, 2, 1], (0x00031c05, 22), (0x00031c05, 25)),
-    d(P::ASTC4x4SRGB, [16, 4, 4, 1], (0x00031c05, 23), (0x00031c05, 26)),
-    d(P::ASTC5x4SRGB, [16, 5, 4, 1], (0x00031c05, 24), (0x00031c05, 27)),
-    d(P::ASTC5x5SRGB, [16, 5, 5, 1], (0x00031c05, 25), (0x00031c05, 28)),
-    d(P::ASTC6x5SRGB, [16, 6, 5, 1], (0x00031c05, 26), (0x00031c05, 29)),
-    d(P::ASTC6x6SRGB, [16, 6, 6, 1], (0x00031c05, 27), (0x00031c05, 30)),
-    d(P::ASTC8x4SRGB, [16, 8, 4, 1], (0x00031c05, 28), (0x00031c05, 31)),
-    d(P::ASTC8x5SRGB, [16, 8, 5, 1], (0x00031c05, 29), (0x00031c05, 32)),
-    d(P::ASTC8x6SRGB, [16, 8, 6, 1], (0x00031c05, 30), (0x00031c05, 33)),
-    d(P::ASTC8x8SRGB, [16, 8, 8, 1], (0x00031c05, 31), (0x00031c05, 34)),
-    d(P::ASTC10x5SRGB, [16, 10, 5, 1], (0x00031c05, 32), (0x00031c05, 35)),
-    d(P::ASTC10x6SRGB, [16, 10, 6, 1], (0x00031c05, 33), (0x00031c05, 36)),
-    d(P::ASTC10x8SRGB, [16, 10, 8, 1], (0x00031c05, 34), (0x00031c05, 37)),
-    d(P::ASTC10x10SRGB, [16, 10, 10, 1], (0x00031c05, 35), (0x00031c05, 38)),
-    d(P::ASTC12x10SRGB, [16, 12, 10, 1], (0x00031c05, 36), (0x00031c05, 39)),
-    d(P::ASTC12x12SRGB, [16, 12, 12, 1], (0x00031c05, 37), (0x00031c05, 40)),
-    d(P::ASTC4x2LDR, [16, 4, 2, 1], (0x00031405, 22), (0x00031405, 25)),
-    d(P::ASTC4x4LDR, [16, 4, 4, 1], (0x00031405, 23), (0x00031405, 26)),
-    d(P::ASTC5x4LDR, [16, 5, 4, 1], (0x00031405, 24), (0x00031405, 27)),
-    d(P::ASTC5x5LDR, [16, 5, 5, 1], (0x00031405, 25), (0x00031405, 28)),
-    d(P::ASTC6x5LDR, [16, 6, 5, 1], (0x00031405, 26), (0x00031405, 29)),
-    d(P::ASTC6x6LDR, [16, 6, 6, 1], (0x00031405, 27), (0x00031405, 30)),
-    d(P::ASTC8x4LDR, [16, 8, 4, 1], (0x00031405, 28), (0x00031405, 31)),
-    d(P::ASTC8x5LDR, [16, 8, 5, 1], (0x00031405, 29), (0x00031405, 32)),
-    d(P::ASTC8x6LDR, [16, 8, 6, 1], (0x00031405, 30), (0x00031405, 33)),
-    d(P::ASTC8x8LDR, [16, 8, 8, 1], (0x00031405, 31), (0x00031405, 34)),
-    d(P::ASTC10x5LDR, [16, 10, 5, 1], (0x00031405, 32), (0x00031405, 35)),
-    d(P::ASTC10x6LDR, [16, 10, 6, 1], (0x00031405, 33), (0x00031405, 36)),
-    d(P::ASTC10x8LDR, [16, 10, 8, 1], (0x00031405, 34), (0x00031405, 37)),
-    d(P::ASTC10x10LDR, [16, 10, 10, 1], (0x00031405, 35), (0x00031405, 38)),
-    d(P::ASTC12x10LDR, [16, 12, 10, 1], (0x00031405, 36), (0x00031405, 39)),
-    d(P::ASTC12x12LDR, [16, 12, 12, 1], (0x00031405, 37), (0x00031405, 40)),
-    d(P::ASTC4x2HDR, [16, 4, 2, 1], (0x00031405, 22), (0x00031405, 25)),
-    d(P::ASTC4x4HDR, [16, 4, 4, 1], (0x00031405, 23), (0x00031405, 26)),
-    d(P::ASTC5x4HDR, [16, 5, 4, 1], (0x00031405, 24), (0x00031405, 27)),
-    d(P::ASTC5x5HDR, [16, 5, 5, 1], (0x00031405, 25), (0x00031405, 28)),
-    d(P::ASTC6x5HDR, [16, 6, 5, 1], (0x00031405, 26), (0x00031405, 29)),
-    d(P::ASTC6x6HDR, [16, 6, 6, 1], (0x00031405, 27), (0x00031405, 30)),
-    d(P::ASTC8x4HDR, [16, 8, 4, 1], (0x00031405, 28), (0x00031405, 31)),
-    d(P::ASTC8x5HDR, [16, 8, 5, 1], (0x00031405, 29), (0x00031405, 32)),
-    d(P::ASTC8x6HDR, [16, 8, 6, 1], (0x00031405, 30), (0x00031405, 33)),
-    d(P::ASTC8x8HDR, [16, 8, 8, 1], (0x00031405, 31), (0x00031405, 34)),
-    d(P::ASTC10x5HDR, [16, 10, 5, 1], (0x00031405, 32), (0x00031405, 35)),
-    d(P::ASTC10x6HDR, [16, 10, 6, 1], (0x00031405, 33), (0x00031405, 36)),
-    d(P::ASTC10x8HDR, [16, 10, 8, 1], (0x00031405, 34), (0x00031405, 37)),
-    d(P::ASTC10x10HDR, [16, 10, 10, 1], (0x00031405, 35), (0x00031405, 38)),
-    d(P::ASTC12x10HDR, [16, 12, 10, 1], (0x00031405, 36), (0x00031405, 39)),
-    d(P::ASTC12x12HDR, [16, 12, 12, 1], (0x00031405, 37), (0x00031405, 40)),
-    d(P::GBGR422, [4, 2, 1, 1], (0x00034405, 0), (0x00034405, 0)),
-    d(P::BGRG422, [4, 2, 1, 1], (0x00034405, 0), (0x00034405, 0)),
-    d(P::Depth16Unorm, [2, 513, 2, 2], (0x000301a5, 0), (0x000301a5, 0)),
-    d(P::Depth32Float, [4, 1025, 4, 4], (0x000301a5, 0), (0x000301a5, 0)),
-    d(P::Stencil8, [1, 257, 1, 1], (0x002801c1, 0), (0x002801c1, 0)),
-    d(P::Depth32FloatStencil8, [8, 1026, 8, 8], (0x008303e5, 39), (0x008303e5, 42)),
-    d(P::X32Stencil8, [1, 257, 1, 1], (0x00a80141, 39), (0x00a80141, 42)),
-    d(P::Unspecialized, [4, 260, 4, 4], (0x203f0019, 3), (0x203f0019, 4)),
-    d(P::RGBX8Unorm, [4, 260, 3, 3], (0x0003019f, 3), (0x0003019f, 4)),
-    d(P::RGBX8UnormSRGB, [4, 260, 3, 3], (0x0003098f, 3), (0x0003098f, 4)),
-    d(P::RGBX8Snorm, [4, 260, 3, 3], (0x0003018f, 3), (0x0003018f, 4)),
-    d(P::RGBX8Uint, [4, 260, 3, 3], (0x00280103, 3), (0x00280103, 4)),
-    d(P::RGBX8Sint, [4, 260, 3, 3], (0x00140103, 3), (0x00140103, 4)),
-    d(P::RGBX16Uint, [8, 516, 6, 6], (0x00280103, 4), (0x00280103, 6)),
-    d(P::RGBX16Sint, [8, 516, 6, 6], (0x00140103, 4), (0x00140103, 6)),
-    d(P::RGBX16Float, [8, 516, 6, 6], (0x0003019f, 4), (0x0003019f, 6)),
-    d(P::RGBX32Uint, [16, 1028, 12, 12], (0x00080103, 5), (0x00080103, 8)),
-    d(P::RGBX32Sint, [16, 1028, 12, 12], (0x00040103, 5), (0x00040103, 8)),
-    d(P::RGBX32Float, [16, 1028, 12, 12], (0x00030197, 5), (0x00030197, 8)),
-    d(P::YCBCR84202P, [1, 515, 6, 6], (0x0783001d, 43), (0x0783001d, 46)),
-    d(P::YCBCR84221P, [1, 515, 6, 6], (0x0003001d, 44), (0x0003001d, 47)),
-    d(P::YCBCR84222P, [1, 515, 6, 6], (0x0783001d, 45), (0x0783001d, 48)),
-    d(P::YCBCR84442P, [1, 515, 6, 6], (0x0783001f, 46), (0x0783001f, 49)),
-    d(P::YCBCR104441P, [2, 515, 6, 6], (0x0703001f, 47), (0x0703001f, 50)),
-    d(P::YCBCR104202P, [2, 515, 6, 6], (0x0783001d, 48), (0x0783001d, 51)),
-    d(P::YCBCR104222P, [2, 515, 6, 6], (0x0783001d, 49), (0x0783001d, 52)),
-    d(P::YCBCR104442P, [2, 515, 6, 6], (0x0783001f, 50), (0x0783001f, 53)),
-    d(P::YCBCR104202PPACKED, [1, 515, 8, 8], (0x07830015, 51), (0x07830015, 54)),
-    d(P::YCBCR104222PPACKED, [1, 515, 8, 8], (0x07830015, 52), (0x07830015, 55)),
-    d(P::YCBCR104442PPACKED, [1, 515, 8, 8], (0x07830017, 53), (0x07830017, 56)),
-    d(P::YCBCR84202PSRGB, [1, 515, 6, 6], (0x0783081d, 43), (0x0783081d, 46)),
-    d(P::YCBCR84221PSRGB, [1, 515, 6, 6], (0x0003081d, 44), (0x0003081d, 47)),
-    d(P::YCBCR84222PSRGB, [1, 515, 6, 6], (0x0783081d, 45), (0x0783081d, 48)),
-    d(P::YCBCR84442PSRGB, [1, 515, 6, 6], (0x0783081f, 46), (0x0783081f, 49)),
-    d(P::YCBCR104441PSRGB, [2, 515, 6, 6], (0x0703081f, 47), (0x0703081f, 50)),
-    d(P::YCBCR104202PSRGB, [2, 515, 6, 6], (0x0783081d, 48), (0x0783081d, 51)),
-    d(P::YCBCR104222PSRGB, [2, 515, 6, 6], (0x0783081d, 49), (0x0783081d, 52)),
-    d(P::YCBCR104442PSRGB, [2, 515, 6, 6], (0x0783081f, 50), (0x0783081f, 53)),
-    d(P::YCBCR104202PPACKEDSRGB, [1, 515, 8, 8], (0x07830815, 51), (0x07830815, 54)),
-    d(P::YCBCR104222PPACKEDSRGB, [1, 515, 8, 8], (0x07830815, 52), (0x07830815, 55)),
-    d(P::YCBCR104442PPACKEDSRGB, [1, 515, 8, 8], (0x07830815, 53), (0x07830815, 56)),
-    d(P::RGB84202P, [1, 515, 6, 6], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::RGB84222P, [1, 515, 6, 6], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::RGB84442P, [1, 515, 6, 6], (0x0783001f, 0), (0x0783001f, 0)),
-    d(P::RGB104202P, [2, 515, 6, 6], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::RGB104222P, [2, 515, 6, 6], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::RGB104442P, [2, 515, 6, 6], (0x0783001f, 0), (0x0783001f, 0)),
-    d(P::RGB104202PPACKED, [1, 515, 8, 8], (0x07830015, 0), (0x07830015, 0)),
-    d(P::RGB104222PPACKED, [1, 515, 8, 8], (0x07830015, 0), (0x07830015, 0)),
-    d(P::RGB104442PPACKED, [1, 515, 8, 8], (0x07830015, 0), (0x07830015, 0)),
-    d(P::RGB10A82PXR10, [2, 516, 8, 8], (0x0783001f, 42), (0x0783001f, 45)),
-    d(P::RGB10A82PXR10SRGB, [2, 516, 8, 8], (0x0783081f, 42), (0x0783081f, 45)),
-    d(P::BGRA10XR, [8, 516, 8, 8], (0x0703019f, 40), (0x0703019f, 43)),
-    d(P::BGRA10XRSRGB, [8, 516, 8, 8], (0x0703099f, 40), (0x0703099f, 43)),
-    d(P::BGR10XR, [4, 515, 6, 6], (0x0703019f, 41), (0x0703019f, 44)),
-    d(P::BGR10XRSRGB, [4, 515, 6, 6], (0x0703099f, 41), (0x0703099f, 44)),
-    d(P::RGBA16FloatXR, [8, 516, 8, 8], (0x0003019f, 4), (0x0003019f, 6)),
-    d(P::YCBCRA84441P, [4, 516, 8, 8], (0x0703001f, 0), (0x0703001f, 0)),
-    d(P::YCBCR84221PREV, [1, 515, 6, 6], (0x0703001d, 0), (0x0703001d, 0)),
-    d(P::YCBCR104441PPQ, [2, 515, 6, 6], (0x0f03001f, 0), (0x0f03001f, 0)),
-    d(P::YCBCR104202PPQ, [2, 515, 6, 6], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::YCBCR104222PPQ, [2, 515, 6, 6], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::YCBCR104442PPQ, [2, 515, 6, 6], (0x0f83001f, 0), (0x0f83001f, 0)),
-    d(P::YCBCR104202PPACKEDPQ, [1, 515, 6, 6], (0x0f830015, 0), (0x0f830015, 0)),
-    d(P::YCBCR104222PPACKEDPQ, [1, 515, 6, 6], (0x0f830015, 0), (0x0f830015, 0)),
-    d(P::YCBCR104442PPACKEDPQ, [1, 515, 6, 6], (0x0f830015, 0), (0x0f830015, 0)),
-    d(P::YCBCR124202P, [2, 515, 6, 6], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124222P, [2, 515, 6, 6], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124442P, [2, 515, 6, 6], (0x0783001f, 0), (0x0783001f, 0)),
-    d(P::YCBCR124202PPQ, [2, 515, 6, 6], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::YCBCR124222PPQ, [2, 515, 6, 6], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::YCBCR124442PPQ, [2, 515, 6, 6], (0x0f83001f, 0), (0x0f83001f, 0)),
-    d(P::R10UnormX6, [2, 513, 2, 2], (0x0703001f, 54), (0x0703001f, 57)),
-    d(P::R10UnormX6SRGB, [2, 513, 2, 2], (0x0703081f, 54), (0x0703081f, 57)),
-    d(P::RG10UnormX12, [4, 514, 4, 4], (0x0303001f, 55), (0x0303001f, 58)),
-    d(P::RG10UnormX12SRGB, [4, 514, 4, 4], (0x0303081f, 55), (0x0303081f, 58)),
-    d(P::YCBCR124202PPACKED, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124222PPACKED, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124442PPACKED, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124202PPACKEDPQ, [2, 259, 2, 2], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::YCBCR124222PPACKEDPQ, [2, 259, 2, 2], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::YCBCR124442PPACKEDPQ, [2, 259, 2, 2], (0x0f83001d, 0), (0x0f83001d, 0)),
-    d(P::RGB10A2UnormSRGB, [4, 516, 8, 8], (0x0003099d, 3), (0x0703099d, 4)),
-    d(P::RGB10A2UnormPQ, [4, 516, 8, 8], (0x0803019d, 3), (0x0f03019d, 4)),
-    d(P::R10UnormPACKED, [1, 513, 2, 2], (0x0703001f, 0), (0x0703001f, 0)),
-    d(P::RG10UnormPACKED, [2, 514, 4, 4], (0x0303001f, 0), (0x0303001f, 0)),
-    d(P::YCBCR104441PXR, [2, 259, 2, 2], (0x0703001f, 0), (0x0703001f, 0)),
-    d(P::YCBCR104202PXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR104222PXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR104442PXR, [2, 259, 2, 2], (0x0783001f, 0), (0x0783001f, 0)),
-    d(P::YCBCR104202PPACKEDXR, [1, 259, 1, 1], (0x07830015, 0), (0x07830015, 0)),
-    d(P::YCBCR104222PPACKEDXR, [1, 259, 1, 1], (0x07830015, 0), (0x07830015, 0)),
-    d(P::YCBCR104442PPACKEDXR, [1, 259, 1, 1], (0x07830015, 0), (0x07830015, 0)),
-    d(P::YCBCR124202PXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124222PXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124442PXR, [2, 259, 2, 2], (0x0783001f, 0), (0x0783001f, 0)),
-    d(P::YCBCR124202PPACKEDXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124222PPACKEDXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::YCBCR124442PPACKEDXR, [2, 259, 2, 2], (0x0783001d, 0), (0x0783001d, 0)),
-    d(P::R12UnormX4, [2, 513, 2, 2], (0x0703001d, 56), (0x0703001d, 59)),
-    d(P::R12UnormX4PQ, [2, 513, 2, 2], (0x0f03001d, 56), (0x0f03001d, 59)),
-    d(P::RG12UnormX8, [4, 514, 4, 4], (0x0703001d, 57), (0x0703001d, 60)),
-    d(P::R10UnormX6PQ, [2, 513, 2, 2], (0x0f03001d, 54), (0x0f03001d, 57)),
-    d(P::YCBCR104441PHLG, [2, 515, 6, 6], (0x1703001f, 0), (0x1703001f, 0)),
-    d(P::YCBCR104202PHLG, [2, 515, 6, 6], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::YCBCR104222PHLG, [2, 515, 6, 6], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::YCBCR104442PHLG, [2, 515, 6, 6], (0x1783001f, 0), (0x1783001f, 0)),
-    d(P::YCBCR104202PPACKEDHLG, [1, 515, 6, 6], (0x17830015, 0), (0x17830015, 0)),
-    d(P::YCBCR104222PPACKEDHLG, [1, 515, 6, 6], (0x17830015, 0), (0x17830015, 0)),
-    d(P::YCBCR104442PPACKEDHLG, [1, 515, 6, 6], (0x17830015, 0), (0x17830015, 0)),
-    d(P::YCBCR124202PHLG, [2, 515, 6, 6], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::YCBCR124222PHLG, [2, 515, 6, 6], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::YCBCR124442PHLG, [2, 515, 6, 6], (0x1783001f, 0), (0x1783001f, 0)),
-    d(P::YCBCR124202PPACKEDHLG, [2, 259, 2, 2], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::YCBCR124222PPACKEDHLG, [2, 259, 2, 2], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::YCBCR124442PPACKEDHLG, [2, 259, 2, 2], (0x1783001d, 0), (0x1783001d, 0)),
-    d(P::R10UnormX6HLG, [2, 513, 2, 2], (0x1703001d, 0), (0x1703001d, 0)),
-    d(P::R12UnormX4HLG, [2, 513, 2, 2], (0x1703001d, 0), (0x1703001d, 0)),
-    d(P::RGB10A2UnormHLG, [4, 516, 8, 8], (0x1003019d, 3), (0x1703019d, 4)),
-    d(P::RGB10A82P, [2, 516, 8, 8], (0x0783001f, 42), (0x0783001f, 45)),
-    d(P::RGB10A82PSRGB, [2, 516, 8, 8], (0x0783081f, 42), (0x0783081f, 45)),
-    d(P::RGB10A82PPQ, [2, 516, 8, 8], (0x0f83001f, 42), (0x0f83001f, 45)),
-    d(P::RGB10A82PHLG, [2, 516, 8, 8], (0x1783001f, 42), (0x1783001f, 45)),
-    d(P::BGR10A2UnormSRGB, [4, 516, 8, 8], (0x0003099d, 3), (0x0703099d, 4)),
-    d(P::BGR10A2UnormPQ, [4, 516, 8, 8], (0x0803019d, 3), (0x0f03019d, 4)),
-    d(P::AnyDepth, [4, 1025, 4, 4], (0x00000021, 0), (0x00000021, 0)),
-    d(P::AnyStencil, [1, 257, 1, 1], (0x00000041, 0), (0x00000041, 0)),
+    d(P::A8Unorm, [1, 257, 1, 1], 0x0403019f, 1),
+    d(P::R8Unorm, [1, 257, 1, 1], 0x0703019f, 1),
+    d(P::R8UnormSRGB, [1, 257, 1, 1], 0x0703099f, 1),
+    d(P::R8Snorm, [1, 257, 1, 1], 0x0403019f, 1),
+    d(P::R8Uint, [1, 257, 1, 1], 0x04280113, 1),
+    d(P::R8Sint, [1, 257, 1, 1], 0x04140113, 1),
+    d(P::R16Unorm, [2, 513, 2, 2], 0x0703019f, 2),
+    d(P::R16Snorm, [2, 513, 2, 2], 0x0703019f, 2),
+    d(P::R16Uint, [2, 513, 2, 2], 0x07280113, 2),
+    d(P::R16Sint, [2, 513, 2, 2], 0x07140113, 2),
+    d(P::R16Float, [2, 513, 2, 2], 0x0703019f, 2),
+    d(P::R16Bfloat, [2, 513, 2, 2], 0x00030013, 2),
+    d(P::RG8Unorm, [2, 258, 2, 2], 0x0503019f, 2),
+    d(P::RG8UnormSRGB, [2, 258, 2, 2], 0x0503099f, 2),
+    d(P::RG8Snorm, [2, 258, 2, 2], 0x0503019f, 2),
+    d(P::RG8Uint, [2, 258, 2, 2], 0x05280113, 2),
+    d(P::RG8Sint, [2, 258, 2, 2], 0x05140113, 2),
+    d(P::B5G6R5Unorm, [2, 515, 6, 6], 0x0003019d, 2),
+    d(P::A1BGR5Unorm, [2, 516, 8, 8], 0x0003019d, 2),
+    d(P::ABGR4Unorm, [2, 516, 8, 8], 0x0003019d, 2),
+    d(P::BGR5A1Unorm, [2, 516, 8, 8], 0x0003019d, 2),
+    d(P::BGRA4Unorm, [2, 516, 8, 8], 0x0003019d, 2),
+    d(P::R32Uint, [4, 1025, 4, 4], 0x04080113, 4),
+    d(P::R32Sint, [4, 1025, 4, 4], 0x04040113, 4),
+    d(P::R32Float, [4, 1025, 4, 4], 0x0403019f, 4),
+    d(P::RG16Unorm, [4, 514, 4, 4], 0x0703019f, 4),
+    d(P::RG16Snorm, [4, 514, 4, 4], 0x0703019f, 4),
+    d(P::RG16Uint, [4, 514, 4, 4], 0x07280113, 4),
+    d(P::RG16Sint, [4, 514, 4, 4], 0x07140113, 4),
+    d(P::RG16Float, [4, 514, 4, 4], 0x0703019f, 4),
+    d(P::RG16Bfloat, [4, 514, 4, 4], 0x00030013, 4),
+    d(P::RGBA8Unorm, [4, 260, 4, 4], 0x0703019f, 4),
+    d(P::RGBA8UnormSRGB, [4, 260, 4, 4], 0x0703099f, 4),
+    d(P::RGBA8Snorm, [4, 260, 4, 4], 0x0703019f, 4),
+    d(P::RGBA8Uint, [4, 260, 4, 4], 0x07280113, 4),
+    d(P::RGBA8Sint, [4, 260, 4, 4], 0x07140113, 4),
+    d(P::BGRA8Unorm, [4, 260, 4, 4], 0x0703019f, 4),
+    d(P::BGRA8UnormSRGB, [4, 260, 4, 4], 0x0703099f, 4),
+    d(P::ARGB8Unorm, [4, 260, 4, 4], 0x0003019f, 4),
+    d(P::ARGB8UnormSRGB, [4, 260, 4, 4], 0x0003099f, 4),
+    d(P::RGB10A2Unorm, [4, 1028, 4, 4], 0x0703019f, 4),
+    d(P::RGB10A2Uint, [4, 516, 8, 8], 0x07280113, 4),
+    d(P::RG11B10Float, [4, 1027, 4, 4], 0x0003019f, 4),
+    d(P::RGB9E5Float, [4, 1027, 4, 4], 0x0003819f, 4),
+    d(P::BGR10A2Unorm, [4, 1028, 4, 4], 0x0703019f, 4),
+    d(P::RG32Uint, [8, 1026, 8, 8], 0x24080113, 6),
+    d(P::RG32Sint, [8, 1026, 8, 8], 0x04040113, 6),
+    d(P::RG32Float, [8, 1026, 8, 8], 0x0403019f, 6),
+    d(P::RGBA16Unorm, [8, 516, 8, 8], 0x0703019f, 6),
+    d(P::RGBA16Snorm, [8, 516, 8, 8], 0x0703019f, 6),
+    d(P::RGBA16Uint, [8, 516, 8, 8], 0x07280113, 6),
+    d(P::RGBA16Sint, [8, 516, 8, 8], 0x07140113, 6),
+    d(P::RGBA16Float, [8, 516, 8, 8], 0x0703019f, 6),
+    d(P::RGBA16Bfloat, [8, 516, 8, 8], 0x00030013, 6),
+    d(P::RGBA32Uint, [16, 1028, 16, 16], 0x04080113, 8),
+    d(P::RGBA32Sint, [16, 1028, 16, 16], 0x04040113, 8),
+    d(P::RGBA32Float, [16, 1028, 16, 16], 0x0403019f, 8),
+    d(P::BC1RGBA, [8, 4, 4, 1], 0x00430405, 9),
+    d(P::BC1RGBASRGB, [8, 4, 4, 1], 0x00430c05, 9),
+    d(P::BC2RGBA, [16, 4, 4, 1], 0x00430405, 10),
+    d(P::BC2RGBASRGB, [16, 4, 4, 1], 0x00430c05, 10),
+    d(P::BC3RGBA, [16, 4, 4, 1], 0x00430405, 11),
+    d(P::BC3RGBASRGB, [16, 4, 4, 1], 0x00430c05, 11),
+    d(P::BC4RUnorm, [8, 4, 4, 1], 0x00430405, 12),
+    d(P::BC4RSnorm, [8, 4, 4, 1], 0x00430405, 12),
+    d(P::BC5RGUnorm, [16, 4, 4, 1], 0x00430405, 13),
+    d(P::BC5RGSnorm, [16, 4, 4, 1], 0x00430405, 13),
+    d(P::BC6HRGBFloat, [16, 4, 4, 1], 0x00430405, 14),
+    d(P::BC6HRGBUfloat, [16, 4, 4, 1], 0x00430405, 14),
+    d(P::BC7RGBAUnorm, [16, 4, 4, 1], 0x00430405, 15),
+    d(P::BC7RGBAUnormSRGB, [16, 4, 4, 1], 0x00430c05, 15),
+    d(P::PVRTCRGB2BPP, [8, 8, 4, 1], 0x00032405, 16),
+    d(P::PVRTCRGB2BPPSRGB, [8, 8, 4, 1], 0x00032c05, 16),
+    d(P::PVRTCRGB4BPP, [8, 4, 4, 1], 0x00032405, 17),
+    d(P::PVRTCRGB4BPPSRGB, [8, 4, 4, 1], 0x00032c05, 17),
+    d(P::PVRTCRGBA2BPP, [8, 8, 4, 1], 0x00032405, 18),
+    d(P::PVRTCRGBA2BPPSRGB, [8, 8, 4, 1], 0x00032c05, 18),
+    d(P::PVRTCRGBA4BPP, [8, 4, 4, 1], 0x00032405, 19),
+    d(P::PVRTCRGBA4BPPSRGB, [8, 4, 4, 1], 0x00032c05, 19),
+    d(P::EACR11Unorm, [8, 4, 4, 1], 0x00030405, 20),
+    d(P::EACR11Snorm, [8, 4, 4, 1], 0x00030405, 20),
+    d(P::EACRG11Unorm, [16, 4, 4, 1], 0x00030405, 21),
+    d(P::EACRG11Snorm, [16, 4, 4, 1], 0x00030405, 21),
+    d(P::EACRGBA8, [16, 4, 4, 1], 0x00030405, 22),
+    d(P::EACRGBA8SRGB, [16, 4, 4, 1], 0x00030c05, 22),
+    d(P::ETC2RGB8, [8, 4, 4, 1], 0x00030405, 23),
+    d(P::ETC2RGB8SRGB, [8, 4, 4, 1], 0x00030c05, 23),
+    d(P::ETC2RGB8A1, [8, 4, 4, 1], 0x00030405, 24),
+    d(P::ETC2RGB8A1SRGB, [8, 4, 4, 1], 0x00030c05, 24),
+    d(P::ASTC4x2SRGB, [16, 4, 2, 1], 0x00031c05, 25),
+    d(P::ASTC4x4SRGB, [16, 4, 4, 1], 0x00031c05, 26),
+    d(P::ASTC5x4SRGB, [16, 5, 4, 1], 0x00031c05, 27),
+    d(P::ASTC5x5SRGB, [16, 5, 5, 1], 0x00031c05, 28),
+    d(P::ASTC6x5SRGB, [16, 6, 5, 1], 0x00031c05, 29),
+    d(P::ASTC6x6SRGB, [16, 6, 6, 1], 0x00031c05, 30),
+    d(P::ASTC8x4SRGB, [16, 8, 4, 1], 0x00031c05, 31),
+    d(P::ASTC8x5SRGB, [16, 8, 5, 1], 0x00031c05, 32),
+    d(P::ASTC8x6SRGB, [16, 8, 6, 1], 0x00031c05, 33),
+    d(P::ASTC8x8SRGB, [16, 8, 8, 1], 0x00031c05, 34),
+    d(P::ASTC10x5SRGB, [16, 10, 5, 1], 0x00031c05, 35),
+    d(P::ASTC10x6SRGB, [16, 10, 6, 1], 0x00031c05, 36),
+    d(P::ASTC10x8SRGB, [16, 10, 8, 1], 0x00031c05, 37),
+    d(P::ASTC10x10SRGB, [16, 10, 10, 1], 0x00031c05, 38),
+    d(P::ASTC12x10SRGB, [16, 12, 10, 1], 0x00031c05, 39),
+    d(P::ASTC12x12SRGB, [16, 12, 12, 1], 0x00031c05, 40),
+    d(P::ASTC4x2LDR, [16, 4, 2, 1], 0x00031405, 25),
+    d(P::ASTC4x4LDR, [16, 4, 4, 1], 0x00031405, 26),
+    d(P::ASTC5x4LDR, [16, 5, 4, 1], 0x00031405, 27),
+    d(P::ASTC5x5LDR, [16, 5, 5, 1], 0x00031405, 28),
+    d(P::ASTC6x5LDR, [16, 6, 5, 1], 0x00031405, 29),
+    d(P::ASTC6x6LDR, [16, 6, 6, 1], 0x00031405, 30),
+    d(P::ASTC8x4LDR, [16, 8, 4, 1], 0x00031405, 31),
+    d(P::ASTC8x5LDR, [16, 8, 5, 1], 0x00031405, 32),
+    d(P::ASTC8x6LDR, [16, 8, 6, 1], 0x00031405, 33),
+    d(P::ASTC8x8LDR, [16, 8, 8, 1], 0x00031405, 34),
+    d(P::ASTC10x5LDR, [16, 10, 5, 1], 0x00031405, 35),
+    d(P::ASTC10x6LDR, [16, 10, 6, 1], 0x00031405, 36),
+    d(P::ASTC10x8LDR, [16, 10, 8, 1], 0x00031405, 37),
+    d(P::ASTC10x10LDR, [16, 10, 10, 1], 0x00031405, 38),
+    d(P::ASTC12x10LDR, [16, 12, 10, 1], 0x00031405, 39),
+    d(P::ASTC12x12LDR, [16, 12, 12, 1], 0x00031405, 40),
+    d(P::ASTC4x2HDR, [16, 4, 2, 1], 0x00031405, 25),
+    d(P::ASTC4x4HDR, [16, 4, 4, 1], 0x00031405, 26),
+    d(P::ASTC5x4HDR, [16, 5, 4, 1], 0x00031405, 27),
+    d(P::ASTC5x5HDR, [16, 5, 5, 1], 0x00031405, 28),
+    d(P::ASTC6x5HDR, [16, 6, 5, 1], 0x00031405, 29),
+    d(P::ASTC6x6HDR, [16, 6, 6, 1], 0x00031405, 30),
+    d(P::ASTC8x4HDR, [16, 8, 4, 1], 0x00031405, 31),
+    d(P::ASTC8x5HDR, [16, 8, 5, 1], 0x00031405, 32),
+    d(P::ASTC8x6HDR, [16, 8, 6, 1], 0x00031405, 33),
+    d(P::ASTC8x8HDR, [16, 8, 8, 1], 0x00031405, 34),
+    d(P::ASTC10x5HDR, [16, 10, 5, 1], 0x00031405, 35),
+    d(P::ASTC10x6HDR, [16, 10, 6, 1], 0x00031405, 36),
+    d(P::ASTC10x8HDR, [16, 10, 8, 1], 0x00031405, 37),
+    d(P::ASTC10x10HDR, [16, 10, 10, 1], 0x00031405, 38),
+    d(P::ASTC12x10HDR, [16, 12, 10, 1], 0x00031405, 39),
+    d(P::ASTC12x12HDR, [16, 12, 12, 1], 0x00031405, 40),
+    d(P::GBGR422, [4, 2, 1, 1], 0x00034405, 0),
+    d(P::BGRG422, [4, 2, 1, 1], 0x00034405, 0),
+    d(P::Depth16Unorm, [2, 513, 2, 2], 0x000301a5, 0),
+    d(P::Depth32Float, [4, 1025, 4, 4], 0x000301a5, 0),
+    d(P::Stencil8, [1, 257, 1, 1], 0x002801c1, 0),
+    d(P::Depth32FloatStencil8, [8, 1026, 8, 8], 0x008303e5, 42),
+    d(P::X32Stencil8, [1, 257, 1, 1], 0x00a80141, 42),
+    d(P::Unspecialized, [4, 260, 4, 4], 0x203f0019, 4),
+    d(P::RGBX8Unorm, [4, 260, 3, 3], 0x0003019f, 4),
+    d(P::RGBX8UnormSRGB, [4, 260, 3, 3], 0x0003098f, 4),
+    d(P::RGBX8Snorm, [4, 260, 3, 3], 0x0003018f, 4),
+    d(P::RGBX8Uint, [4, 260, 3, 3], 0x00280103, 4),
+    d(P::RGBX8Sint, [4, 260, 3, 3], 0x00140103, 4),
+    d(P::RGBX16Uint, [8, 516, 6, 6], 0x00280103, 6),
+    d(P::RGBX16Sint, [8, 516, 6, 6], 0x00140103, 6),
+    d(P::RGBX16Float, [8, 516, 6, 6], 0x0003019f, 6),
+    d(P::RGBX32Uint, [16, 1028, 12, 12], 0x00080103, 8),
+    d(P::RGBX32Sint, [16, 1028, 12, 12], 0x00040103, 8),
+    d(P::RGBX32Float, [16, 1028, 12, 12], 0x00030197, 8),
+    d(P::YCBCR84202P, [1, 515, 6, 6], 0x0783001d, 46),
+    d(P::YCBCR84221P, [1, 515, 6, 6], 0x0003001d, 47),
+    d(P::YCBCR84222P, [1, 515, 6, 6], 0x0783001d, 48),
+    d(P::YCBCR84442P, [1, 515, 6, 6], 0x0783001f, 49),
+    d(P::YCBCR104441P, [2, 515, 6, 6], 0x0703001f, 50),
+    d(P::YCBCR104202P, [2, 515, 6, 6], 0x0783001d, 51),
+    d(P::YCBCR104222P, [2, 515, 6, 6], 0x0783001d, 52),
+    d(P::YCBCR104442P, [2, 515, 6, 6], 0x0783001f, 53),
+    d(P::YCBCR104202PPACKED, [1, 515, 8, 8], 0x07830015, 54),
+    d(P::YCBCR104222PPACKED, [1, 515, 8, 8], 0x07830015, 55),
+    d(P::YCBCR104442PPACKED, [1, 515, 8, 8], 0x07830017, 56),
+    d(P::YCBCR84202PSRGB, [1, 515, 6, 6], 0x0783081d, 46),
+    d(P::YCBCR84221PSRGB, [1, 515, 6, 6], 0x0003081d, 47),
+    d(P::YCBCR84222PSRGB, [1, 515, 6, 6], 0x0783081d, 48),
+    d(P::YCBCR84442PSRGB, [1, 515, 6, 6], 0x0783081f, 49),
+    d(P::YCBCR104441PSRGB, [2, 515, 6, 6], 0x0703081f, 50),
+    d(P::YCBCR104202PSRGB, [2, 515, 6, 6], 0x0783081d, 51),
+    d(P::YCBCR104222PSRGB, [2, 515, 6, 6], 0x0783081d, 52),
+    d(P::YCBCR104442PSRGB, [2, 515, 6, 6], 0x0783081f, 53),
+    d(P::YCBCR104202PPACKEDSRGB, [1, 515, 8, 8], 0x07830815, 54),
+    d(P::YCBCR104222PPACKEDSRGB, [1, 515, 8, 8], 0x07830815, 55),
+    d(P::YCBCR104442PPACKEDSRGB, [1, 515, 8, 8], 0x07830815, 56),
+    d(P::RGB84202P, [1, 515, 6, 6], 0x0783001d, 0),
+    d(P::RGB84222P, [1, 515, 6, 6], 0x0783001d, 0),
+    d(P::RGB84442P, [1, 515, 6, 6], 0x0783001f, 0),
+    d(P::RGB104202P, [2, 515, 6, 6], 0x0783001d, 0),
+    d(P::RGB104222P, [2, 515, 6, 6], 0x0783001d, 0),
+    d(P::RGB104442P, [2, 515, 6, 6], 0x0783001f, 0),
+    d(P::RGB104202PPACKED, [1, 515, 8, 8], 0x07830015, 0),
+    d(P::RGB104222PPACKED, [1, 515, 8, 8], 0x07830015, 0),
+    d(P::RGB104442PPACKED, [1, 515, 8, 8], 0x07830015, 0),
+    d(P::RGB10A82PXR10, [2, 516, 8, 8], 0x0783001f, 45),
+    d(P::RGB10A82PXR10SRGB, [2, 516, 8, 8], 0x0783081f, 45),
+    d(P::BGRA10XR, [8, 516, 8, 8], 0x0703019f, 43),
+    d(P::BGRA10XRSRGB, [8, 516, 8, 8], 0x0703099f, 43),
+    d(P::BGR10XR, [4, 515, 6, 6], 0x0703019f, 44),
+    d(P::BGR10XRSRGB, [4, 515, 6, 6], 0x0703099f, 44),
+    d(P::RGBA16FloatXR, [8, 516, 8, 8], 0x0003019f, 6),
+    d(P::YCBCRA84441P, [4, 516, 8, 8], 0x0703001f, 0),
+    d(P::YCBCR84221PREV, [1, 515, 6, 6], 0x0703001d, 0),
+    d(P::YCBCR104441PPQ, [2, 515, 6, 6], 0x0f03001f, 0),
+    d(P::YCBCR104202PPQ, [2, 515, 6, 6], 0x0f83001d, 0),
+    d(P::YCBCR104222PPQ, [2, 515, 6, 6], 0x0f83001d, 0),
+    d(P::YCBCR104442PPQ, [2, 515, 6, 6], 0x0f83001f, 0),
+    d(P::YCBCR104202PPACKEDPQ, [1, 515, 6, 6], 0x0f830015, 0),
+    d(P::YCBCR104222PPACKEDPQ, [1, 515, 6, 6], 0x0f830015, 0),
+    d(P::YCBCR104442PPACKEDPQ, [1, 515, 6, 6], 0x0f830015, 0),
+    d(P::YCBCR124202P, [2, 515, 6, 6], 0x0783001d, 0),
+    d(P::YCBCR124222P, [2, 515, 6, 6], 0x0783001d, 0),
+    d(P::YCBCR124442P, [2, 515, 6, 6], 0x0783001f, 0),
+    d(P::YCBCR124202PPQ, [2, 515, 6, 6], 0x0f83001d, 0),
+    d(P::YCBCR124222PPQ, [2, 515, 6, 6], 0x0f83001d, 0),
+    d(P::YCBCR124442PPQ, [2, 515, 6, 6], 0x0f83001f, 0),
+    d(P::R10UnormX6, [2, 513, 2, 2], 0x0703001f, 57),
+    d(P::R10UnormX6SRGB, [2, 513, 2, 2], 0x0703081f, 57),
+    d(P::RG10UnormX12, [4, 514, 4, 4], 0x0303001f, 58),
+    d(P::RG10UnormX12SRGB, [4, 514, 4, 4], 0x0303081f, 58),
+    d(P::YCBCR124202PPACKED, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124222PPACKED, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124442PPACKED, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124202PPACKEDPQ, [2, 259, 2, 2], 0x0f83001d, 0),
+    d(P::YCBCR124222PPACKEDPQ, [2, 259, 2, 2], 0x0f83001d, 0),
+    d(P::YCBCR124442PPACKEDPQ, [2, 259, 2, 2], 0x0f83001d, 0),
+    d(P::RGB10A2UnormSRGB, [4, 516, 8, 8], 0x0703099d, 4),
+    d(P::RGB10A2UnormPQ, [4, 516, 8, 8], 0x0f03019d, 4),
+    d(P::R10UnormPACKED, [1, 513, 2, 2], 0x0703001f, 0),
+    d(P::RG10UnormPACKED, [2, 514, 4, 4], 0x0303001f, 0),
+    d(P::YCBCR104441PXR, [2, 259, 2, 2], 0x0703001f, 0),
+    d(P::YCBCR104202PXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR104222PXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR104442PXR, [2, 259, 2, 2], 0x0783001f, 0),
+    d(P::YCBCR104202PPACKEDXR, [1, 259, 1, 1], 0x07830015, 0),
+    d(P::YCBCR104222PPACKEDXR, [1, 259, 1, 1], 0x07830015, 0),
+    d(P::YCBCR104442PPACKEDXR, [1, 259, 1, 1], 0x07830015, 0),
+    d(P::YCBCR124202PXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124222PXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124442PXR, [2, 259, 2, 2], 0x0783001f, 0),
+    d(P::YCBCR124202PPACKEDXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124222PPACKEDXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::YCBCR124442PPACKEDXR, [2, 259, 2, 2], 0x0783001d, 0),
+    d(P::R12UnormX4, [2, 513, 2, 2], 0x0703001d, 59),
+    d(P::R12UnormX4PQ, [2, 513, 2, 2], 0x0f03001d, 59),
+    d(P::RG12UnormX8, [4, 514, 4, 4], 0x0703001d, 60),
+    d(P::R10UnormX6PQ, [2, 513, 2, 2], 0x0f03001d, 57),
+    d(P::YCBCR104441PHLG, [2, 515, 6, 6], 0x1703001f, 0),
+    d(P::YCBCR104202PHLG, [2, 515, 6, 6], 0x1783001d, 0),
+    d(P::YCBCR104222PHLG, [2, 515, 6, 6], 0x1783001d, 0),
+    d(P::YCBCR104442PHLG, [2, 515, 6, 6], 0x1783001f, 0),
+    d(P::YCBCR104202PPACKEDHLG, [1, 515, 6, 6], 0x17830015, 0),
+    d(P::YCBCR104222PPACKEDHLG, [1, 515, 6, 6], 0x17830015, 0),
+    d(P::YCBCR104442PPACKEDHLG, [1, 515, 6, 6], 0x17830015, 0),
+    d(P::YCBCR124202PHLG, [2, 515, 6, 6], 0x1783001d, 0),
+    d(P::YCBCR124222PHLG, [2, 515, 6, 6], 0x1783001d, 0),
+    d(P::YCBCR124442PHLG, [2, 515, 6, 6], 0x1783001f, 0),
+    d(P::YCBCR124202PPACKEDHLG, [2, 259, 2, 2], 0x1783001d, 0),
+    d(P::YCBCR124222PPACKEDHLG, [2, 259, 2, 2], 0x1783001d, 0),
+    d(P::YCBCR124442PPACKEDHLG, [2, 259, 2, 2], 0x1783001d, 0),
+    d(P::R10UnormX6HLG, [2, 513, 2, 2], 0x1703001d, 0),
+    d(P::R12UnormX4HLG, [2, 513, 2, 2], 0x1703001d, 0),
+    d(P::RGB10A2UnormHLG, [4, 516, 8, 8], 0x1703019d, 4),
+    d(P::RGB10A82P, [2, 516, 8, 8], 0x0783001f, 45),
+    d(P::RGB10A82PSRGB, [2, 516, 8, 8], 0x0783081f, 45),
+    d(P::RGB10A82PPQ, [2, 516, 8, 8], 0x0f83001f, 45),
+    d(P::RGB10A82PHLG, [2, 516, 8, 8], 0x1783001f, 45),
+    d(P::BGR10A2UnormSRGB, [4, 516, 8, 8], 0x0703099d, 4),
+    d(P::BGR10A2UnormPQ, [4, 516, 8, 8], 0x0f03019d, 4),
+    d(P::AnyDepth, [4, 1025, 4, 4], 0x00000021, 0),
+    d(P::AnyStencil, [1, 257, 1, 1], 0x00000041, 0),
 ];

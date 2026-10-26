@@ -7,14 +7,13 @@ use super::super::texture_descriptor::{
     TextureLayout, TextureProblem, TextureRules, TextureSwizzleChannels, APPLE_SAMPLE_COUNTS,
 };
 use super::super::values::{CpuCacheMode, HazardTrackingMode, ResourceOptions, StorageMode};
-use crate::MetalLevel;
+use crate::pixel_format_info::describes;
 use metal2vulkan::metal::format::ycbcr_format;
 use metal2vulkan::metal::{PixelFormat, TextureSwizzle, TextureType, TextureUsage};
 
-/// A device of an Apple GPU's sample counts answering at the newest Metal level.
+/// A device of an Apple GPU's sample counts.
 pub(super) const APPLE: TextureRules = TextureRules {
     sample_counts: APPLE_SAMPLE_COUNTS,
-    level: MetalLevel::NEWEST,
 };
 
 /// A refusal's problem, whichever answer it has.
@@ -39,48 +38,43 @@ fn of(texture_type: TextureType, extent: [u64; 3]) -> TextureDescriptor {
 /// validation asserts on the extent alone, naming no format
 /// ([`TextureProblem::PastLargestSide`]: 16385 measured in `RGBA8Unorm`, `R8Unorm`,
 /// `Depth32Float` and `BC1_RGBA`, in `Private`, `Shared` and `Managed` storage), so of every
-/// format a level describes and whose 2D texture no earlier rule stops, one texel past 16384 is
+/// format Metal describes and whose 2D texture no earlier rule stops, one texel past 16384 is
 /// `PastLargestSide` and the side itself is not.
 #[test]
 fn a_side_past_the_largest_is_refused_whatever_the_format() {
     let stop = || Refused::Stops(TextureProblem::PastLargestSide { max: 16384 });
-    for level in MetalLevel::ALL {
-        let rules = TextureRules {
-            sample_counts: APPLE_SAMPLE_COUNTS,
-            level,
+    let rules = APPLE;
+    for &pf in PixelFormat::ALL {
+        if !describes(pf) {
+            continue;
+        }
+        let fits = TextureDescriptor {
+            pixel_format: pf,
+            ..of(TextureType::Type2D, [16384, 16, 1])
         };
-        for &pf in PixelFormat::ALL {
-            if !level.describes(pf) {
-                continue;
-            }
-            let fits = TextureDescriptor {
+        // Only a format whose 2D texture passes every rule before the extent's says anything
+        // about the extent's rule.
+        if matches!(
+            fits.check_made(Creator::Device, rules),
+            Err(Refused::Stops(_))
+        ) {
+            continue;
+        }
+        assert_ne!(
+            fits.check_made(Creator::Device, rules),
+            Err(stop()),
+            "{pf:?} at the largest side"
+        );
+        for extent in [[16385, 16, 1], [16, 16385, 1]] {
+            let past = TextureDescriptor {
                 pixel_format: pf,
-                ..of(TextureType::Type2D, [16384, 16, 1])
+                ..of(TextureType::Type2D, extent)
             };
-            // Only a format whose 2D texture passes every rule before the extent's says anything
-            // about the extent's rule.
-            if matches!(
-                fits.check_made(Creator::Device, rules),
-                Err(Refused::Stops(_))
-            ) {
-                continue;
-            }
-            assert_ne!(
-                fits.check_made(Creator::Device, rules),
+            assert_eq!(
+                past.check_made(Creator::Device, rules),
                 Err(stop()),
-                "{level:?} {pf:?} at the largest side"
+                "{pf:?} at {extent:?}"
             );
-            for extent in [[16385, 16, 1], [16, 16385, 1]] {
-                let past = TextureDescriptor {
-                    pixel_format: pf,
-                    ..of(TextureType::Type2D, extent)
-                };
-                assert_eq!(
-                    past.check_made(Creator::Device, rules),
-                    Err(stop()),
-                    "{level:?} {pf:?} at {extent:?}"
-                );
-            }
         }
     }
 }
@@ -434,14 +428,12 @@ fn a_multisample_texture_takes_a_count_the_device_takes() {
     }
     let eight = TextureRules {
         sample_counts: metal2vulkan::vk::SampleCountFlags::from_raw(0b1111),
-        ..APPLE
     };
     assert!(ms(PixelFormat::RGBA8Unorm, 8).check(eight).is_ok());
     // A count an Apple GPU takes and the device does not (1 and 4 alone) is the device's gap,
     // refused as the image is planned, not a stop; one neither takes is stopped.
     let one_and_four = TextureRules {
         sample_counts: metal2vulkan::vk::SampleCountFlags::from_raw(0b101),
-        ..APPLE
     };
     assert!(ms(PixelFormat::RGBA8Unorm, 2).check(one_and_four).is_ok());
     assert_eq!(
@@ -751,9 +743,9 @@ fn texture_types_follow_probe_5s_verdicts_per_format() {
             }
             continue;
         }
-        // Nor one the level describes none of (24-bit depth among them), stopped in every type
-        // (`tests::metal_level`).
-        if !APPLE.level.describes(pf) {
+        // Nor one Metal describes none of (24-bit depth among them), stopped in every type
+        // (`tests::metal_release`).
+        if !describes(pf) {
             continue;
         }
         let name = &pf.name()["MTLPixelFormat".len()..];
@@ -1016,9 +1008,9 @@ fn extents_follow_probe_6s_verdicts_per_format() {
         if no_texture_alone(pf) {
             continue;
         }
-        // Nor one the level describes none of (24-bit depth among them), stopped before every
-        // extent rule (`tests::metal_level`).
-        if !APPLE.level.describes(pf) {
+        // Nor one Metal describes none of (24-bit depth among them), stopped before every
+        // extent rule (`tests::metal_release`).
+        if !describes(pf) {
             continue;
         }
         let name = &pf.name()["MTLPixelFormat".len()..];
@@ -1193,13 +1185,7 @@ fn two_plane_ycbcr_textures_follow_metal_s_rules() {
                 Err(Refused::Nil(TextureProblem::NoTextureOfFormat)),
                 "{pf:?} {ty:?}"
             );
-            for level in MetalLevel::ALL {
-                assert_eq!(
-                    no_texture_alignment(pf, ty, level),
-                    align,
-                    "{pf:?} {ty:?} {level}"
-                );
-            }
+            assert_eq!(no_texture_alignment(pf, ty), align, "{pf:?} {ty:?}");
             // Each rule Metal stops comes first (Y3): an extent of 0 here.
             d.width = 0;
             assert_eq!(

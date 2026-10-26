@@ -8,8 +8,8 @@
 //! all, which is what makes this the first sparse family the suite can carry end to end.
 //!
 //! The runtime answers them from a model of Metal's rule (`sparse::tile_texels`), the same on every
-//! device at one Metal level, whose comment says it was measured on an Apple M4 and whose only
-//! possible oracle is Metal. `runtime_lane::sparse_textures` asserts exactly three of its answers —
+//! device, whose comment says it was measured on an Apple M4 and whose only possible oracle is
+//! Metal. `runtime_lane::sparse_textures` asserts exactly three of its answers —
 //! `(Type2D, R32Float, 1)`, `(Cube, R32Float, 1)` and `(Type2DMultisample, RGBA8Unorm, 2 and 4)` —
 //! so the rule's two interesting claims, that the answer does not depend on the texture type and
 //! that it halves the tile's sides as the block's bytes double, have never been checked against

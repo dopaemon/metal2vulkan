@@ -302,7 +302,6 @@ impl StrideBelowTheRow {
     /// built ([`crate::record::never_returned`]).
     pub fn stated_answer(&self) -> Result<crate::recording::Answer, String> {
         Ok(crate::record::never_returned(
-            metal2vulkan_runtime::MetalLevel::NEWEST,
             ASSERTED_IN,
             BELOW_SITE,
             crate::recording::ORACLE_CHIP,

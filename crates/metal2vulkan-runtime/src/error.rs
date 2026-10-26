@@ -401,7 +401,7 @@ impl Nil {
 /// A call whose answer on plain Metal the runtime cannot prove ([`Error::Unproven`]): Metal may
 /// make what it asks for, or refuse it. Every problem the runtime answers so:
 /// [`Problem::IndirectCommandsDirectArgumentUnproven`],
-/// [`Problem::UnwrittenFragmentInputsUnproven`], a device's [`Problem::HostReleaseUnmeasured`], and
+/// [`Problem::UnwrittenFragmentInputsUnproven`], and
 /// [`Problem::IndirectCommandsDirectArgumentUndecided`].
 ///
 /// What is unproven is Metal's *answer*, not what the call then does: a call measured to return,
@@ -563,18 +563,6 @@ pub enum Problem {
     /// Basis: unknown (plain Metal is held to fault at a dispatch with no pipeline state, on no
     /// measurement recorded here).
     NoPipelineState,
-    /// A run of compute encoders' first indirect dispatch (`dispatch_threadgroups_indirect`,
-    /// `dispatch_threads_indirect`) in an encoder whose dispatch type is not the run's first
-    /// encoder's, on a device whose Metal level ends the process there (a segmentation fault):
-    /// [`MetalLevel::MacOS26_7`](crate::MetalLevel::MacOS26_7), as the consumer measured on an M3
-    /// Max. A run is a command buffer's compute encoders one after another with no other encoder
-    /// and no event signal or wait between; its first encoder's type counts though it dispatches
-    /// nothing, and once one indirect dispatch of the run went through, every later one does.
-    /// macOS 27.0.1 runs it.
-    ///
-    /// Basis: metal-measured (an M3 Max, macOS 26.7: a segmentation fault, as the consumer
-    /// measured; 27.0.1 runs it).
-    IndirectDispatchOfAnotherType,
     /// An argument-table index past Metal's table (plain Metal writes past its own table: a
     /// compute texture at index 128 faulted the dispatch on an M4).
     ///
@@ -881,16 +869,6 @@ pub enum Problem {
     ///
     /// Basis: ours (a runtime extension: Metal wraps no Vulkan buffer).
     WrappedBuffer(WrappedBufferProblem),
-    /// A depth/stencil state's `gpu_resource_id` on a device that does not claim Apple10, at a
-    /// [`MetalLevel`](crate::MetalLevel) whose plain Metal raises there (macOS 26.7, the
-    /// consumer's measurement on an M3 Max). Metal's API validation stops the call at every
-    /// release measured ("Obtaining the resourceID of a DepthStencilState object requires support
-    /// for MTLGPUFamilyApple10"), which is not what plain Metal does: macOS 27.0.1's plain call
-    /// answers 0 (our probe on an M3 Max), and so does the runtime at that level.
-    ///
-    /// Basis: metal-measured (an M3 Max, macOS 26.7: plain Metal raises, as the consumer measured;
-    /// 27.0.1's plain call answers 0, and so does the runtime there).
-    DepthStencilResourceId,
     /// A pipeline's `requiredThreadsPerThreadgroup` that Metal refuses at creation, or a dispatch
     /// whose threadgroup size is not it.
     ///
@@ -1012,22 +990,12 @@ pub enum Problem {
         /// The rule that keeps one.
         reason: LinkedUseGap,
     },
-    /// A device made, with no `metal_level` named, on a macOS host whose release (`macos`: major,
-    /// minor, patch; `None` where it cannot be read) is below every measured
-    /// [`MetalLevel`](crate::MetalLevel) ([`Error::Unproven`]): an older Metal's answers are
-    /// unmeasured, and a newer one's would answer above the host. Naming a level in the options
-    /// makes the device answer at it.
-    ///
-    /// Basis: unknown (no measured Metal level describes the host's release).
-    HostReleaseUnmeasured {
-        /// The host's macOS version, where it reads.
-        macos: Option<[u32; 3]>,
-    },
     /// `new_render_pipeline_state` or `new_mesh_render_pipeline_state` of a descriptor whose
-    /// `attachment` is in a pixel format (`format`) the device's
-    /// [`MetalLevel`](crate::MetalLevel) describes none of: under macOS 26.7 the values from 630
-    /// to 650 and the three-channel ones, under 27.0.1 the three-channel ones and 646 to 650, and
-    /// `Depth24Unorm_Stencil8` and `X24_Stencil8` at every level (an Apple GPU has neither).
+    /// `attachment` is in a pixel format (`format`) Metal describes none of
+    /// ([`Device::pixel_format_info`](crate::Device::pixel_format_info) answers
+    /// [`PixelFormatInfo::INVALID`](crate::PixelFormatInfo::INVALID)): the three-channel ones, the
+    /// values from 630 to 650 (an Apple M4 describes 630 to 645, an M3 Max none of them), and
+    /// `Depth24Unorm_Stencil8` and `X24_Stencil8` (an Apple GPU has neither).
     /// Plain Metal's descriptor validation stops it ("pixelFormat, for color render target(0), is
     /// not a valid MTLPixelFormat", "depthAttachmentPixelFormat is not a valid MTLPixelFormat";
     /// on an Apple M4 under 27.0.1, the consumer's run on an M3 Max under 26.7),

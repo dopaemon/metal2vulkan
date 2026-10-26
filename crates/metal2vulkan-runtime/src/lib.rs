@@ -144,7 +144,7 @@ mod loader_word;
 mod managed;
 mod memory;
 mod memory_log;
-mod metal_level;
+mod metal_release;
 mod mipmap;
 mod mipmap_filter;
 mod mipmap_pick;
@@ -299,7 +299,7 @@ pub use interop::SemaphoreProblem;
 pub use library::{Function, FunctionDescriptor, Library};
 pub use linear_plan::BufferTextureProblem;
 pub use metal2vulkan::device::DriverFact;
-pub use metal_level::MetalLevel;
+pub use metal_release::MACOS_RELEASE;
 pub use mipmap::MipmapVerdict;
 pub use mipmap_plan::MipmapProblem;
 #[doc(hidden)]

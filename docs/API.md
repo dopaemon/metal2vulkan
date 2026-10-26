@@ -1872,15 +1872,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   itself to its bindings, through a swizzle, and takes a shadow only for a pass that renders into
   it: Vulkan views the image in no format of the view's. Cost: its texels are copied from its
   texture's image before each use and back after each write.
-- `metal2vulkan-degrade-mipmaps-as-apple-m4` (precision). `MipmapsAsAppleM4`: `generate_mipmaps`
-  computed as Metal's filter where an Apple M3 Max's answer may differ from the chain's
-  (`MipmapFilterChain::unlike_an_m3`): a 2D texture, array or cube of three levels or more whose M3
-  Max passes are not known, an `A1BGR5Unorm` 2D texture, an `ABGR4Unorm` one of three levels or
-  more, or a 3D texture of a format summed as half floats, under macOS 26.7's rule
-  (`MipmapRule::AppleM3MaxPasses`). Under macOS 27.0.1's every level is the M3 Max's. Cost: each
-  level is the Apple M3 Max's but where its answer is not known: below the first level of a 2D chain
-  whose M3 Max passes are not known an Apple M4's filter, and a few measured values of the 4-bit and
-  1-bit formats and of 3D half-float sums one unit off.
 - `metal2vulkan-degrade-repeated-execution-start` (precision). `RepeatedExecutionStart`: A render
   encoder executes an indirect command buffer's commands from a command it executed them from before
   with another length, each range given (`executeCommandsInBuffer:withRange:`) or read from a
@@ -2210,13 +2201,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   read_write access) that does not name it reads what an earlier such write left in the stand-in's
   sink, where Metal drops those writes and reads zero; a sampled read, and a size query, are
   Metal's.
-- `metal2vulkan-degrade-metal-level-below-host` (precision). `MetalLevelBelowHost`: A device made,
-  with no level named in its options, on a macOS host whose release has no measured `MetalLevel`: it
-  answers as the newest measured release below the host's. Cost: where Metal's answers differ by
-  release (which pixel formats a texture descriptor takes and Metal describes, whether a run of
-  compute encoders' first indirect dispatch of another dispatch type ends the process), the device
-  gives the older release's: it can stop or refuse a texture or a dispatch the host's Metal makes,
-  and never makes one the older release stops.
 - `metal2vulkan-degrade-unreached-tiles-rewritten` (precision). `UnreachedTilesRewritten`: A render
   pass that loads a color attachment of an extended-range, padded 10-bit or bfloat format
   (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins,
@@ -2260,11 +2244,11 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   would.
 - `metal2vulkan-degrade-heap-texture-block-compressed-layout` (precision).
   `HeapTextureBlockCompressedLayout`: A texture of a block-compressed format made in a heap over
-  host pages whose placement the device's Metal level does not measure: Metal places a format
-  family's blocks in each level by a rule that differs by family and by release, measured for BC,
-  ETC2, EAC and ASTC under macOS 27.0.1 (an Apple M3 Max and an Apple M4 alike) and 26.7 (an
-  Apple M3 Max), and for PVRTC under 27.0.1 (an Apple M3 Max), where those lie as Metal lays them
-  out, and not for PVRTC under 26.7, whose blocks lie in the runtime's layout. Cost: the texture's
+  host pages whose blocks' placement is not measured: Metal places a format family's blocks in each
+  level by a rule that differs by family and by release, measured at the release every device
+  answers as (`MACOS_RELEASE`) for the BC, ETC2, EAC, ASTC and PVRTC families (an Apple M3 Max, and
+  an Apple M4 alike but PVRTC), whose textures lie as Metal lays them out; a format of none of them
+  (ASTC's 4x2 and 8x4 footprints) lies in the runtime's layout. Cost: the texture's
   reads, writes and copies are Metal's, but its blocks lie in the heap's bytes in the runtime's
   layout, where Metal tiles them: a buffer or texture over them meets the blocks at other bytes than
   on Metal.
@@ -2306,17 +2290,12 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   computed as Metal's filter whose levels take a rounding the chain does not fit at sums a hair from
   a rounding boundary (`MipmapFilterChain::near_ties`): a texture of a format with an 8-bit sRGB
   colour channel (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`), whose
-  filtered levels take it; under macOS 26.7's rule (`MipmapRule::AppleM3MaxPasses`), of an
-  extended-range sRGB format (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`), whose filtered levels and levels
-  read from kept values take it; or of a 16-bit float format (`R16Float`, `RG16Float`,
-  `RGBA16Float`) with a level read from the level above's kept values (a 2D chain's even level below
-  a square of a power of two, a pass's second level). `RGB10A2Unorm`, `BGR10A2Unorm`, `BGR10_XR`,
-  `BGRA10_XR`, `ABGR4Unorm` and `A1BGR5Unorm` are exact. Cost: each level is Metal's but at a value
-  whose sum lies a hair from a rounding boundary, which may be one unit off: an 8-bit sRGB colour
-  code of a filtered level (1 of 5,331,270 measured values), an extended-range sRGB code, a 16-bit
-  float read from kept values one unit in the last place (8 of 538,088). Under macOS 27.0.1 an Apple
-  M3 Max stores an 8-bit sRGB texel one unit below the chain's at two measured sums a hair above a
-  tie (test `the_filter_gives_the_m3_s_chains_under_macos_27_0_1`), which no rule fits yet.
+  filtered levels take it. `RGB10A2Unorm`, `BGR10A2Unorm`, `BGR10_XR`, `BGRA10_XR`, `ABGR4Unorm` and
+  `A1BGR5Unorm` are exact. Cost: each level is Metal's but at a value whose sum lies a hair from a
+  rounding boundary, which may be one unit off: an 8-bit sRGB colour code of a filtered level (1 of
+  5,331,270 measured values). An Apple M3 Max under macOS 27.0.1 stores an 8-bit sRGB texel one unit
+  below the chain's at two measured sums a hair above a tie (test
+  `the_filter_gives_the_m3_s_chains_under_macos_27_0_1`), which no rule fits yet.
 - `metal2vulkan-degrade-extended-range-blends-stored-codes` (precision).
   `ExtendedRangeBlendsStoredCodes`: A draw whose render pipeline state blends into, or reads (a
   framebuffer fetch, or the interlocked storage form an extended-range blend takes), a color
@@ -2331,9 +2310,8 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-unmeasured-heap-texture-size` (precision). `UnmeasuredHeapTextureSize`: A
   heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose size Metal's
   layout the runtime does not model: a format or a sample count whose layout in Metal's heaps is not
-  measured at the device's Metal level (8 samples; a PVRTC format at macOS 26.7's level, whose
-  blocks' placement only macOS 27.0.1's measures); a mipmapped texture Metal compresses and a
-  `Depth32Float_Stencil8` one are modelled. Cost: heap_texture_size_and_align answers the
+  measured (8 samples); a mipmapped texture Metal compresses and a `Depth32Float_Stencil8` one are
+  modelled. Cost: heap_texture_size_and_align answers the
   device's own image's size and alignment, which may be larger or smaller than Metal's, so a heap
   sized by Metal's answers may hold more or fewer such textures and they lie at other offsets.
 - `metal2vulkan-degrade-plain-state-unique-identifier` (precision). `PlainStateUniqueIdentifier`: A
@@ -2576,12 +2554,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   which the extension requires. Cost: the driver keeps its own cache of the device's pipelines
   beside the shader cache's records, with whatever it writes to disk and holds in memory for it; the
   pipelines made are the same.
-- `metal2vulkan-degrade-metal-level-not-macos` (precision). `MetalLevelNotMacOS`: A device made off
-  macOS with no Metal level named: it answers as the newest measured release (`MetalLevel::NEWEST`),
-  no release of the host's. Cost: where Metal's answers differ by release (which pixel formats a
-  texture descriptor takes and Metal describes, how a heap texture's blocks lie, whether a run of
-  compute encoders' first indirect dispatch of another dispatch type ends the process), the device
-  gives the newest measured release's, whatever release the program expects.
 - `metal2vulkan-degrade-private-properties-unknown` (precision). `PrivatePropertiesUnknown`: Apple's
   private device properties the device has no answer for: no document describes them and nothing the
   device reports maps to them. Cost: the device gives no answer for them (`PrivateAnswer::value` is
@@ -3197,6 +3169,12 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-resource-id-takeover` (retired). No replacement: a command reads the
   sampler states live as its batch is submitted, so a state made before the event wait that orders
   its ID's write is the one its function reads, as on Metal.
+- `metal2vulkan-degrade-metal-level-below-host` (retired). No replacement: every device answers as
+  the one release the runtime imitates (`MACOS_RELEASE`), on every host, whatever release it runs.
+- `metal2vulkan-degrade-metal-level-not-macos` (retired). No replacement: every device answers as
+  the one release the runtime imitates (`MACOS_RELEASE`), on every host, macOS or not.
+- `metal2vulkan-degrade-mipmaps-as-apple-m4` (retired). No replacement: every level of every chain
+  is the Apple M3 Max's filter of the level above, the rule of the release every device answers as.
 
 ## 10. Accepted differences
 

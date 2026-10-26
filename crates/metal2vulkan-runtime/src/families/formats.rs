@@ -1580,9 +1580,9 @@ impl FormatRow {
 impl Device {
     /// The answers of `pf` on this device (the module docs), worked out once per format.
     pub(crate) fn format_answers(&self, pf: PixelFormat) -> FormatAnswers {
-        // A format the device's Metal level describes none of answers nothing: Metal stops every
-        // texture of one (the 24-bit depth formats among them, whatever the Vulkan driver has).
-        if !self.properties().metal_level.describes(pf) {
+        // A format Metal describes none of answers nothing: Metal stops every texture of one (the
+        // 24-bit depth formats among them, whatever the Vulkan driver has).
+        if !crate::pixel_format_info::describes(pf) {
             return FormatAnswers::none();
         }
         let textures = &self.shared().textures;

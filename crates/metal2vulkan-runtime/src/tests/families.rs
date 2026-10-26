@@ -86,15 +86,14 @@ pub(super) fn all_audits(
 }
 
 /// The texture capabilities the runtime gives `pf` on the device created as `enabled`, whose
-/// compile layer is `compile`, at `level`, as `Device::pixel_format_capabilities` answers them
-/// (every image taken at any size, the module docs).
+/// compile layer is `compile`, as `Device::pixel_format_capabilities` answers them (every image
+/// taken at any size, the module docs).
 pub(super) fn format_capabilities(
     enabled: &metal2vulkan::device::DeviceDescription,
     compile: &Device,
-    level: crate::MetalLevel,
     pf: PixelFormat,
 ) -> FormatCapabilities {
-    if !level.describes(pf) {
+    if !crate::pixel_format_info::describes(pf) {
         return FormatCapabilities::NONE;
     }
     let image = ImageFacts {

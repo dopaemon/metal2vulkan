@@ -18,7 +18,6 @@ use super::super::texture_descriptor::{
 };
 use super::super::values::{ResourceOptions, StorageMode};
 use super::texture_descriptor::APPLE;
-use crate::MetalLevel;
 use ash::vk;
 use metal2vulkan::device::{
     Device, DeviceDescription, DevicePolicy, FormatUsage, VkExtension, VkFeature, VkProperty,
@@ -98,7 +97,6 @@ fn layout(ty: TextureType, pf: PixelFormat, samples: u64, array: u64) -> Texture
     }
     .check(TextureRules {
         sample_counts: SampleCountFlags::from_raw(0x7f),
-        level: MetalLevel::NEWEST,
     })
     .expect("a valid descriptor");
     TextureLayout {

@@ -1,8 +1,8 @@
 //! What a case's Metal answer is stored as.
 //!
 //! A recording is one file per case, keyed by the oracle it was taken from: the chip, the macOS
-//! build, and the Metal level the runtime answers as ([`OracleKey`]). A case whose answer depends on
-//! the Metal level holds one answer per level.
+//! build, and the macOS release whose Metal the answer is of, the one the runtime answers as
+//! ([`OracleKey`], [`MACOS_RELEASE`]).
 //!
 //! Each answer holds **two** Metal facts, kept apart. Plain Metal is the behavioural oracle, because
 //! that is how a consumer runs the runtime, and its transcript is what comparison uses. The same
@@ -19,7 +19,7 @@
 
 use crate::cost::CostRecord;
 use crate::transcript::Transcript;
-use metal2vulkan_runtime::MetalLevel;
+use metal2vulkan_runtime::MACOS_RELEASE;
 use serde::{Deserialize, Serialize};
 
 /// The recording file's format. Bump it when a stored field changes meaning; a recording of another
@@ -48,8 +48,8 @@ pub const ORACLE_OS_VERSION: &str = "27.0.1";
 /// changed Metal between builds before, and a stale row that passes quietly is worse than no row.
 pub const ORACLE_OS_BUILD: &str = "26A434";
 
-/// Which oracle an answer came from. Keyed, not commented, because a case may hold one answer per
-/// Metal level.
+/// Which oracle an answer came from. Keyed, not commented, because a case may hold answers of
+/// more than one oracle.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OracleKey {
@@ -59,26 +59,21 @@ pub struct OracleKey {
     pub os_version: String,
     /// The macOS build (`26A434`).
     pub os_build: String,
-    /// The Metal level the answer is of ([`MetalLevel::macos`]).
+    /// The macOS release whose Metal the answer is of, as macOS names it: a fact of the
+    /// recording, which a run compares with the release the runtime answers as
+    /// ([`MACOS_RELEASE`]).
     pub metal_level: String,
 }
 
 impl OracleKey {
-    /// The oracle this round records on, at `level`.
-    pub fn current(level: MetalLevel) -> Self {
+    /// The oracle this round records on, at the release the runtime answers as.
+    pub fn current() -> Self {
         Self {
             chip: ORACLE_CHIP.to_owned(),
             os_version: ORACLE_OS_VERSION.to_owned(),
             os_build: ORACLE_OS_BUILD.to_owned(),
-            metal_level: level.macos().to_owned(),
+            metal_level: MACOS_RELEASE.to_owned(),
         }
-    }
-
-    /// The Metal level the key names, where a release names one.
-    pub fn level(&self) -> Option<MetalLevel> {
-        MetalLevel::ALL
-            .into_iter()
-            .find(|level| level.macos() == self.metal_level)
     }
 }
 
@@ -86,7 +81,7 @@ impl std::fmt::Display for OracleKey {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             out,
-            "{} on macOS {} ({}), Metal level {}",
+            "{} on macOS {} ({}), Metal of macOS {}",
             self.chip, self.os_version, self.os_build, self.metal_level
         )
     }
@@ -383,16 +378,16 @@ impl Recording {
         self
     }
 
-    /// The answer for the venue's declared Metal `level`, or why there is none.
+    /// The answer at the release the runtime answers as ([`MACOS_RELEASE`]), or why there is
+    /// none.
     ///
     /// The two outcomes are kept apart because they mean different things. A recording of another
     /// chip, macOS release, macOS build, file format or suite version is **stale**: it fails,
     /// because a recording taken under one Metal and compared under another proves nothing.
-    /// A recording that holds answers for this oracle but none for `level` is simply
-    /// **unrecorded** at that level: nine lanes today pick their expected row from the live host's
-    /// Metal level, which a host without Metal cannot read, so the level is the recording's key
-    /// and a missing level is a gap to fill rather than a failure to blame on the venue.
-    pub fn answer(&self, level: MetalLevel) -> Result<&Answer, Lookup> {
+    /// A recording that holds answers for this oracle but none at the runtime's release, or none
+    /// at all, is simply **unrecorded** there: a gap to fill rather than a failure to blame on the
+    /// venue.
+    pub fn answer(&self) -> Result<&Answer, Lookup> {
         if self.format != RECORDING_FORMAT_VERSION {
             return Err(Lookup::Stale(Stale::Format {
                 recorded: self.format,
@@ -405,7 +400,7 @@ impl Recording {
                 current: SUITE_VERSION,
             }));
         }
-        let wanted = OracleKey::current(level);
+        let wanted = OracleKey::current();
         if let Some(answer) = self.answers.iter().find(|answer| answer.key == wanted) {
             return Ok(answer);
         }
@@ -414,16 +409,16 @@ impl Recording {
             .iter()
             .map(|answer| answer.key.clone())
             .collect();
-        // An answer of this oracle at another Metal level is a level the case has not been
-        // recorded at; anything else is a recording of another Metal.
-        let other_level = recorded.iter().any(|key| {
+        // An answer of this oracle of another release's Metal leaves the case unrecorded at the
+        // runtime's; anything else is a recording of another Metal.
+        let other_release = recorded.iter().any(|key| {
             key.chip == wanted.chip
                 && key.os_version == wanted.os_version
                 && key.os_build == wanted.os_build
         });
-        if other_level || recorded.is_empty() {
+        if other_release || recorded.is_empty() {
             return Err(Lookup::Unrecorded {
-                level: wanted.metal_level,
+                release: wanted.metal_level,
             });
         }
         Err(Lookup::Stale(Stale::Oracle { wanted, recorded }))
@@ -435,16 +430,16 @@ impl Recording {
 pub enum Lookup {
     /// The recording is not current evidence: it fails.
     Stale(Stale),
-    /// The case has no answer at the venue's Metal level: it is unrecorded there.
-    Unrecorded { level: String },
+    /// The case has no answer at the release the runtime answers as: it is unrecorded there.
+    Unrecorded { release: String },
 }
 
 impl std::fmt::Display for Lookup {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Lookup::Stale(stale) => write!(out, "{stale}"),
-            Lookup::Unrecorded { level } => {
-                write!(out, "the case has no Metal answer at Metal level {level}")
+            Lookup::Unrecorded { release } => {
+                write!(out, "the case has no Metal answer at macOS {release}")
             }
         }
     }

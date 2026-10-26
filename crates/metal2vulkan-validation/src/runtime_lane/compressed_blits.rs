@@ -1,10 +1,9 @@
 //! Blits through textures Metal keeps losslessly compressed on the device the cfg selects, under
-//! the validation layer, at every Metal level (macOS 26.7 and 27.0.1), against what our probes
-//! measured on an Apple M4 and the package share-cblit on an Apple M3 Max:
+//! the validation layer, against what our probes measured on an Apple M4 and the package share-cblit on an Apple M3 Max:
 //!
 //! - A GPU blit into, out of, or between textures of `ShaderRead` usage at least 16 texels on a
 //!   side writes `BGRA10_XR`'s, `RG11B10Float`'s and `RGB9E5Float`'s texels by
-//!   `bind::CompressedBlit`'s rule, at every level; the same blits of a texture without
+//!   `bind::CompressedBlit`'s rule; the same blits of a texture without
 //!   `allowGPUOptimizedContents`, 8 texels high, or over a buffer keep the bytes.
 //! - CPU copies keep the bytes of every texture; a CPU copy in followed by a blit out, or a blit
 //!   in followed by a CPU copy out, meets the rule.
@@ -21,8 +20,8 @@ use metal2vulkan::bind::CompressedBlit;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     BlitCommandEncoder, BlitOption, Buffer, CommandQueue, CpuCacheMode, Device, HazardTrackingMode,
-    HeapDescriptor, HeapType, MetalLevel, Origin, Region, ResourceOptions, Size, StorageMode,
-    Texture, TextureDescriptor,
+    HeapDescriptor, HeapType, Origin, Region, ResourceOptions, Size, StorageMode, Texture,
+    TextureDescriptor,
 };
 use std::time::Duration;
 
@@ -221,172 +220,164 @@ fn get(texture: &Texture, height: u64, per: u64) -> Vec<u8> {
 fn blits_through_a_compressed_texture_write_metal_s_texels() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    for level in MetalLevel::ALL {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-            options.metal_level = Some(level);
-        })
-        .unwrap();
-        let name = format!("{} at {level:?}", device.name());
-        let lane = Lane {
-            queue: device.new_command_queue().unwrap(),
-            device,
+    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
+    let name = device.name().to_owned();
+    let lane = Lane {
+        queue: device.new_command_queue().unwrap(),
+        device,
+    };
+    let mut rng = Rng(0xfc5_b117);
+    for pf in FORMATS {
+        let per = u64::from(CompressedBlit::of(pf).unwrap().texel_bytes());
+        let whole = [SIDE, SIDE];
+        let n = (SIDE * SIDE * per) as usize;
+        // A buffer into a texture and back: compressed, without GPU-optimized contents, and
+        // 8 high.
+        for (optimized, height, compressed) in
+            [(true, SIDE, true), (false, SIDE, false), (true, 8, false)]
+        {
+            let bytes = rng.bytes((SIDE * height * per) as usize);
+            let texture = lane.texture(pf, optimized, StorageMode::Private, height, 1);
+            lane.blit_in(&texture, 0, [SIDE, height], per, &bytes);
+            let out = lane.blit_out(&texture, 0, [SIDE, height], (0, SIDE * per));
+            let want = if compressed {
+                blitted(pf, &bytes)
+            } else {
+                bytes.clone()
+            };
+            assert_eq!(
+                out, want,
+                "{pf:?} optimized {optimized}, {height} high on {name}"
+            );
+        }
+        // Level 3 of a mipmapped compressed texture, out into a buffer at an offset of 4 and
+        // rows 12 bytes longer than the texels': only the texels' bytes change.
+        let texture = lane.texture(pf, true, StorageMode::Private, SIDE, 4);
+        let small = [SIDE >> 3, SIDE >> 3];
+        let bytes = rng.bytes((small[0] * small[1] * per) as usize);
+        lane.blit_in(&texture, 3, small, per, &bytes);
+        let row = small[0] * per + 12;
+        let out = lane.blit_out(&texture, 3, small, (4, row));
+        let want_rows = blitted(pf, &bytes);
+        for y in 0..small[1] as usize {
+            let at = 4 + y * row as usize;
+            let texels = (small[0] * per) as usize;
+            assert_eq!(
+                out[at..at + texels],
+                want_rows[y * texels..(y + 1) * texels],
+                "{pf:?} level 3 row {y} on {name}"
+            );
+            assert!(out[at + texels..at + row as usize]
+                .iter()
+                .all(|&b| b == 0xee));
+        }
+        assert!(out[..4].iter().all(|&b| b == 0xee));
+        // CPU copies keep the bytes of a compressed shared texture; a CPU copy in and a blit
+        // out, or a blit in and a CPU copy out, meet the rule.
+        let shared = lane.texture(pf, true, StorageMode::Shared, SIDE, 1);
+        let bytes = rng.bytes(n);
+        put(&shared, SIDE, per, &bytes);
+        assert_eq!(get(&shared, SIDE, per), bytes, "{pf:?} CPU on {name}");
+        let out = lane.blit_out(&shared, 0, whole, (0, SIDE * per));
+        assert_eq!(
+            out,
+            blitted(pf, &bytes),
+            "{pf:?} CPU in, blit out on {name}"
+        );
+        let bytes = rng.bytes(n);
+        lane.blit_in(&shared, 0, whole, per, &bytes);
+        assert_eq!(
+            get(&shared, SIDE, per),
+            blitted(pf, &bytes),
+            "{pf:?} blit in, CPU out on {name}"
+        );
+        // A heap answers the Shared texture's size as the Private one's, and two Shared
+        // textures placed back to back in a heap at that size keep their CPU bytes, each
+        // blitting out by the rule: the image bound at each offset fits the space the answer
+        // reserves (on MoltenVK an uncompressed image in the compressed one's space).
+        let size = |storage| {
+            let d = descriptor(pf, true, storage, SIDE, 1);
+            lane.device.heap_texture_size_and_align(&d).unwrap()
         };
-        let mut rng = Rng(0xfc5_b117);
-        for pf in FORMATS {
-            let per = u64::from(CompressedBlit::of(pf).unwrap().texel_bytes());
-            let whole = [SIDE, SIDE];
-            let n = (SIDE * SIDE * per) as usize;
-            // A buffer into a texture and back: compressed, without GPU-optimized contents, and
-            // 8 high.
-            for (optimized, height, compressed) in
-                [(true, SIDE, true), (false, SIDE, false), (true, 8, false)]
-            {
-                let bytes = rng.bytes((SIDE * height * per) as usize);
-                let texture = lane.texture(pf, optimized, StorageMode::Private, height, 1);
-                lane.blit_in(&texture, 0, [SIDE, height], per, &bytes);
-                let out = lane.blit_out(&texture, 0, [SIDE, height], (0, SIDE * per));
-                let want = if compressed {
-                    blitted(pf, &bytes)
-                } else {
-                    bytes.clone()
-                };
-                assert_eq!(
-                    out, want,
-                    "{pf:?} optimized {optimized}, {height} high on {name}"
-                );
-            }
-            // Level 3 of a mipmapped compressed texture, out into a buffer at an offset of 4 and
-            // rows 12 bytes longer than the texels': only the texels' bytes change.
-            let texture = lane.texture(pf, true, StorageMode::Private, SIDE, 4);
-            let small = [SIDE >> 3, SIDE >> 3];
-            let bytes = rng.bytes((small[0] * small[1] * per) as usize);
-            lane.blit_in(&texture, 3, small, per, &bytes);
-            let row = small[0] * per + 12;
-            let out = lane.blit_out(&texture, 3, small, (4, row));
-            let want_rows = blitted(pf, &bytes);
-            for y in 0..small[1] as usize {
-                let at = 4 + y * row as usize;
-                let texels = (small[0] * per) as usize;
-                assert_eq!(
-                    out[at..at + texels],
-                    want_rows[y * texels..(y + 1) * texels],
-                    "{pf:?} level 3 row {y} on {name}"
-                );
-                assert!(out[at + texels..at + row as usize]
-                    .iter()
-                    .all(|&b| b == 0xee));
-            }
-            assert!(out[..4].iter().all(|&b| b == 0xee));
-            // CPU copies keep the bytes of a compressed shared texture; a CPU copy in and a blit
-            // out, or a blit in and a CPU copy out, meet the rule.
-            let shared = lane.texture(pf, true, StorageMode::Shared, SIDE, 1);
-            let bytes = rng.bytes(n);
-            put(&shared, SIDE, per, &bytes);
-            assert_eq!(get(&shared, SIDE, per), bytes, "{pf:?} CPU on {name}");
-            let out = lane.blit_out(&shared, 0, whole, (0, SIDE * per));
+        let answer = size(StorageMode::Shared);
+        assert_eq!(
+            answer,
+            size(StorageMode::Private),
+            "{pf:?} heap size on {name}"
+        );
+        let second = answer.size.next_multiple_of(answer.align);
+        let options = ResourceOptions::shared();
+        let heap_descriptor =
+            HeapDescriptor::new(HeapType::Placement, second + answer.size, options);
+        let heap = lane.device.new_heap(&heap_descriptor).unwrap();
+        let shared_descriptor = descriptor(pf, true, StorageMode::Shared, SIDE, 1);
+        let placed = [0, second].map(|offset| {
+            heap.new_texture_at_offset(&shared_descriptor, offset)
+                .unwrap()
+        });
+        let bytes = [rng.bytes(n), rng.bytes(n)];
+        for (texture, bytes) in placed.iter().zip(&bytes) {
+            put(texture, SIDE, per, bytes);
+        }
+        for (k, (texture, bytes)) in placed.iter().zip(&bytes).enumerate() {
+            assert_eq!(
+                get(texture, SIDE, per),
+                *bytes,
+                "{pf:?} heap texture {k} CPU on {name}"
+            );
+            let out = lane.blit_out(texture, 0, whole, (0, SIDE * per));
             assert_eq!(
                 out,
-                blitted(pf, &bytes),
-                "{pf:?} CPU in, blit out on {name}"
+                blitted(pf, bytes),
+                "{pf:?} heap texture {k} CPU in, blit out on {name}"
             );
-            let bytes = rng.bytes(n);
-            lane.blit_in(&shared, 0, whole, per, &bytes);
+        }
+        // Texture to texture: out of a compressed texture's CPU bytes into a plain one, and
+        // from a plain one's into a compressed one.
+        let plain = lane.texture(pf, false, StorageMode::Shared, SIDE, 1);
+        let bytes = rng.bytes(n);
+        put(&shared, SIDE, per, &bytes);
+        lane.copy(&shared, &plain, SIDE);
+        assert_eq!(
+            get(&plain, SIDE, per),
+            blitted(pf, &bytes),
+            "{pf:?} out of compressed on {name}"
+        );
+        let bytes = rng.bytes(n);
+        put(&plain, SIDE, per, &bytes);
+        lane.copy(&plain, &shared, SIDE);
+        assert_eq!(
+            get(&shared, SIDE, per),
+            blitted(pf, &bytes),
+            "{pf:?} into compressed on {name}"
+        );
+        // Into a texture over a buffer, its rows 256 bytes past the texels': the rule at its
+        // rows, the bytes between them kept.
+        let row = SIDE * per + 256;
+        let backing = lane.buffer(&vec![0xee; (row * SIDE) as usize]);
+        let mut d = TextureDescriptor::texture_2d(pf, SIDE, SIDE, false);
+        d.usage = TextureUsage::SHADER_READ;
+        d.resource_options = ResourceOptions::shared();
+        let over = backing.new_texture(&d, 0, row).unwrap();
+        let bytes = rng.bytes(n);
+        put(&shared, SIDE, per, &bytes);
+        lane.copy(&shared, &over, SIDE);
+        // SAFETY: every command buffer completed; the buffer holds `row * SIDE` bytes.
+        let held = unsafe {
+            std::slice::from_raw_parts(backing.contents().unwrap().as_ptr(), (row * SIDE) as usize)
+        };
+        let want = blitted(pf, &bytes);
+        let texels = (SIDE * per) as usize;
+        for y in 0..SIDE as usize {
+            let at = y * row as usize;
             assert_eq!(
-                get(&shared, SIDE, per),
-                blitted(pf, &bytes),
-                "{pf:?} blit in, CPU out on {name}"
+                held[at..at + texels],
+                want[y * texels..(y + 1) * texels],
+                "{pf:?} over a buffer row {y} on {name}"
             );
-            // A heap answers the Shared texture's size as the Private one's, and two Shared
-            // textures placed back to back in a heap at that size keep their CPU bytes, each
-            // blitting out by the rule: the image bound at each offset fits the space the answer
-            // reserves (on MoltenVK an uncompressed image in the compressed one's space).
-            let size = |storage| {
-                let d = descriptor(pf, true, storage, SIDE, 1);
-                lane.device.heap_texture_size_and_align(&d).unwrap()
-            };
-            let answer = size(StorageMode::Shared);
-            assert_eq!(
-                answer,
-                size(StorageMode::Private),
-                "{pf:?} heap size on {name}"
-            );
-            let second = answer.size.next_multiple_of(answer.align);
-            let options = ResourceOptions::shared();
-            let heap_descriptor =
-                HeapDescriptor::new(HeapType::Placement, second + answer.size, options);
-            let heap = lane.device.new_heap(&heap_descriptor).unwrap();
-            let shared_descriptor = descriptor(pf, true, StorageMode::Shared, SIDE, 1);
-            let placed = [0, second].map(|offset| {
-                heap.new_texture_at_offset(&shared_descriptor, offset)
-                    .unwrap()
-            });
-            let bytes = [rng.bytes(n), rng.bytes(n)];
-            for (texture, bytes) in placed.iter().zip(&bytes) {
-                put(texture, SIDE, per, bytes);
-            }
-            for (k, (texture, bytes)) in placed.iter().zip(&bytes).enumerate() {
-                assert_eq!(
-                    get(texture, SIDE, per),
-                    *bytes,
-                    "{pf:?} heap texture {k} CPU on {name}"
-                );
-                let out = lane.blit_out(texture, 0, whole, (0, SIDE * per));
-                assert_eq!(
-                    out,
-                    blitted(pf, bytes),
-                    "{pf:?} heap texture {k} CPU in, blit out on {name}"
-                );
-            }
-            // Texture to texture: out of a compressed texture's CPU bytes into a plain one, and
-            // from a plain one's into a compressed one.
-            let plain = lane.texture(pf, false, StorageMode::Shared, SIDE, 1);
-            let bytes = rng.bytes(n);
-            put(&shared, SIDE, per, &bytes);
-            lane.copy(&shared, &plain, SIDE);
-            assert_eq!(
-                get(&plain, SIDE, per),
-                blitted(pf, &bytes),
-                "{pf:?} out of compressed on {name}"
-            );
-            let bytes = rng.bytes(n);
-            put(&plain, SIDE, per, &bytes);
-            lane.copy(&plain, &shared, SIDE);
-            assert_eq!(
-                get(&shared, SIDE, per),
-                blitted(pf, &bytes),
-                "{pf:?} into compressed on {name}"
-            );
-            // Into a texture over a buffer, its rows 256 bytes past the texels': the rule at its
-            // rows, the bytes between them kept.
-            let row = SIDE * per + 256;
-            let backing = lane.buffer(&vec![0xee; (row * SIDE) as usize]);
-            let mut d = TextureDescriptor::texture_2d(pf, SIDE, SIDE, false);
-            d.usage = TextureUsage::SHADER_READ;
-            d.resource_options = ResourceOptions::shared();
-            let over = backing.new_texture(&d, 0, row).unwrap();
-            let bytes = rng.bytes(n);
-            put(&shared, SIDE, per, &bytes);
-            lane.copy(&shared, &over, SIDE);
-            // SAFETY: every command buffer completed; the buffer holds `row * SIDE` bytes.
-            let held = unsafe {
-                std::slice::from_raw_parts(
-                    backing.contents().unwrap().as_ptr(),
-                    (row * SIDE) as usize,
-                )
-            };
-            let want = blitted(pf, &bytes);
-            let texels = (SIDE * per) as usize;
-            for y in 0..SIDE as usize {
-                let at = y * row as usize;
-                assert_eq!(
-                    held[at..at + texels],
-                    want[y * texels..(y + 1) * texels],
-                    "{pf:?} over a buffer row {y} on {name}"
-                );
-                assert!(held[at + texels..at + row as usize]
-                    .iter()
-                    .all(|&b| b == 0xee));
-            }
+            assert!(held[at + texels..at + row as usize]
+                .iter()
+                .all(|&b| b == 0xee));
         }
     }
     layer_reported_nothing_at_all(&messages);

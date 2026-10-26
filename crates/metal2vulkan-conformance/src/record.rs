@@ -14,7 +14,6 @@ use crate::case::{Case, Side};
 use crate::recording::{self, Answer, Outcome, Provenance, Recording, Validated};
 use crate::replay::NOTICES_SITE;
 use crate::transcript::{Sites, Transcript};
-use metal2vulkan_runtime::MetalLevel;
 
 /// Why an answer could not be recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,7 +64,7 @@ impl std::fmt::Display for RecordError {
     }
 }
 
-/// Take `case`'s answer by running it `runs` times on `side`, at Metal level `level`, with
+/// Take `case`'s answer by running it `runs` times on `side`, with
 /// `validated` what Metal's API validation did with the same case.
 ///
 /// `side` must be a Metal side. The two Metal facts stay apart: the transcripts are plain Metal's,
@@ -86,7 +85,6 @@ pub fn record(
     case: &dyn Case,
     side: &mut dyn Side,
     runs: u32,
-    level: MetalLevel,
     validated: Validated,
 ) -> Result<Answer, RecordError> {
     if let Some(reason) = case.metal_source().forbidden() {
@@ -122,7 +120,7 @@ pub fn record(
     }
     let venue = side.venue();
     Ok(Answer {
-        key: recording::OracleKey::current(level),
+        key: recording::OracleKey::current(),
         provenance: Provenance::MetalRun,
         device: venue.device,
         runs,
@@ -134,7 +132,6 @@ pub fn record(
 /// The answer a case carries from a measurement this tree already holds: one outcome, the runs the
 /// measurement stands on, where it came from, and the chip it was taken on.
 pub fn carried(
-    level: MetalLevel,
     from: &str,
     measured_on: &str,
     device: &str,
@@ -143,7 +140,7 @@ pub fn carried(
     validated: Validated,
 ) -> Answer {
     Answer {
-        key: recording::OracleKey::current(level),
+        key: recording::OracleKey::current(),
         provenance: Provenance::Carried {
             from: from.to_owned(),
             measured_on: measured_on.to_owned(),
@@ -164,7 +161,6 @@ pub fn carried(
 /// validated oracle is [`Validated::NotRun`] for the same reason: Metal's API validation layer was
 /// never asked either, and the file says so rather than implying it was content.
 pub fn never_returned(
-    level: MetalLevel,
     from: &str,
     call: &str,
     device: &str,
@@ -172,7 +168,7 @@ pub fn never_returned(
     transcript: Transcript,
 ) -> Answer {
     Answer {
-        key: recording::OracleKey::current(level),
+        key: recording::OracleKey::current(),
         provenance: Provenance::NeverReturned {
             from: from.to_owned(),
             call: call.to_owned(),

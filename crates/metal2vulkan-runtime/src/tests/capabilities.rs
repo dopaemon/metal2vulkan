@@ -8,8 +8,7 @@ use crate::capabilities::{
     DeviceIdentity, RATE_MAP_LAYERS,
 };
 use crate::{
-    BufferTextureProblem, DeviceKind, DeviceProperties, Error, Invalid, MetalLevel, Problem, Query,
-    Size,
+    BufferTextureProblem, DeviceKind, DeviceProperties, Error, Invalid, Problem, Query, Size,
 };
 use metal2vulkan::bind::{RasterizationRateMap, RateMapDescriptor, RateMapLayerDescriptor};
 use metal2vulkan::device::{
@@ -91,15 +90,6 @@ pub(super) fn created(
     stem: &str,
     desc: &DeviceDescription,
 ) -> (DeviceDescription, DeviceProperties) {
-    created_at(stem, desc, MetalLevel::NEWEST)
-}
-
-/// [`created`], answering at `level`.
-pub(super) fn created_at(
-    stem: &str,
-    desc: &DeviceDescription,
-    level: MetalLevel,
-) -> (DeviceDescription, DeviceProperties) {
     let policy = DevicePolicy::UNTRUSTED;
     let enables = desc.recommended_enables(&policy);
     let enabled = desc
@@ -107,7 +97,7 @@ pub(super) fn created_at(
         .with_enabled(&enables)
         .unwrap_or_else(|e| panic!("{stem}: {e}"));
     let compile = Device::new(enabled.clone(), policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
-    let properties = DeviceProperties::new(identity(stem), enabled.clone(), &compile, level);
+    let properties = DeviceProperties::new(identity(stem), enabled.clone(), &compile);
     (enabled, properties)
 }
 
@@ -134,7 +124,7 @@ fn unified_memory_is_the_device_kinds() {
             kind,
             ..identity(stem)
         };
-        let p = DeviceProperties::new(identity, enabled.clone(), &compile, MetalLevel::NEWEST);
+        let p = DeviceProperties::new(identity, enabled.clone(), &compile);
         assert_eq!(p.has_unified_memory, unified, "{kind:?}");
     }
 }
@@ -236,7 +226,7 @@ fn raster_order_groups_agree_with_the_compile_layer() {
             .unsupported_features
             .iter()
             .any(|u: &Unsupported| u.feature == Feature::RasterOrderGroups);
-        let p = DeviceProperties::new(identity(stem), enabled, &compile, MetalLevel::NEWEST);
+        let p = DeviceProperties::new(identity(stem), enabled, &compile);
         if p.device_answers().raster_order_groups {
             assert!(!refused, "{stem}");
         }

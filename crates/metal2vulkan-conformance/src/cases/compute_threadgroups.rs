@@ -577,7 +577,6 @@ mod tests {
                 device: "unwriting".to_owned(),
                 driver: "none".to_owned(),
                 api: "none".to_owned(),
-                metal_level: "none".to_owned(),
             }
         }
 

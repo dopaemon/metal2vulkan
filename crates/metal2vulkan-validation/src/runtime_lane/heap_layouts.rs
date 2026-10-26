@@ -15,15 +15,12 @@
 //!   four of its bytes through a buffer over the heap keeps both writes: the next element's bytes
 //!   (`k.two_ways_disjoint`'s shape) or bytes between the elements (`k.two_ways_gap`'s), every
 //!   other byte the heap's, through the merge (`shadow-merge` once).
-//! - **Blocks**. A BC, ETC2, EAC or ASTC texture lies as its device's Metal level lays it out, at
-//!   each level: each row's span, every block numbered as the probes numbered it, hashes to the
-//!   M3 Max's and the M4's at 27.0.1 through `replaceRegion` and blits, and at 26.7 to the M3
-//!   Max's CPU's through `replaceRegion` and its GPU's through blits; `getBytes` reads the CPU's
-//!   writes of the CPU's bytes.
+//! - **Blocks**. A BC, ETC2, EAC or ASTC texture lies as Metal lays it out: each row's span,
+//!   every block numbered as the probes numbered it, hashes to the M3 Max's and the M4's under
+//!   macOS 27.0.1 through `replaceRegion` and blits; `getBytes` reads the CPU's writes of those
+//!   bytes.
 //! - **Layouts the runtime does not follow** ([`HEAP_LAYOUTS`]). A texture Metal keeps
-//!   losslessly compressed (`heap-texture-lossless-layout`), one of a block-compressed format
-//!   whose placement its device's Metal level does not measure (PVRTC at macOS 26.7's,
-//!   `heap-texture-block-compressed-layout`) and one
+//!   losslessly compressed (`heap-texture-lossless-layout`) and one
 //!   of a format whose layout is not measured
 //!   (`heap-texture-untiled-layout`, a two-aspect depth and stencil format) are each counted
 //!   (`Device::degraded_objects`, and its kind's `WorkCounts` field) and usable: the notice is
@@ -47,9 +44,9 @@ use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     BlitOption, ClearColor, CommandQueue, Degradation, Device, DeviceOptions, Error, Heap,
-    HeapDescriptor, HeapType, HostMemory, LoadAction, MetalLevel, ObjectId, Origin,
-    PipelineOptions, Region, RenderPassDescriptor, ResourceOptions, RuntimeGap, Size, StoreAction,
-    Texture, TextureDescriptor, WorkCounts,
+    HeapDescriptor, HeapType, HostMemory, LoadAction, ObjectId, Origin, PipelineOptions, Region,
+    RenderPassDescriptor, ResourceOptions, RuntimeGap, Size, StoreAction, Texture,
+    TextureDescriptor, WorkCounts,
 };
 use std::path::Path;
 
@@ -626,16 +623,13 @@ fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
 }
 
 /// A texture Metal keeps losslessly compressed (a colour one, a `Depth32Float_Stencil8` one and an
-/// `X32_Stencil8` one) and one of a block-compressed format whose placement its device's Metal
-/// level does not measure (PVRTC at macOS 26.7's, `DeviceOptions::metal_level`), each in a heap
-/// over host pages, are counted in their kind's field and `Device::degraded_objects`, and the
-/// first of each kind is announced in the call that made it, with its ID; each is usable after.
-/// Four compressed textures, one notice, a count of four. (A multisample texture's samples lie in
+/// `X32_Stencil8` one), each in a heap over host pages, is counted in its kind's field and
+/// `Device::degraded_objects`, and the first is announced in the call that made it, with its ID;
+/// each is usable after. Four compressed textures, one notice, a count of four. (A multisample texture's samples lie in
 /// Metal's tiles: `a_host_heap_s_multisample_textures_hold_their_samples_in_metal_s_tiles`.)
 #[test]
 fn heap_textures_laid_out_otherwise_than_metal_s_tiles_are_counted_and_announced_once() {
-    let at_26_7 = |options: &mut DeviceOptions| options.metal_level = Some(MetalLevel::MacOS26_7);
-    on_device_with(at_26_7, |device, messages| {
+    on_device(|device, messages| {
         let mapping = Mapping::anonymous(HEAP);
         let Some(heap) = heap_over(device, &mapping) else {
             return;
@@ -645,9 +639,6 @@ fn heap_textures_laid_out_otherwise_than_metal_s_tiles_are_counted_and_announced
         let mut compressed = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 64, 64, false);
         compressed.resource_options = shared();
         compressed.usage = read;
-        let mut blocks = TextureDescriptor::texture_2d(PixelFormat::PVRTCRGBA4BPP, 64, 64, false);
-        blocks.resource_options = shared();
-        blocks.usage = read;
         let mut aspects =
             TextureDescriptor::texture_2d(PixelFormat::Depth32FloatStencil8, 32, 32, false);
         aspects.resource_options = shared();
@@ -662,7 +653,6 @@ fn heap_textures_laid_out_otherwise_than_metal_s_tiles_are_counted_and_announced
         let cases = [
             (compressed, Degradation::HeapTextureLosslessLayout, 1),
             (compressed, Degradation::HeapTextureLosslessLayout, 1),
-            (blocks, Degradation::HeapTextureBlockCompressedLayout, 2),
             (aspects, Degradation::HeapTextureLosslessLayout, 1),
             (stencil, Degradation::HeapTextureLosslessLayout, 1),
         ];
@@ -710,7 +700,6 @@ fn heap_textures_laid_out_otherwise_than_metal_s_tiles_are_counted_and_announced
             );
             // Usable: its texels round-trip (a single-sample texture's, which the CPU copies).
             let (row, rows) = match (descriptor.pixel_format, descriptor.sample_count) {
-                (PixelFormat::PVRTCRGBA4BPP, _) => (16 * 8, 16),
                 (PixelFormat::RGBA8Unorm, 1) => (64 * 4, 64),
                 _ => (0, 0),
             };
@@ -820,8 +809,8 @@ fn making_many_textures_of_a_layout_kind_announces_it_once_and_counts_each() {
 
 /// A block-compressed texture's shape, one of the rows of `runtime::tests::heap_tiled_blocks`
 /// (and the same probes on an Apple M3 Max): its format, block bytes and texels, type, level-0
-/// extent, levels and array length, Metal's size, and the FNV-1a hashes of its span with every
-/// block numbered in turn, as each level's Metal lays it out.
+/// extent, levels and array length, Metal's size, and the FNV-1a hash of its span with every
+/// block numbered in turn, as Metal lays it out.
 struct Blocks {
     format: PixelFormat,
     unit: u64,
@@ -831,10 +820,9 @@ struct Blocks {
     levels: u64,
     array: u64,
     size: u64,
-    /// An Apple M4's under macOS 27.0.1, by `replaceRegion` and by a blit alike.
-    m4: u64,
-    /// An Apple M3 Max's under macOS 26.7: by `replaceRegion`, and by a blit.
-    m3: (u64, u64),
+    /// An Apple M4's and an Apple M3 Max's under macOS 27.0.1, by `replaceRegion` and by a blit
+    /// alike.
+    hash: u64,
 }
 
 /// The rows the lane lays out: BC, ETC2, EAC and ASTC of square and other blocks, levels narrower
@@ -842,19 +830,17 @@ struct Blocks {
 fn block_rows() -> Vec<Blocks> {
     use PixelFormat as P;
     use TextureType as T;
-    let row =
-        |format, (unit, block), texture_type, extent, (levels, array), (size, m4), m3| Blocks {
-            format,
-            unit,
-            block,
-            texture_type,
-            extent,
-            levels,
-            array,
-            size,
-            m4,
-            m3,
-        };
+    let row = |format, (unit, block), texture_type, extent, (levels, array), (size, hash)| Blocks {
+        format,
+        unit,
+        block,
+        texture_type,
+        extent,
+        levels,
+        array,
+        size,
+        hash,
+    };
     let (bc1, bc7, astc4) = ((8, [4, 4]), (16, [4, 4]), (16, [4, 4]));
     vec![
         row(
@@ -864,7 +850,6 @@ fn block_rows() -> Vec<Blocks> {
             [100, 33],
             (7, 1),
             (5888, 0x4558c9fea80831cb),
-            (0x35839f04fcebe60b, 0x35839f04fcebe60b),
         ),
         row(
             P::BC1RGBA,
@@ -873,7 +858,6 @@ fn block_rows() -> Vec<Blocks> {
             [513, 300],
             (10, 1),
             (251648, 0x22ea3ab679043212),
-            (0x22ea3ab679043212, 0x8a8f3ecd2a8d3212),
         ),
         row(
             P::BC3RGBA,
@@ -882,7 +866,6 @@ fn block_rows() -> Vec<Blocks> {
             [129, 300],
             (9, 1),
             (142336, 0x9b6045c40ad46074),
-            (0x56e93915d9393274, 0x56e93915d9393274),
         ),
         row(
             P::BC1RGBA,
@@ -891,7 +874,6 @@ fn block_rows() -> Vec<Blocks> {
             [100, 100],
             (7, 1),
             (67584, 0x8af37d6151423431),
-            (0x8af37d6151423431, 0x8af37d6151423431),
         ),
         row(
             P::BC7RGBAUnorm,
@@ -900,7 +882,6 @@ fn block_rows() -> Vec<Blocks> {
             [260, 70],
             (9, 2),
             (196608, 0x4d4b187c72ec750a),
-            (0x15f023d6e521510a, 0x15f023d6e521510a),
         ),
         row(
             P::ETC2RGB8,
@@ -909,7 +890,6 @@ fn block_rows() -> Vec<Blocks> {
             [67, 300],
             (9, 1),
             (44160, 0xc670a09509ba2c26),
-            (0x9524fa25b7c2a8e6, 0x9524fa25b7c2a8e6),
         ),
         row(
             P::EACRG11Unorm,
@@ -918,7 +898,6 @@ fn block_rows() -> Vec<Blocks> {
             [260, 70],
             (9, 1),
             (87808, 0xcd5ceb35bcad1b11),
-            (0x1225e98160f8ff11, 0x1225e98160f8ff11),
         ),
         row(
             P::ASTC4x4LDR,
@@ -927,7 +906,6 @@ fn block_rows() -> Vec<Blocks> {
             [100, 33],
             (7, 1),
             (11264, 0xdbaa664cd6a1e329),
-            (0xdbaa664cd6a1e329, 0xdbaa664cd6a1e329),
         ),
         row(
             P::ASTC4x4LDR,
@@ -936,7 +914,6 @@ fn block_rows() -> Vec<Blocks> {
             [257, 300],
             (9, 1),
             (251520, 0x72d9c6368399c396),
-            (0x72d9c6368399c396, 0x2169ff70ee34c396),
         ),
         row(
             P::ASTC5x4LDR,
@@ -945,21 +922,11 @@ fn block_rows() -> Vec<Blocks> {
             [260, 70],
             (9, 1),
             (44160, 0xbdaaba6680137944),
-            (0xbdaaba6680137944, 0xbdaaba6680137944),
         ),
     ]
 }
 
 impl Blocks {
-    /// Its span's hashes as `level`'s Metal lays it out: by `replaceRegion`, and by a blit.
-    fn spans(&self, level: MetalLevel) -> (u64, u64) {
-        match level {
-            MetalLevel::MacOS26_7 => self.m3,
-            MetalLevel::MacOS27_0_1 => (self.m4, self.m4),
-            other => panic!("no spans measured at {other}"),
-        }
-    }
-
     /// Its descriptor in a `Shared` heap, read by shaders.
     fn descriptor(&self) -> TextureDescriptor {
         let [w, h] = self.extent;
@@ -1017,45 +984,25 @@ fn fnv(bytes: &[u8]) -> u64 {
     })
 }
 
-/// A block-compressed texture in a heap over host pages lies as its device's Metal level lays it
-/// out (the M4's under 27.0.1, `MetalLevel::MacOS27_0_1`; the M3 Max's under 26.7,
-/// `MetalLevel::MacOS26_7`; each level a device naming it, `DeviceOptions::metal_level`): its
-/// answer holds Metal's size; `replaceRegion` of every block leaves the span the level's CPU's
-/// bytes, and a blit of each level the level's GPU's bytes (their hashes; the M3 Max's GPU counts
-/// the 513 x 300 `BC1_RGBA` and 257 x 300 `ASTC_4x4` level 1's tiles a row otherwise than its
-/// CPU); `getBytes` reads each level back from the CPU's writes of the CPU's bytes. Counted tiled,
-/// with no layout notice. A device whose image of the format holds other bytes than its blocks (a
-/// format it decodes) announces `heap-texture-untiled-layout` instead (each row's notice: the
-/// device asks for each, `DeviceOptions::announce_each`).
+/// A block-compressed texture in a heap over host pages lies as Metal lays it out (the M4's and
+/// the M3 Max's under macOS 27.0.1): its answer holds Metal's size; `replaceRegion` of every block
+/// leaves the span Metal's bytes, and a blit of each level the same bytes (their hash); `getBytes`
+/// reads each level back from the CPU's writes of those bytes. Counted tiled, with no layout
+/// notice. A device whose image of the format holds other bytes than its blocks (a format it
+/// decodes) announces `heap-texture-untiled-layout` instead (each row's notice: the device asks
+/// for each, `DeviceOptions::announce_each`).
 #[test]
-fn a_host_heap_s_block_compressed_texture_lies_as_its_level_s_metal_lays_it_out() {
-    for metal_level in MetalLevel::ALL {
-        let each = |options: &mut DeviceOptions| {
-            options.announce_each = HEAP_LAYOUTS.into();
-            options.metal_level = Some(metal_level);
-        };
-        on_device_with(each, |device, messages| {
-            block_rows_lie_as_their_level_lays_them_out(device, messages, metal_level);
-        });
-    }
+fn a_host_heap_s_block_compressed_texture_lies_as_metal_lays_it_out() {
+    let each = |options: &mut DeviceOptions| options.announce_each = HEAP_LAYOUTS.into();
+    on_device_with(each, block_rows_lie_as_metal_lays_them_out);
 }
 
-/// `a_host_heap_s_block_compressed_texture_lies_as_its_level_s_metal_lays_it_out` on `device`,
-/// whose Metal level is `metal_level`.
-fn block_rows_lie_as_their_level_lays_them_out(
-    device: &Device,
-    messages: &Messages,
-    metal_level: MetalLevel,
-) {
-    assert_eq!(device.properties().metal_level, metal_level);
+/// `a_host_heap_s_block_compressed_texture_lies_as_metal_lays_it_out` on `device`.
+fn block_rows_lie_as_metal_lays_them_out(device: &Device, messages: &Messages) {
     let queue = device.new_command_queue().unwrap();
     let mut tiled = 0;
     for row in block_rows() {
-        let what = format!(
-            "{metal_level} {:?} {:?} {:?}",
-            row.format, row.texture_type, row.extent
-        );
-        let (cpu_span, gpu_span) = row.spans(metal_level);
+        let what = format!("{:?} {:?} {:?}", row.format, row.texture_type, row.extent);
         let mapping = Mapping::anonymous(HEAP);
         let Some(heap) = heap_over(device, &mapping) else {
             return;
@@ -1105,7 +1052,7 @@ fn block_rows_lie_as_their_level_lays_them_out(
         let span = OFFSET as usize..(OFFSET + row.size) as usize;
         let numbered = row.numbered();
 
-        // `replaceRegion` of every level of every slice: the level's CPU's bytes.
+        // `replaceRegion` of every level of every slice: Metal's bytes.
         mapping.fill(0);
         for (slice, level, bytes) in &numbered {
             let ([w, h], [bw, _]) = row.level(*level);
@@ -1115,9 +1062,9 @@ fn block_rows_lie_as_their_level_lays_them_out(
                 .unwrap();
         }
         let laid = mapping.read(span.clone());
-        assert_eq!(fnv(&laid), cpu_span, "{what}: replaceRegion's bytes");
+        assert_eq!(fnv(&laid), row.hash, "{what}: replaceRegion's bytes");
 
-        // A blit of each level writes them as the level's GPU lays them out, over bytes of zeros.
+        // A blit of each level writes the same bytes, over bytes of zeros.
         mapping.fill(0);
         let command_buffer = queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -1146,7 +1093,7 @@ fn block_rows_lie_as_their_level_lays_them_out(
         run(&command_buffer);
         assert_eq!(
             fnv(&mapping.read(span.clone())),
-            gpu_span,
+            row.hash,
             "{what}: a blit's bytes"
         );
 
@@ -1168,20 +1115,12 @@ fn block_rows_lie_as_their_level_lays_them_out(
         tiled += 1;
         drop((sources, texture, heap));
         drop(mapping);
-        let apart = if cpu_span == gpu_span {
-            ""
-        } else {
-            ", its blit's apart"
-        };
         eprintln!(
-            "HEAPLAYOUT {what}: as its level lays it out{apart}, size {}",
+            "HEAPLAYOUT {what}: as Metal lays it out, size {}",
             answer.size
         );
     }
-    assert!(
-        tiled > 0,
-        "{metal_level}: no block-compressed texture tiled"
-    );
+    assert!(tiled > 0, "no block-compressed texture tiled");
 }
 
 /// 4-sample 64 x 64 render targets in a heap over host pages, each a shadow of its samples in

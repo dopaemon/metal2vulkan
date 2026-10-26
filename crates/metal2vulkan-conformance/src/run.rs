@@ -498,12 +498,11 @@ pub fn record_all(cases: &[Box<dyn Case>]) -> Vec<(String, Result<std::path::Pat
 #[cfg(target_os = "macos")]
 fn record_one(case: &dyn Case) -> Result<std::path::PathBuf, String> {
     use crate::recording::Validated;
-    let level = metal2vulkan_runtime::MetalLevel::NEWEST;
     let answer = match case.metal_source() {
         crate::case::MetalSource::Run => {
             let validated = crate::validated::take(case).map_err(|error| error.to_string())?;
             let mut side = crate::metal_side::MetalSide::new()?;
-            crate::record::record(case, &mut side, case.record_runs(), level, validated)
+            crate::record::record(case, &mut side, case.record_runs(), validated)
                 .map_err(|error| error.to_string())?
         }
         // Never run, and never written from here either: the call this row names is the call
@@ -524,7 +523,6 @@ fn record_one(case: &dyn Case) -> Result<std::path::PathBuf, String> {
                 .carried_transcript()?
                 .ok_or_else(|| format!("{}: it carries no answer", case.name()))?;
             crate::record::carried(
-                level,
                 from,
                 measured_on,
                 crate::recording::ORACLE_CHIP,

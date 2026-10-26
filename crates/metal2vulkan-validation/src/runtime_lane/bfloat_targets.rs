@@ -9,8 +9,7 @@
 //!   checked first), each cleared through a `Clear` load action into a 1 x 1 target: Metal's
 //!   codes, as a digest over the list. The model (`ExtendedRange::clear_texel`) gives the same
 //!   digest, checked here too: a 1 x 1 target's clear goes through `half`
-//!   (`ClearRoute::ThroughHalf`). The device answers at the M4's release
-//!   (`MetalLevel::MacOS27_0_1`), as do the loads and draws below.
+//!   (`ClearRoute::ThroughHalf`).
 //! - **Clear routes** (the consumer's M3 Max under macOS 26.7 alike). Metal clears straight to
 //!   bfloat (`ClearRoute::Straight`) where it keeps the level compressed and the pass has no draw
 //!   call, else through `half`: targets of each route clear their route's codes for colors whose
@@ -37,14 +36,14 @@
 //! A difference is printed on a `BFLOAT-TARGETS-DIFFERS` line.
 
 use super::extended_range_targets::digest;
-use super::resolves::{lane_with, quiet, Lane};
+use super::resolves::{lane, lane_with, quiet, Lane};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::candidate::runtime_samples::{library, shape};
 use metal2vulkan::metal::format::{ClearRoute, ExtendedRange};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage, TextureWriteRoundingMode};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, LoadAction, MetalLevel, Origin, PipelineOptions, RenderPassDescriptor,
+    BlitOption, ClearColor, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
     ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 
@@ -217,15 +216,10 @@ fn texture(lane: &Lane, pf: PixelFormat, width: u64, height: u64, usage: Texture
         .unwrap_or_else(|e| panic!("a {pf:?} texture: {e}"))
 }
 
-/// The lane of the device made at the M4's release, whose Metal the probes measured.
-fn m4_lane() -> (super::Messages, super::ScratchCache, Lane) {
-    lane_with(|options| options.metal_level = Some(MetalLevel::MacOS27_0_1))
-}
-
 /// A `Clear` of a bfloat attachment stores Metal's codes for every color of the probe's.
 #[test]
 fn bfloat_clears_store_metal_s_codes() {
-    let (messages, _cache, lane) = m4_lane();
+    let (messages, _cache, lane) = lane();
     let colors = clear_colors();
     let bits = colors
         .iter()
@@ -621,7 +615,7 @@ fn load_case(lane: &Lane, pf: PixelFormat, channels: u64, case: Case) -> Vec<u8>
 /// `DontCare` load under a draw stores zeros, and a clear under a draw stores the clear's.
 #[test]
 fn bfloat_load_passes_leave_metal_s_codes() {
-    let (messages, _cache, lane) = m4_lane();
+    let (messages, _cache, lane) = lane();
     let mut wrong = Vec::new();
     for (pf, channels, _, cleared) in FORMATS {
         let form = ExtendedRange::of(pf).expect("a bfloat format");
@@ -867,7 +861,7 @@ fn drawn(
 /// and the `float`s around each code's tie, and every `half` code.
 #[test]
 fn bfloat_draws_store_metal_s_codes() {
-    let (messages, _cache, lane) = m4_lane();
+    let (messages, _cache, lane) = lane();
     let mut wrong = Vec::new();
     for (pf, sweep_of, toward_zero, nearest_even) in DRAWN {
         let channels = FORMATS

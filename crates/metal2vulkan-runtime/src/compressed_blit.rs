@@ -31,8 +31,11 @@
 //! takes the compressed image's bytes of the heap).
 //!
 //! **Not measured**: a texture of many samples (the runtime leaves its bytes), and a region
-//! copied onto itself (nothing is recorded for it, as before). Each Metal level states whether
-//! its release was measured (`MetalLevel::compressed_blit`; both are).
+//! copied onto itself (nothing is recorded for it, as before). Each rule matched every texel of
+//! its formats' blits through a texture Metal compresses (private, array, heap, texture to
+//! texture, a shared texture's blit out), and every texture Metal keeps uncompressed, every CPU
+//! copy and 7 other formats kept their bytes, at the release every device answers as
+//! (`metal_release.rs`; an Apple M3 Max and an Apple M4 alike).
 
 use super::blit::{reads, writes, BlitCommandEncoder, TRANSFER};
 use super::blit_plan::{BufferRange, RowsCopy};
@@ -44,7 +47,7 @@ use super::texture::{buffer_image_copy, Texture};
 use super::texture_descriptor::{TextureDescriptor, TextureLayout};
 use super::tracker::{Access, Barrier};
 use super::values::{ResourceOptions, StorageMode};
-use super::{Buffer, Device, MetalLevel};
+use super::{Buffer, Device};
 use crate::device::functions::Vk;
 use ash::vk;
 use metal2vulkan::bind::{CompressedBlit, CompressedBlitModule};
@@ -57,7 +60,7 @@ use std::ops::Range;
 /// The rule of the texels Metal's GPU blits write where `texture` is a side of the blit: its
 /// format's (`CompressedBlit::of`) where Metal keeps the texture losslessly compressed (a texture
 /// of an image, single-sampled, whose texture, or a view's first texture, `metal_compresses`
-/// holds for) and the device's Metal level measured the rule; `None` elsewhere.
+/// holds for); `None` elsewhere.
 pub(super) fn rule_of(texture: &Texture) -> Option<CompressedBlit> {
     if texture.over_buffer() {
         return None;
@@ -72,20 +75,18 @@ pub(super) fn rule_of(texture: &Texture) -> Option<CompressedBlit> {
         [root.width(), root.height()],
         texture.sample_count(),
         (root.usage(), root.allow_gpu_optimized_contents()),
-        texture.device().properties().metal_level,
     )
 }
 
 /// The rule of Metal's GPU blits of a texture of `pixel_format` whose texture (a view's first) is
 /// of `texture_type`, its level 0 `width` by `height`, of `samples` samples and the
-/// `(usage, allowGPUOptimizedContents)` of `optimized`, at the Metal `level` (`rule_of`).
+/// `(usage, allowGPUOptimizedContents)` of `optimized` (`rule_of`).
 fn rule_for(
     pixel_format: PixelFormat,
     texture_type: TextureType,
     [width, height]: [u64; 2],
     samples: u64,
     (usage, allow_gpu_optimized_contents): (TextureUsage, bool),
-    level: MetalLevel,
 ) -> Option<CompressedBlit> {
     let one_row = matches!(texture_type, TextureType::Type1D | TextureType::Type1DArray);
     let level0 = [width, if one_row { 1 } else { height }];
@@ -93,7 +94,7 @@ fn rule_for(
     let compressed =
         samples == 1 && metal_compresses(colour, usage, allow_gpu_optimized_contents, level0);
     compressed
-        .then(|| level.compressed_blit(pixel_format))
+        .then(|| CompressedBlit::of(pixel_format))
         .flatten()
 }
 
@@ -142,7 +143,6 @@ impl Device {
             [u64::from(width), u64::from(height)],
             u64::from(layout.samples),
             (usage, true),
-            properties.metal_level,
         );
         let kept = reachable || !descriptor.allow_gpu_optimized_contents;
         let rewrites = properties.driver_defects.contains(&defect)

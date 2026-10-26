@@ -4,15 +4,9 @@
 //! a 2D, 2D array, cube, cube array or 3D texture or a view of its texture's format, whatever its
 //! levels' sizes.
 //!
-//! Each level is the Apple M3 Max's at the device's Metal level (`MetalLevel::mipmap_rule`,
-//! `bind::MipmapRule`). Under macOS 26.7: its bilinear (trilinear in 3D) filter of the level above
-//! at each texel's centre for the first computed level and every level of a 3D chain, and its
-//! own shader arithmetic below the first level of a 2D chain, an array or a cube whose first
-//! level is at most 64 texels wide and tall, and of the wider and taller ones whose M3 Max passes
-//! are known (`bind::MipmapFilterChain`'s docs). Those passes depend on whether Metal keeps the
-//! texture losslessly compressed (`texture/heap_tiled.rs`'s `metal_compresses`). Below the first
-//! level of another chain an Apple M4's filter stands in. Under macOS 27.0.1: its filter of the
-//! level above at every level of every chain.
+//! Each level is the Apple M3 Max's at the release every device answers as (`metal_release.rs`,
+//! `bind::MipmapRule::Filter`): its bilinear (trilinear in 3D) filter of the level above at each
+//! texel's centre, at every level of every chain.
 //!
 //! **The command.** One blit command, between barriers from the commands before it and to the
 //! ones after it ([`BlitCommandEncoder::command`]), over a scratch block the device keeps between
@@ -39,10 +33,8 @@
 //! out, the mipmaps take the device's blit chain instead, as before this path (an extended-range
 //! format, which no blit filters, is refused).
 //!
-//! **Announced** (`mipmaps-as-apple-m4`, once per device) where an Apple M3 Max's answer may
-//! differ from the chain's (`MipmapFilterChain::unlike_an_m3`), and (`mipmap-tie-rounding`, once
-//! per device) where a level may be one unit from Metal's at a sum a hair from a rounding
-//! boundary (`MipmapFilterChain::near_ties`).
+//! **Announced** (`mipmap-tie-rounding`, once per device) where a level may be one unit from
+//! Metal's at a sum a hair from a rounding boundary (`MipmapFilterChain::near_ties`).
 
 use super::binding_view::{views_as, VkView};
 use super::blit::BlitCommandEncoder;
@@ -99,8 +91,8 @@ impl BlitCommandEncoder {
         let device = self.core().device().clone();
         let fetch = fetch_view(plan, facts, &device);
         let limits = &device.properties().description.limits;
-        // Whether Metal keeps the texture (a view's first texture) losslessly compressed: the M3
-        // Max's passes depend on it.
+        // Whether Metal keeps the texture (a view's first texture) losslessly compressed, which
+        // the chain's plan takes.
         let mut root = texture;
         while let Some(parent) = root.parent_texture() {
             root = parent;
@@ -119,7 +111,7 @@ impl BlitCommandEncoder {
             record.level_count,
             volume,
             compressed,
-            device.properties().metal_level.mipmap_rule(),
+            crate::metal_release::MIPMAP_RULE,
             limits.min_storage_buffer_offset_alignment,
             limits.max_storage_buffer_range,
             [
@@ -342,23 +334,6 @@ impl BlitCommandEncoder {
             })
             .collect();
         self.scrub(texture, written)?;
-        if chain.unlike_an_m3 {
-            let (pixel_format, texture_type) = (record.pixel_format, record.texture_type);
-            let levels = record.level_count;
-            device.degrade(Degradation::MipmapsAsAppleM4, || {
-                (
-                    format!(
-                        "generate_mipmaps of a {} {texture_type:?} texture of {levels} levels",
-                        pixel_format.name()
-                    ),
-                    "its levels below the first follow an Apple M4's filter where an Apple M3 \
-                     Max's passes are not known (a compressed 2D chain with a pass more than 128 \
-                     times wider than tall), or a model of the M3 Max's that a few of its \
-                     measured values miss"
-                        .to_owned(),
-                )
-            });
-        }
         if chain.near_ties {
             let (pixel_format, texture_type) = (record.pixel_format, record.texture_type);
             let levels = record.level_count;
@@ -369,9 +344,7 @@ impl BlitCommandEncoder {
                         pixel_format.name()
                     ),
                     "a level's value whose sum lies a hair from a rounding boundary may be one \
-                     unit from Metal's: an 8-bit sRGB code of a filtered level, an \
-                     extended-range sRGB code, or a 16-bit float level read from the values \
-                     the level above kept"
+                     unit from Metal's: an 8-bit sRGB code of a filtered level"
                         .to_owned(),
                 )
             });

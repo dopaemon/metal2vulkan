@@ -607,8 +607,7 @@ driver's. Each is open work.
   alpha, read out of Metal's own stored words; each channel `ChannelWrite::HalfUnorm`'s rule, as
   its four siblings; `generateMipmapsForTexture:` computed by `bind::mipmap_filter` on every
   device, with the blit chain's per-device check against its `mipmap_answers.txt` block where the
-  kernel cannot run. Below the first level of a 2D chain under macOS 26.7's rule its answer is
-  announced as an M4's (`mipmaps-as-apple-m4`): only 27.0.1 could be measured here.
+  kernel cannot run.
   What is still open is the **render target** on a device whose `A4R4G4B4_UNORM_PACK16` carries no
   `COLOR_ATTACHMENT` -- both MoltenVK profiles and the RTX 5080 -- where the format is refused
   rather than rendered through the view of its word. Metal takes both a `[[color(0)]]` fragment

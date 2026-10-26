@@ -484,7 +484,6 @@ mod tests {
     /// widening shows as the texel that moved rather than as a lane that stops passing on one Mac.
     #[test]
     fn metals_recorded_words_are_the_rule_the_lane_measured() {
-        use metal2vulkan_runtime::MetalLevel;
         for case in all() {
             let recording = match crate::recording::read(case.name()) {
                 Ok(recording) => recording,
@@ -493,7 +492,7 @@ mod tests {
                 Err(_) => continue,
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name));
             let taken = answer
                 .deterministic()

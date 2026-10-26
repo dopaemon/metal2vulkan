@@ -29,7 +29,7 @@
 
 use super::degrade_notices::counts;
 use super::heap_layouts::HEAP_LAYOUTS;
-use super::heap_metal_sizes::stacked_nil_alignment;
+use super::heap_metal_sizes::STACKED_NIL_ALIGNMENT;
 use super::host_memory::{gpu_fill, gpu_read, on_device, run};
 use super::presenting::Adopted;
 use super::textures::{no_texture_alone, pattern, texel_bytes};
@@ -1281,8 +1281,8 @@ fn tiling_refusal(error: &Error) -> Option<LinearNeed> {
 /// of transfers alone, `device/staging.rs` in the runtime). No colour texture is refused
 /// `NotImplemented(HeapTextureMemory)`: one whose image needs extended usage, such as a written
 /// sRGB texture, is checked format by format. `Unspecialized` takes Metal's answers: 0 bytes from
-/// the query, at 128 for a 2D texture and the device's level's alignment for a cube, a 3D texture
-/// or an array (`stacked_nil_alignment`), and no texture from the call
+/// the query, at 128 for a 2D texture, a cube, a 3D texture or an array (`STACKED_NIL_ALIGNMENT`),
+/// and no texture from the call
 /// (`TextureProblem::Unspecialized`, Metal's nil; an M4 under macOS 27.0.1, every
 /// usage). A format Metal makes no texture of from a descriptor alone, such as a two-plane YCbCr
 /// one, takes Metal's answers too: 0 bytes from the query, at 16 for a two-plane YCbCr 2D texture
@@ -1368,7 +1368,7 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
                     let align = match descriptor.texture_type {
                         TextureType::Type1D | TextureType::Type2D => 128,
                         TextureType::TextureBuffer => 16,
-                        _ => stacked_nil_alignment(device),
+                        _ => STACKED_NIL_ALIGNMENT,
                     };
                     assert_eq!(
                         (answer.size, answer.align, descriptor.pixel_format),

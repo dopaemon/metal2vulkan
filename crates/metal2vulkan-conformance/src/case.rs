@@ -622,8 +622,6 @@ pub struct Venue {
     pub driver: String,
     /// The API version the device runs.
     pub api: String,
-    /// The Metal level the side answers as ([`metal2vulkan_runtime::MetalLevel::macos`]).
-    pub metal_level: String,
 }
 
 impl Venue {
@@ -635,11 +633,7 @@ impl Venue {
 
 impl std::fmt::Display for Venue {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            out,
-            "{} ({}, API {}, Metal level {})",
-            self.device, self.driver, self.api, self.metal_level
-        )
+        write!(out, "{} ({}, API {})", self.device, self.driver, self.api)
     }
 }
 

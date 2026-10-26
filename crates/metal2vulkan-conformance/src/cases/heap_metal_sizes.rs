@@ -11,9 +11,8 @@
 //! 6 x 3 4:2:2 texture, 20480 for a 64 x 64 two-plane extended-range one, and some 240 more — and
 //! until now nothing tied them to a Metal run: they were taken on an Apple M4 by hand, written into
 //! assertions, and the probe was thrown away. The runtime answers them from a **model** of Metal's
-//! arithmetic (`texture/heap_tiled.rs`) that is the same on every device at one Metal level, so the
-//! numbers are a contract with Metal and with nothing else, and the only thing that can check them
-//! is Metal. Record mode now does, on the oracle, as often as anybody asks.
+//! arithmetic (`texture/heap_tiled.rs`) that is the same on every device, so the numbers are a
+//! contract with Metal and with nothing else, and the only thing that can check them is Metal. Record mode now does, on the oracle, as often as anybody asks.
 //!
 //! # Why every case here is safe
 //!
@@ -224,9 +223,9 @@ const STACKABLE_TYPES: [(TextureType, u32, u32); 8] = [
 /// `Unspecialized`, Apple's private format: 0 bytes at the alignment of its texture type, and no
 /// texture from any creator.
 ///
-/// The alignment is the subject. It is a Metal-level fact — 16 KiB for the stacked types under
-/// macOS 26.7, 128 under 27.0.1 — which is exactly the kind of answer a recording keyed by Metal
-/// level exists to hold, and exactly the kind a comment cannot.
+/// The alignment is the subject. It is a fact of the release — 128 for the stacked types under
+/// macOS 27.0.1 — which is exactly the kind of answer a recording keyed by its release exists to
+/// hold, and exactly the kind a comment cannot.
 ///
 /// `ShaderAtomic` is not among the usages, and must not be: Metal ends its own process on it.
 fn unspecialized() -> HeapSizeCase {

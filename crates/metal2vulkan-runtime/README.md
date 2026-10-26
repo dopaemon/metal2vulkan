@@ -139,7 +139,6 @@ Vulkan-side choices Metal has no counterpart for:
 | `gpu_times_from_host` | Answer command buffers' GPU times from the host clock, sparing two timestamps per command buffer. |
 | `announce_each` | Degradation kinds to announce at every occurrence instead of once. |
 | `lowering_refuses` | Degradation kinds that refuse a render encoder's call when its lowering after the call meets them (`RenderLoweringPolicy::Worker`), failing its command buffer, instead of being announced. Empty by default. |
-| `metal_level` | The macOS release whose Metal the device answers as (the host's by default). |
 | `record_executions` | Keep, per command buffer, which pipeline each dispatch and draw ran (`CommandBuffer::executions`). Off by default. |
 | `assume_unmeasured_identity` | A diagnostic: take the device as another GPU of its driver at its release, one no measurement names, so it runs the paths an unmeasured device of that driver runs (every exact path, every assumed defect, no deviation measured on one GPU alone) and says so in its `metal2vulkan-unmeasured-driver` message. Off by default. |
 
@@ -351,6 +350,12 @@ tables for it (features, limits and pixel-format capabilities) is exact on the d
 `Device::family_blockers` names each blocking row and why: not built yet (`RowState::Gap`), not
 possible on this device (a refusal), or Metal's own answer is no. Run it on the device for its
 list.
+
+Where Metal's answers differ by macOS release (which pixel formats it describes, how a heap
+texture's blocks lie, how `generate_mipmaps` makes each level, its private device properties),
+every device answers as one release, `MACOS_RELEASE` (macOS 27.0.1, measured on an Apple M3 Max),
+on every host, whatever release the host runs. What a device can do, its GPU family, features and
+limits, follows its GPU.
 
 ## Out of scope
 

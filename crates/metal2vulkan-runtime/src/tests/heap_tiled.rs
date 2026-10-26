@@ -6,11 +6,10 @@
 //! second probe's answers.
 
 use crate::copy_plan::block_bytes;
-use crate::metal_level::MetalLevel;
 use crate::texture::heap_tiled::{
     fresh_pattern, level_bytes, lossless_answer, metal_compresses, metal_heap_layout,
     own_heap_layout, pattern_levels, sample_grid, shadow_tiles, BlockPlacement, Elements,
-    FreshDepth, FreshPattern, GpuRows, HeapLayout, TiledLayout, Untiled,
+    FreshDepth, FreshPattern, HeapLayout, TiledLayout, Untiled,
 };
 use crate::texture_descriptor::TextureLayout;
 use metal2vulkan::metal::format::byte_format;
@@ -410,7 +409,6 @@ impl Row {
             block => Elements::Blocks {
                 block,
                 placement: BlockPlacement::Halved,
-                gpu_rows: GpuRows::AsCpu,
             },
         };
         TiledLayout::of(
@@ -534,7 +532,6 @@ fn block_compressed_allocations_are_the_layout_s() {
         let elements = Elements::Blocks {
             block: [4, 4],
             placement: BlockPlacement::Narrow,
-            gpu_rows: GpuRows::AsCpu,
         };
         let layout = TiledLayout::of(unit, elements, T::Type2D, [w, h, 1], levels, 1).unwrap();
         let got: Vec<u64> = layout.levels.iter().map(|level| level.base).collect();
@@ -707,9 +704,8 @@ fn depth_stencil_answers_are_their_planes() {
             [w, h, 1],
             (levels, slices, 1),
         );
-        let level = MetalLevel::MacOS27_0_1;
         let format = Format::D32_SFLOAT_S8_UINT;
-        let metal = metal_heap_layout(&ds, usage, optimized, format, level);
+        let metal = metal_heap_layout(&ds, usage, optimized, format);
         let answer = metal.answer.map(|a| (a.size, a.align));
         assert_eq!(answer, Some((size, align)), "{what}");
     }
@@ -734,31 +730,29 @@ fn texture(
 }
 
 /// How the runtime lays a heap texture out over host pages, by its format, usage and shape: a
-/// plain or block-compressed format whose image holds Metal's bytes tiled (PVRTC under 27.0.1),
-/// and an uncompressed multisample texture's samples; a compressed texture, a PVRTC one under
-/// 26.7, or one whose image holds other bytes, untiled, each with its kind, and the answers
-/// Metal's where measured.
+/// plain or block-compressed format whose image holds Metal's bytes tiled (PVRTC among them), and
+/// an uncompressed multisample texture's samples; a compressed texture, a block-compressed one of
+/// a family whose placement is not measured (ASTC 4 x 2), or one whose image holds other bytes,
+/// untiled, each with its kind, and the answers Metal's where measured.
 #[test]
 fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
     use crate::degradation::Degradation as D;
-    const M4: MetalLevel = MetalLevel::MacOS27_0_1;
-    const M3: MetalLevel = MetalLevel::MacOS26_7;
     let write = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
     let read = TextureUsage::SHADER_READ;
     let rgba = texture(T::Type2D, PixelFormat::RGBA8Unorm, [64, 64, 1], (1, 1, 1));
-    let tiled = metal_heap_layout(&rgba, write, true, Format::R8G8B8A8_UNORM, M4);
+    let tiled = metal_heap_layout(&rgba, write, true, Format::R8G8B8A8_UNORM);
     let answer = tiled.answer.unwrap();
     assert_eq!((answer.size, answer.align), (16384, 128));
     assert!(matches!(tiled.layout, HeapLayout::Tiled(_)));
     // Compressed: its answer, and the lossless kind.
-    let lossless = metal_heap_layout(&rgba, read, true, Format::R8G8B8A8_UNORM, M4);
+    let lossless = metal_heap_layout(&rgba, read, true, Format::R8G8B8A8_UNORM);
     assert_eq!(lossless.answer.map(|a| a.size), Some(16512));
     let HeapLayout::Untiled(untiled) = lossless.layout else {
         panic!("a compressed texture is tiled");
     };
     assert_eq!(untiled.kind, D::HeapTextureLosslessLayout);
     // An image of other bytes.
-    let other = metal_heap_layout(&rgba, write, true, Format::B8G8R8A8_UNORM, M4);
+    let other = metal_heap_layout(&rgba, write, true, Format::B8G8R8A8_UNORM);
     let HeapLayout::Untiled(untiled) = other.layout else {
         panic!("an image of other bytes is tiled");
     };
@@ -771,33 +765,32 @@ fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
         [100, 36, 1],
         (7, 3, 1),
     );
-    let blocks = metal_heap_layout(&bc1, read, true, Format::BC1_RGBA_UNORM_BLOCK, M4);
+    let blocks = metal_heap_layout(&bc1, read, true, Format::BC1_RGBA_UNORM_BLOCK);
     assert_eq!(blocks.answer.map(|a| (a.size, a.align)), Some((17664, 128)));
     assert!(matches!(blocks.layout, HeapLayout::Tiled(_)));
-    let m3 = metal_heap_layout(&bc1, read, true, Format::BC1_RGBA_UNORM_BLOCK, M3);
-    assert_eq!(m3.answer, blocks.answer);
-    assert!(matches!(m3.layout, HeapLayout::Tiled(_)));
     let pvrtc = texture(
         T::Type2D,
         PixelFormat::PVRTCRGBA4BPP,
         [64, 64, 1],
         (7, 1, 1),
     );
-    // PVRTC: Metal's answer and its tiles under 27.0.1, untiled and unanswered under 26.7.
+    // PVRTC: Metal's answer and its tiles.
     let format = Format::PVRTC1_4BPP_UNORM_BLOCK_IMG;
-    let m3_pvrtc = metal_heap_layout(&pvrtc, read, true, format, M3);
-    assert_eq!(m3_pvrtc.answer, None);
-    let HeapLayout::Untiled(untiled) = m3_pvrtc.layout else {
-        panic!("a PVRTC texture is tiled at 26.7's level");
-    };
-    assert_eq!(untiled.kind, D::HeapTextureBlockCompressedLayout);
-    let m4_pvrtc = metal_heap_layout(&pvrtc, read, true, format, M4);
+    let m4_pvrtc = metal_heap_layout(&pvrtc, read, true, format);
     assert_eq!(
         m4_pvrtc.answer.map(|a| (a.size, a.align)),
         Some((3200, 128))
     );
     assert!(matches!(m4_pvrtc.layout, HeapLayout::Tiled(_)));
-    let decoded = metal_heap_layout(&bc1, read, true, Format::R8G8B8A8_UNORM, M4);
+    // ASTC 4 x 2: a family whose blocks' placement is not measured, untiled and unanswered.
+    let astc = texture(T::Type2D, PixelFormat::ASTC4x2LDR, [64, 64, 1], (1, 1, 1));
+    let unmeasured = metal_heap_layout(&astc, read, true, Format::UNDEFINED);
+    assert_eq!(unmeasured.answer, None);
+    let HeapLayout::Untiled(untiled) = unmeasured.layout else {
+        panic!("an ASTC 4 x 2 texture is tiled");
+    };
+    assert_eq!(untiled.kind, D::HeapTextureBlockCompressedLayout);
+    let decoded = metal_heap_layout(&bc1, read, true, Format::R8G8B8A8_UNORM);
     assert_eq!(decoded.answer, blocks.answer);
     let HeapLayout::Untiled(untiled) = decoded.layout else {
         panic!("a block-compressed texture held decoded is tiled");
@@ -815,7 +808,6 @@ fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
         TextureUsage::RENDER_TARGET,
         false,
         Format::R8G8B8A8_UNORM,
-        M4,
     );
     assert_eq!(
         multisample.answer.map(|a| (a.size, a.align)),
@@ -835,7 +827,7 @@ fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
         (1, 1, 1),
     );
     let format = Format::D32_SFLOAT_S8_UINT;
-    let two = metal_heap_layout(&ds, write, false, format, M4);
+    let two = metal_heap_layout(&ds, write, false, format);
     assert_eq!(two.answer.map(|a| (a.size, a.align)), Some((0x5000, 128)));
     let HeapLayout::Tiled(tiles) = &two.layout else {
         panic!("a two-aspect texture is untiled");
@@ -848,28 +840,28 @@ fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
         Some(ImageAspectFlags::STENCIL),
     );
     assert_eq!(parts, [(depth, 0, 4, 0x4000), (stencil, 0x4000, 1, 0x1000)]);
-    let kept = metal_heap_layout(&ds, write, true, format, M4);
+    let kept = metal_heap_layout(&ds, write, true, format);
     assert_eq!(kept.answer.map(|a| (a.size, a.align)), Some((0x9080, 128)));
     let HeapLayout::Untiled(untiled) = kept.layout else {
         panic!("a compressed two-aspect texture is tiled");
     };
     assert_eq!(untiled.kind, D::HeapTextureLosslessLayout);
-    let shadow = shadow_tiles(&ds, format, M4, &kept.layout);
+    let shadow = shadow_tiles(&ds, format, &kept.layout);
     let Some(HeapLayout::Uncompressed(tiles)) = shadow else {
         panic!("a compressed two-aspect texture has no shadow's tiles");
     };
     let ats: Vec<_> = tiles.parts.iter().map(|part| part.at).collect();
     assert_eq!((ats, tiles.size), (vec![0, 0x8000], 0x9000));
-    let other = metal_heap_layout(&ds, write, false, Format::D32_SFLOAT, M4);
+    let other = metal_heap_layout(&ds, write, false, Format::D32_SFLOAT);
     assert!(matches!(other.layout, HeapLayout::Untiled(_)));
     // A depth texture without GPU-optimized contents: tiled.
     let depth = texture(T::Type2D, PixelFormat::Depth32Float, [64, 64, 1], (1, 1, 1));
-    let tiled_depth = metal_heap_layout(&depth, read, false, Format::D32_SFLOAT, M4);
+    let tiled_depth = metal_heap_layout(&depth, read, false, Format::D32_SFLOAT);
     assert!(matches!(tiled_depth.layout, HeapLayout::Tiled(_)));
     // A stencil view: a `Stencil8` texture's tiles and answers (the M3 Max under 27.0.1), the
     // tiles its image's stencil aspect's; kept compressed, a shadow's uncompressed tiles alike.
     let view = texture(T::Type2D, PixelFormat::X32Stencil8, [100, 70, 1], (1, 1, 1));
-    let x32 = metal_heap_layout(&view, read, false, format, M4);
+    let x32 = metal_heap_layout(&view, read, false, format);
     assert_eq!(x32.answer.map(|a| (a.size, a.align)), Some((0x4000, 128)));
     let HeapLayout::Tiled(tiles) = &x32.layout else {
         panic!("a stencil view is untiled");
@@ -878,9 +870,9 @@ fn heap_textures_are_tiled_where_metal_s_layout_is_measured() {
         .map(|part| (part.aspect, part.at, part.layout.unit, part.layout.size))
         .collect();
     assert_eq!(parts, [(stencil, 0, 1, 0x4000)]);
-    let kept = metal_heap_layout(&view, read, true, format, M4);
+    let kept = metal_heap_layout(&view, read, true, format);
     assert_eq!(kept.answer.map(|a| (a.size, a.align)), Some((0x4200, 128)));
-    let shadow = shadow_tiles(&view, format, M4, &kept.layout);
+    let shadow = shadow_tiles(&view, format, &kept.layout);
     let Some(HeapLayout::Uncompressed(tiles)) = shadow else {
         panic!("a compressed stencil view has no shadow's tiles");
     };
@@ -1104,12 +1096,11 @@ fn multisample_answers_are_metal_s() {
         ),
         (P::Stencil8, 4, rt, true, ms, 1, [17, 13], (2176, 128), true),
     ];
-    const M4: MetalLevel = MetalLevel::MacOS27_0_1;
     for (pf, samples, usage, optimized, ty, slices, [w, h], (size, align), compressed) in rows {
         let what = format!("{pf:?} x{samples} {usage:?} {optimized} {ty:?} {slices} {w}x{h}");
         let layout = texture(ty, pf, [w, h, 1], (1, slices, samples));
         // An image of other bytes than Metal's elements: its samples apart.
-        let other = metal_heap_layout(&layout, usage, optimized, Format::UNDEFINED, M4);
+        let other = metal_heap_layout(&layout, usage, optimized, Format::UNDEFINED);
         let answer = other.answer.map(|a| (a.size, a.align));
         assert_eq!(answer, Some((size, align)), "{what}");
         let HeapLayout::Untiled(untiled) = other.layout else {
@@ -1121,12 +1112,12 @@ fn multisample_answers_are_metal_s() {
         }
         // Its image of Metal's elements: tiled, or its uncompressed tiles a shadow's.
         let format = image_format(pf);
-        let metal = metal_heap_layout(&layout, usage, optimized, format, M4);
+        let metal = metal_heap_layout(&layout, usage, optimized, format);
         assert_eq!(metal.answer, other.answer, "{what}");
         let tiles = match (compressed, &metal.layout) {
             (false, HeapLayout::Tiled(tiles)) => tiles.clone(),
             (true, HeapLayout::Untiled(untiled)) if *untiled == Untiled::LOSSLESS_MULTISAMPLE => {
-                match shadow_tiles(&layout, format, M4, &metal.layout) {
+                match shadow_tiles(&layout, format, &metal.layout) {
                     Some(HeapLayout::Uncompressed(tiles)) => tiles,
                     shadow => panic!("{what}: a shadow of {shadow:?}"),
                 }
@@ -1161,7 +1152,7 @@ fn multisample_answers_are_metal_s() {
     for (samples, optimized, ty, slices, [w, h], (size, align)) in ds_rows {
         let what = format!("Depth32Float_Stencil8 x{samples} {optimized} {ty:?} {slices} {w}x{h}");
         let ds = texture(ty, P::Depth32FloatStencil8, [w, h, 1], (1, slices, samples));
-        let metal = metal_heap_layout(&ds, rt, optimized, Format::D32_SFLOAT_S8_UINT, M4);
+        let metal = metal_heap_layout(&ds, rt, optimized, Format::D32_SFLOAT_S8_UINT);
         let answer = metal.answer.map(|a| (a.size, a.align));
         assert_eq!(answer, Some((size, align)), "{what}");
         let lossless = metal.layout == HeapLayout::Untiled(Untiled::LOSSLESS_MULTISAMPLE);
@@ -1170,7 +1161,7 @@ fn multisample_answers_are_metal_s() {
         // Its two planes, the stencil plane past the depth plane's answer rounded up to 16 KiB:
         // Metal's tiles, or a compressed one's uncompressed tiles.
         let format = Format::D32_SFLOAT_S8_UINT;
-        let tiles = match shadow_tiles(&ds, format, M4, &metal.layout) {
+        let tiles = match shadow_tiles(&ds, format, &metal.layout) {
             Some(HeapLayout::Tiled(tiles)) if !lossless => tiles,
             Some(HeapLayout::Uncompressed(tiles)) if lossless => tiles,
             shadow => panic!("{what}: a shadow of {shadow:?}"),
@@ -1182,7 +1173,7 @@ fn multisample_answers_are_metal_s() {
         let n = u64::from(samples);
         assert_eq!(units, [(Some(depth), 4 * n), (Some(stencil), n)], "{what}");
         let depth_plane = texture(ty, P::Depth32Float, [w, h, 1], (1, slices, samples));
-        let depth_answer = metal_heap_layout(&depth_plane, rt, optimized, Format::D32_SFLOAT, M4);
+        let depth_answer = metal_heap_layout(&depth_plane, rt, optimized, Format::D32_SFLOAT);
         let at = depth_answer
             .answer
             .expect("depth")
@@ -1195,13 +1186,7 @@ fn multisample_answers_are_metal_s() {
     }
     // Eight samples: not measured, no answer, refused over host pages.
     let eight = texture(ms, P::RGBA8Unorm, [64, 64, 1], (1, 1, 8));
-    let metal = metal_heap_layout(
-        &eight,
-        rt,
-        true,
-        Format::R8G8B8A8_UNORM,
-        MetalLevel::MacOS27_0_1,
-    );
+    let metal = metal_heap_layout(&eight, rt, true, Format::R8G8B8A8_UNORM);
     assert_eq!(metal.answer, None);
     assert_ne!(
         metal.layout,
@@ -1313,7 +1298,7 @@ fn multisample_samples_lie_where_metal_draws_them() {
     for (pf, format, samples, [w, h], size, stencil_at) in rows {
         let what = format!("{pf:?} x{samples} {w}x{h}");
         let layout = texture(T::Type2DMultisample, pf, [w, h, 1], (1, 1, samples));
-        let metal = metal_heap_layout(&layout, rt, false, format, MetalLevel::MacOS27_0_1);
+        let metal = metal_heap_layout(&layout, rt, false, format);
         assert_eq!(metal.answer.map(|a| a.size), Some(size), "{what}");
         let HeapLayout::Tiled(tiles) = metal.layout else {
             panic!("{what}: untiled");
@@ -1429,7 +1414,6 @@ fn pattern_levels_are_the_levels_of_16_or_more() {
 #[test]
 fn a_multisample_heap_texture_apart_from_metal_s_tiles_is_announced_untiled() {
     use crate::degradation::Degradation as D;
-    const M4: MetalLevel = MetalLevel::MacOS27_0_1;
     let read = TextureUsage::SHADER_READ;
     let format = Format::R8G8B8A8_UNORM;
     // A 4-sample texture of a sample grid of 8 x 8, under the 16 Metal compresses from: Metal
@@ -1441,7 +1425,7 @@ fn a_multisample_heap_texture_apart_from_metal_s_tiles_is_announced_untiled() {
         (1, 1, 4),
     );
     assert_eq!(sample_grid(4, [4, 4]), Some([8, 8]));
-    let metal = metal_heap_layout(&ms, read, true, format, M4);
+    let metal = metal_heap_layout(&ms, read, true, format);
     assert!(matches!(metal.layout, HeapLayout::Tiled(_)));
     // A shadow of Metal's own tiles holds the texture as Metal lays it out: no notice.
     assert_eq!(own_heap_layout(&metal.layout, 4, false), None);
@@ -1466,12 +1450,12 @@ fn a_multisample_heap_texture_apart_from_metal_s_tiles_is_announced_untiled() {
         [64, 64, 1],
         (1, 1, 4),
     );
-    let compressed = metal_heap_layout(&big, read, true, format, M4);
+    let compressed = metal_heap_layout(&big, read, true, format);
     let HeapLayout::Untiled(lossless) = compressed.layout else {
         panic!("Metal keeps a 64 x 64 4-sample texture compressed");
     };
     assert_eq!(lossless, Untiled::LOSSLESS_MULTISAMPLE);
-    let tiles = shadow_tiles(&big, format, M4, &HeapLayout::Untiled(lossless))
+    let tiles = shadow_tiles(&big, format, &HeapLayout::Untiled(lossless))
         .expect("a compressed multisample texture has a shadow's uncompressed tiles");
     assert!(matches!(tiles, HeapLayout::Uncompressed(_)));
     for apart in [false, true] {

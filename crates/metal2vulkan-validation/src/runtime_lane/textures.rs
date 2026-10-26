@@ -400,8 +400,8 @@ fn texture_2d(
     device.new_texture(&d)
 }
 
-/// Every pixel format makes a texture or is refused typed, and a format the device's Metal level
-/// describes none of is stopped (`NotAFormat`), the 24-bit depth formats on every venue; every
+/// Every pixel format makes a texture or is refused typed, and a format Metal describes none of is
+/// stopped (`NotAFormat`), the 24-bit depth formats on every venue; every
 /// uncompressed color format's new `Shared` texture reads zero, as Metal's do, takes bytes through
 /// `replace_region` and gives the same bytes back through `get_bytes`, with padded rows left alone.
 #[test]
@@ -411,9 +411,12 @@ fn every_format_makes_a_texture_or_is_refused_typed() {
     let (mut made, mut refused, mut round_trips) = (0, 0, 0);
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        // The device's formats: its Metal level's (the 24-bit depth formats at none).
-        let level = device.properties().metal_level;
-        let describes = |pf: PixelFormat| level.describes(pf);
+        // The formats Metal describes (the 24-bit depth formats not among them).
+        let describes = |pf: PixelFormat| {
+            device
+                .pixel_format_info(u64::from(pf.as_raw()))
+                .describes_a_format()
+        };
         for &pf in PixelFormat::ALL {
             match texture_2d(&device, pf, 8, 1) {
                 Ok(texture) => {

@@ -1295,10 +1295,9 @@ impl GraphicsState {
             .as_ref()
             .map(crate::dynamic_library::stage_with_dependencies);
         let descriptor = &loaded;
-        // Metal's descriptor validation stops an attachment in a format the device's Metal
-        // describes none of, first (`attachment_formats.rs`).
+        // Metal's descriptor validation stops an attachment in a format Metal describes none
+        // of, first (`attachment_formats.rs`).
         super::attachment_formats::check(
-            device,
             "new_render_pipeline_state",
             &descriptor.color_attachments,
             descriptor.depth_format,
@@ -1618,10 +1617,9 @@ impl GraphicsState {
     ) -> Result<GraphicsState, Error> {
         const CALL: &str = "new_mesh_render_pipeline_state";
         let _noted = NoteEntries(device);
-        // Metal's descriptor validation stops an attachment in a format the device's Metal
-        // describes none of, first (`attachment_formats.rs`).
+        // Metal's descriptor validation stops an attachment in a format Metal describes none
+        // of, first (`attachment_formats.rs`).
         super::attachment_formats::check(
-            device,
             CALL,
             &descriptor.color_attachments,
             descriptor.depth_format,

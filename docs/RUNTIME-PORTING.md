@@ -158,9 +158,9 @@ narrow refusal that the call's rustdoc describes.
 | Item | Metal | Runtime |
 |---|---|---|
 | `DispatchThreadgroups` | `dispatchThreadgroups:threadsPerThreadgroup:` | `ComputeCommandEncoder::dispatch_threadgroups` |
-| `DispatchThreadgroupsIndirect` | `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:…` | `ComputeCommandEncoder::dispatch_threadgroups_indirect`; at the Metal level `MacOS26_7`, a compute encoder run's first indirect dispatch in an encoder of another dispatch type is refused `Invalid` (`IndirectDispatchOfAnotherType`), where that Metal ends the process |
+| `DispatchThreadgroupsIndirect` | `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:…` | `ComputeCommandEncoder::dispatch_threadgroups_indirect` |
 | `DispatchThreads` | `dispatchThreads:threadsPerThreadgroup:` | `ComputeCommandEncoder::dispatch_threads` |
-| `DispatchThreadsIndirect` | `dispatchThreadsWithIndirectBuffer:indirectBufferOffset:` (SPI) | `ComputeCommandEncoder::dispatch_threads_indirect` (a host step reads the arguments); refused at `MacOS26_7` as `dispatch_threadgroups_indirect` is |
+| `DispatchThreadsIndirect` | `dispatchThreadsWithIndirectBuffer:indirectBufferOffset:` (SPI) | `ComputeCommandEncoder::dispatch_threads_indirect` (a host step reads the arguments) |
 | `EncodeStartDoWhile` | `encodeStartDoWhile` (SPI) | `ComputeCommandEncoder::encode_start_do_while`, as Metal runs it, its body in its unit's later encoders included, nested to any depth, laid down as 64 copies of the loop's commands (16 inside another loop, fewer past 16384 steps and gated dispatches, at least one), submitted again from where the loop stopped until it ends; a loop without bound runs until the process ends, as Metal's does |
 | `EncodeStartElse` | `encodeStartElse` (SPI) | `ComputeCommandEncoder::encode_start_else`, as Metal runs it; with no block open an unbalanced record, dropping its range of the unit's work as Metal's does, the unit's dispatches before its first record included |
 | `EncodeStartIf` | `encodeStartIf:offset:comparison:referenceValue:` (SPI) | `ComputeCommandEncoder::encode_start_if`, as Metal runs it, on a counter the runtime's step kernel moves; a live block open where its unit ends fails the command buffer where its commands skip there, as Metal's GPU recovery does (`PredicationOpenAtUnitEnd`); a word past its buffer reads as Metal reads it (the heap's bytes, or zero; zero announced where Metal reads unrelated memory) *(partial)* |
@@ -528,7 +528,7 @@ narrow refusal that the call's rustdoc describes.
 
 | Item | Metal | Runtime |
 |---|---|---|
-| `gpu_resource_id` | `gpuResourceID` | `DepthStencilState::gpu_resource_id`: `Invalid(DepthStencilResourceId)` below Apple10, as Metal's validation stops it |
+| `gpu_resource_id` | `gpuResourceID` | `DepthStencilState::gpu_resource_id`: 0 below Apple10, plain Metal's answer; `NotImplemented(IndirectRenderCommands)` on a device that claims Apple10 |
 
 ### `ComputePipeline`: `MTLComputePipelineState`
 

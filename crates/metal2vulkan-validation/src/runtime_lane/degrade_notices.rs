@@ -30,8 +30,7 @@
 //! steps ([`HOST_STEPS`]), indirect dispatches' host reads ([`INDIRECT_DISPATCHES`]), indexed draws
 //! past their index buffer ([`INDEX_FETCHES`]), depth twins ([`TWINS`]) and uploads into depth
 //! images ([`UPLOADS`]), a MoltenVK whose
-//! argument-buffer state is unread ([`ARGUMENT_BUFFERS`]), a device answering at a Metal level
-//! below its host's macOS release here ([`METAL_LEVELS`]), mipmaps within Metal's
+//! argument-buffer state is unread ([`ARGUMENT_BUFFERS`]), mipmaps within Metal's
 //! spread ([`MIPMAPS`]), a heap's depth or stencil texture laid apart from the heap ([`APART`]),
 //! a multisample depth or stencil texture without GPU-optimized contents that stays optimized
 //! ([`OPTIMIZED`]),
@@ -44,8 +43,7 @@
 //! whose fragment rounds its color writes in `color_writes` ([`COLOR_WRITES`]), render pipeline
 //! states whose stages an archive holds from two adds in `binary_archives` ([`ARCHIVES`]),
 //! texture views of another component layout shadowed in `view_reinterpretation`
-//! ([`VIEW_SHADOWS`]), mipmaps computed as an Apple M4's where an Apple M3 Max's differ in
-//! `mipmaps_exact` ([`M3_MIPMAPS`]) and mipmaps at a rounding the chain does not fit there
+//! ([`VIEW_SHADOWS`]), mipmaps at a rounding the chain does not fit in `mipmaps_exact`
 //! ([`TIE_MIPMAPS`]), executions of an indirect command buffer from one command
 //! with two lengths in `visibility` ([`REPEATED_STARTS`]), resources made with Metal's private
 //! option bit here ([`PRIVATE_OPTION`]), indexed indirect draws of bytes a draw wrote with no
@@ -195,7 +193,7 @@ use super::kept_buffer_bytes::KEPT_BYTES;
 use super::linear_attachments::{CHOSEN_COPIES, LINEAR_COPIES};
 use super::memoryless::MEMORYLESS_TEXEL_BUFFERS;
 use super::mesh_draws::EMULATED_MESH;
-use super::mipmaps_exact::{M3_MIPMAPS, TIE_MIPMAPS};
+use super::mipmaps_exact::TIE_MIPMAPS;
 use super::no_copy_heaps::HEAP;
 use super::pass_start_reads::{FRAGMENTS_BEFORE_GEOMETRY, IN_PLACE_VERTEX_READS};
 use super::patches::EMULATED_TESSELLATION;
@@ -262,9 +260,9 @@ use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CpuCacheMode, DebugMessage, Degradation, DegradationCategory, Device,
     DeviceOptions, DriverSetting, Error, HazardTrackingMode, HeapDescriptor, HeapType, HostMemory,
-    LayerSetting, LayerSettingValue, LoadAction, MessageSeverity, MetalLevel,
-    MultisampleStencilResolveFilter, Origin, PipelineOptions, Problem, RenderPassDescriptor,
-    ResourceOptions, RuntimeGap, Size, StorageMode, StoreAction, TextureDescriptor,
+    LayerSetting, LayerSettingValue, LoadAction, MessageSeverity, MultisampleStencilResolveFilter,
+    Origin, PipelineOptions, Problem, RenderPassDescriptor, ResourceOptions, RuntimeGap, Size,
+    StorageMode, StoreAction, TextureDescriptor,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -315,11 +313,10 @@ pub(super) const WRAPPED: [Degradation; 1] = [Degradation::WrappedImageLayoutTra
 pub(super) const POSITIONED: [Degradation; 1] = [Degradation::PositionsThroughScratch];
 
 /// The kinds a device announces as it is made, which the lane's constructor takes and checks
-/// exactly (`runtime_lane::creation_kinds`); `metal-level-below-host` is [`METAL_LEVELS`].
+/// exactly (`runtime_lane::creation_kinds`).
 /// `float-tininess-after-rounding` is announced by the devices `native_maths` makes with native
 /// device maths, on every venue but MoltenVK, and by none made with the lane's exact policy.
-pub(super) const CREATED: [Degradation; 3] = [
-    Degradation::MetalLevelNotMacOS,
+pub(super) const CREATED: [Degradation; 2] = [
     Degradation::DriverPipelineCacheKept,
     Degradation::FloatTininessAfterRounding,
 ];
@@ -514,7 +511,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &COLOR_WRITES,
         &ARCHIVES,
         &VIEW_SHADOWS,
-        &M3_MIPMAPS,
         &REPEATED_STARTS,
         &PRIVATE_OPTION,
         &IN_PLACE_VERTEX_READS,
@@ -539,7 +535,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &NOT_MIPMAPPED_ANISOTROPY,
         &IN_PLACE,
         &ARGUMENT_BUFFERS,
-        &METAL_LEVELS,
         &UNREADABLE,
         &UNVIEWABLE,
         &UNNAMED_SHADOWS,
@@ -635,7 +630,7 @@ fn moltenvk_argument_buffers_are_announced_where_unread_and_refused_off() {
                 || (description.vendor_id == 0x106b
                     && uab == limits.max_per_stage_descriptor_sampled_images));
         // The constructor checked the creation notices against `creation_kinds`.
-        let made = super::creation_kinds(&device, false);
+        let made = super::creation_kinds(&device);
         assert!(
             messages.take_notices().is_empty(),
             "announced past the creation"
@@ -755,86 +750,6 @@ fn exact_forms_past_the_compiler_bound_are_announced_exactly_there() {
             .unwrap();
         check("compute", longest);
     });
-}
-
-/// The kind a device answering at a Metal level below its host's macOS release takes
-/// ([`a_metal_level_below_the_host_release_is_announced_once`]).
-const METAL_LEVELS: [Degradation; 1] = [Degradation::MetalLevelBelowHost];
-
-/// A device opens at its host's Metal level, the device's site of
-/// [`METAL_LEVELS`]: on macOS, the measured level of the host's release, or else the newest
-/// measured below it, announcing [`METAL_LEVELS`] once, exactly where the release is not a
-/// measured one; off macOS, the newest level, announcing `metal-level-not-macos`. Every lane
-/// venue's macOS release is a measured level (26.7 on the M3, 27.0.1 on the M4) or none, so no
-/// venue announces [`METAL_LEVELS`] today; each checks the rule on its own host. A device made at a
-/// named level (`DeviceOptions::metal_level`) answers at it and announces neither. The lane's
-/// constructor checks each device's creation notices exactly (`creation_kinds`), so the test checks
-/// the level, that the constructor expects the notice exactly where the host's release is not a
-/// measured one, and that nothing more is announced.
-#[test]
-fn a_metal_level_below_the_host_release_is_announced_once() {
-    let cache = ScratchCache::new().unwrap();
-    let messages = Messages::default();
-    let host = super::host_release();
-    let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |_| {}).unwrap();
-    let level = device.properties().metal_level;
-    let made = assert_once(&messages.take_notices(), &[]);
-    let created = super::creation_kinds(&device, false);
-    let measured =
-        |level: MetalLevel| super::macos_release(level.macos()).expect("a level's release reads");
-    let (expected, below) = match host {
-        Some(version) => {
-            let at = MetalLevel::ALL
-                .into_iter()
-                .rev()
-                .find(|&level| measured(level) <= version)
-                .expect("the host's release is at or above a measured level");
-            (at, measured(at) != version)
-        }
-        None => (MetalLevel::NEWEST, false),
-    };
-    eprintln!(
-        "{}: host macOS {host:?}, Metal level {level}; made announcing {created:?}",
-        device.name()
-    );
-    assert_eq!(
-        level, expected,
-        "the device's Metal level on macOS {host:?}"
-    );
-    for kind in METAL_LEVELS {
-        assert_eq!(
-            created.contains(&kind),
-            below,
-            "{kind:?} exactly where macOS {host:?} is not a measured release: {created:?}"
-        );
-    }
-    assert_eq!(
-        created.contains(&Degradation::MetalLevelNotMacOS),
-        host.is_none(),
-        "metal-level-not-macos exactly off macOS: {created:?}"
-    );
-    assert!(made.is_empty(), "announced past the creation: {made:?}");
-    drop(device);
-    for named in MetalLevel::ALL {
-        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-            options.metal_level = Some(named);
-        })
-        .unwrap();
-        assert_eq!(device.properties().metal_level, named, "the level named");
-        let made = assert_once(&messages.take_notices(), &[]);
-        let created = super::creation_kinds(&device, true);
-        for kind in METAL_LEVELS
-            .into_iter()
-            .chain([Degradation::MetalLevelNotMacOS])
-        {
-            assert!(
-                !created.contains(&kind),
-                "{kind:?} at the named level {named}: {created:?}"
-            );
-        }
-        assert!(made.is_empty(), "announced past the creation: {made:?}");
-    }
-    layer_reported_nothing_at_all(&messages);
 }
 
 /// The kind an anisotropy past the device's largest takes
@@ -1873,14 +1788,14 @@ fn a_creation_s_notices_and_messages_reach_the_sink_on_the_asking_thread() {
     let made = made_lane_device(TEST_DEVICE, &lane, cache.path(), |options| {
         options.messages = Some(sink);
     });
-    let (device, level_named) = made.unwrap();
+    let device = made.unwrap();
     {
         let device = &device;
         let take = || -> Vec<(std::thread::ThreadId, u32, DebugMessage)> {
             heard.lock().unwrap().drain(..).collect()
         };
         let created: Vec<DebugMessage> = take().into_iter().map(|(_, _, m)| m).collect();
-        creation_heard_checked(device, level_named, &created, &lane).unwrap();
+        creation_heard_checked(device, &created, &lane).unwrap();
         // Notes announced as each state is made.
         let cases: Vec<PublicCase> = NOTED.map(|name| public_case(name).unwrap()).into();
         let (asker, ()) = on_a_utility_thread(|| {

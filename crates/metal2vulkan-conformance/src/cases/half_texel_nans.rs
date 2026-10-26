@@ -655,14 +655,13 @@ mod tests {
     /// counted where it does not, rather than asserted away in either direction.
     #[test]
     fn metals_recorded_halves_are_the_rule_the_lane_measured() {
-        use metal2vulkan_runtime::MetalLevel;
         for case in all() {
             let Ok(recording) = crate::recording::read(case.name()) else {
                 // A case recorded in a later commit of this batch.
                 continue;
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name));
             let taken = answer
                 .deterministic()

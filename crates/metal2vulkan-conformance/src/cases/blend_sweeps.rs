@@ -1973,7 +1973,6 @@ mod tests {
     /// `Min` and `Max` over the same two zero operands store `+0`, which is the other half.
     #[test]
     fn metals_subtract_stores_a_negative_zero_where_both_terms_are_zero() {
-        use metal2vulkan_runtime::MetalLevel;
         let case = all()
             .into_iter()
             .find(|case| case.sweep == Sweep::Operations)
@@ -1981,7 +1980,7 @@ mod tests {
         let Ok(recording) = crate::recording::read(case.name()) else {
             return;
         };
-        let answer = recording.answer(MetalLevel::NEWEST).unwrap();
+        let answer = recording.answer().unwrap();
         let taken = answer.deterministic().expect("one outcome");
         let blended = taken.root.child("blended").expect("the blended site");
         let held = layout();
@@ -2064,7 +2063,6 @@ mod tests {
     /// deliver any of them fails here rather than passing on bytes that happen to match.
     #[test]
     fn metals_recorded_texels_are_the_blend_model_at_every_pixel() {
-        use metal2vulkan_runtime::MetalLevel;
         let mut checked = 0usize;
         let mut unrecorded = Vec::new();
         for case in all() {
@@ -2073,7 +2071,7 @@ mod tests {
                 continue;
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             let taken = answer
                 .deterministic()

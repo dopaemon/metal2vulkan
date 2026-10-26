@@ -2,13 +2,9 @@
 //! `encodeStartIf:offset:comparison:referenceValue:`, `encodeStartElse` and `encodeEndIf`, and its
 //! loops, `encodeStartWhile:offset:comparison:referenceValue:` to `encodeEndWhile` and
 //! `encodeStartDoWhile` to `encodeEndDoWhile:offset:comparison:referenceValue:`, as Metal runs
-//! them (measured on an M3 Max under macOS 27.0.1, which the runtime answers as on every device
-//! and at every Metal level; an M4 under macOS 27.0.1 gave the same answers for every stream both
-//! ran). At macOS 26.7 the consumer's M3 Max gave the same answers wherever it recorded one (its
-//! unbalanced records, open blocks and loops); its unit model, fences and misused records there
-//! are not measured. What 26.7 does differently it does with or without a record: it ends the
-//! process at a run of compute encoders' first indirect dispatch in an encoder of another dispatch
-//! type, which the device answers by its level (`metal_level.rs`).
+//! them (measured on an M3 Max under macOS 27.0.1, the release every device answers as,
+//! `metal_release.rs`; an M4 under macOS 27.0.1 gave the same answers for every stream both
+//! ran).
 //!
 //! # What Metal does
 //!
@@ -186,10 +182,6 @@ pub(super) struct Predication {
     /// The command buffer's command-predication calls that returned `Ok` so far: the index of
     /// the next (the calls a loop's copies replay not counted).
     records: u32,
-    /// The run of compute encoders the open one is in, whose first indirect dispatch in an
-    /// encoder of another type than its first encoder's ends the process at some levels
-    /// (`MetalLevel::ends_at_a_runs_first_indirect_of_another_type`).
-    indirect_run: Option<IndirectRun>,
     /// The loops laid down so far: the next one's id ([`PredicationStep::id`]) is one more.
     loops: u32,
     /// The laying of the unit's outermost open loop, from its start (the module docs).
@@ -211,14 +203,13 @@ pub(super) struct Predication {
 }
 
 /// What a compute encoder found as it opened: its place among the command buffer's ended
-/// encoders, the event waits and signals encoded before it, its dispatch type, the index of the
-/// command buffer's next record, and the run of compute encoders it joined.
+/// encoders, the event waits and signals encoded before it, its dispatch type, and the index of
+/// the command buffer's next record.
 struct Opened {
     place: usize,
     events: (usize, usize),
     dispatch_type: DispatchType,
     records: u32,
-    indirect_run: Option<IndirectRun>,
 }
 
 /// The laying of a unit's outermost loop: its pieces in encoding order (`command_buffer/rerun.rs`),
@@ -437,22 +428,6 @@ impl Condition<'_> {
     }
 }
 
-/// A run of a command buffer's compute encoders one after another, with no other encoder and no
-/// event signal or wait between: at some Metal levels its first indirect dispatch in an encoder of
-/// another type than its first encoder's ends the process
-/// (`MetalLevel::ends_at_a_runs_first_indirect_of_another_type`).
-#[derive(Clone)]
-struct IndirectRun {
-    /// The place among the command buffer's ended encoders its last encoder takes.
-    place: usize,
-    /// The event waits and signals encoded before it.
-    events: (usize, usize),
-    /// Its first encoder's dispatch type.
-    first: DispatchType,
-    /// One of its indirect dispatches went through.
-    through: bool,
-}
-
 /// One unit of predication.
 struct Unit {
     /// The place among the command buffer's ended encoders its first compute encoder takes.
@@ -648,23 +623,11 @@ impl Predication {
         events: (usize, usize),
         dispatch_type: DispatchType,
     ) -> Vec<Vec<(EncoderState, Event)>> {
-        match &mut self.indirect_run {
-            Some(run) if run.place + 1 == place && run.events == events => run.place = place,
-            _ => {
-                self.indirect_run = Some(IndirectRun {
-                    place,
-                    events,
-                    first: dispatch_type,
-                    through: false,
-                })
-            }
-        }
         self.opened.push(Opened {
             place,
             events,
             dispatch_type,
             records: self.records,
-            indirect_run: self.indirect_run.clone(),
         });
         if let Some(unit) = &mut self.unit {
             if !unit.closing
@@ -723,21 +686,6 @@ impl Predication {
         }
     }
 
-    /// An indirect dispatch of the open encoder, of `dispatch_type`, where the device's Metal level
-    /// ends the process at a run's first one in an encoder of another type than the run's first
-    /// encoder's (`ends`): whether it goes through (once one did, every later one of the run
-    /// does).
-    pub(super) fn indirect_dispatch(&mut self, dispatch_type: DispatchType, ends: bool) -> bool {
-        let Some(run) = &mut self.indirect_run else {
-            return true;
-        };
-        if ends && !run.through && run.first != dispatch_type {
-            return false;
-        }
-        run.through = true;
-        true
-    }
-
     /// A command-predication call returned `Ok`: the next call's index is one more.
     pub(super) fn counted(&mut self) {
         self.records += 1;
@@ -773,8 +721,8 @@ impl Predication {
     }
 
     /// The predication the compute encoder at `place` encodes again with, where it encodes again
-    /// exactly ([`alone`](Self::alone)): its unit begun anew as it opened, the next record's index
-    /// and the run of compute encoders as they were then. Its records and dispatches then step
+    /// exactly ([`alone`](Self::alone)): its unit begun anew as it opened and the next record's
+    /// index as it was then. Its records and dispatches then step
     /// and gate as the first encoding's did, over a counter, steps and gates of their own; the
     /// first encoding's go with its recording, never submitted.
     pub(super) fn replaying(&self, place: usize) -> Option<Predication> {
@@ -785,7 +733,6 @@ impl Predication {
         Some(Predication {
             unit: Some(Unit::new(place, opened.events, opened.dispatch_type)),
             records: opened.records,
-            indirect_run: opened.indirect_run.clone(),
             ..Predication::default()
         })
     }

@@ -1646,10 +1646,9 @@ mod tests {
     /// The `blended` branch of `case`'s newest recorded Metal answer, or `None` where the case is
     /// unrecorded.
     fn recorded(case: &BlendInteraction) -> Option<Node> {
-        use metal2vulkan_runtime::MetalLevel;
         let recording = crate::recording::read(case.name()).ok()?;
         let answer = recording
-            .answer(MetalLevel::NEWEST)
+            .answer()
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
         let taken = answer
             .deterministic()

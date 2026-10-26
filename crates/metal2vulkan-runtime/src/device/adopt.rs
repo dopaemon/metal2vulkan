@@ -12,7 +12,6 @@ use crate::error::Error;
 use crate::gpu_time;
 use crate::image_barrier::MemoryReads;
 use crate::loader_word::LoaderWord;
-use crate::metal_level::{choose, Host};
 use crate::shader_cache::{CacheSetup, ShaderCacheOptions};
 use crate::sparse::device::SparseFeatures;
 use ash::vk;
@@ -98,10 +97,6 @@ pub struct RawDevice {
     /// [`DeviceOptions::lowering_refuses`](crate::DeviceOptions::lowering_refuses) says: none by
     /// default.
     pub lowering_refuses: BTreeSet<crate::Degradation>,
-    /// The macOS release whose Metal the device answers as, as
-    /// [`DeviceOptions::metal_level`](crate::DeviceOptions::metal_level) says: `None` by default,
-    /// the host's.
-    pub metal_level: Option<crate::MetalLevel>,
 }
 
 impl RawDevice {
@@ -132,7 +127,6 @@ impl RawDevice {
             gpu_times_from_host: false,
             announce_each: BTreeSet::new(),
             lowering_refuses: BTreeSet::new(),
-            metal_level: None,
         }
     }
 }
@@ -146,9 +140,7 @@ impl Device {
     /// `Unsupported` or `Compile`), one whose timeline semaphores step less than Vulkan
     /// requires (`Unsupported`, `Feature::TimelineSemaphores`), and a MoltenVK device without
     /// Metal argument buffers (`DriverSetting`): the consumer's instance must leave MoltenVK's
-    /// `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` on. And, with no `raw.metal_level`, a macOS host
-    /// below every measured release, or whose release cannot be read (`Unproven`,
-    /// `Problem::HostReleaseUnmeasured`).
+    /// `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS` on.
     ///
     /// # Safety
     ///
@@ -173,7 +165,6 @@ impl Device {
     ///   with the runtime.
     pub unsafe fn from_raw(raw: RawDevice, policy: DevicePolicy) -> Result<Device, Error> {
         let cache = CacheSetup::of(&raw.shader_cache, "from_raw")?;
-        let metal_level = choose(raw.metal_level, Host::this(), "from_raw")?;
         let static_fn = ash::StaticFn {
             get_instance_proc_addr: raw.get_instance_proc_addr,
         };
@@ -298,7 +289,6 @@ impl Device {
             memory_reads,
             owned: false,
             cache,
-            metal_level,
         };
         // SAFETY: the caller's contract.
         unsafe { Device::assemble(parts) }

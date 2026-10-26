@@ -442,7 +442,7 @@ fn answers_under(device: &Device, messages: &Messages, setting: Setting, bitcode
     // The constructor checked the creation notices against `creation_kinds`: the device's
     // multiply and fused multiply-add, taken under native device maths, announced as it was made.
     assert_eq!(
-        super::creation_kinds(device, false).contains(&Degradation::FloatTininessAfterRounding),
+        super::creation_kinds(device).contains(&Degradation::FloatTininessAfterRounding),
         maths && !metals,
         "{name}: float-tininess-after-rounding"
     );

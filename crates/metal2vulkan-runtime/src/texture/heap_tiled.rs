@@ -38,24 +38,15 @@
 //!   `Narrow` counts them so while the level before is a tile or more on that side, then halves the
 //!   first narrower level's texels (its blocks' whole texels), rounding down (BC, ETC2 and EAC on
 //!   the M4: level 3 of a 100 x 36 `BC1_RGBA` chain, 3 x 1 blocks of its own and 4 x 2 halved, lies
-//!   in tiles of 4 x 1, where `Halved` would take 4 x 2). An Apple M3 Max under macOS 26.7 (the
-//!   same 815 textures, packages `bc-m3pkg` and `bc-m3pkg2` rerun there) answers every texture
-//!   alike and places every family as `Halved` where its CPU copies (`replaceRegion`, `getBytes`)
-//!   reach the bytes; where its GPU does (a blit from or into a buffer), it counts a level's tiles
-//!   a row by the level's own blocks instead, `⌈b / tw⌉` (`GpuRows::Own`), so on 7 of the 815
-//!   (levels whose own and halved blocks fill a different number of tiles a row: level 1 of a 513 x
-//!   300 `BC1_RGBA` chain, 64 blocks of its own and 65 halved in tiles 64 wide) its GPU and its CPU
-//!   copies meet the level's blocks at other bytes, and a CPU copy reads back other blocks than a
-//!   blit wrote; the M4's GPU counts them as its CPU copies do (`GpuRows::AsCpu`). The release
-//!   makes the difference: the M3 Max under 27.0.1 answers every texture of
-//!   `tests/heap_tiled_blocks.rs` as the M4 does, its CPU's spans and its GPU's. The device's Metal
-//!   level names each family's placement and its GPU's count (`MetalLevel::heap_blocks`,
-//!   `MetalLevel::heap_block_gpu_rows`): the CPU copies place blocks by `TiledLevel::across`, the
-//!   kernel's moves by `TiledLevel::gpu_across`, as Metal's own two paths do. PVRTC's blocks lie
-//!   so too, `Halved`, under 27.0.1 (an Apple M3 Max: 320 answers, every PVRTC format square from
-//!   4 to 2048 texels, one level and full chains, one slice and three; every block of each level of
-//!   six textures, written by a row-linear blit; `tests/heap_tiled_blocks.rs`); under 26.7 they
-//!   are not measured, so a PVRTC texture there stays untiled
+//!   in tiles of 4 x 1, where `Halved` would take 4 x 2). The M3 Max under 27.0.1 answers every
+//!   texture of `tests/heap_tiled_blocks.rs` as the M4 does, its CPU's spans (`replaceRegion`,
+//!   `getBytes`) and its GPU's (a blit from or into a buffer), which count a level's tiles a row
+//!   alike. Each family's placement is the release's (`metal_release::heap_blocks`): the CPU
+//!   copies and the kernel's moves place blocks by `TiledLevel::across`, as Metal's own two paths
+//!   do. PVRTC's blocks lie so too, `Halved` (an Apple M3 Max: 320 answers, every PVRTC format
+//!   square from 4 to 2048 texels, one level and full chains, one slice and three; every block of
+//!   each level of six textures, written by a row-linear blit; `tests/heap_tiled_blocks.rs`). A
+//!   block-compressed format of none of those families stays untiled
 //!   (`heap-texture-block-compressed-layout`), its answer its device's.
 //! - **Lossless compression** (14174 answers of every plain format, type, shape, usage and storage
 //!   mode). Metal keeps a texture losslessly compressed where `allowGPUOptimizedContents` holds and
@@ -174,7 +165,7 @@ use super::super::depth_copy;
 use super::super::error::{internal, Error};
 use super::super::heap::SizeAndAlign;
 use super::super::image_plan::block_family;
-use super::super::metal_level::MetalLevel;
+use super::super::metal_release::heap_blocks;
 use super::super::owned_kernel::{OwnedKernel, OwnedModule, OwnedSets};
 use super::super::row_copies::RowCopies;
 use super::super::sample_interleave::InterleaveCopy;
@@ -293,17 +284,15 @@ pub(crate) fn level_bytes(
 pub(crate) enum Elements {
     /// A plain format's texels: a level's own, `⌊w0 / 2^l⌋`, for both.
     Texels,
-    /// A block-compressed format's blocks of `block` texels, placed as `placement` says, its
-    /// GPU's tiles a row counted as `gpu_rows` says.
+    /// A block-compressed format's blocks of `block` texels, placed as `placement` says.
     Blocks {
         block: [u64; 2],
         placement: BlockPlacement,
-        gpu_rows: GpuRows,
     },
 }
 
-/// How a level's Metal places a block-compressed texture's blocks in its levels' tiles (the
-/// module docs). Each level is allocated alike under both, of level 0's blocks halved per level,
+/// How Metal places a block-compressed texture's blocks in its levels' tiles (the module
+/// docs). Each level is allocated alike under both, of level 0's blocks halved per level,
 /// rounding up; each lies in tiles of its elements counted as here, `⌈e / tw⌉` tiles a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlockPlacement {
@@ -315,20 +304,7 @@ pub(crate) enum BlockPlacement {
     Narrow,
 }
 
-/// How a level's Metal counts a block-compressed level's tiles a row where its GPU reaches the
-/// texture (its blits; the runtime's kernel moves, `HeapTiledCopies`), whose CPU copies
-/// (`replaceRegion`, `getBytes`; `TiledLayout::element`) count them by the elements its
-/// placement counts (the module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GpuRows {
-    /// As its CPU copies count them (the M4 under 27.0.1).
-    AsCpu,
-    /// By the level's own blocks, `⌈b / tw⌉` (the M3 Max under 26.7): where that count differs
-    /// from its CPU copies', its GPU and its CPU copies meet the level's blocks at other bytes.
-    Own,
-}
-
-/// The families of block-compressed formats a level's Metal places alike (`MetalLevel`'s rows).
+/// The families of block-compressed formats Metal places alike (`metal_release::heap_blocks`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BlockFamily {
     /// BC1 to BC7, linear, sRGB, signed and unsigned.
@@ -414,14 +390,6 @@ impl Elements {
                 .map(|axis| narrowed([w0, h0][axis], shift, largest[axis], block[axis].max(1))),
         }
     }
-
-    /// How its GPU counts a level's tiles a row: a plain format's texels as its CPU copies do.
-    fn gpu_rows(self) -> GpuRows {
-        match self {
-            Elements::Texels => GpuRows::AsCpu,
-            Elements::Blocks { gpu_rows, .. } => gpu_rows,
-        }
-    }
 }
 
 /// `blocks` halved `shift` times, rounding up.
@@ -467,11 +435,9 @@ pub(crate) struct TiledLevel {
     pub(crate) depth: u64,
     /// Its tile, elements across and down: powers of two.
     pub(crate) tile: [u64; 2],
-    /// Its tiles a row, as Metal's CPU copies count them (`TiledLayout::element`).
+    /// Its tiles a row, as Metal's CPU copies and its GPU count them (`TiledLayout::element`; the
+    /// kernel's moves).
     pub(crate) across: u64,
-    /// Its tiles a row, as Metal's GPU counts them (`GpuRows`; the kernel's moves): `across`,
-    /// but a block-compressed level's own blocks' where its level counts them so.
-    pub(crate) gpu_across: u64,
     /// Its first byte from its chain's.
     pub(crate) base: u64,
     /// The bytes Metal lays it out in.
@@ -537,16 +503,11 @@ impl TiledLayout {
             let tile = [largest[0].min(pot(tw)), largest[1].min(pot(th))];
             let taken = bytes(level);
             let across = tw.div_ceil(tile[0]);
-            let gpu_across = match elements.gpu_rows() {
-                GpuRows::AsCpu => across,
-                GpuRows::Own => w.div_ceil(tile[0]),
-            };
             tiled.push(TiledLevel {
                 extent: [w, h],
                 depth: (d0 >> shift).max(1),
                 tile,
                 across,
-                gpu_across,
                 base: end,
                 bytes: taken,
             });
@@ -991,13 +952,13 @@ impl Untiled {
          in memory of its own, does not hold: it holds other bytes than Metal's samples, the \
          device cannot move them to and from the heap's bytes, or their layout is not measured",
     );
-    /// A block-compressed texture whose placement the device's Metal level does not measure
+    /// A block-compressed texture whose blocks' placement is not measured
     /// (`heap-texture-block-compressed-layout`).
     const BLOCK_COMPRESSED: Untiled = Untiled {
         kind: Degradation::HeapTextureBlockCompressedLayout,
         reason: "its format is block-compressed, whose blocks Metal places in each level by a \
                  rule that differs by format family and by machine, not measured for its \
-                 family at the device's Metal level",
+                 family",
     };
 
     /// A texture the runtime holds otherwise than tiled for `reason`
@@ -1103,8 +1064,8 @@ pub(crate) fn own_heap_layout(metal: &HeapLayout, samples: u32, apart: bool) -> 
     }
 }
 
-/// The layout a shadow of the heap's bytes holds a texture of `layout` (its image of `format`, at
-/// the Metal level `level`) in, where Metal lays it out as `metal`: Metal's tiles where it tiles
+/// The layout a shadow of the heap's bytes holds a texture of `layout` (its image of `format`) in,
+/// where Metal lays it out as `metal`: Metal's tiles where it tiles
 /// the texture ([`HeapLayout::Tiled`]); where it keeps the texture losslessly compressed
 /// ([`Untiled::LOSSLESS`], [`Untiled::LOSSLESS_MULTISAMPLE`]), the tiles it lays the texture in
 /// uncompressed ([`HeapLayout::Uncompressed`]); `None` for any other (a layout not measured, or
@@ -1112,7 +1073,6 @@ pub(crate) fn own_heap_layout(metal: &HeapLayout, samples: u32, apart: bool) -> 
 pub(crate) fn shadow_tiles(
     layout: &TextureLayout,
     format: Format,
-    level: MetalLevel,
     metal: &HeapLayout,
 ) -> Option<HeapLayout> {
     match metal {
@@ -1130,7 +1090,7 @@ pub(crate) fn shadow_tiles(
                 return depth_stencil_tiles(layout, format, true).map(HeapLayout::Uncompressed);
             }
             // With `allowGPUOptimizedContents` off Metal keeps every texture uncompressed.
-            let plain = metal_heap_layout(layout, TextureUsage::SHADER_READ, false, format, level);
+            let plain = metal_heap_layout(layout, TextureUsage::SHADER_READ, false, format);
             match plain.layout {
                 HeapLayout::Tiled(tiled) => Some(HeapLayout::Uncompressed(tiled)),
                 _ => None,
@@ -1232,7 +1192,6 @@ pub(crate) fn footprint_size(
         true => Elements::Blocks {
             block,
             placement: BlockPlacement::Halved,
-            gpu_rows: GpuRows::AsCpu,
         },
         false => Elements::Texels,
     };
@@ -1255,29 +1214,27 @@ pub(crate) fn footprint_size(
     })
 }
 
-/// Metal's answer for a heap texture of `layout` at the Metal level `level` (the module docs),
-/// `usage` and `allow_gpu_optimized_contents` the descriptor's: [`metal_heap_layout`]'s answer,
+/// Metal's answer for a heap texture of `layout` (the module docs), `usage` and
+/// `allow_gpu_optimized_contents` the descriptor's: [`metal_heap_layout`]'s answer,
 /// which no image format decides (the format decides only how a heap over host pages holds the
 /// texture, so none is given). `None` where the model has none.
 pub(crate) fn modelled_size(
     layout: &TextureLayout,
     usage: TextureUsage,
     allow_gpu_optimized_contents: bool,
-    level: MetalLevel,
 ) -> Option<SizeAndAlign> {
     let no_image = Format::UNDEFINED;
-    metal_heap_layout(layout, usage, allow_gpu_optimized_contents, no_image, level).answer
+    metal_heap_layout(layout, usage, allow_gpu_optimized_contents, no_image).answer
 }
 
 /// Metal's answer for a heap texture of `layout` and the runtime's layout of it over host pages
-/// (the module docs), its image of `format`, at the device's Metal level `level`: `usage` and
-/// `allow_gpu_optimized_contents` the descriptor's, which decide whether Metal may compress it.
+/// (the module docs), its image of `format`: `usage` and `allow_gpu_optimized_contents` the
+/// descriptor's, which decide whether Metal may compress it.
 pub(crate) fn metal_heap_layout(
     layout: &TextureLayout,
     usage: TextureUsage,
     allow_gpu_optimized_contents: bool,
     format: Format,
-    level: MetalLevel,
 ) -> MetalHeapLayout {
     let pf = layout.pixel_format;
     let [width, height, depth] = layout.extent.map(u64::from);
@@ -1287,20 +1244,14 @@ pub(crate) fn metal_heap_layout(
         layout: HeapLayout::Untiled(why),
     };
     // Block-compressed formats: Metal's allocations are its blocks' (every BC, ETC2, EAC, ASTC
-    // and PVRTC format), alike under both placements, so a placement the level does not measure
-    // answers `Halved`'s; PVRTC's are measured only where its placement is.
+    // and PVRTC format), placed as the release places its family's
+    // (`metal_release::heap_blocks`); a format of no measured family is not modelled.
     if let Some([bw, bh]) = block_extent(pf) {
         let block = [u64::from(bw), u64::from(bh)];
-        let family = BlockFamily::of(pf);
-        let placement = family.and_then(|family| level.heap_blocks(family));
-        let elements = Elements::Blocks {
-            block,
-            placement: placement.unwrap_or(BlockPlacement::Halved),
-            gpu_rows: level.heap_block_gpu_rows(),
-        };
+        let placement = BlockFamily::of(pf).map(heap_blocks);
         let unit = block_bytes(pf).map(u64::from);
-        let measured = placement.is_some() || family.is_some_and(|f| f != BlockFamily::Pvrtc);
-        let tiled = unit.filter(|_| measured).and_then(|unit| {
+        let tiled = placement.zip(unit).and_then(|(placement, unit)| {
+            let elements = Elements::Blocks { block, placement };
             let ty = layout.texture_type;
             let extent = [width, height, depth];
             TiledLayout::of(unit, elements, ty, extent, layout.levels, slices)
@@ -1309,7 +1260,7 @@ pub(crate) fn metal_heap_layout(
             size: tiled.size,
             align: tiled.align,
         });
-        let (Some(tiled), Some(unit), Some(_)) = (tiled, unit, placement) else {
+        let (Some(tiled), Some(unit)) = (tiled, unit) else {
             return untiled(answer, Untiled::BLOCK_COMPRESSED);
         };
         if image_element(pf, format) != Some((unit, block)) {
@@ -1340,7 +1291,7 @@ pub(crate) fn metal_heap_layout(
                 pixel_format,
                 ..*layout
             };
-            metal_heap_layout(&one, usage, allow_gpu_optimized_contents, format, level).answer
+            metal_heap_layout(&one, usage, allow_gpu_optimized_contents, format).answer
         };
         let answer = plane(PixelFormat::Depth32Float)
             .zip(plane(PixelFormat::Stencil8))
@@ -1630,7 +1581,7 @@ impl HeapTiledCopies {
                     [narrow(level.extent[0])?, narrow(level.extent[1])?],
                     narrow(plane.images)?,
                     [narrow(level.tile[0])?, narrow(level.tile[1])?],
-                    narrow(level.gpu_across)?,
+                    narrow(level.across)?,
                     narrow(part.at + level.base)?,
                     narrow(layout.stride)?,
                     narrow(plane.offset)?,

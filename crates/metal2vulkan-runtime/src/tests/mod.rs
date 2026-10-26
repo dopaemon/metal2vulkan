@@ -162,7 +162,7 @@ mod memory_frees;
 mod memory_reads;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod mesh_reflection_derived;
-mod metal_level;
+mod metal_release;
 mod mipmap;
 mod mipmap_plan;
 mod mipmap_scratch;

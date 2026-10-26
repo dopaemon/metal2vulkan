@@ -13,7 +13,6 @@ use super::super::texture_descriptor::{effective_usage, no_texture_alone, Textur
 use super::super::values::StorageMode;
 use super::image_plan::{committed, facts};
 use super::texture_descriptor::APPLE;
-use crate::MetalLevel;
 use ash::vk;
 use metal2vulkan::metal::format::{byte_format, direct_format};
 use metal2vulkan::metal::PixelFormat as P;
@@ -88,7 +87,7 @@ const ANSWERED: [P; 59] = [
 
 /// The added linear formats for which an Apple M4 under macOS 27.0.1 answered 16, the linear and
 /// the texture-buffer alignment alike; it asserted on the other 18, the formats
-/// macOS 27.0.1 describes none of (`MetalLevel::describes`).
+/// macOS 27.0.1 describes none of (`pixel_format_info::describes`).
 const ANSWERED_M4: [P; 62] = [
     P::R16Bfloat,
     P::BGRA4Unorm,
@@ -192,19 +191,17 @@ fn buffers_back_exactly_the_formats_metal_answers_for() {
         |pf: P| no_texture_alone(pf) && !matches!(pf, P::R10UnormPACKED | P::RG10UnormPACKED);
     let unprobed = P::ALL.iter().copied().filter(|&pf| skipped(pf)).count();
     assert_eq!(unprobed, 72);
-    for level in MetalLevel::ALL {
-        for &pf in P::ALL {
-            if pf == P::Invalid || skipped(pf) {
-                continue;
-            }
-            let asserted = ASSERTED_M3.contains(&pf);
-            let want = if ANSWERED.contains(&pf) || (ANSWERED_M4.contains(&pf) && !asserted) {
-                Ok(LINEAR_ALIGNMENT)
-            } else {
-                Err(BufferTextureProblem::NotLinear { pixel_format: pf })
-            };
-            assert_eq!(linear_alignment(pf, level), want, "{level:?} {pf:?}");
+    for &pf in P::ALL {
+        if pf == P::Invalid || skipped(pf) {
+            continue;
         }
+        let asserted = ASSERTED_M3.contains(&pf);
+        let want = if ANSWERED.contains(&pf) || (ANSWERED_M4.contains(&pf) && !asserted) {
+            Ok(LINEAR_ALIGNMENT)
+        } else {
+            Err(BufferTextureProblem::NotLinear { pixel_format: pf })
+        };
+        assert_eq!(linear_alignment(pf), want, "{pf:?}");
     }
     // Nor ASTC's 4x2 and 8x4 formats, which the runtime refuses as the compressed formats they
     // are (their type rules are measured as `ASTC_4x4_LDR`'s).
@@ -222,23 +219,21 @@ fn buffers_back_exactly_the_formats_metal_answers_for() {
         83 + 18,
         "one probe saw 83 formats refused, another 18 more"
     );
-    for level in MetalLevel::ALL {
+    assert_eq!(
+        linear_alignment(P::Invalid),
+        Err(BufferTextureProblem::NotLinear {
+            pixel_format: P::Invalid
+        })
+    );
+    // Nor `AnyDepth` and `AnyStencil`, of which Metal makes no texture alone: it asserts as on
+    // every depth and stencil format ("Linear textures do not support
+    // depth/stencil pixel formats").
+    for pf in [P::AnyDepth, P::AnyStencil] {
         assert_eq!(
-            linear_alignment(P::Invalid, level),
-            Err(BufferTextureProblem::NotLinear {
-                pixel_format: P::Invalid
-            })
+            linear_alignment(pf),
+            Err(BufferTextureProblem::NotLinear { pixel_format: pf }),
+            "{pf:?}"
         );
-        // Nor `AnyDepth` and `AnyStencil`, of which Metal makes no texture alone: it asserts as on
-        // every depth and stencil format ("Linear textures do not support
-        // depth/stencil pixel formats").
-        for pf in [P::AnyDepth, P::AnyStencil] {
-            assert_eq!(
-                linear_alignment(pf, level),
-                Err(BufferTextureProblem::NotLinear { pixel_format: pf }),
-                "{level:?} {pf:?}"
-            );
-        }
     }
 }
 

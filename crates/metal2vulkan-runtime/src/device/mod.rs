@@ -1128,8 +1128,6 @@ pub(super) struct Parts {
     pub(super) owned: bool,
     /// The shader cache, its directory opened before any Vulkan object was made.
     pub(super) cache: CacheSetup,
-    /// The Metal level it answers at, and how it was chosen (`metal_level.rs`).
-    pub(super) metal_level: crate::metal_level::Chosen,
 }
 
 impl Device {
@@ -1173,7 +1171,6 @@ impl Device {
             memory_reads,
             owned,
             cache,
-            metal_level,
         } = parts;
         // Every pipeline made on the device from here on is made at the user-initiated class.
         // SAFETY: the device is live (the caller's contract), and its functions are its own.
@@ -1475,8 +1472,7 @@ impl Device {
         // device exists, so the description's version passed the floor).
         let (identity, max_allocation) =
             unsafe { properties::query(&instance.raw, physical, instance.api_version) };
-        let properties =
-            DeviceProperties::new(identity, description, &compile, metal_level.level());
+        let properties = DeviceProperties::new(identity, description, &compile);
         // SAFETY: as above.
         let memory_properties =
             unsafe { instance.raw.get_physical_device_memory_properties(physical) };
@@ -1848,9 +1844,6 @@ impl Device {
         device.recall_in_place_checks();
         device.degrade_argument_buffers_unread();
         device.degrade_float_tininess();
-        if let Some((kind, notice)) = metal_level.announcement() {
-            device.degrade(kind, || notice);
-        }
         Ok(device)
     }
 }

@@ -3251,31 +3251,30 @@ fn reservations_keep_ids_from_plain_allocation() {
     {
         let keep = Arc::clone(&seen);
         // The device's creation notices reach this sink, not the lane's: they are checked here.
-        let (device, level_named) =
-            made_lane_device(TEST_DEVICE, &messages, cache.path(), |options| {
-                options.messages = Some(MessageSink::new(move |message: &DebugMessage| {
-                    let mut seen = keep.lock().unwrap_or_else(|p| p.into_inner());
-                    if message.id_name == LATE_RESERVATION {
-                        seen.0.push(message.clone());
-                    } else if message.degradation.is_some() {
-                        seen.2.push(message.clone());
-                    } else if message.severity == MessageSeverity::Error
-                        || (message.severity == MessageSeverity::Warning && message.kind.validation)
-                    {
-                        let announced = seen.2.iter().any(|notice| {
-                            notice.degradation.as_ref().is_some_and(|notice| {
-                                notice.degradation == Degradation::SetPastLayoutSupport
-                            })
-                        });
-                        if !(announced && unsupported_set::shape(&message.id_name, &message.text)) {
-                            seen.1.push(message.clone());
-                        }
+        let device = made_lane_device(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.messages = Some(MessageSink::new(move |message: &DebugMessage| {
+                let mut seen = keep.lock().unwrap_or_else(|p| p.into_inner());
+                if message.id_name == LATE_RESERVATION {
+                    seen.0.push(message.clone());
+                } else if message.degradation.is_some() {
+                    seen.2.push(message.clone());
+                } else if message.severity == MessageSeverity::Error
+                    || (message.severity == MessageSeverity::Warning && message.kind.validation)
+                {
+                    let announced = seen.2.iter().any(|notice| {
+                        notice.degradation.as_ref().is_some_and(|notice| {
+                            notice.degradation == Degradation::SetPastLayoutSupport
+                        })
+                    });
+                    if !(announced && unsupported_set::shape(&message.id_name, &message.text)) {
+                        seen.1.push(message.clone());
                     }
-                }));
-            })
-            .unwrap();
+                }
+            }));
+        })
+        .unwrap();
         let created = seen.lock().unwrap().2.clone();
-        creation_checked(&device, level_named, &created).unwrap();
+        creation_checked(&device, &created).unwrap();
         let kind = ResourceIdKind::Texture;
         device
             .reserve_resource_ids(kind, &[ResourceId(2), ResourceId(4)])

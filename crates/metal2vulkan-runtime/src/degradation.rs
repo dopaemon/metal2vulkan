@@ -56,8 +56,7 @@
 //!   it (`deferred.rs`); a `Shared` buffer or heap in system memory where the device makes it
 //!   (`buffer.rs`, `heap.rs`); a texture whose blocks a carrier holds, which a command reading
 //!   texture handles reaches, once the command is encoded (`pvrtc.rs`, from `compute.rs` and
-//!   `render/arguments.rs`); a Metal level below the host's release where the device is made
-//!   (`device/mod.rs`, from `metal_level.rs`); native device maths that rounds a tiny product
+//!   `render/arguments.rs`); native device maths that rounds a tiny product
 //!   before its flush where the device is made (`device/float_tininess.rs`); a sampler state whose
 //!   anisotropy the device filters otherwise than Metal where the device makes it (`sampler.rs`); a
 //!   BC1 to BC5 texture whose texels the device decodes otherwise than Metal where the device makes
@@ -1002,18 +1001,6 @@ degradations! {
         ShadowedTextureView = "shadowed-texture-view", Performance,
             "its texels are copied from its texture's image before each use and back after each \
              write";
-        /// `generate_mipmaps` computed as Metal's filter (`mipmap_filter.rs`) where an Apple M3
-        /// Max's answer may differ from the chain's (`MipmapFilterChain::unlike_an_m3`): a 2D
-        /// texture, array or cube of three levels or more whose M3 Max passes are not known (a
-        /// compressed texture's pass from a level more than 128 times wider than tall or taller
-        /// than wide), an `A1BGR5Unorm` 2D texture, an `ABGR4Unorm` one of three levels or more, or
-        /// a 3D texture of a format summed as half floats, under macOS 26.7's rule
-        /// (`MipmapRule::AppleM3MaxPasses`). Under macOS 27.0.1's every level is the M3 Max's.
-        MipmapsAsAppleM4 = "mipmaps-as-apple-m4", Precision,
-            "each level is the Apple M3 Max's but where its answer is not known: below the first \
-             level of a 2D chain whose M3 Max passes are not known an Apple M4's filter, and a \
-             few measured values of the 4-bit and 1-bit formats and of 3D half-float sums one \
-             unit off";
         /// A render encoder executes an indirect command buffer's commands from a command it
         /// executed them from before with another length, each range given
         /// (`executeCommandsInBuffer:withRange:`) or read from a buffer
@@ -1504,16 +1491,6 @@ degradations! {
              that does not name it reads what an earlier such write left in the stand-in's \
              sink, where Metal drops those writes and reads zero; a sampled read, and a size \
              query, are Metal's";
-        /// A device made, with no level named in its options, on a macOS host whose release has
-        /// no measured [`MetalLevel`](crate::MetalLevel): it answers as the newest measured
-        /// release below the host's (`metal_level.rs`). Announced when the device is made; the
-        /// payload names the host's release and the level.
-        MetalLevelBelowHost = "metal-level-below-host", Precision,
-            "where Metal's answers differ by release (which pixel formats a texture descriptor \
-             takes and Metal describes, whether a run of compute encoders' first indirect \
-             dispatch of another dispatch type ends the process), the device gives the older \
-             release's: it can stop or refuse a texture or a dispatch the host's Metal makes, and \
-             never makes one the older release stops";
         /// A render pass that loads a color attachment of an extended-range, padded 10-bit or
         /// bfloat format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`,
         /// `RG10Unorm_X12` and their sRGB twins, `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat`
@@ -1578,14 +1555,13 @@ degradations! {
              multisample texture's image in memory of its own, the heap's bytes keeping what \
              they held): a buffer or texture over them reads and writes other bytes than Metal's \
              would";
-        /// A texture of a block-compressed format made in a heap over host pages whose
-        /// placement the device's Metal level does not measure: Metal places a format family's
-        /// blocks in each level by a rule that differs by family and by release
-        /// (`texture/heap_tiled.rs`), measured for BC, ETC2, EAC and ASTC under macOS 27.0.1 (an
-        /// Apple M3 Max and an Apple M4 alike) and 26.7 (an Apple M3 Max), and for PVRTC under
-        /// 27.0.1 (an Apple M3 Max), where those lie as Metal lays them out, and not for PVRTC
-        /// under 26.7, whose blocks lie in the runtime's layout. Its size and alignment answers
-        /// are its device's. Announced once per device, in the call that made the first such
+        /// A texture of a block-compressed format made in a heap over host pages whose blocks'
+        /// placement is not measured: Metal places a format family's blocks in each level by a
+        /// rule that differs by family and by release (`texture/heap_tiled.rs`), measured at the
+        /// release every device answers as for the BC, ETC2, EAC, ASTC and PVRTC families (an
+        /// Apple M3 Max, and an Apple M4 alike but PVRTC), whose textures lie as Metal lays them
+        /// out; a format of none of them lies in the runtime's layout. Its size and alignment
+        /// answers are its device's. Announced once per device, in the call that made the first such
         /// texture, with its ID ([`DegradeNotice::object_id`]), or for each texture where
         /// `DeviceOptions::announce_each` asks; each texture counted
         /// ([`Device::degraded_objects`](crate::Device::degraded_objects)).
@@ -1645,18 +1621,12 @@ degradations! {
         /// rounding the chain does not fit at sums a hair from a rounding boundary
         /// (`MipmapFilterChain::near_ties`): a texture of a format with an 8-bit sRGB colour
         /// channel (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`), whose
-        /// filtered levels take it; under macOS 26.7's rule (`MipmapRule::AppleM3MaxPasses`), of an
-        /// extended-range sRGB format (`BGR10_XR_sRGB`, `BGRA10_XR_sRGB`), whose filtered levels
-        /// and levels read from kept values take it; or of a 16-bit float format (`R16Float`,
-        /// `RG16Float`, `RGBA16Float`) with a level read from the level above's kept values (a 2D
-        /// chain's even level below a square of a power of two, a pass's second level).
-        /// `RGB10A2Unorm`, `BGR10A2Unorm`, `BGR10_XR`, `BGRA10_XR`, `ABGR4Unorm` and `A1BGR5Unorm`
-        /// are exact.
+        /// filtered levels take it. `RGB10A2Unorm`, `BGR10A2Unorm`, `BGR10_XR`, `BGRA10_XR`,
+        /// `ABGR4Unorm` and `A1BGR5Unorm` are exact.
         MipmapTieRounding = "mipmap-tie-rounding", Precision,
             "each level is Metal's but at a value whose sum lies a hair from a rounding boundary, \
              which may be one unit off: an 8-bit sRGB colour code of a filtered level (1 of \
-             5,331,270 measured values), an extended-range sRGB code, a 16-bit float read from \
-             kept values one unit in the last place (8 of 538,088)";
+             5,331,270 measured values)";
         /// A draw whose render pipeline state blends into, or reads (a framebuffer fetch, or the
         /// interlocked storage form an extended-range blend takes), a color attachment of an
         /// extended-range format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their sRGB
@@ -1676,10 +1646,8 @@ degradations! {
              grow over many draws that blend onto each other";
         /// A heap texture sized or made (`heap_texture_size_and_align`, `Heap::new_texture`) whose
         /// size Metal's layout the runtime does not model (`texture/heap_tiled.rs`): a format or a
-        /// sample count whose layout in Metal's heaps is not measured at the device's Metal level
-        /// (8 samples; a PVRTC format at macOS 26.7's level, whose blocks' placement only macOS
-        /// 27.0.1's measures; a mipmapped texture Metal compresses and a
-        /// `Depth32Float_Stencil8` one are).
+        /// sample count whose layout in Metal's heaps is not measured (8 samples; a mipmapped
+        /// texture Metal compresses and a `Depth32Float_Stencil8` one are).
         /// The runtime answers its device's image's size and alignment there, which can differ from
         /// Metal's either way.
         UnmeasuredHeapTextureSize = "unmeasured-heap-texture-size", Precision,
@@ -2036,14 +2004,6 @@ degradations! {
             "the driver keeps its own cache of the device's pipelines beside the shader cache's \
              records, with whatever it writes to disk and holds in memory for it; the pipelines \
              made are the same";
-        /// A device made off macOS with no Metal level named: it answers as the newest measured
-        /// release ([`MetalLevel::NEWEST`](crate::MetalLevel::NEWEST)), no release of the host's
-        /// (`metal_level.rs`). Announced once, as the device is made; the payload names the level.
-        MetalLevelNotMacOS = "metal-level-not-macos", Precision,
-            "where Metal's answers differ by release (which pixel formats a texture descriptor \
-             takes and Metal describes, how a heap texture's blocks lie, whether a run of compute \
-             encoders' first indirect dispatch of another dispatch type ends the process), the \
-             device gives the newest measured release's, whatever release the program expects";
         /// Apple's private device properties the device has no answer for
         /// (`private_properties.rs`): no document describes them and nothing the device reports
         /// maps to them. Announced once, when `Device::private_properties` is first read; the
@@ -2494,6 +2454,29 @@ impl Degradation {
             "none: a command reads the sampler states live as its batch is submitted, so a state \
              made before the event wait that orders its ID's write is the one its function reads, \
              as on Metal",
+        ),
+        (
+            // A device made with no Metal level named, on a macOS host whose release had no
+            // measured level, answered as the newest measured release below it and announced it.
+            // Every device answers as one release now, whatever release the host runs.
+            "metal2vulkan-degrade-metal-level-below-host",
+            "none: every device answers as the one release the runtime imitates \
+             (metal2vulkan_runtime::MACOS_RELEASE), on every host, whatever release it runs",
+        ),
+        (
+            // A device made off macOS with no Metal level named answered as the newest measured
+            // release and announced it. Every device answers as one release now, on every host.
+            "metal2vulkan-degrade-metal-level-not-macos",
+            "none: every device answers as the one release the runtime imitates \
+             (metal2vulkan_runtime::MACOS_RELEASE), on every host, macOS or not",
+        ),
+        (
+            // `generate_mipmaps` under an older release's rule, whose Apple M3 Max passes were not
+            // known for some chains, announced the levels it computed by an Apple M4's filter.
+            // Every device makes the release's mipmaps now, every level the M3 Max's filter.
+            "metal2vulkan-degrade-mipmaps-as-apple-m4",
+            "none: every level of every chain is the Apple M3 Max's filter of the level above, \
+             the rule of the release every device answers as",
         ),
     ];
 

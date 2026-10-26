@@ -3,9 +3,9 @@
 //!
 //! [`crate::cases::sparse_tiles`] states the test this family is built on, and states it exactly:
 //! the runtime answers a sparse tile size "from a model of Metal's arithmetic that is the same on
-//! every device at one Metal level, so the numbers are a contract with Metal and with nothing
-//! else, and the only thing that can check them is Metal". Every query here passes that test, each
-//! one checked against the runtime's own source:
+//! every device, so the numbers are a contract with Metal and with nothing else, and the only thing
+//! that can check them is Metal". Every query here passes that test, each one checked against the
+//! runtime's own source:
 //!
 //! - `heapBufferSizeAndAlignWithLength:options:` answers `length` bytes at a multiple of 256 "for
 //!   every length and options, as Metal answers (measured)" — a constant with the word *measured*

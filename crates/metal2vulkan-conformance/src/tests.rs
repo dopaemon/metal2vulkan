@@ -13,7 +13,7 @@ use crate::compare::compare;
 use crate::diff::DivergenceKind;
 use crate::record::{record, RecordError};
 use crate::recording::{
-    Answer as RecordedAnswer, Lookup, Outcome, Provenance, Recording, Validated, ORACLE_OS_VERSION,
+    Answer as RecordedAnswer, Lookup, Outcome, Provenance, Recording, Validated,
 };
 use crate::replay::{replay_against, NOTICES_SITE};
 use crate::report::Report;
@@ -21,7 +21,7 @@ use crate::transcript::{
     ByteLayout, Digest, Element, Gaps, Negative, Node, Observed, Region, Sites, Transcript, Value,
 };
 use crate::verdict::Verdict;
-use metal2vulkan_runtime::{Degradation, MetalLevel};
+use metal2vulkan_runtime::{Degradation, MACOS_RELEASE};
 
 /// A side that answers from a script rather than from a device, so the suite's own machinery is
 /// testable with no GPU.
@@ -947,7 +947,7 @@ fn recording_of(case: &dyn Case, transcript: Transcript, runs: u32) -> Recording
         case.name(),
         Vec::new(),
         vec![RecordedAnswer {
-            key: crate::recording::OracleKey::current(MetalLevel::NEWEST),
+            key: crate::recording::OracleKey::current(),
             provenance: Provenance::MetalRun,
             device: "the oracle".to_owned(),
             runs,
@@ -1728,7 +1728,7 @@ fn a_recording_of_another_oracle_is_stale_and_fails() {
     let case = WordsCase::new("words", 2);
     let mut recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
     recording.answers[0].key.os_build = "00A000".to_owned();
-    let Err(Lookup::Stale(stale)) = recording.answer(MetalLevel::NEWEST) else {
+    let Err(Lookup::Stale(stale)) = recording.answer() else {
         panic!("a recording of another build is not stale");
     };
     let printed = stale.to_string();
@@ -1740,15 +1740,17 @@ fn a_recording_of_another_oracle_is_stale_and_fails() {
     assert!(format!("{error}").contains("stale"), "{error}");
 }
 
+/// An answer of the oracle whose key names the Metal of another release than the runtime's leaves
+/// the case unrecorded at the runtime's release, not stale.
 #[test]
-fn a_level_with_no_answer_is_unrecorded_rather_than_stale() {
+fn another_release_s_answer_is_unrecorded_rather_than_stale() {
     let case = WordsCase::new("words", 2);
     let mut recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
-    recording.answers[0].key.metal_level = "26.7".to_owned();
+    recording.answers[0].key.metal_level = "26.0".to_owned();
     assert_eq!(
-        recording.answer(MetalLevel::NEWEST),
+        recording.answer(),
         Err(Lookup::Unrecorded {
-            level: MetalLevel::NEWEST.macos().to_owned()
+            release: MACOS_RELEASE.to_owned()
         })
     );
 }
@@ -1795,7 +1797,7 @@ fn record_mode_refuses_a_case_that_must_not_be_re_recorded() {
         ..WordsCase::new("words", 2)
     };
     let mut side = StubSide::new(words(&[1, 2]));
-    let error = record(&case, &mut side, 1, MetalLevel::NEWEST, Validated::NotRun).unwrap_err();
+    let error = record(&case, &mut side, 1, Validated::NotRun).unwrap_err();
     assert_eq!(
         error,
         RecordError::Forbidden {
@@ -1830,7 +1832,7 @@ fn record_mode_refuses_a_case_whose_metal_run_stopped() {
     {
         let mut stops = StubSide::new(words(&[7])).refusing("library", refusal.clone());
         assert_eq!(
-            record(&case, &mut stops, 1, MetalLevel::NEWEST, Validated::Ran).unwrap_err(),
+            record(&case, &mut stops, 1, Validated::Ran).unwrap_err(),
             RecordError::NoMetal
         );
     }
@@ -1839,7 +1841,7 @@ fn record_mode_refuses_a_case_whose_metal_run_stopped() {
         // A refusal at the site the case makes with `made`: the run stops, and no recording is
         // written. The site is named, and the refusal in the words a ledger row uses.
         let mut stops = StubSide::new(words(&[7])).refusing("library", refusal.clone());
-        let error = record(&case, &mut stops, 1, MetalLevel::NEWEST, Validated::Ran).unwrap_err();
+        let error = record(&case, &mut stops, 1, Validated::Ran).unwrap_err();
         let RecordError::Refused {
             case: named,
             at,
@@ -1860,7 +1862,7 @@ fn record_mode_refuses_a_case_whose_metal_run_stopped() {
         // same case, the same refusal, at the site it carries past. The transcript is the whole
         // case with one query Metal answered nil for, which is Metal's answer, so it records.
         let mut carries = StubSide::new(words(&[7])).refusing("texture", refusal);
-        let answer = record(&case, &mut carries, 1, MetalLevel::NEWEST, Validated::Ran)
+        let answer = record(&case, &mut carries, 1, Validated::Ran)
             .expect("a refusal a sweep carries past is Metal's answer, not a truncated run");
         assert_eq!(answer.provenance, Provenance::MetalRun);
         let printed = format!("{:?}", answer.outcomes[0].transcript);
@@ -1884,7 +1886,7 @@ fn record_mode_counts_the_outcomes_it_saw_with_their_runs() {
         let case = WordsCase::new("words", 2);
         let mut side = StubSide::new(words(&[1, 2]));
         assert_eq!(
-            record(&case, &mut side, 2, MetalLevel::NEWEST, Validated::Ran).unwrap_err(),
+            record(&case, &mut side, 2, Validated::Ran).unwrap_err(),
             RecordError::NoMetal
         );
     }
@@ -1892,7 +1894,7 @@ fn record_mode_counts_the_outcomes_it_saw_with_their_runs() {
     {
         let case = WordsCase::new("words", 2);
         let mut side = StubSide::new(words(&[1, 2]));
-        let answer = record(&case, &mut side, 3, MetalLevel::NEWEST, Validated::Ran).unwrap();
+        let answer = record(&case, &mut side, 3, Validated::Ran).unwrap();
         assert_eq!(answer.runs, 3);
         assert_eq!(
             answer.outcomes.len(),
@@ -2347,7 +2349,7 @@ fn a_carried_answer_taken_on_another_chip_names_it() {
         };
         let recorded = crate::recording::read(case.name())
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()))
-            .answer(MetalLevel::NEWEST)
+            .answer()
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()))
             .provenance
             .clone();
@@ -2773,7 +2775,7 @@ fn the_committed_recordings_carry_all_three_validated_answers() {
     let validated = |case: &str| {
         crate::recording::read(case)
             .unwrap_or_else(|why| panic!("{case}: {why}"))
-            .answer(MetalLevel::NEWEST)
+            .answer()
             .unwrap_or_else(|why| panic!("{case}: {why}"))
             .validated
             .clone()
@@ -3006,7 +3008,6 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
         device: device.to_owned(),
         driver: "vendor 0x10005 device 0x0000".to_owned(),
         api: "1.2".to_owned(),
-        metal_level: "27.0.1".to_owned(),
     };
     let measured = lavapipe("llvmpipe (LLVM 21.1.8, 128 bits)");
     let other = lavapipe("llvmpipe (LLVM 23.1.1, 256 bits)");
@@ -3145,7 +3146,6 @@ fn venue_named(device: &str) -> Venue {
         device: device.to_owned(),
         driver: "stub".to_owned(),
         api: "none".to_owned(),
-        metal_level: ORACLE_OS_VERSION.to_owned(),
     }
 }
 
@@ -3236,7 +3236,7 @@ fn the_ledger_fails_on_a_new_refusal_and_on_one_that_is_gone() {
         case: "words".to_owned(),
         venue: venue_named("stub"),
         verdict: Verdict::Unrecorded {
-            why: "no Metal answer at Metal level 99".to_owned(),
+            why: "no Metal answer at macOS 99".to_owned(),
         },
         allowances: Default::default(),
         measured_on: None,
@@ -3667,7 +3667,7 @@ fn metal_on_this_chip_answers_the_two_plane_blits_exactly_as_the_probes_printed_
         let recorded = crate::recording::read(case.name())
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
         let answer = recorded
-            .answer(MetalLevel::NEWEST)
+            .answer()
             .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
         assert_eq!(
             answer.provenance,
@@ -3789,7 +3789,6 @@ fn a_call_metal_did_not_return_from_is_its_own_verdict() {
         case.name(),
         Vec::new(),
         vec![crate::record::never_returned(
-            MetalLevel::NEWEST,
             "the suite's own tests",
             DIED_AT,
             "the probe's device",
@@ -3853,7 +3852,6 @@ fn answering_where_metal_did_not_return_is_divergent() {
         case.name(),
         Vec::new(),
         vec![crate::record::never_returned(
-            MetalLevel::NEWEST,
             "the suite's own tests",
             DIED_AT,
             "the probe's device",
@@ -3884,7 +3882,7 @@ fn record_mode_refuses_a_row_metal_does_not_return_from() {
     let case = DiedOnMetal { answers: false };
     assert_eq!(case.metal_source().forbidden(), Some(DIED_SAYS));
     let mut side = StubSide::new(Vec::new());
-    let refused = record(&case, &mut side, 1, MetalLevel::NEWEST, Validated::NotRun);
+    let refused = record(&case, &mut side, 1, Validated::NotRun);
     assert_eq!(
         refused,
         Err(RecordError::Forbidden {
@@ -3896,7 +3894,6 @@ fn record_mode_refuses_a_row_metal_does_not_return_from() {
     // And the answer that is written instead says so in the file: the provenance names the call,
     // and Metal's API validation was never asked either.
     let answer = crate::record::never_returned(
-        MetalLevel::NEWEST,
         "the suite's own tests",
         DIED_AT,
         "the probe's device",
@@ -3923,7 +3920,7 @@ fn the_report_says_how_many_answers_came_from_another_chip() {
             case.name(),
             Vec::new(),
             vec![RecordedAnswer {
-                key: crate::recording::OracleKey::current(MetalLevel::NEWEST),
+                key: crate::recording::OracleKey::current(),
                 provenance: Provenance::Carried {
                     from: "a probe this tree holds".to_owned(),
                     measured_on: chip.to_owned(),
@@ -4374,7 +4371,7 @@ fn a_run_with_no_bound_that_stands_is_unmeasured_and_says_why() {
 #[test]
 fn the_cost_record_rides_in_the_recording() {
     let answer = RecordedAnswer {
-        key: crate::recording::OracleKey::current(MetalLevel::NEWEST),
+        key: crate::recording::OracleKey::current(),
         provenance: Provenance::MetalRun,
         device: "a device".to_owned(),
         runs: 1,

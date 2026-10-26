@@ -12,8 +12,7 @@
 //! textures from 4096 down to 64 (one level's cost at each size). Printed per case: the median and
 //! the fastest GPU time, the median and the fastest wall time, the median encoding time, and the
 //! notices the case announced (each kind once per device, so at
-//! its first case: `mipmaps-within-spread` for the blit chain, `mipmaps-as-apple-m4` for the
-//! filter where an M3 Max's answer differs). A case the device refuses (for example a format
+//! its first case: `mipmaps-within-spread` for the blit chain). A case the device refuses (for example a format
 //! whose blit chain failed the runtime's check, on a device that runs no filter for it) is
 //! printed with its refusal and skipped.
 //!

@@ -1,122 +1,85 @@
-//! `pixel_format_info`: `MTLPixelFormatGetInfoForDevice` answers our own measurements at each Metal
-//! level (an Apple M3 Max: our probe and the consumer's macOS 27 host lane, whose answers are an
-//! M4's but from 630 to 645), the level describes a format exactly where the table has a row,
-//! and `MTLGetTextureLevelInfoForDeviceWithOptions` answers the probes' layouts (on each).
+//! `pixel_format_info`: `MTLPixelFormatGetInfoForDevice` answers our own measurements at the
+//! release every device answers as (an Apple M3 Max: our probe and the consumer's macOS 27 host
+//! lane, whose answers are an M4's but from 630 to 645), Metal describes a format exactly where the
+//! table has a row, and `MTLGetTextureLevelInfoForDeviceWithOptions` answers the probes' layouts.
 
-use crate::{MetalLevel, PixelFormatInfo, TextureLevelQuery};
+use crate::pixel_format_info::{describes, pixel_format_info, texture_level_info};
+use crate::{PixelFormatInfo, TextureLevelQuery};
 use metal2vulkan::metal::PixelFormat as P;
 
-/// Every raw value the probes asked (0 to 2047) with a description at `level`.
-fn described(level: MetalLevel) -> Vec<u64> {
+/// Every raw value the probes asked (0 to 2047) with a description.
+fn described() -> Vec<u64> {
     (0..2048)
-        .filter(|&raw| level.pixel_format_info(raw).describes_a_format())
+        .filter(|&raw| pixel_format_info(raw).describes_a_format())
         .collect()
 }
 
-/// An Apple M3 Max describes the same 264 values under macOS 26.7 and 27.0.1, none from 630 to
-/// 645 (which an Apple M4 describes under 27.0.1).
+/// An Apple M3 Max describes 264 values under macOS 27.0.1, none from 630 to 645 (which an Apple
+/// M4 describes there).
 #[test]
-fn each_level_answers_its_measured_rows() {
-    let old = described(MetalLevel::MacOS26_7);
-    let new = described(MetalLevel::MacOS27_0_1);
-    assert_eq!(old.len(), 264);
-    assert_eq!(new, old);
-    assert!(!new.iter().any(|raw| (630..=645).contains(raw)));
+fn the_table_answers_its_measured_rows() {
+    let described = described();
+    assert_eq!(described.len(), 264);
+    assert!(!described.iter().any(|raw| (630..=645).contains(raw)));
     // Past every named value, and a value no format has, Metal answers Invalid.
     for raw in [0, 2, 9, 2047, 2048, u64::from(u32::MAX) + 10, u64::MAX] {
-        for level in MetalLevel::ALL {
-            assert_eq!(
-                level.pixel_format_info(raw),
-                PixelFormatInfo::INVALID,
-                "{raw}"
-            );
-        }
+        assert_eq!(pixel_format_info(raw), PixelFormatInfo::INVALID, "{raw}");
     }
 }
 
-/// A level describes a format (`MetalLevel::describes`) exactly where `pixel_format_info` answers
-/// one, and then under the format's own Metal name; 24-bit depth formats, which no Apple GPU has,
-/// at no level.
+/// Metal describes a format (`describes`) exactly where `pixel_format_info` answers one, and then
+/// under the format's own Metal name; neither 24-bit depth format, which no Apple GPU has.
 #[test]
-fn a_level_describes_exactly_the_formats_it_answers() {
-    for level in MetalLevel::ALL {
-        for &pf in P::ALL {
-            let info = level.pixel_format_info(u64::from(pf.as_raw()));
-            assert_eq!(
-                level.describes(pf),
-                info.describes_a_format(),
-                "{level} {pf:?}"
-            );
-            if info.describes_a_format() {
-                assert_eq!(info.name, pf.name(), "{level} {pf:?}");
-            }
+fn metal_describes_exactly_the_formats_it_answers() {
+    for &pf in P::ALL {
+        let info = pixel_format_info(u64::from(pf.as_raw()));
+        assert_eq!(describes(pf), info.describes_a_format(), "{pf:?}");
+        if info.describes_a_format() {
+            assert_eq!(info.name, pf.name(), "{pf:?}");
         }
-        for pf in [P::Depth24UnormStencil8, P::X24Stencil8] {
-            assert!(!level.describes(pf), "{level} {pf:?}");
-        }
+    }
+    for pf in [P::Depth24UnormStencil8, P::X24Stencil8] {
+        assert!(!describes(pf), "{pf:?}");
     }
 }
 
-/// Spot values, as the probes printed them: a format alike at both levels, a cast class numbered
-/// anew, flags that differ, a compressed format's block, and a format only an Apple M4 describes.
+/// Spot values, as the probes printed them: a plain format, a cast class, flags, a compressed
+/// format's block, and a format only an Apple M4 describes.
 #[test]
 fn the_answers_are_the_probes() {
-    let at = |level: MetalLevel, pf: P| level.pixel_format_info(u64::from(pf.as_raw()));
-    for level in MetalLevel::ALL {
-        let bgra8 = at(level, P::BGRA8Unorm);
-        assert_eq!(bgra8.name, "MTLPixelFormatBGRA8Unorm");
-        assert_eq!(bgra8.words[0], 4, "{level}");
-    }
-    // RG32Float: the same flags and words, cast class 4 at 26.7 and 6 at 27.0.1.
-    let old = at(MetalLevel::MacOS26_7, P::RG32Float);
-    let new = at(MetalLevel::MacOS27_0_1, P::RG32Float);
+    let at = |pf: P| pixel_format_info(u64::from(pf.as_raw()));
+    let bgra8 = at(P::BGRA8Unorm);
+    assert_eq!(bgra8.name, "MTLPixelFormatBGRA8Unorm");
+    assert_eq!(bgra8.words[0], 4);
+    // RG32Float: cast class 6.
+    let rg32 = at(P::RG32Float);
     assert_eq!(
-        (old.flags, old.cast_class, old.words),
-        (0x0403_019f, 4, [8, 1026, 8, 8])
-    );
-    assert_eq!(
-        (new.flags, new.cast_class, new.words),
+        (rg32.flags, rg32.cast_class, rg32.words),
         (0x0403_019f, 6, [8, 1026, 8, 8])
     );
-    // RGB10A2Unorm_sRGB: its flags differ by level.
-    assert_eq!(
-        at(MetalLevel::MacOS26_7, P::RGB10A2UnormSRGB).flags,
-        0x0003_099d
-    );
-    assert_eq!(
-        at(MetalLevel::MacOS27_0_1, P::RGB10A2UnormSRGB).flags,
-        0x0703_099d
-    );
+    assert_eq!(at(P::RGB10A2UnormSRGB).flags, 0x0703_099d);
     // BC1_RGBA: compressed (flags bit 0x400), an 8-byte 4x4x1 block.
-    let bc1 = at(MetalLevel::MacOS27_0_1, P::BC1RGBA);
+    let bc1 = at(P::BC1RGBA);
     assert_ne!(bc1.flags & 0x400, 0);
     assert_eq!(bc1.words, [8, 4, 4, 1]);
-    // BGRA10Unorm (638): only an Apple M4 under macOS 27.0.1 describes it.
-    for level in MetalLevel::ALL {
-        assert_eq!(
-            at(level, P::BGRA10Unorm),
-            PixelFormatInfo::INVALID,
-            "{level}"
-        );
-    }
+    // BGRA10Unorm (638): only an Apple M4 describes it.
+    assert_eq!(at(P::BGRA10Unorm), PixelFormatInfo::INVALID);
 }
 
 /// A format of blocks (flags bit 0x400) states its block in the four words: bytes, then a width
-/// and height of more than one texel, then a depth of 1. They are the compressed formats (80 at
-/// 27.0.1, ASTC 4x2's 4 by 2 among them) and the 4:2:2 formats, of 4-byte blocks of 2 by 1.
+/// and height of more than one texel, then a depth of 1. They are the compressed formats (80,
+/// ASTC 4x2's 4 by 2 among them) and the 4:2:2 formats, of 4-byte blocks of 2 by 1.
 #[test]
 fn block_formats_state_their_block() {
-    for level in MetalLevel::ALL {
-        for raw in described(level) {
-            let info = level.pixel_format_info(raw);
-            if info.flags & 0x400 != 0 {
-                let [bytes, width, height, depth] = info.words;
-                assert!(bytes > 0 && width * height > 1, "{level} {}", info.name);
-                assert_eq!(depth, 1, "{level} {}", info.name);
-            }
+    for raw in described() {
+        let info = pixel_format_info(raw);
+        if info.flags & 0x400 != 0 {
+            let [bytes, width, height, depth] = info.words;
+            assert!(bytes > 0 && width * height > 1, "{}", info.name);
+            assert_eq!(depth, 1, "{}", info.name);
         }
     }
-    let at = |pf: P| MetalLevel::MacOS27_0_1.pixel_format_info(u64::from(pf.as_raw()));
+    let at = |pf: P| pixel_format_info(u64::from(pf.as_raw()));
     assert_eq!(at(P::GBGR422).words, [4, 2, 1, 1]);
     assert_eq!(at(P::BGRG422).words, [4, 2, 1, 1]);
     assert_eq!(at(P::ASTC4x4LDR).words[1..], [4, 4, 1]);
@@ -178,23 +141,17 @@ fn query(args: [u64; 7]) -> TextureLevelQuery {
     }
 }
 
-/// Each level answers the probes' layouts word for word.
+/// The probes' layouts, word for word.
 #[test]
 fn texture_level_info_answers_the_probes() {
-    for level in MetalLevel::ALL {
-        for &(args, words) in MEASURED {
-            assert_eq!(
-                level.texture_level_info(&query(args)).words(),
-                words,
-                "{level} {args:?}"
-            );
-        }
-        for &(raw, by_plane) in PLANES {
-            for (planes, &bytes) in (0..).zip(by_plane.iter()) {
-                let info = level.texture_level_info(&query([raw, 17, 9, 1, 1, 0, planes]));
-                assert_eq!(info.bytes_per_block, bytes, "{level} {raw} {planes}");
-                assert_eq!(info.bytes, bytes * 17 * 9, "{level} {raw} {planes}");
-            }
+    for &(args, words) in MEASURED {
+        assert_eq!(texture_level_info(&query(args)).words(), words, "{args:?}");
+    }
+    for &(raw, by_plane) in PLANES {
+        for (planes, &bytes) in (0..).zip(by_plane.iter()) {
+            let info = texture_level_info(&query([raw, 17, 9, 1, 1, 0, planes]));
+            assert_eq!(info.bytes_per_block, bytes, "{raw} {planes}");
+            assert_eq!(info.bytes, bytes * 17 * 9, "{raw} {planes}");
         }
     }
 }
@@ -206,7 +163,7 @@ fn a_plane_query_is_level_zero_of_one_image() {
         TextureLevelQuery::plane_2d(80, 17, 9),
         query([80, 17, 9, 1, 1, 0, 0])
     );
-    let info = MetalLevel::MacOS27_0_1.texture_level_info(&TextureLevelQuery::plane_2d(80, 17, 9));
+    let info = texture_level_info(&TextureLevelQuery::plane_2d(80, 17, 9));
     assert_eq!(
         (info.bytes_per_row, info.aligned_height, info.bytes),
         (68, 9, 612)
@@ -278,17 +235,11 @@ const NEAR_TWO_TO_THE_64: &[Measured] = &[
      [ALL_ONES, ALL_ONES, 1, ALL_ONES, ALL_ONES, 1, ALL_ONES, ALL_ONES, 1, 4, ALL_ONES - 3, 4, 4]),
 ];
 
-/// Each level answers the wrapped block counts and the fields that follow from them.
+/// The wrapped block counts and the fields that follow from them.
 #[test]
 fn extents_near_two_to_the_64_wrap_the_block_count() {
-    for level in MetalLevel::ALL {
-        for &(args, words) in NEAR_TWO_TO_THE_64 {
-            assert_eq!(
-                level.texture_level_info(&query(args)).words(),
-                words,
-                "{level} {args:?}"
-            );
-        }
+    for &(args, words) in NEAR_TWO_TO_THE_64 {
+        assert_eq!(texture_level_info(&query(args)).words(), words, "{args:?}");
     }
 }
 
@@ -306,29 +257,27 @@ fn astc_formats_answer_metal_s_blocks_and_levels() {
     for (pf, decode) in formats {
         seen += 1;
         let [bw, bh] = decode.block_extent().map(u64::from);
-        for level in MetalLevel::ALL {
-            let raw = u64::from(pf.as_raw());
-            let info = level.pixel_format_info(raw);
-            assert_ne!(info.flags & 0x400, 0, "{level} {pf:?}");
-            assert_eq!(info.words, [16, bw, bh, 1], "{level} {pf:?}");
-            for (width, height, mip) in [(37, 23, 0), (37, 23, 2), (1000, 7, 1), (1, 1, 0)] {
-                let at = |side: u64| (side >> mip).max(1);
-                let (w, h) = (at(width), at(height));
-                let [across, down] = [w.div_ceil(bw), h.div_ceil(bh)];
-                let mut query = TextureLevelQuery::plane_2d(raw, width, height);
-                query.level = mip;
-                let answer = level.texture_level_info(&query);
-                let what = format!("{level} {pf:?} {width}x{height} level {mip}");
-                assert_eq!([answer.width, answer.height], [w, h], "{what}");
-                assert_eq!(
-                    [answer.blocks_across, answer.blocks_down],
-                    [across, down],
-                    "{what}"
-                );
-                assert_eq!(answer.bytes_per_block, 16, "{what}");
-                assert_eq!(answer.bytes_per_row, 16 * across, "{what}");
-                assert_eq!(answer.bytes_per_image, 16 * across * down, "{what}");
-            }
+        let raw = u64::from(pf.as_raw());
+        let info = pixel_format_info(raw);
+        assert_ne!(info.flags & 0x400, 0, "{pf:?}");
+        assert_eq!(info.words, [16, bw, bh, 1], "{pf:?}");
+        for (width, height, mip) in [(37, 23, 0), (37, 23, 2), (1000, 7, 1), (1, 1, 0)] {
+            let at = |side: u64| (side >> mip).max(1);
+            let (w, h) = (at(width), at(height));
+            let [across, down] = [w.div_ceil(bw), h.div_ceil(bh)];
+            let mut query = TextureLevelQuery::plane_2d(raw, width, height);
+            query.level = mip;
+            let answer = texture_level_info(&query);
+            let what = format!("{pf:?} {width}x{height} level {mip}");
+            assert_eq!([answer.width, answer.height], [w, h], "{what}");
+            assert_eq!(
+                [answer.blocks_across, answer.blocks_down],
+                [across, down],
+                "{what}"
+            );
+            assert_eq!(answer.bytes_per_block, 16, "{what}");
+            assert_eq!(answer.bytes_per_row, 16 * across, "{what}");
+            assert_eq!(answer.bytes_per_image, 16 * across * down, "{what}");
         }
     }
     assert_eq!(seen, 28);

@@ -86,9 +86,9 @@ the case needs is not a gap of ours at all — that is its own verdict, per site
 A row may also name the **venue** it is expected on, because a gap can be one venue's and not
 another's: a pipeline the runtime refuses on MoltenVK for a structural reason can translate on
 lavapipe, and a global row would then fail the lavapipe run for existing. The field is held, without
-case, against the venue's own description — its device name, driver, API version and Metal level —
-so a row can name one device (`Apple M3 Max`), one implementation (`llvmpipe`) or a family of them,
-and a venue that joins later needs no new vocabulary. `*` means every venue, and it is the
+case, against the venue's own description — its device name, driver and API version — so a row can
+name one device (`Apple M3 Max`), one implementation (`llvmpipe`) or a family of them, and a venue
+that joins later needs no new vocabulary. `*` means every venue, and it is the
 **stronger** claim rather than the looser one: the row is then held on every venue the run selected
 its case on, so widening a row's scope makes it harder to satisfy. That is what stops a
 venue-scoped row from becoming a way to silence a venue. A venue pattern that matches nothing holds
@@ -614,7 +614,7 @@ edits one.
 | `allowance` | The justification a loosened field must name, checked against the degrade catalogue and `docs/API.md` |
 | `compare`, `diff` | Field-by-field comparison, and the diff that names the leaf that moved |
 | `verdict` | Exact, announced, divergent, refused, unrecorded, and per venue "lacks the device feature" |
-| `recording` | A case's Metal answer, keyed by chip, macOS build and Metal level, with its runs and its outcome set |
+| `recording` | A case's Metal answer, keyed by chip, macOS build and the release whose Metal it is, with its runs and its outcome set |
 | `case` | The case API and the vocabulary both sides answer in |
 | `runtime_side` | `metal2vulkan-runtime` as a side |
 | `metal_side` | Native Metal as a side (macOS only), which record mode runs |

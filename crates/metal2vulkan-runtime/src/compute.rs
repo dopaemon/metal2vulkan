@@ -966,11 +966,8 @@ impl ComputeCommandEncoder {
     ///
     /// An offset that is not a multiple of 4 reads at the multiple below, as plain Metal reads
     /// it. Refused, recording nothing, as `dispatch_threadgroups` refuses `threads`, and as Metal's
-    /// API validation refuses arguments past the buffer's length from there (`Invalid`); for a
-    /// buffer of another device; and, on a device at the Metal level `MacOS26_7`, as the first
-    /// indirect dispatch of a run of compute encoders in an encoder of another dispatch type than
-    /// the run's first (`Invalid`, `Problem::IndirectDispatchOfAnotherType`: that Metal ends the
-    /// process there).
+    /// API validation refuses arguments past the buffer's length from there (`Invalid`); and for
+    /// a buffer of another device.
     pub fn dispatch_threadgroups_indirect(
         &mut self,
         indirect_buffer: &Buffer,
@@ -1020,9 +1017,8 @@ impl ComputeCommandEncoder {
     ///
     /// An offset that is not a multiple of 4 reads at the multiple below, as plain Metal reads
     /// it. Refused, recording nothing, with no pipeline state set, and as Metal's API validation
-    /// refuses arguments past the buffer's length from there (`Invalid`); for a buffer of another
-    /// device; and as [`dispatch_threadgroups_indirect`](Self::dispatch_threadgroups_indirect)
-    /// refuses a run's first indirect dispatch of another type.
+    /// refuses arguments past the buffer's length from there (`Invalid`); and for a buffer of
+    /// another device.
     pub fn dispatch_threads_indirect(
         &mut self,
         indirect_buffer: &Buffer,
@@ -1072,16 +1068,6 @@ impl ComputeCommandEncoder {
         offset: u64,
         arguments: Arguments,
     ) -> Result<(), Error> {
-        // Where the device's Metal level ends the process at a run's first indirect dispatch in
-        // an encoder of another type than the run's first encoder's, so does the runtime
-        // (`metal_level.rs`).
-        let ends = (self.core.device().properties().metal_level)
-            .ends_at_a_runs_first_indirect_of_another_type();
-        let goes = (self.core.command_buffer().state().predication_mut())
-            .indirect_dispatch(self.dispatch_type, ends);
-        if !goes {
-            return Err(invalid(call, Problem::IndirectDispatchOfAnotherType));
-        }
         let Some(pipeline) = self.pipeline.clone() else {
             return Err(invalid(call, Problem::NoPipelineState));
         };

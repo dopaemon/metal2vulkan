@@ -14,15 +14,14 @@
 //! layout compares the gaps ([`Gaps::Compared`]).
 //!
 //! **What the port adds to the lane.** The lane asserts *rules*: a fresh texture reads zero, the
-//! bytes come back, the padding is untouched, a format the device's Metal level describes none of
-//! is stopped. It holds no Metal value at all, and it walks all 301 formats in one test, so a
+//! bytes come back, the padding is untouched, a format Metal describes none of is stopped. It holds no Metal value at all, and it walks all 301 formats in one test, so a
 //! format the venue has no texture of leaves the test green with nothing compared. Here Metal's own
 //! bytes are recorded per format, and a format the venue honestly lacks stops that format's case
 //! alone and counts as [`LacksFeature`](crate::verdict::Verdict::LacksFeature) — neither a pass nor
 //! a failure, and visible in the matrix.
 //!
 //! **What is left in the lane.** Whether a texture of each of the 301 formats is made at all, which
-//! the lane checks against two rules (the Metal level's format list, and the formats Metal answers
+//! the lane checks against two rules (the formats Metal describes, and the formats Metal answers
 //! nil for). One case per format would record Metal's answer for each, but the suite's
 //! `LacksFeature` outcome arrives only when a case stops, so a case covering many formats would
 //! have to swallow a venue's gap to keep going. That is a verdict-model question, not something to

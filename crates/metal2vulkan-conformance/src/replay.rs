@@ -10,7 +10,6 @@ use crate::compare::{compare_run, Unfired};
 use crate::recording::{self, Answer, Lookup, Recording};
 use crate::transcript::{Node, Sites, Transcript};
 use crate::verdict::Verdict;
-use metal2vulkan_runtime::MetalLevel;
 
 /// The reserved site replay emits the degrade notices our run announced at. Metal announces none,
 /// so a recording holds an empty set here and any notice of ours must be justified by naming its
@@ -63,8 +62,6 @@ pub enum ReplayError {
     Stale { case: String, why: String },
     /// The case could not state its own inputs or shaders.
     Case { case: String, why: String },
-    /// The venue answers at a Metal level no release of this runtime names.
-    UnknownMetalLevel { case: String, level: String },
 }
 
 impl std::fmt::Display for ReplayError {
@@ -75,12 +72,6 @@ impl std::fmt::Display for ReplayError {
             }
             ReplayError::Stale { case, why } => write!(out, "{case}: a stale recording: {why}"),
             ReplayError::Case { case, why } => write!(out, "{case}: {why}"),
-            ReplayError::UnknownMetalLevel { case, level } => {
-                write!(
-                    out,
-                    "{case}: the venue answers at an unknown Metal level {level}"
-                )
-            }
         }
     }
 }
@@ -121,13 +112,6 @@ pub fn replay_against(
 ) -> Result<Replayed, ReplayError> {
     let name = case.name();
     let venue = side.venue();
-    let level = MetalLevel::ALL
-        .into_iter()
-        .find(|level| level.macos() == venue.metal_level)
-        .ok_or_else(|| ReplayError::UnknownMetalLevel {
-            case: name.to_owned(),
-            level: venue.metal_level.clone(),
-        })?;
     let inputs = case.inputs().map_err(|why| ReplayError::Case {
         case: name.to_owned(),
         why,
@@ -155,14 +139,14 @@ pub fn replay_against(
     let ours = sites.finish();
     announced.extend(ours.announced_notices().into_keys());
 
-    let answer = match recording.answer(level) {
+    let answer = match recording.answer() {
         Ok(answer) => answer,
-        Err(Lookup::Unrecorded { level }) => {
+        Err(Lookup::Unrecorded { release }) => {
             return Ok(Replayed {
                 case: name.to_owned(),
                 venue,
                 verdict: Verdict::Unrecorded {
-                    why: format!("no Metal answer at Metal level {level}"),
+                    why: format!("no Metal answer at macOS {release}"),
                 },
                 allowances: Allowances::default(),
                 measured_on: None,

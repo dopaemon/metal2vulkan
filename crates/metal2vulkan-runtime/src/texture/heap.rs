@@ -232,7 +232,7 @@ use crate::image_plan::{check_image_limits, plan_images, ImagePlan};
 use crate::key_hash::KeyMap;
 use crate::linear_plan::{check_linear_limits, linear_lack, LinearLack, LINEAR_ALIGNMENT};
 use crate::memory::{Memory, MemoryClass, Placement};
-use crate::metal_level::MetalLevel;
+use crate::metal_release::NO_TEXTURE_STACK_ALIGNMENT;
 use crate::release;
 use crate::resource::{Identity, ResourceKey};
 use crate::shadow::{Backing, ShadowBuffer, ShadowCopies, ShadowSource, ShadowTarget};
@@ -1009,12 +1009,10 @@ fn four_two_two_heap_answer(layout: &TextureLayout) -> SizeAndAlign {
 ///   the 1D array, cube array and texture buffer, our probe and an M3 Max under 26.7 alike);
 /// - a two-plane extended-range cube or cube array's ([`TextureProblem::TypeForFormat`]): 16
 ///   (an M4, plain and validated);
-/// - `Unspecialized`'s, `RGBA16Float_XR`'s, `AnyDepth`'s and `AnyStencil`'s: 128 for a 1D, 2D
-///   and 2D multisample texture, 16 for a texture buffer, and for the arrays, cubes and 3D
-///   textures the level's answer (`MetalLevel::no_texture_stack_alignment`): 16 KiB, as for a
-///   texture of a format, on an M3 Max under macOS 26.7 (the consumer's report alike; plain and
-///   validated, every usage and storage mode), and 128 under macOS 27.0.1 (and an M4 alike).
-pub(crate) fn no_texture_alignment(pf: PixelFormat, ty: TextureType, level: MetalLevel) -> u64 {
+/// - `Unspecialized`'s, `RGBA16Float_XR`'s, `AnyDepth`'s and `AnyStencil`'s: 16 for a texture
+///   buffer, and 128 for every other type (`metal_release::NO_TEXTURE_STACK_ALIGNMENT` for the
+///   arrays, cubes and 3D textures: an M3 Max under macOS 27.0.1, and an M4 alike).
+pub(crate) fn no_texture_alignment(pf: PixelFormat, ty: TextureType) -> u64 {
     use TextureType as T;
     // `R10Unorm_PACKED` and `RG10Unorm_PACKED` answer as a two-plane YCbCr format does, and so do
     // the shapes of a one-plane YCbCr format Metal makes no texture of (a cube, a cube array, and
@@ -1040,7 +1038,7 @@ pub(crate) fn no_texture_alignment(pf: PixelFormat, ty: TextureType, level: Meta
         | T::Cube
         | T::CubeArray
         | T::Type3D
-        | T::Type2DMultisampleArray => level.no_texture_stack_alignment(),
+        | T::Type2DMultisampleArray => NO_TEXTURE_STACK_ALIGNMENT,
     }
 }
 
@@ -1531,8 +1529,8 @@ impl Device {
     /// stencil one `Invalid`, as every creator does. Metal's private usage 0x8 alone is one it
     /// compresses, where its texture is of `Unknown` usage: the descriptor keeps it
     /// ([`TextureUsage::DROPPED`]), so the answer is Metal's. A descriptor whose layout in Metal's
-    /// heaps the runtime does not model (a format or sample count not measured: a PVRTC format at
-    /// a Metal level of macOS 26.7, 8 samples) answers its device's image's size, announced `unmeasured-heap-texture-size` (a
+    /// heaps the runtime does not model (a format or sample count not measured, such as 8
+    /// samples) answers its device's image's size, announced `unmeasured-heap-texture-size` (a
     /// mipmapped texture Metal compresses and a `Depth32Float_Stencil8` one answer Metal's).
     pub fn heap_texture_size_and_align(
         &self,
@@ -1546,7 +1544,7 @@ impl Device {
                 let (pf, ty) = (descriptor.pixel_format, descriptor.texture_type);
                 return Ok(SizeAndAlign {
                     size: 0,
-                    align: no_texture_alignment(pf, ty, self.properties().metal_level),
+                    align: no_texture_alignment(pf, ty),
                 });
             }
             layout => layout?,
@@ -1585,8 +1583,7 @@ impl Device {
 
     /// Metal's own answer to `heapTextureSizeAndAlignWithDescriptor:` for `descriptor`, as the
     /// runtime models it (`texture/heap_tiled.rs`), whatever this device's images need: the same
-    /// on every device at the same Metal level (`DeviceProperties::metal_level`). `None` where the
-    /// model has no answer (a PVRTC format at macOS 26.7's level, 8 samples, any other layout not
+    /// on every device. `None` where the model has no answer (8 samples, any other layout not
     /// measured), where
     /// [`Device::heap_texture_size_and_align`] announces `unmeasured-heap-texture-size`. No Metal
     /// counterpart: Metal answers its own GPU's.
@@ -1616,7 +1613,7 @@ impl Device {
                 let (pf, ty) = (descriptor.pixel_format, descriptor.texture_type);
                 return Ok(Some(SizeAndAlign {
                     size: 0,
-                    align: no_texture_alignment(pf, ty, self.properties().metal_level),
+                    align: no_texture_alignment(pf, ty),
                 }));
             }
             layout => layout?,
@@ -1655,8 +1652,7 @@ impl Device {
             return self.modelled_answer(call, &other, &layout, optimized);
         }
         let usage = effective_usage(descriptor.usage);
-        let level = self.properties().metal_level;
-        Ok(modelled_size(layout, usage, optimized, level))
+        Ok(modelled_size(layout, usage, optimized))
     }
 
     /// The layout of a heap texture of `descriptor`, for `call`: the descriptor checked for
@@ -1845,9 +1841,8 @@ impl Device {
             None => {
                 let usage = effective_usage(descriptor.usage);
                 let optimized = descriptor.allow_gpu_optimized_contents;
-                let level = self.properties().metal_level;
                 let format = image.plan.format;
-                let measured = metal_heap_layout(&layout, usage, optimized, format, level);
+                let measured = metal_heap_layout(&layout, usage, optimized, format);
                 if measured.answer.is_none() {
                     self.degrade_unmeasured_size(call, &layout);
                 }
@@ -1908,8 +1903,7 @@ impl Device {
         let shadowed = matches!(image.route, AliasRoute::Shadow | AliasRoute::MemoryShadow)
             || self.keeps_optimized_layout(descriptor, &layout);
         if shadowed && twin.is_none() {
-            let level = self.properties().metal_level;
-            let tiles = shadow_tiles(&layout, image.plan.format, level, &metal_layout);
+            let tiles = shadow_tiles(&layout, image.plan.format, &metal_layout);
             if let (Some(tiles), Some(answer)) = (tiles, metal_answer) {
                 let serves = (tiles.tiles())
                     .is_some_and(|tiled| self.tiles_serve(&image.plan, tiled, answer.size));
@@ -2048,8 +2042,7 @@ impl Device {
             PixelFormat::X32Stencil8 => {
                 let usage = effective_usage(descriptor.usage);
                 let optimized = descriptor.allow_gpu_optimized_contents;
-                let level = self.properties().metal_level;
-                metal_heap_layout(layout, usage, optimized, format, level).layout
+                metal_heap_layout(layout, usage, optimized, format).layout
             }
             _ => p.metal_layout,
         };
@@ -2804,9 +2797,7 @@ impl Device {
         metal: &HeapLayout,
         answer: Option<SizeAndAlign>,
     ) -> Result<Option<(ImagePlan, HeapLayout, SizeAndAlign)>, Error> {
-        let level = self.properties().metal_level;
-        let (Some(tiles), Some(answer)) = (shadow_tiles(layout, plan.format, level, metal), answer)
-        else {
+        let (Some(tiles), Some(answer)) = (shadow_tiles(layout, plan.format, metal), answer) else {
             return Ok(None);
         };
         let plan = self.with_sample_moves_usage(plan, layout.texture_type)?;

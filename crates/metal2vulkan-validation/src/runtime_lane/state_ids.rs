@@ -9,9 +9,8 @@
 //! - A state without that support, and a tile state, take no ID: they answer 0 whatever the
 //!   placement, 16384 included.
 //! - A placement at 16384 or more after the cut, which ended Metal's process, is refused typed.
-//! - A depth/stencil state's ID below Apple10 is its level's plain Metal answer, 0 at macOS
-//!   27.0.1, and refused typed only at a level whose plain call raises (macOS 26.7). Metal's own
-//!   API validation stops the call at every release measured, which is not what plain Metal does.
+//! - A depth/stencil state's ID below Apple10 is plain Metal's answer, 0 (macOS 27.0.1). Metal's
+//!   own API validation stops the call, which is not what plain Metal does.
 //!
 //! - A state answers its descriptor's label, and one made from it with additional binary
 //!   functions keeps it.
@@ -29,9 +28,9 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ComputePipelineState, Device, Error, GpuFamily, IdPlacement, Invalid, MetalLevel,
-    PipelineOption, PipelineOptions, Problem, RenderPipelineFunctionsDescriptor,
-    RenderPipelineState, ResourceId, RuntimeGap,
+    ComputePipelineState, Device, Error, GpuFamily, IdPlacement, Invalid, PipelineOption,
+    PipelineOptions, Problem, RenderPipelineFunctionsDescriptor, RenderPipelineState, ResourceId,
+    RuntimeGap,
 };
 
 /// The placement at `id`.
@@ -254,14 +253,13 @@ fn placements_past_the_pipeline_limit_are_refused_typed() {
     });
 }
 
-/// A depth/stencil state's `gpu_resource_id` below Apple10 is its device's level's plain Metal
-/// answer: 0 at macOS 27.0.1 (our probe on an M3 Max; Metal's own API validation stops the call
-/// there, "Obtaining the resourceID of a DepthStencilState object requires support for
-/// MTLGPUFamilyApple10", probe 6, which is not what plain Metal does), and refused typed at macOS
-/// 26.7, whose plain call raises. It is a gap on a device that claims Apple10. Every descriptor
-/// answers alike, a depth one and a depth-and-stencil one among them.
+/// A depth/stencil state's `gpu_resource_id` below Apple10 is plain Metal's answer: 0 (our probe on
+/// an M3 Max under macOS 27.0.1; Metal's own API validation stops the call, "Obtaining the
+/// resourceID of a DepthStencilState object requires support for MTLGPUFamilyApple10", probe 6,
+/// which is not what plain Metal does). It is a gap on a device that claims Apple10. Every
+/// descriptor answers alike, a depth one and a depth-and-stencil one among them.
 #[test]
-fn a_depth_stencil_states_id_below_apple10_is_its_levels_answer() {
+fn a_depth_stencil_states_id_below_apple10_is_plain_metal_s_answer() {
     on_device(|device| {
         let mut stencilled = DepthStencilDescriptor::default();
         stencilled.front_face_stencil.stencil_compare_function = CompareFunction::Equal;
@@ -270,12 +268,7 @@ fn a_depth_stencil_states_id_below_apple10_is_its_levels_answer() {
             let expected = if device.supports_family(GpuFamily::Apple10.raw()) {
                 Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands))
             } else {
-                match device.properties().metal_level {
-                    MetalLevel::MacOS26_7 => {
-                        Err(invalid("gpu_resource_id", Problem::DepthStencilResourceId))
-                    }
-                    _ => Ok(ResourceId(0)),
-                }
+                Ok(ResourceId(0))
             };
             assert_eq!(state.gpu_resource_id(), expected, "{descriptor:?}");
         }

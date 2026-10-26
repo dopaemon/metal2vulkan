@@ -38,21 +38,15 @@ use metal2vulkan::error::{Feature, Needs};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, CommandQueue, Degradation, Device, Error, HeapDescriptor, HeapType,
-    IdPlacement, Invalid, MetalLevel, Nil, Origin, Problem, Region, ResourceOptions, Size,
-    SizeAndAlign, Texture, TextureDescriptor, TextureProblem,
+    IdPlacement, Invalid, Nil, Origin, Problem, Region, ResourceOptions, Size, SizeAndAlign,
+    Texture, TextureDescriptor, TextureProblem,
 };
 
 /// The alignment Metal's heap query answers, with 0 bytes, for an array, a cube, a cube array, a 3D
 /// texture or a multisample array of a format it makes no texture of and that has no planes
-/// (`Unspecialized`, `RGBA16Float_XR`, `AnyDepth`, `AnyStencil`), at `device`'s Metal level:
-/// 16 KiB on an Apple M3 Max under macOS 26.7, 128 under 27.0.1 (an M4 alike).
-pub(super) fn stacked_nil_alignment(device: &Device) -> u64 {
-    if device.properties().metal_level >= MetalLevel::MacOS27_0_1 {
-        128
-    } else {
-        16 << 10
-    }
-}
+/// (`Unspecialized`, `RGBA16Float_XR`, `AnyDepth`, `AnyStencil`): 128, as for a 1D or 2D texture
+/// (an Apple M3 Max under macOS 27.0.1, an M4 alike).
+pub(super) const STACKED_NIL_ALIGNMENT: u64 = 128;
 
 /// A Shared buffer holding `bytes`.
 fn staged(device: &Device, bytes: &[u8]) -> Buffer {
@@ -387,8 +381,8 @@ fn two_plane_heap_textures_take_metal_s_size() {
 }
 
 /// `Unspecialized`: Metal answers 0 bytes from the heap query, at its texture type's alignment
-/// ([`stacked_nil_alignment`] for the arrays, cubes and 3D textures), and nil for the texture, a heap's (automatic and placement) and a
-/// buffer's (`newTextureWithDescriptor:offset:bytesPerRow:` and the linear form), in every storage
+/// ([`STACKED_NIL_ALIGNMENT`] for the arrays, cubes and 3D textures), and nil for the texture, a
+/// heap's (automatic and placement) and a buffer's (`newTextureWithDescriptor:offset:bytesPerRow:` and the linear form), in every storage
 /// mode and usage; it stops a multisample one and one of `ShaderAtomic` usage, plain too, in the
 /// query and the calls alike.
 #[test]
@@ -429,7 +423,7 @@ fn unspecialized_answers_metal_s_nothing() {
             d.resource_options = options;
             d
         };
-        let stacked = stacked_nil_alignment(device);
+        let stacked = STACKED_NIL_ALIGNMENT;
         let types = [
             (TextureType::Type1D, 128),
             (TextureType::Type1DArray, stacked),
@@ -537,8 +531,8 @@ fn unspecialized_answers_metal_s_nothing() {
 /// validation stops comes first, from every creator and the heap query alike (`Error::Invalid`),
 /// and then Metal's nil (`Error::Nil`) from the device, either heap, a buffer and its linear
 /// form, a placement heap whose storage is not the descriptor's too; the query answers 0 bytes at
-/// the type's alignment, the M3 Max's at the device's level ([`stacked_nil_alignment`] for the
-/// arrays, cubes and 3D textures).
+/// the type's alignment, the M3 Max's ([`STACKED_NIL_ALIGNMENT`] for the arrays, cubes and 3D
+/// textures).
 #[test]
 fn formats_without_textures_answer_metal_s_stops_then_its_nil() {
     use TextureType as T;
@@ -610,7 +604,7 @@ fn formats_without_textures_answer_metal_s_stops_then_its_nil() {
                 };
                 // Metal's nil from every creator, and the query's 0 bytes at the type's
                 // alignment, for each type Metal does not stop.
-                let stacked = stacked_nil_alignment(device);
+                let stacked = STACKED_NIL_ALIGNMENT;
                 for (texture_type, align, ycbcr_align) in [
                     (T::Type1D, 128, 16),
                     (T::Type1DArray, stacked, 16),
@@ -873,10 +867,9 @@ pub(super) const UNMODELLED_SIZES: [Degradation; 1] = [Degradation::UnmeasuredHe
 /// A heap texture whose layout in Metal's heaps the runtime does not model answers its device's
 /// size and announces `unmeasured-heap-texture-size` once a device: an 8-sample `RGBA8Unorm`
 /// texture, where the device takes 8 samples (Apple's GPUs take 2 and 4, so Metal's layout of 8 is
-/// not measured), or else a PVRTC texture, where the device has the format and its Metal level is
-/// macOS 26.7's (whose PVRTC placement is not measured; under 27.0.1 it answers Metal's 2048 bytes
-/// for 64x64 `PVRTC_RGBA_4BPP`, announcing nothing); a device with neither announces nothing.
-/// One-level and mipmapped textures Metal
+/// not measured); a device without announces nothing. A PVRTC texture, where the device has the
+/// format, answers Metal's 2048 bytes for 64x64 `PVRTC_RGBA_4BPP`, announcing nothing, as do
+/// one-level and mipmapped textures Metal
 /// compresses announce nothing, their answers Metal's model's (the consumer's boot's three-level
 /// 224 x 928 `RGBA16Float` texture of `ShaderRead | RenderTarget | BlockWritesOnly` usage and a
 /// seven-level 64 x 64 x 64 3D one).
@@ -920,27 +913,19 @@ fn an_unmodelled_heap_size_is_announced_once() {
         eight.texture_type = TextureType::Type2DMultisample;
         eight.sample_count = 8;
         let pvrtc = TextureDescriptor::texture_2d(PixelFormat::PVRTCRGBA4BPP, 64, 64, false);
-        let modelled = device.properties().metal_level >= MetalLevel::MacOS27_0_1;
-        if modelled {
-            if let Ok(answer) = device.heap_texture_size_and_align(&private(pvrtc)) {
-                assert_eq!(kinds(messages), [], "PVRTC");
-                assert!(answer.size >= 2048, "PVRTC: {answer:?}: at least Metal's");
-            }
+        if let Ok(answer) = device.heap_texture_size_and_align(&private(pvrtc)) {
+            assert_eq!(kinds(messages), [], "PVRTC");
+            assert!(answer.size >= 2048, "PVRTC: {answer:?}: at least Metal's");
         }
-        let unmodelled = [("8 samples", private(eight)), ("PVRTC", private(pvrtc))];
-        let mut announced = false;
-        for (what, d) in unmodelled.into_iter().take(if modelled { 1 } else { 2 }) {
-            let Ok(answer) = device.heap_texture_size_and_align(&d) else {
-                println!("UNMODELLED {what}: refused by the device");
-                continue;
-            };
-            println!("UNMODELLED {what}: {answer:?}");
-            let want = match announced {
-                false => UNMODELLED_SIZES.to_vec(),
-                true => Vec::new(),
-            };
-            assert_eq!(kinds(messages), want, "{what}: once a device");
-            announced = true;
+        match device.heap_texture_size_and_align(&private(eight)) {
+            Ok(answer) => {
+                println!("UNMODELLED 8 samples: {answer:?}");
+                assert_eq!(kinds(messages), UNMODELLED_SIZES, "8 samples: announced");
+                let again = device.heap_texture_size_and_align(&private(eight)).unwrap();
+                assert_eq!(again, answer, "8 samples, again");
+                assert_eq!(kinds(messages), [], "8 samples: once a device");
+            }
+            Err(_) => println!("UNMODELLED 8 samples: refused by the device"),
         }
     });
 }
@@ -1145,8 +1130,7 @@ fn metal_s_heap_answer_is_the_same_on_every_device() {
             "METAL-MODEL {coarser} of {answered} device answers coarser than Metal's, of {} shapes",
             rows.len()
         );
-        // No model: a PVRTC texture at 26.7's level; an 8-sample one, where the device's rules
-        // take it.
+        // A PVRTC texture, modelled; no model: an 8-sample one, where the device's rules take it.
         let private = |mut d: TextureDescriptor| {
             d.usage = TextureUsage::SHADER_READ;
             d.resource_options = ResourceOptions::private();
@@ -1155,9 +1139,7 @@ fn metal_s_heap_answer_is_the_same_on_every_device() {
         let pvrtc = TextureDescriptor::texture_2d(PixelFormat::PVRTCRGBA4BPP, 64, 64, false);
         let answer = device.metal_heap_texture_size_and_align(&private(pvrtc));
         let answer = answer.ok().map(|answer| answer.map(|a| (a.size, a.align)));
-        let pvrtc =
-            (device.properties().metal_level >= MetalLevel::MacOS27_0_1).then_some((2048, 128));
-        assert_eq!(answer, Some(pvrtc), "PVRTC");
+        assert_eq!(answer, Some(Some((2048, 128))), "PVRTC");
         let mut eight = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, 64, 64, false);
         eight.texture_type = TextureType::Type2DMultisample;
         eight.sample_count = 8;

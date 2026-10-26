@@ -24,8 +24,8 @@
 
 use super::buffer_texture_blits::{Held, Kind, OFF};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device,
-    validated_device_with, Messages, ScratchCache, WAIT,
+    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
+    ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -39,9 +39,9 @@ use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     Attachment, BlitCommandEncoder, BlitOption, Buffer, ClearColor, CommandBufferStatus,
     CommandQueue, CpuCacheMode, Device, Error, HazardTrackingMode, HeapDescriptor, HeapType,
-    Invalid, Library, LoadAction, MetalLevel, Origin, PipelineOptions, Problem, Region,
-    RenderCommandEncoder, RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect,
-    Size, StorageMode, StoreAction, Texture, TextureDescriptor, TextureProblem, ViewProblem,
+    Invalid, Library, LoadAction, Origin, PipelineOptions, Problem, Region, RenderCommandEncoder,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size, StorageMode,
+    StoreAction, Texture, TextureDescriptor, TextureProblem, ViewProblem,
 };
 use std::path::Path;
 
@@ -963,16 +963,14 @@ fn a_texture_made_in_x32_stencil8_is_a_stencil_texture() {
 /// An sRGB view of a texture over a buffer renders its encoding into the buffer's texel bytes and
 /// leaves the bytes between its rows, over an ordinary and a no-copy buffer (the aliasing image or
 /// the shadow; Metal probe case `r.view_srgb` on the M3 Max and an M4, and our probe's values).
-/// A render pipeline whose attachment is in a pixel format the device's Metal level describes none
-/// of is stopped, as plain Metal's descriptor validation stops it ("is not a valid MTLPixelFormat";
-/// on an Apple M4 under macOS 27.0.1, the consumer's run on an M3 Max under 26.7),
-/// on every venue: a color attachment of `RGB8Unorm`, which no level describes, blended or not; a
+/// A render pipeline whose attachment is in a pixel format Metal describes none of is stopped, as
+/// plain Metal's descriptor validation stops it ("is not a valid MTLPixelFormat"; on an Apple M4
+/// under macOS 27.0.1), on every venue: a color attachment of `RGB8Unorm`, blended or not; a
 /// depth or a stencil attachment of `Depth24Unorm_Stencil8` or `X24_Stencil8`, which an Apple GPU
-/// has neither of, whatever the Vulkan driver has; and at macOS 26.7's level
-/// (`DeviceOptions::metal_level`) a color attachment of each of 630 to 650, blended or not, of
-/// which 27.0.1's level stops only 646 to 650.
+/// has neither of, whatever the Vulkan driver has; and a color attachment of each of 630 to 650
+/// the release does not describe (`Device::pixel_format_info`), blended or not.
 #[test]
-fn an_attachment_in_a_format_the_level_describes_none_of_stops_the_pipeline() {
+fn an_attachment_in_a_format_metal_describes_none_of_stops_the_pipeline() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
@@ -1023,29 +1021,23 @@ fn an_attachment_in_a_format_the_level_describes_none_of_stops_the_pipeline() {
                 "{pf:?}"
             );
         }
-        drop(lane);
-        drop(device);
         let from_630: Vec<PixelFormat> = PixelFormat::ALL
             .iter()
             .copied()
             .filter(|pf| (630..=650).contains(&pf.as_raw()))
             .collect();
         assert_eq!(from_630.len(), 21);
-        for level in MetalLevel::ALL {
-            let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-                options.metal_level = Some(level);
-            })
-            .unwrap();
-            let lane = Lane::new(&device);
-            for &pf in &from_630 {
-                for blend in [false, true] {
-                    let answer = made(&lane, &colored(&lane, pf, blend));
-                    let stop = stopped(Attachment::Color(0), pf);
-                    if level.describes(pf) {
-                        assert_ne!(answer, stop, "{level} {pf:?} blend {blend}");
-                    } else {
-                        assert_eq!(answer, stop, "{level} {pf:?} blend {blend}");
-                    }
+        for &pf in &from_630 {
+            let described = device
+                .pixel_format_info(u64::from(pf.as_raw()))
+                .describes_a_format();
+            for blend in [false, true] {
+                let answer = made(&lane, &colored(&lane, pf, blend));
+                let stop = stopped(Attachment::Color(0), pf);
+                if described {
+                    assert_ne!(answer, stop, "{pf:?} blend {blend}");
+                } else {
+                    assert_eq!(answer, stop, "{pf:?} blend {blend}");
                 }
             }
         }

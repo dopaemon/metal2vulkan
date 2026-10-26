@@ -2,7 +2,6 @@
 //! compressed answers, against our probe (an Apple M4 under macOS 27.0.1; the
 //! consumer's M3 Max rows under 26.7 alike).
 
-use crate::metal_level::MetalLevel;
 use crate::texture::heap_tiled::{metal_heap_layout, metal_keeps_uncompressed};
 use crate::texture_descriptor::{effective_usage, TextureLayout};
 use metal2vulkan::metal::{PixelFormat, PixelFormat as P, TextureType as T, TextureUsage};
@@ -279,8 +278,7 @@ fn the_model_answers_metal_s_sizes_by_usage() {
                 let what = format!(
                     "{pf:?} {ty:?} {w}x{h} {levels} {length} x{samples} {raw:#x} {optimized}"
                 );
-                let metal =
-                    metal_heap_layout(&layout, usage, optimized, format, MetalLevel::MacOS27_0_1);
+                let metal = metal_heap_layout(&layout, usage, optimized, format);
                 let Some(answer) = metal.answer else {
                     unanswered.push(what);
                     continue;
@@ -340,16 +338,15 @@ fn a_memoryless_descriptor_answers_metal_s_uncompressed_size() {
         let usage = effective_usage(TextureUsage::try_from(raw).unwrap());
         let what = format!("{pf:?} {ty:?} {extent:?} l{levels} x{samples} {raw:#x}");
         let format = image_format(pf);
-        let level = MetalLevel::MacOS27_0_1;
         // Uncompressed, which is what the query answers for `Memoryless` storage.
-        let plain = metal_heap_layout(&layout, usage, false, format, level);
+        let plain = metal_heap_layout(&layout, usage, false, format);
         let answer = plain
             .answer
             .unwrap_or_else(|| panic!("no model answer: {what}"));
         assert_eq!((answer.size, answer.align), memoryless, "{what}");
         // The compressed answer for the same descriptor, which the other modes take: the two are
         // the same only where Metal keeps the texture uncompressed anyway.
-        let optimized = metal_heap_layout(&layout, usage, true, format, level);
+        let optimized = metal_heap_layout(&layout, usage, true, format);
         let other = optimized
             .answer
             .unwrap_or_else(|| panic!("no model answer: {what}"));

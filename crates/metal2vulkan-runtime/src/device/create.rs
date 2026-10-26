@@ -40,7 +40,6 @@ use crate::exit_guard;
 use crate::gpu_time;
 use crate::image_barrier::MemoryReads;
 use crate::loader_word::LoaderWord;
-use crate::metal_level::{choose, Chosen, Host};
 use crate::release;
 use crate::shader_cache::{CacheSetup, ShaderCacheOptions};
 use crate::sparse;
@@ -171,16 +170,6 @@ pub struct DeviceOptions {
     /// at a kind's notice in the call names that kind here, so the work it ends at never runs.
     /// No Metal counterpart.
     pub lowering_refuses: BTreeSet<crate::Degradation>,
-    /// The macOS release whose Metal each device answers as, where releases answer differently
-    /// ([`MetalLevel`](crate::MetalLevel): which pixel formats a descriptor takes and Metal
-    /// describes). `None` by default: on a macOS host, the host's own release, or the newest
-    /// measured release below it, announced once as `metal2vulkan-degrade-metal-level-below-host`
-    /// (a host below every measured release, or whose release cannot be read, refuses the device,
-    /// `Error::Unproven` with `Problem::HostReleaseUnmeasured`); on any other host, the newest,
-    /// [`MetalLevel::NEWEST`](crate::MetalLevel::NEWEST). Named, the devices answer at it on any
-    /// host, unannounced: for hosts that are not macOS, and for tests. No Metal counterpart:
-    /// Metal answers as the release it runs on.
-    pub metal_level: Option<crate::MetalLevel>,
     /// Keep each command buffer's execution record
     /// ([`CommandBuffer::executions`](crate::CommandBuffer::executions)): the pipeline each
     /// dispatch and draw ran, the bind shape it was planned for, and its `VkPipeline`s' creation
@@ -1234,13 +1223,12 @@ pub(crate) fn identity_as_options(
     description
 }
 
-/// A device on `physical`, made from `instance`, answering at `level`.
+/// A device on `physical`, made from `instance`.
 fn create_on(
     instance: &Arc<InstanceShared>,
     physical: vk::PhysicalDevice,
     options: &DeviceOptions,
     cache: &CacheSetup,
-    level: Chosen,
 ) -> Result<Device, Error> {
     // SAFETY: `physical` was enumerated from the instance, created at `api_version`.
     let description =
@@ -1471,7 +1459,6 @@ fn create_on(
         memory_reads,
         owned: true,
         cache: cache.clone(),
-        metal_level: level,
     };
     // SAFETY: the device was made from these parts just now.
     let device = unsafe { Device::assemble(parts) }?;
@@ -1586,7 +1573,6 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         gpu_times_from_host,
         announce_each,
         lowering_refuses,
-        metal_level,
         record_executions,
         assume_unmeasured_identity,
         fail_in_place_check,
@@ -1608,7 +1594,6 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *gpu_times_from_host == b.gpu_times_from_host
         && *announce_each == b.announce_each
         && *lowering_refuses == b.lowering_refuses
-        && *metal_level == b.metal_level
         && *record_executions == b.record_executions
         && *assume_unmeasured_identity == b.assume_unmeasured_identity
         && *fail_in_place_check == b.fail_in_place_check
@@ -1639,20 +1624,18 @@ fn group(
     Ok((made.len() - 1, instance))
 }
 
-/// The device of `physical` in `group`: its live one, or one made now and kept there, answering
-/// at `level`.
+/// The device of `physical` in `group`: its live one, or one made now and kept there.
 fn device_of(
     group: &mut Made,
     instance: &Arc<InstanceShared>,
     physical: vk::PhysicalDevice,
     options: &DeviceOptions,
     cache: &CacheSetup,
-    level: Chosen,
 ) -> Result<Device, Error> {
     if let Some(device) = group.device(physical) {
         return Ok(device);
     }
-    let device = create_on(instance, physical, options, cache, level)?;
+    let device = create_on(instance, physical, options, cache)?;
     group.devices.retain(|(_, weak)| weak.strong_count() > 0);
     group.devices.push((physical, Arc::downgrade(&device.0)));
     Ok(device)
@@ -1678,18 +1661,13 @@ impl Device {
     /// it loaded for the life of the process: one bare instance, with no layers and no
     /// messenger, is never destroyed. The loader would otherwise unload the drivers with the
     /// last device and load them again for the next, which some drivers cannot do indefinitely.
-    ///
-    /// With no `options.metal_level`, a macOS host below every measured release of Metal, or
-    /// whose release cannot be read, refuses every device (`Unproven`,
-    /// `Problem::HostReleaseUnmeasured`).
     pub fn system_default_with(options: &DeviceOptions) -> Result<Device, Error> {
         let cache = CacheSetup::of(&options.shader_cache, "system_default_with")?;
-        let level = choose(options.metal_level, Host::this(), "system_default_with")?;
         let mut made = lock(&MADE);
         let (at, instance) = group(&mut made, options)?;
         let mut refusal = None;
         for physical in ranked(&instance, options)? {
-            match device_of(&mut made[at], &instance, physical, options, &cache, level) {
+            match device_of(&mut made[at], &instance, physical, options, &cache) {
                 Ok(device) => {
                     keep_drivers_loaded(&instance.entry);
                     return Ok(device);
@@ -1775,7 +1753,6 @@ impl Device {
     /// refusal of the device where the runtime cannot make it.
     pub fn with_registry_id(registry_id: u64, options: &DeviceOptions) -> Result<Device, Error> {
         let cache = CacheSetup::of(&options.shader_cache, "with_registry_id")?;
-        let level = choose(options.metal_level, Host::this(), "with_registry_id")?;
         let mut made = lock(&MADE);
         let (at, instance) = group(&mut made, options)?;
         let ranked = ranked(&instance, options)?;
@@ -1784,7 +1761,7 @@ impl Device {
         else {
             return Err(Error::NoDevice);
         };
-        let device = device_of(&mut made[at], &instance, physical, options, &cache, level)?;
+        let device = device_of(&mut made[at], &instance, physical, options, &cache)?;
         keep_drivers_loaded(&instance.entry);
         Ok(device)
     }
@@ -1803,12 +1780,11 @@ impl Device {
     /// `MTLCopyAllDevices()[0]` is `MTLCreateSystemDefaultDevice()`).
     pub fn all_with(options: &DeviceOptions) -> Result<Vec<Device>, Error> {
         let cache = CacheSetup::of(&options.shader_cache, "all_with")?;
-        let level = choose(options.metal_level, Host::this(), "all_with")?;
         let mut made = lock(&MADE);
         let (at, instance) = group(&mut made, options)?;
         let mut devices = Vec::new();
         for physical in ranked(&instance, options)? {
-            match device_of(&mut made[at], &instance, physical, options, &cache, level) {
+            match device_of(&mut made[at], &instance, physical, options, &cache) {
                 Ok(device) => devices.push(device),
                 Err(Error::Unsupported(_) | Error::NoDevice) => {}
                 Err(error) => return Err(error),

@@ -16,7 +16,6 @@ fn venue() -> Venue {
         device: "stub".to_owned(),
         driver: "stub".to_owned(),
         api: "1.2".to_owned(),
-        metal_level: "26.0".to_owned(),
     }
 }
 

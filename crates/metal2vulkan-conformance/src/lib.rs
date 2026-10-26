@@ -22,9 +22,9 @@
 //!   second recorded fact, taken in a child process so no assertion of Apple's can end a record
 //!   run, and it is the only thing that may justify our refusing a call plain Metal answered.
 //! - **Record mode** ([`record`]) takes Metal's answer on this Mac and writes one recording per
-//!   case, keyed by chip, macOS build and Metal level, with the runs behind it and the set of
-//!   outcomes where behaviour varies. **Replay** ([`mod@replay`]) reads the recording, runs our side
-//!   and compares, and needs no Metal at all.
+//!   case, keyed by chip, macOS build and the release whose Metal it is, with the runs behind it
+//!   and the set of outcomes where behaviour varies. **Replay** ([`mod@replay`]) reads the
+//!   recording, runs our side and compares, and needs no Metal at all.
 //! - A **report** ([`report`]) over a selection gives the verdict counts and the matrix of case
 //!   against venue.
 //! - A **known-gaps ledger** ([`known_gaps`]) holds the gaps we have written down — a refusal or a

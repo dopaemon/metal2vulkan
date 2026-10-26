@@ -14,17 +14,16 @@
 //!   answer rides beside it, so an answer below Metal's shows what the device lacks.
 //! - **None of the device's** ([`PrivateAnswer::Metal`]), where no document says what the
 //!   property promises and nothing the device reports maps to it: [`PrivateAnswer::value`] gives
-//!   none, and Metal's measured answer at the device's Metal level, on Apple's GPU, rides alone
+//!   none, and Metal's measured answer, on Apple's GPU, rides alone
 //!   ([`PrivateAnswer::metal`]), never as this device's (It was the value given).
 //!   [`Device::private_properties`] announces those properties once
 //!   (`metal2vulkan-degrade-private-properties-unknown`).
 //!
-//! [`MetalLevel::private_count`], [`MetalLevel::private_flag`] and
-//! [`MetalLevel::supports_primitive_type`] are Metal's measured answers on an Apple M3 Max (macOS
-//! 26.7, each getter in a process of its own, none faulted: macOS 27.0.1). An Apple M4 under 27.0.1
-//! answers every one alike but `gpuCoreCount` (10) and `supportsComputeCompressedTextureWrite`
-//! (yes). Like [`MetalLevel`] itself, a level conflates the chip and the release: Metal's
-//! `gpuCoreCount` is the measured chip's, and the device's own is its driver's
+//! Metal's measured answers ([`PrivateAnswer::metal`]) are an Apple M3 Max's at the release every
+//! device answers as (`metal_release.rs`; each getter in a process of its own, none faulted). An
+//! Apple M4 at that release answers every one alike but `gpuCoreCount` (10) and
+//! `supportsComputeCompressedTextureWrite` (yes). An answer conflates the chip and the release:
+//! Metal's `gpuCoreCount` is the measured chip's, and the device's own is its driver's
 //! ([`DeviceProperties::gpu_core_count`]), where it reports one.
 //!
 //! Metal's public properties are [`DeviceProperties`]'s, not repeated here.
@@ -37,7 +36,6 @@ use crate::families::{
     RowAudit, RowState,
 };
 use crate::linear_plan::LINEAR_ALIGNMENT;
-use crate::metal_level::MetalLevel;
 use crate::render_state::MAX_VIEWPORTS;
 use crate::texture_descriptor::{largest_side, MAX_ARRAY_LENGTH};
 use crate::{Degradation, Device};
@@ -45,7 +43,7 @@ use metal2vulkan::device::{MetalDeviceProperties, VkExtension, VkFeature};
 use metal2vulkan::error::{Capability, Needs};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureType};
 
-/// The family whose rows judge the device for the measured levels: Apple9, the newest family
+/// The family whose rows judge the device for the measured answers: Apple9, the newest family
 /// both measured chips are (an M3 Max and an M4 answer `supportsFamily:` yes for 1009 and no for
 /// 1010).
 pub(crate) const MEASURED_FAMILY: GpuFamily = GpuFamily::Apple9;
@@ -55,16 +53,16 @@ pub(crate) const MEASURED_FAMILY: GpuFamily = GpuFamily::Apple9;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PrivateAnswer<T> {
     /// The runtime's answer on the device, read from what the runtime acts on, beside Metal's
-    /// measured answer at the device's Metal level. An answer below Metal's (or no where Metal
+    /// measured answer. An answer below Metal's (or no where Metal
     /// answers yes) is what the device lacks.
     Device {
         /// The runtime's answer.
         answer: T,
-        /// Metal's measured answer at the device's Metal level.
+        /// Metal's measured answer.
         metal: T,
     },
     /// No answer of the device's: no document describes the property and nothing the device
-    /// reports maps to it. It holds Metal's measured answer at the device's Metal level, on
+    /// reports maps to it. It holds Metal's measured answer, on
     /// Apple's GPU, which is not this device's.
     Metal(T),
 }
@@ -79,7 +77,7 @@ impl<T: Copy> PrivateAnswer<T> {
         }
     }
 
-    /// Metal's measured answer at the device's Metal level.
+    /// Metal's measured answer.
     pub fn metal(self) -> T {
         match self {
             PrivateAnswer::Device { metal, .. } | PrivateAnswer::Metal(metal) => metal,
@@ -220,47 +218,50 @@ impl PrivateCount {
         self.measured().0
     }
 
+    /// Metal's measured answer for the property on its Apple GPU (the module docs).
+    pub(crate) fn metal(self) -> u64 {
+        self.measured().1
+    }
+
     /// The selector and Metal's measured answers on an Apple M3 Max: under macOS 26.7, and under
     /// 27.0.1.
-    fn measured(self) -> (&'static str, [u64; 2]) {
+    fn measured(self) -> (&'static str, u64) {
         use PrivateCount as C;
         match self {
-            C::GpuCoreCount => ("gpuCoreCount", [40, 40]),
-            C::MaxVertexAmplificationCount => ("maxVertexAmplificationCount", [2, 2]),
-            C::DeviceLinearTextureAlignmentBytes => ("deviceLinearTextureAlignmentBytes", [16, 16]),
-            C::LinearTextureAlignmentBytes => ("linearTextureAlignmentBytes", [16, 16]),
-            C::IosurfaceTextureAlignmentBytes => ("iosurfaceTextureAlignmentBytes", [16, 16]),
+            C::GpuCoreCount => ("gpuCoreCount", 40),
+            C::MaxVertexAmplificationCount => ("maxVertexAmplificationCount", 2),
+            C::DeviceLinearTextureAlignmentBytes => ("deviceLinearTextureAlignmentBytes", 16),
+            C::LinearTextureAlignmentBytes => ("linearTextureAlignmentBytes", 16),
+            C::IosurfaceTextureAlignmentBytes => ("iosurfaceTextureAlignmentBytes", 16),
             C::IosurfaceReadOnlyTextureAlignmentBytes => {
-                ("iosurfaceReadOnlyTextureAlignmentBytes", [16, 16])
+                ("iosurfaceReadOnlyTextureAlignmentBytes", 16)
             }
-            C::MaxVertexBuffers => ("maxVertexBuffers", [31, 31]),
-            C::MaxFragmentBuffers => ("maxFragmentBuffers", [31, 31]),
-            C::MaxComputeBuffers => ("maxComputeBuffers", [31, 31]),
-            C::MaxTileBuffers => ("maxTileBuffers", [31, 31]),
-            C::MaxVertexTextures => ("maxVertexTextures", [128, 128]),
-            C::MaxFragmentTextures => ("maxFragmentTextures", [128, 128]),
-            C::MaxComputeTextures => ("maxComputeTextures", [128, 128]),
-            C::MaxTileTextures => ("maxTileTextures", [128, 128]),
-            C::MaxVertexSamplers => ("maxVertexSamplers", [16, 16]),
-            C::MaxFragmentSamplers => ("maxFragmentSamplers", [16, 16]),
-            C::MaxComputeSamplers => ("maxComputeSamplers", [16, 16]),
-            C::MaxTileSamplers => ("maxTileSamplers", [16, 16]),
-            C::MaxComputeLocalMemorySizes => ("maxComputeLocalMemorySizes", [31, 31]),
-            C::MaxComputeThreadgroupMemory => ("maxComputeThreadgroupMemory", [65536, 65536]),
+            C::MaxVertexBuffers => ("maxVertexBuffers", 31),
+            C::MaxFragmentBuffers => ("maxFragmentBuffers", 31),
+            C::MaxComputeBuffers => ("maxComputeBuffers", 31),
+            C::MaxTileBuffers => ("maxTileBuffers", 31),
+            C::MaxVertexTextures => ("maxVertexTextures", 128),
+            C::MaxFragmentTextures => ("maxFragmentTextures", 128),
+            C::MaxComputeTextures => ("maxComputeTextures", 128),
+            C::MaxTileTextures => ("maxTileTextures", 128),
+            C::MaxVertexSamplers => ("maxVertexSamplers", 16),
+            C::MaxFragmentSamplers => ("maxFragmentSamplers", 16),
+            C::MaxComputeSamplers => ("maxComputeSamplers", 16),
+            C::MaxTileSamplers => ("maxTileSamplers", 16),
+            C::MaxComputeLocalMemorySizes => ("maxComputeLocalMemorySizes", 31),
+            C::MaxComputeThreadgroupMemory => ("maxComputeThreadgroupMemory", 65536),
             C::MaxComputeThreadgroupMemoryAlignmentBytes => {
-                ("maxComputeThreadgroupMemoryAlignmentBytes", [16, 16])
+                ("maxComputeThreadgroupMemoryAlignmentBytes", 16)
             }
-            C::MaxPredicatedNestingDepth => {
-                ("maxPredicatedNestingDepth", [0xffff_ffff, 0xffff_ffff])
-            }
-            C::MaxRasterizationRateLayerCount => ("maxRasterizationRateLayerCount", [2, 2]),
-            C::MaxTextureWidth2D => ("maxTextureWidth2D", [16384, 16384]),
-            C::MaxTextureHeight2D => ("maxTextureHeight2D", [16384, 16384]),
-            C::MaxTextureLayers => ("maxTextureLayers", [2048, 2048]),
+            C::MaxPredicatedNestingDepth => ("maxPredicatedNestingDepth", 0xffff_ffff),
+            C::MaxRasterizationRateLayerCount => ("maxRasterizationRateLayerCount", 2),
+            C::MaxTextureWidth2D => ("maxTextureWidth2D", 16384),
+            C::MaxTextureHeight2D => ("maxTextureHeight2D", 16384),
+            C::MaxTextureLayers => ("maxTextureLayers", 2048),
             C::MaxTotalComputeThreadsPerThreadgroup => {
-                ("maxTotalComputeThreadsPerThreadgroup", [1024, 1024])
+                ("maxTotalComputeThreadsPerThreadgroup", 1024)
             }
-            C::MaxViewportCount => ("maxViewportCount", [16, 16]),
+            C::MaxViewportCount => ("maxViewportCount", 16),
         }
     }
 }
@@ -382,78 +383,49 @@ impl PrivateFlag {
         self.measured().0
     }
 
-    /// The selector and Metal's measured answers on an Apple M3 Max: under macOS 26.7, and under
-    /// 27.0.1.
-    fn measured(self) -> (&'static str, [bool; 2]) {
+    /// Metal's measured answer for the property on its Apple GPU (the module docs).
+    pub(crate) fn metal(self) -> bool {
+        self.measured().1
+    }
+
+    /// The selector and Metal's measured answer on an Apple M3 Max (the module docs).
+    fn measured(self) -> (&'static str, bool) {
         use PrivateFlag as F;
         match self {
-            F::IsFramebufferReadSupported => ("isFramebufferReadSupported", [true, true]),
-            F::IsLargeMrtSupported => ("isLargeMRTSupported", [true, true]),
-            F::IsRgb10a2GammaSupported => ("isRGB10A2GammaSupported", [true, true]),
-            F::SupportsBufferWithAddressRanges => ("supportsBufferWithAddressRanges", [true, true]),
-            F::SupportsBufferWithIosurface => ("supportsBufferWithIOSurface", [true, true]),
-            F::SupportsCommandBufferJump => ("supportsCommandBufferJump", [true, true]),
+            F::IsFramebufferReadSupported => ("isFramebufferReadSupported", true),
+            F::IsLargeMrtSupported => ("isLargeMRTSupported", true),
+            F::IsRgb10a2GammaSupported => ("isRGB10A2GammaSupported", true),
+            F::SupportsBufferWithAddressRanges => ("supportsBufferWithAddressRanges", true),
+            F::SupportsBufferWithIosurface => ("supportsBufferWithIOSurface", true),
+            F::SupportsCommandBufferJump => ("supportsCommandBufferJump", true),
             F::SupportsComputeCompressedTextureWrite => {
-                ("supportsComputeCompressedTextureWrite", [false, false])
+                ("supportsComputeCompressedTextureWrite", false)
             }
-            F::SupportsConditionalLoadStore => ("supportsConditionalLoadStore", [true, true]),
-            F::SupportsDynamicAttributeStride => ("supportsDynamicAttributeStride", [true, true]),
-            F::SupportsExtendedXr10Formats => ("supportsExtendedXR10Formats", [true, true]),
-            F::SupportsFloat16BcubicFiltering => ("supportsFloat16BCubicFiltering", [true, true]),
-            F::SupportsHeapWithAddressRanges => ("supportsHeapWithAddressRanges", [true, true]),
-            F::SupportsImageBlocks => ("supportsImageBlocks", [true, true]),
-            F::SupportsMemoryOrderAtomics => ("supportsMemoryOrderAtomics", [false, true]),
-            F::SupportsNativeHardwareFp16 => ("supportsNativeHardwareFP16", [true, true]),
-            F::SupportsNonSquareTileShaders => ("supportsNonSquareTileShaders", [true, true]),
-            F::SupportsProgrammableSamplePositions => {
-                ("supportsProgrammableSamplePositions", [true, true])
-            }
-            F::SupportsResourceDetachBacking => ("supportsResourceDetachBacking", [true, true]),
-            F::SupportsSharedTextureHandles => ("supportsSharedTextureHandles", [true, true]),
-            F::SupportsSimdReduction => ("supportsSIMDReduction", [true, true]),
-            F::SupportsSimdShuffleAndFill => ("supportsSIMDShuffleAndFill", [true, true]),
-            F::SupportsTexture2dMultisampleArray => {
-                ("supportsTexture2DMultisampleArray", [true, true])
-            }
-            F::SupportsTileShaders => ("supportsTileShaders", [true, true]),
+            F::SupportsConditionalLoadStore => ("supportsConditionalLoadStore", true),
+            F::SupportsDynamicAttributeStride => ("supportsDynamicAttributeStride", true),
+            F::SupportsExtendedXr10Formats => ("supportsExtendedXR10Formats", true),
+            F::SupportsFloat16BcubicFiltering => ("supportsFloat16BCubicFiltering", true),
+            F::SupportsHeapWithAddressRanges => ("supportsHeapWithAddressRanges", true),
+            F::SupportsImageBlocks => ("supportsImageBlocks", true),
+            F::SupportsMemoryOrderAtomics => ("supportsMemoryOrderAtomics", true),
+            F::SupportsNativeHardwareFp16 => ("supportsNativeHardwareFP16", true),
+            F::SupportsNonSquareTileShaders => ("supportsNonSquareTileShaders", true),
+            F::SupportsProgrammableSamplePositions => ("supportsProgrammableSamplePositions", true),
+            F::SupportsResourceDetachBacking => ("supportsResourceDetachBacking", true),
+            F::SupportsSharedTextureHandles => ("supportsSharedTextureHandles", true),
+            F::SupportsSimdReduction => ("supportsSIMDReduction", true),
+            F::SupportsSimdShuffleAndFill => ("supportsSIMDShuffleAndFill", true),
+            F::SupportsTexture2dMultisampleArray => ("supportsTexture2DMultisampleArray", true),
+            F::SupportsTileShaders => ("supportsTileShaders", true),
         }
-    }
-}
-
-/// The index of `level`'s answer in a measured pair.
-fn at(level: MetalLevel) -> usize {
-    match level {
-        MetalLevel::MacOS26_7 => 0,
-        MetalLevel::MacOS27_0_1 => 1,
-    }
-}
-
-/// The primitive types Metal's `supportsPrimitiveType:` answers yes for at each measured level:
-/// raw 0 to 8, the five public types and four private ones (raw 0 to 12; an Apple M4 alike).
-const MEASURED_PRIMITIVE_TYPES: [u64; 2] = [9, 9];
-
-impl MetalLevel {
-    /// Metal's measured answer for `property` at the level, on its Apple GPU (the module docs).
-    pub fn private_count(self, property: PrivateCount) -> u64 {
-        property.measured().1[at(self)]
-    }
-
-    /// Metal's measured answer for `property` at the level, on its Apple GPU (the module docs).
-    pub fn private_flag(self, property: PrivateFlag) -> bool {
-        property.measured().1[at(self)]
-    }
-
-    /// `supportsPrimitiveType:` (Apple SPI) as the level's release answers it on its Apple GPU:
-    /// yes for raw 0 to 8, Metal's five public primitive types and four private ones.
-    pub fn supports_primitive_type(self, raw: u64) -> bool {
-        raw < MEASURED_PRIMITIVE_TYPES[at(self)]
     }
 }
 
 impl DeviceProperties {
     /// `supportsPrimitiveType:` (Apple SPI) as the runtime answers it: yes for Metal's five
-    /// public primitive types (raw 0 to 4), which render encoders draw; no for the private ones
-    /// Metal draws too ([`MetalLevel::supports_primitive_type`]), which no encoder takes.
+    /// public primitive types (raw 0 to 4), which render encoders draw; no for the four private
+    /// ones Metal draws too (Metal answers yes for raw 0 to 8 on an Apple M3 Max and an M4), which
+    /// no encoder takes.
     pub fn supports_primitive_type(&self, raw: u64) -> bool {
         u32::try_from(raw).is_ok_and(|raw| PrimitiveType::try_from(raw).is_ok())
     }
@@ -492,7 +464,7 @@ impl PrivateProperties {
         counts.chain(flags).collect()
     }
 
-    /// The answers on a device of `properties`, at its Metal level, whose compile layer answers
+    /// The answers on a device of `properties`, whose compile layer answers
     /// `metal`, and whose rows of [`MEASURED_FAMILY`] are `rows`, and the runtime gives a pixel
     /// format the capabilities `formats` answers.
     pub(crate) fn of(
@@ -501,7 +473,6 @@ impl PrivateProperties {
         rows: &[RowAudit],
         formats: &dyn Fn(PixelFormat) -> FormatCapabilities,
     ) -> PrivateProperties {
-        let level = properties.metal_level;
         let answers = Answers {
             properties,
             metal,
@@ -510,7 +481,7 @@ impl PrivateProperties {
         };
         PrivateProperties {
             counts: PrivateCount::ALL.map(|p| {
-                let metal = level.private_count(p);
+                let metal = p.metal();
                 answers
                     .count(p)
                     .map_or(PrivateAnswer::Metal(metal), |answer| {
@@ -518,7 +489,7 @@ impl PrivateProperties {
                     })
             }),
             flags: PrivateFlag::ALL.map(|p| {
-                let metal = level.private_flag(p);
+                let metal = p.metal();
                 answers
                     .flag(p)
                     .map_or(PrivateAnswer::Metal(metal), |answer| {
@@ -531,7 +502,7 @@ impl PrivateProperties {
 
 impl Device {
     /// Apple's private (SPI) device properties [`PrivateCount`] and [`PrivateFlag`] name, as the
-    /// runtime answers them on this device at its Metal level (the module docs). It judges the
+    /// runtime answers them on this device (the module docs). It judges the
     /// device by the GPU-family rows, so read it once.
     pub fn private_properties(&self) -> PrivateProperties {
         let compile = self.compile_device();
@@ -634,10 +605,10 @@ impl Answers<'_> {
             C::MaxComputeLocalMemorySizes => u64::from(THREADGROUP_SLOTS),
             // The row's cell is Metal's alignment, which the encoders take every multiple of.
             C::MaxComputeThreadgroupMemoryAlignmentBytes => {
-                let metal = self.properties.metal_level.private_count(property);
+                let metal = property.metal();
                 self.limit(L::ThreadgroupMemoryAlignment, metal)
             }
-            C::MaxPredicatedNestingDepth => self.properties.metal_level.private_count(property),
+            C::MaxPredicatedNestingDepth => property.metal(),
             C::MaxRasterizationRateLayerCount => RATE_MAP_LAYERS,
             C::MaxTextureWidth2D | C::MaxTextureHeight2D => self.limit(L::TextureSize2D, side_2d),
             C::MaxTextureLayers => self.limit(L::TextureArrayLayers, MAX_ARRAY_LENGTH),

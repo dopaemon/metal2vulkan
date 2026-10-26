@@ -764,14 +764,13 @@ mod tests {
     /// restating the lane's whole model.
     #[test]
     fn metals_recorded_codes_hold_the_three_blends_the_rule_pins() {
-        use metal2vulkan_runtime::MetalLevel;
         for case in all() {
             let Ok(recording) = crate::recording::read(case.name()) else {
                 // Recorded in a later commit of this batch.
                 continue;
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name));
             let taken = answer
                 .deterministic()
@@ -949,7 +948,6 @@ mod tests {
     ///
     #[test]
     fn metals_recorded_codes_round_the_blend_colour_before_its_one_minus() {
-        use metal2vulkan_runtime::MetalLevel;
         let mut separating = 0usize;
         let mut compared = 0usize;
         let mut fits_before = 0usize;
@@ -962,7 +960,7 @@ mod tests {
                 continue;
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name));
             let taken = answer
                 .deterministic()
@@ -1070,7 +1068,6 @@ mod tests {
     /// `one-zero`, `min` and `max` are the test above.
     #[test]
     fn metals_recorded_codes_hold_the_rounding_the_divergent_sites_measure() {
-        use metal2vulkan_runtime::MetalLevel;
         let mut checked = 0usize;
         for case in all() {
             let sites: Vec<&str> = MEASURED
@@ -1085,7 +1082,7 @@ mod tests {
                 continue;
             };
             let answer = recording
-                .answer(MetalLevel::NEWEST)
+                .answer()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name));
             let taken = answer
                 .deterministic()

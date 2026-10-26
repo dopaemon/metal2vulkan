@@ -1,29 +1,23 @@
-//! `private_properties`: Apple's private device properties, as Metal answers them at each level
-//! and as the runtime answers them on every committed device profile, read from what the runtime
-//! acts on.
+//! `private_properties`: Apple's private device properties, as Metal answers them and as the
+//! runtime answers them on every committed device profile, read from what the runtime acts on.
 
 use std::collections::BTreeSet;
 
-use super::capabilities::{committed_descriptions, created_at};
+use super::capabilities::{committed_descriptions, created};
 use super::families::{all_audits, format_capabilities};
 use crate::argument_table::{check_index, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
 use crate::private_properties::MEASURED_FAMILY;
 use crate::texture_descriptor::{Refused, TextureDescriptor, TextureProblem};
-use crate::{MetalLevel, PrivateAnswer, PrivateCount, PrivateFlag, PrivateProperties};
+use crate::{PrivateAnswer, PrivateCount, PrivateFlag, PrivateProperties};
 use metal2vulkan::device::{Device, DevicePolicy};
 use metal2vulkan::metal::TextureType;
 
-/// The answers on the committed profile `stem` at `level`, as `Device::private_properties`
-/// reads them.
-fn answers(
-    stem: &str,
-    desc: &metal2vulkan::device::DeviceDescription,
-    level: MetalLevel,
-) -> PrivateProperties {
-    let (enabled, properties) = created_at(stem, desc, level);
+/// The answers on the committed profile `stem`, as `Device::private_properties` reads them.
+fn answers(stem: &str, desc: &metal2vulkan::device::DeviceDescription) -> PrivateProperties {
+    let (enabled, properties) = created(stem, desc);
     let compile = Device::new(enabled.clone(), DevicePolicy::UNTRUSTED).unwrap();
     let rows = all_audits(stem, desc).remove(&MEASURED_FAMILY).unwrap();
-    let formats = |pf| format_capabilities(&enabled, &compile, level, pf);
+    let formats = |pf| format_capabilities(&enabled, &compile, pf);
     PrivateProperties::of(&properties, compile.metal_properties(), &rows, &formats)
 }
 
@@ -47,38 +41,22 @@ fn every_property_has_one_selector() {
     );
 }
 
-/// Spot values as the probes printed them on an Apple M3 Max at each release (an Apple M4 under
-/// macOS 27.0.1 answers `gpuCoreCount` 10 and `supportsComputeCompressedTextureWrite` yes; the M3
-/// Max 40 and no).
+/// Spot values as the probes printed them on an Apple M3 Max at macOS 27.0.1 (an Apple M4 there
+/// answers `gpuCoreCount` 10 and `supportsComputeCompressedTextureWrite` yes; the M3 Max 40 and
+/// no).
 #[test]
 fn the_answers_are_the_probes() {
-    for level in MetalLevel::ALL {
-        assert_eq!(level.private_count(PrivateCount::GpuCoreCount), 40);
-        assert_eq!(level.private_count(PrivateCount::MaxComputeBuffers), 31);
-        assert_eq!(
-            level.private_count(PrivateCount::MaxComputeThreadgroupMemory),
-            65536
-        );
-        assert_eq!(
-            level.private_count(PrivateCount::MaxVertexAmplificationCount),
-            2
-        );
-        assert_eq!(
-            level.private_count(PrivateCount::MaxPredicatedNestingDepth),
-            u64::from(u32::MAX)
-        );
-        assert!(level.private_flag(PrivateFlag::SupportsTileShaders));
-        // `supportsPrimitiveType:`: the five public types and four private ones.
-        assert!(
-            (0..9).all(|raw| level.supports_primitive_type(raw)),
-            "{level}"
-        );
-        assert!(
-            !(9..13).any(|raw| level.supports_primitive_type(raw)),
-            "{level}"
-        );
-        assert!(!level.private_flag(PrivateFlag::SupportsComputeCompressedTextureWrite));
-    }
+    assert_eq!(PrivateCount::GpuCoreCount.metal(), 40);
+    assert_eq!(PrivateCount::MaxComputeBuffers.metal(), 31);
+    assert_eq!(PrivateCount::MaxComputeThreadgroupMemory.metal(), 65536);
+    assert_eq!(PrivateCount::MaxVertexAmplificationCount.metal(), 2);
+    assert_eq!(
+        PrivateCount::MaxPredicatedNestingDepth.metal(),
+        u64::from(u32::MAX)
+    );
+    assert!(PrivateFlag::SupportsTileShaders.metal());
+    assert!(PrivateFlag::SupportsMemoryOrderAtomics.metal());
+    assert!(!PrivateFlag::SupportsComputeCompressedTextureWrite.metal());
 }
 
 /// Which properties answer Metal's measured value: those no document describes.
@@ -97,36 +75,34 @@ fn metals_answers_are_the_undocumented_properties() {
         F::SupportsConditionalLoadStore,
     ]);
     for (stem, desc) in committed_descriptions() {
-        for level in MetalLevel::ALL {
-            let p = answers(&stem, &desc, level);
-            for c in PrivateCount::ALL {
-                let metal = level.private_count(c);
-                match p.count(c) {
-                    PrivateAnswer::Metal(v) => {
-                        assert!(metal_counts.contains(&c), "{stem} {c:?}");
-                        assert_eq!(v, metal, "{stem} {c:?}");
-                        assert_eq!(p.count(c).value(), None, "{stem} {c:?}");
-                        assert!(p.unknown().contains(&c.selector()), "{stem} {c:?}");
-                    }
-                    PrivateAnswer::Device { metal: m, .. } => {
-                        assert!(!metal_counts.contains(&c), "{stem} {c:?}");
-                        assert_eq!(m, metal, "{stem} {c:?}");
-                    }
+        let p = answers(&stem, &desc);
+        for c in PrivateCount::ALL {
+            let metal = c.metal();
+            match p.count(c) {
+                PrivateAnswer::Metal(v) => {
+                    assert!(metal_counts.contains(&c), "{stem} {c:?}");
+                    assert_eq!(v, metal, "{stem} {c:?}");
+                    assert_eq!(p.count(c).value(), None, "{stem} {c:?}");
+                    assert!(p.unknown().contains(&c.selector()), "{stem} {c:?}");
+                }
+                PrivateAnswer::Device { metal: m, .. } => {
+                    assert!(!metal_counts.contains(&c), "{stem} {c:?}");
+                    assert_eq!(m, metal, "{stem} {c:?}");
                 }
             }
-            for f in PrivateFlag::ALL {
-                let metal = level.private_flag(f);
-                match p.flag(f) {
-                    PrivateAnswer::Metal(v) => {
-                        assert!(metal_flags.contains(&f), "{stem} {f:?}");
-                        assert_eq!(v, metal, "{stem} {f:?}");
-                        assert_eq!(p.flag(f).value(), None, "{stem} {f:?}");
-                        assert!(p.unknown().contains(&f.selector()), "{stem} {f:?}");
-                    }
-                    PrivateAnswer::Device { metal: m, .. } => {
-                        assert!(!metal_flags.contains(&f), "{stem} {f:?}");
-                        assert_eq!(m, metal, "{stem} {f:?}");
-                    }
+        }
+        for f in PrivateFlag::ALL {
+            let metal = f.metal();
+            match p.flag(f) {
+                PrivateAnswer::Metal(v) => {
+                    assert!(metal_flags.contains(&f), "{stem} {f:?}");
+                    assert_eq!(v, metal, "{stem} {f:?}");
+                    assert_eq!(p.flag(f).value(), None, "{stem} {f:?}");
+                    assert!(p.unknown().contains(&f.selector()), "{stem} {f:?}");
+                }
+                PrivateAnswer::Device { metal: m, .. } => {
+                    assert!(!metal_flags.contains(&f), "{stem} {f:?}");
+                    assert_eq!(m, metal, "{stem} {f:?}");
                 }
             }
         }
@@ -140,7 +116,7 @@ fn metals_answers_are_the_undocumented_properties() {
 fn table_counts_and_sizes_are_what_the_runtime_takes() {
     use PrivateCount as C;
     for (stem, desc) in committed_descriptions() {
-        let p = answers(&stem, &desc, MetalLevel::NEWEST);
+        let p = answers(&stem, &desc);
         for (counts, slots) in [
             (
                 [
@@ -219,7 +195,7 @@ fn table_counts_and_sizes_are_what_the_runtime_takes() {
 #[test]
 fn the_device_draws_the_public_primitive_types() {
     let (stem, desc) = committed_descriptions().into_iter().next().unwrap();
-    let (_, properties) = created_at(&stem, &desc, MetalLevel::NEWEST);
+    let (_, properties) = created(&stem, &desc);
     assert!((0..5).all(|raw| properties.supports_primitive_type(raw)));
     assert!(!(5..13).any(|raw| properties.supports_primitive_type(raw)));
     assert!(!properties.supports_primitive_type(u64::from(u32::MAX) + 1));
@@ -231,13 +207,13 @@ fn the_device_draws_the_public_primitive_types() {
 fn predication_answers_where_it_runs() {
     let mut seen = (0, 0);
     for (stem, desc) in committed_descriptions() {
-        let (enabled, _) = created_at(&stem, &desc, MetalLevel::NEWEST);
+        let (enabled, _) = created(&stem, &desc);
         let compile = Device::new(enabled, DevicePolicy::UNTRUSTED).unwrap();
         match compile.profile().addressed_needs().is_empty() {
             true => seen.0 += 1,
             false => seen.1 += 1,
         }
-        let p = answers(&stem, &desc, MetalLevel::NEWEST);
+        let p = answers(&stem, &desc);
         let jump = p.flag(PrivateFlag::SupportsCommandBufferJump).value();
         assert_eq!(jump, Some(true), "{stem}");
         let depth = p.count(PrivateCount::MaxPredicatedNestingDepth).value();
@@ -252,10 +228,10 @@ fn predication_answers_where_it_runs() {
 fn the_core_count_and_fp16_are_the_devices() {
     use crate::capabilities::DeviceProperties;
     for (stem, desc) in committed_descriptions() {
-        let (enabled, properties) = created_at(&stem, &desc, MetalLevel::NEWEST);
+        let (enabled, properties) = created(&stem, &desc);
         let compile = Device::new(enabled.clone(), DevicePolicy::UNTRUSTED).unwrap();
         let rows = all_audits(&stem, &desc).remove(&MEASURED_FAMILY).unwrap();
-        let formats = |pf| format_capabilities(&enabled, &compile, MetalLevel::NEWEST, pf);
+        let formats = |pf| format_capabilities(&enabled, &compile, pf);
         let of = |properties: &DeviceProperties| {
             PrivateProperties::of(properties, compile.metal_properties(), &rows, &formats)
         };
@@ -292,8 +268,8 @@ fn the_alignments_atomics_and_formats_are_the_devices() {
     use PrivateCount as C;
     use PrivateFlag as F;
     for (stem, desc) in committed_descriptions() {
-        let (enabled, _) = created_at(&stem, &desc, MetalLevel::NEWEST);
-        let p = answers(&stem, &desc, MetalLevel::NEWEST);
+        let (enabled, _) = created(&stem, &desc);
+        let p = answers(&stem, &desc);
         for c in [
             C::DeviceLinearTextureAlignmentBytes,
             C::LinearTextureAlignmentBytes,

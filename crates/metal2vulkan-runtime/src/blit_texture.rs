@@ -1914,14 +1914,9 @@ impl BlitCommandEncoder {
     /// Every colour format Metal filters but `B5G6R5Unorm` and `BGR5A1Unorm`, extended range
     /// included, is computed as Metal's filter computes it, on every device with `shaderInt64`
     /// and without a blit (`mipmap_filter.rs`): a scratch buffer of the levels, one compute
-    /// dispatch per level, and copies in and out, by the rule of the device's Metal level
-    /// ([`MetalLevel::mipmap_rule`](crate::MetalLevel::mipmap_rule)). Under macOS 27.0.1 every
-    /// level is an Apple M3 Max's filter of the level above. Under macOS 26.7 the first computed
-    /// level, and every level of a 3D texture, is an Apple M3 Max's answer; below the first level
-    /// of a 2D chain, an array or a cube whose M3 Max passes are not known an Apple M4's stands in,
-    /// announced once per device (`mipmaps-as-apple-m4`), as for the formats an M3 Max converts
-    /// through a half (`ABGR4Unorm`, `A1BGR5Unorm`, extended range) and, in 3D, those summed as
-    /// half floats.
+    /// dispatch per level, and copies in and out, by the rule of the release every device answers
+    /// as ([`MACOS_RELEASE`](crate::MACOS_RELEASE)): every level an Apple M3 Max's filter of the
+    /// level above.
     ///
     /// Elsewhere (those two formats, a device without `shaderInt64`, limits that do not fit the
     /// chain) Metal's answers differ between Apple GPUs, so the runtime checks this device's

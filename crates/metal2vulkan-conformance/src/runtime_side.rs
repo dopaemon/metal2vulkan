@@ -1833,7 +1833,6 @@ impl Side for RuntimeSide<'_> {
                 "{}.{}",
                 properties.api_version.major, properties.api_version.minor
             ),
-            metal_level: properties.metal_level.macos().to_owned(),
         }
     }
 

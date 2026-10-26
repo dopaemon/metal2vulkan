@@ -42,7 +42,7 @@ use metal2vulkan::pipeline::LinkedFunctions;
 use metal2vulkan_devtools::{llvm_assemble, AssembleError};
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, DebugMessage, Degradation, Device, DeviceOptions,
-    Execution, Function, LayerSetting, LayerSettingValue, MetalLevel, PipelineOptions,
+    Execution, Function, LayerSetting, LayerSettingValue, PipelineOptions,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -900,20 +900,19 @@ pub fn validated_device_with(
     let made = messages.take_notices();
     messages.restore_notices(pending);
     messages.device_made(&made);
-    let (device, level_named) = device?;
-    creation_checked(&device, level_named, &made)?;
+    let device = device?;
+    creation_checked(&device, &made)?;
     Ok(device)
 }
 
-/// The device [`validated_device_with`] makes, and whether its options name a Metal level; the
-/// notices it announced as it was made are left in its sink, `messages` or the one `adjust` set,
-/// for [`creation_checked`].
+/// The device [`validated_device_with`] makes; the notices it announced as it was made are left in
+/// its sink, `messages` or the one `adjust` set, for [`creation_checked`].
 pub(crate) fn made_lane_device(
     device_type: DeviceType,
     messages: &Messages,
     cache: &Path,
     adjust: impl FnOnce(&mut DeviceOptions),
-) -> Result<(Device, bool), String> {
+) -> Result<Device, String> {
     fatal_signals::install();
     let mut options = validated_options(messages, cache);
     adjust(&mut options);
@@ -921,29 +920,23 @@ pub(crate) fn made_lane_device(
     // The layers the device finally asks for, after `adjust`: what a layer-dependent claim of this
     // list holds is what the instance enables of them (`layer_reported_nothing`).
     messages.device_asked_layers(&options.layers);
-    let level_named = options.metal_level.is_some();
-    let device = open_device(device_type, options).map_err(|error| {
+    open_device(device_type, options).map_err(|error| {
         format!(
             "the runtime made no {} device: {error}",
             device_type.as_str()
         )
-    })?;
-    Ok((device, level_named))
+    })
 }
 
 /// Whether `made`, the messages `device`'s making delivered, are exactly its [`creation_kinds`],
 /// one notice each; else what it announced.
-pub(crate) fn creation_checked(
-    device: &Device,
-    level_named: bool,
-    made: &[DebugMessage],
-) -> Result<(), String> {
+pub(crate) fn creation_checked(device: &Device, made: &[DebugMessage]) -> Result<(), String> {
     let announced: BTreeSet<Degradation> = made
         .iter()
         .filter_map(|message| message.degradation.as_ref())
         .map(|notice| notice.degradation)
         .collect();
-    let expected = creation_kinds(device, level_named);
+    let expected = creation_kinds(device);
     match announced == expected && made.len() == expected.len() {
         true => Ok(()),
         false => Err(format!(
@@ -979,7 +972,6 @@ const METAL_CACHE_KEPT: &str = "metal2vulkan-driver-pipeline-cache-kept";
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn creation_heard_checked(
     device: &Device,
-    level_named: bool,
     heard: &[DebugMessage],
     messages: &Messages,
 ) -> Result<(), String> {
@@ -987,7 +979,7 @@ pub(crate) fn creation_heard_checked(
         .iter()
         .cloned()
         .partition(|message| message.degradation.is_some());
-    creation_checked(device, level_named, &notices)?;
+    creation_checked(device, &notices)?;
     for message in &informed {
         messages.heard_informational(&message.id_name, &message.text);
     }
@@ -1065,7 +1057,8 @@ pub(crate) fn creation_heard_checked(
 }
 
 /// A macOS release as `[major, minor, patch]` (`26.7` is `[26, 7, 0]`), if it reads.
-pub(crate) fn macos_release(text: &str) -> Option<[u32; 3]> {
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn macos_release(text: &str) -> Option<[u32; 3]> {
     let mut parts = text.trim().split('.').map(str::parse::<u32>);
     let major = parts.next()?.ok()?;
     let minor = parts.next().unwrap_or(Ok(0)).ok()?;
@@ -1074,6 +1067,7 @@ pub(crate) fn macos_release(text: &str) -> Option<[u32; 3]> {
 }
 
 /// The macOS release this host runs (`sw_vers -productVersion`); `None` off macOS.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) fn host_release() -> Option<[u32; 3]> {
     if !cfg!(target_os = "macos") {
         return None;
@@ -1164,14 +1158,13 @@ fn driver_keeps_pipeline_cache(device: &Device) -> bool {
 pub(crate) const MOLTENVK_ARGUMENT_BUFFERS_READ: [u32; 2] = [10401, 10402];
 
 /// The kinds a device the lane makes announces as it is made, each from what the lane reads of
-/// the device and its host apart from the runtime, and nothing else: `metal-level-not-macos` off
-/// macOS and `metal-level-below-host` on a macOS release that is no measured level, where the
-/// options name no Metal level; `driver-pipeline-cache-kept` where the driver lets no device turn
-/// its internal pipeline cache off and that cache is not Metal's own (MoltenVK's);
+/// the device apart from the runtime, and nothing else: `driver-pipeline-cache-kept` where the
+/// driver lets no device turn its internal pipeline cache off and that cache is not Metal's own
+/// (MoltenVK's);
 /// `moltenvk-argument-buffers-unread` on a MoltenVK whose argument-buffer state the runtime does
 /// not read; and `float-tininess-after-rounding` where the device's policy takes native device
 /// maths and its profile's float functions are not Metal's own (MoltenVK's).
-pub fn creation_kinds(device: &Device, level_named: bool) -> BTreeSet<Degradation> {
+pub fn creation_kinds(device: &Device) -> BTreeSet<Degradation> {
     let mut kinds = BTreeSet::new();
     let compile = device.compile_device();
     if compile.policy().float_maths == metal2vulkan::device::FloatMathsPolicy::Native
@@ -1193,21 +1186,6 @@ pub fn creation_kinds(device: &Device, level_named: bool) -> BTreeSet<Degradatio
                 && uab == limits.max_per_stage_descriptor_sampled_images));
     if description.driver_id == Some(metal2vulkan::vk::DriverId::MOLTENVK) && !read {
         kinds.insert(Degradation::MoltenVkArgumentBuffersUnread);
-    }
-    if !level_named {
-        match host_release() {
-            None => {
-                kinds.insert(Degradation::MetalLevelNotMacOS);
-            }
-            Some(version) => {
-                let measured = MetalLevel::ALL
-                    .into_iter()
-                    .any(|level| macos_release(level.macos()) == Some(version));
-                if !measured {
-                    kinds.insert(Degradation::MetalLevelBelowHost);
-                }
-            }
-        }
     }
     // MoltenVK's kept cache is Metal's own, said in an informational message, no notice
     // (`creation_heard_checked`).

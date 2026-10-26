@@ -71,7 +71,7 @@ pub enum Verdict {
         /// does not stop being a row about tolerances just because one of its calls killed Metal.
         justified: Vec<String>,
     },
-    /// No Metal answer stands for this run: none was recorded for the venue's Metal level, or the
+    /// No Metal answer stands for this run: none was recorded at the runtime's release, or the
     /// inputs the run fed are not the ones the recording's answer was taken from. Counted, never
     /// skipped and never a pass.
     Unrecorded { why: String },

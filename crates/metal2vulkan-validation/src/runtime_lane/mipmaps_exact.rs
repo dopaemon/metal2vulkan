@@ -2,39 +2,28 @@
 //! selects, under the validation layer: every format the filter computes, level by level, is
 //! `bind::MipmapFilterChain::expected_levels` from the first level as the device read it back; and
 //! the 16-bit unorm and snorm formats on chains that halve exactly are the chain too, the boxes an
-//! Apple M4 measured among them, on every device, never refused, and announced once
-//! (`mipmaps-as-apple-m4`) exactly where an Apple M3 Max's answer may differ.
+//! Apple M4 measured among them, on every device, never refused. Every level is the filter of the
+//! level above (`MipmapRule::Filter`), as the release every device answers as makes it.
 //!
 //! a Metal probe measured every value of such chains of `R16Unorm`, `RG16Unorm`, `RGBA16Unorm`,
-//! `R16Snorm`, `RG16Snorm` and `RGBA16Snorm` on an Apple M4 (macOS 27.0.1) and an Apple M3 Max
-//! (macOS 26.7), plain and under the API validation layer: 2D textures (square, wide, tall, one
-//! texel high or wide), a 2D array, a cube, and 3D textures, seeded from random codes, near
-//! neighbours and the extremes. On the M4 each component of a level is the average of its box in
-//! the level above (2x2, 2 where an axis is 1, 2x2x2 in 3D) rounded half up to a code, an snorm
-//! code of -32768 read as -32767. The M3 Max agrees on every 3D level and every first level; below
-//! a 2D chain's first level it runs its own arithmetic, the chain's tail where the first level is
-//! at most 64 texels wide and tall.
+//! `R16Snorm`, `RG16Snorm` and `RGBA16Snorm` on an Apple M4 (macOS 27.0.1), plain and under the
+//! API validation layer: 2D textures (square, wide, tall, one texel high or wide), a 2D array, a
+//! cube, and 3D textures, seeded from random codes, near neighbours and the extremes. Each
+//! component of a level is the average of its box in the level above (2x2, 2 where an axis is 1,
+//! 2x2x2 in 3D) rounded half up to a code, an snorm code of -32768 read as -32767.
 //!
 //! The chains here are seeded as probe 10 seeded its textures; each chain is compared with the
 //! CPU's from its first level as the device read it back, and the boxes the M4 measured are
 //! compared with its bytes.
 
 use super::degrade_notices::assert_once;
-use super::{
-    layer_reported_nothing_at_all, validated_device, validated_device_with, Messages, ScratchCache,
-    WAIT,
-};
+use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::{MipmapFilterChain, MipmapRule};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
-    CommandQueue, Degradation, Device, MetalLevel, Region, ResourceOptions, Texture,
-    TextureDescriptor,
+    CommandQueue, Degradation, Region, ResourceOptions, Texture, TextureDescriptor,
 };
-
-/// The kinds the computed chains take: the M4's answer where an Apple M3 Max's differs, every
-/// venue, in `the_m3_note_is_announced_exactly_where_an_m3_differs`.
-pub(super) const M3_MIPMAPS: [Degradation; 1] = [Degradation::MipmapsAsAppleM4];
 
 /// The six formats and their channels.
 const FORMATS: [(PixelFormat, usize); 6] = [
@@ -91,22 +80,7 @@ fn texture(
     levels: usize,
     slices: usize,
 ) -> Texture {
-    texture_allowing(device, pf, ty, extent, levels, slices, true)
-}
-
-/// [`texture`]'s, with `allowGPUOptimizedContents` as `allow` says (off, Metal does not compress
-/// it).
-fn texture_allowing(
-    device: &metal2vulkan_runtime::Device,
-    pf: PixelFormat,
-    ty: TextureType,
-    extent: [usize; 3],
-    levels: usize,
-    slices: usize,
-    allow: bool,
-) -> Texture {
     let mut d = TextureDescriptor::texture_2d(pf, extent[0] as u64, extent[1] as u64, false);
-    d.allow_gpu_optimized_contents = allow;
     d.texture_type = ty;
     d.depth = extent[2] as u64;
     d.mipmap_level_count = levels as u64;
@@ -167,17 +141,6 @@ fn generate(queue: &CommandQueue, t: &Texture) {
     assert_eq!(command_buffer.error(), None);
 }
 
-/// The lane's device answering at Metal level `level`, whose release's mipmap rule its chains
-/// take (`MetalLevel::mipmap_rule`).
-fn device_at(level: MetalLevel, messages: &Messages, cache: &ScratchCache) -> Device {
-    let device = validated_device_with(TEST_DEVICE, messages, cache.path(), |options| {
-        options.metal_level = Some(level);
-    })
-    .unwrap();
-    assert_eq!(device.properties().metal_level, level);
-    device
-}
-
 /// Whether Metal keeps a texture [`texture`] makes of `extent` losslessly compressed (`ShaderRead`
 /// usage, `allowGPUOptimizedContents` on): where its shorter side is 16 texels or more
 /// (`MipmapFilterChain::plan`'s `compressed`).
@@ -186,16 +149,13 @@ fn compressed(extent: [u32; 3]) -> bool {
 }
 
 /// The chain of `levels` levels of `slices` layers of `pf` from a first level of `extent`, as
-/// the runtime plans it on a device of generous limits: of a texture [`texture`] makes, or with
-/// `allowGPUOptimizedContents` off where `allow` is false ([`texture_allowing`]).
+/// the runtime plans it on a device of generous limits, of a texture [`texture`] makes.
 fn chain_of(
     pf: PixelFormat,
     ty: TextureType,
     extent: [usize; 3],
     levels: usize,
     slices: usize,
-    allow: bool,
-    rule: MipmapRule,
 ) -> MipmapFilterChain {
     MipmapFilterChain::plan(
         pf,
@@ -203,8 +163,8 @@ fn chain_of(
         slices as u32,
         levels as u32,
         ty == TextureType::Type3D,
-        allow && compressed(extent.map(|a| a as u32)),
-        rule,
+        compressed(extent.map(|a| a as u32)),
+        MipmapRule::Filter,
         64,
         u32::MAX,
         [65535, 65535],
@@ -214,17 +174,15 @@ fn chain_of(
 }
 
 /// Every level of halving chains of the six formats, in 2D (square, wide, tall, one texel high,
-/// one wide, one past the M3 Max's tail's 64 texels), as a 2D array and a cube, in 3D, and
-/// through a view of a texture's later levels, is the chain on the CPU from the first level at the
-/// device's Metal level; the M4's answer is never announced (the strip past 64 texels takes the M3
-/// Max's passes at macOS 26.7, its filter at 27.0.1), nor the blit chain's near-equivalent.
+/// one wide, one past 64 texels), as a 2D array and a cube, in 3D, and through a view of a
+/// texture's later levels, is the chain on the CPU from the first level; the blit chain's
+/// near-equivalent is never announced.
 #[test]
 fn mipmaps_of_the_16_bit_fixed_formats_on_halving_chains_are_metal_s() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        let rule = device.properties().metal_level.mipmap_rule();
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
         let chains: [(TextureType, [usize; 3], usize); 11] = [
@@ -258,7 +216,7 @@ fn mipmaps_of_the_16_bit_fixed_formats_on_halving_chains_are_metal_s() {
                         .flat_map(|slice| bytes(&level(&t, slice, l, at(l), ch)))
                         .collect()
                 };
-                let chain = chain_of(pf, ty, extent, levels, slices, true, rule);
+                let chain = chain_of(pf, ty, extent, levels, slices);
                 let want = chain.expected_levels(&read(0)).expect("the levels");
                 for (l, want) in want.iter().enumerate().skip(1) {
                     let got = read(l);
@@ -287,7 +245,7 @@ fn mipmaps_of_the_16_bit_fixed_formats_on_halving_chains_are_metal_s() {
                 first,
                 "{pf:?}: the view's first level is only read"
             );
-            let chain = chain_of(pf, TextureType::Type2D, at(1), 4, 1, true, rule);
+            let chain = chain_of(pf, TextureType::Type2D, at(1), 4, 1);
             let want = chain.expected_levels(&bytes(&first)).expect("the levels");
             for l in 2..5 {
                 let got = bytes(&level(&t, 0, l, at(l), ch));
@@ -301,9 +259,8 @@ fn mipmaps_of_the_16_bit_fixed_formats_on_halving_chains_are_metal_s() {
         );
         let announced = assert_once(&messages.take_notices(), &[]);
         assert!(
-            !announced.contains_key(&Degradation::MipmapsAsAppleM4)
-                && !announced.contains_key(&Degradation::MipmapsWithinSpread),
-            "the M3 Max's passes, no blit chain: {announced:?}"
+            !announced.contains_key(&Degradation::MipmapsWithinSpread),
+            "no blit chain: {announced:?}"
         );
     }
     layer_reported_nothing_at_all(&messages);
@@ -367,124 +324,25 @@ fn the_boxes_metal_measured_mipmap_as_it_measured_them() {
                 "{pf:?} {first:04x?}"
             );
         }
-        // One computed level each: the M3 Max's answer there is the M4's.
-        let announced = assert_once(&messages.take_notices(), &[]);
-        assert!(
-            !announced.contains_key(&Degradation::MipmapsAsAppleM4),
-            "{announced:?}"
-        );
-    }
-    layer_reported_nothing_at_all(&messages);
-}
-
-/// At macOS 26.7 (`MetalLevel::MacOS26_7`, the M3 Max's passes), `mipmaps-as-apple-m4` is
-/// announced exactly where an Apple M3 Max's mipmaps may differ from the chain's: not for a 3D
-/// chain, a chain of one computed level (a 2x2 texture, a 32x32 one of
-/// two levels, a view of two levels of a 32x32 texture), a 2D chain or array whose first level is
-/// at most 65 texels wide and tall, nor a 2D strip past 65 texels thinner than 16 texels; once,
-/// naming the texture, for a compressed 2D chain of two computed levels whose first pass starts
-/// from a level 256 times wider than tall (past `PASS_ASPECT`); and for an `A1BGR5Unorm` cube of
-/// three past 65 texels (a few of the format's measured values unexplained) on a device of its own.
-#[test]
-fn the_m3_note_is_announced_exactly_where_an_m3_differs() {
-    let cache = ScratchCache::new().unwrap();
-    let messages = Messages::default();
-    {
-        let device = device_at(MetalLevel::MacOS26_7, &messages, &cache);
-        messages.take_notices();
-        let queue = device.new_command_queue().unwrap();
-        let pf = PixelFormat::RG16Unorm;
-        let mut seed = 0x2545_f491_4f6c_dd1du64;
-        let mut chain = |ty: TextureType, extent: [usize; 3], levels: usize, slices: usize| {
-            let t = texture(&device, pf, ty, extent, levels, slices);
-            for slice in 0..slices {
-                let first = seeded(extent.iter().product::<usize>() * 2, &mut seed);
-                write(&t, slice, 0, extent, 2, &first);
-            }
-            t
-        };
-        let agreeing = [
-            chain(TextureType::Type3D, [4, 4, 4], 3, 1),
-            chain(TextureType::Type3D, [8, 8, 2], 4, 1),
-            chain(TextureType::Type2D, [2, 2, 1], 2, 1),
-            chain(TextureType::Type2D, [32, 32, 1], 2, 1),
-            chain(TextureType::Type2D, [4, 4, 1], 3, 1),
-            chain(TextureType::Type2DArray, [8, 8, 1], 4, 3),
-            chain(TextureType::Type2D, [64, 64, 1], 7, 1),
-            chain(TextureType::Type2D, [128, 4, 1], 3, 1),
-            chain(TextureType::Type2D, [4, 128, 1], 4, 1),
-        ];
-        for t in &agreeing {
-            generate(&queue, t);
-        }
-        let whole = chain(TextureType::Type2D, [32, 32, 1], 6, 1);
-        let view = whole
-            .new_texture_view_with_levels_slices(pf, TextureType::Type2D, 1..3, 0..1)
-            .unwrap();
-        generate(&queue, &view);
-        let announced = assert_once(&messages.take_notices(), &[]);
-        assert!(
-            !announced.contains_key(&Degradation::MipmapsAsAppleM4),
-            "where the M3 Max agrees: {announced:?}"
-        );
-        generate(&queue, &chain(TextureType::Type2D, [4096, 16, 1], 3, 1));
-        let notices = messages.take_notices();
-        assert_once(&notices, &M3_MIPMAPS);
-        let notice = notices
-            .iter()
-            .filter_map(|message| message.degradation.as_ref())
-            .find(|notice| notice.degradation == Degradation::MipmapsAsAppleM4)
-            .unwrap();
-        assert!(
-            notice.object.contains("RG16Unorm") && notice.object.contains("3 levels"),
-            "{notice:?}"
-        );
-    }
-    {
-        let device = device_at(MetalLevel::MacOS26_7, &messages, &cache);
-        messages.take_notices();
-        let queue = device.new_command_queue().unwrap();
-        let t = texture(
-            &device,
-            PixelFormat::A1BGR5Unorm,
-            TextureType::Cube,
-            [128, 128, 1],
-            3,
-            6,
-        );
-        let mut seed = 0x0123_4567_89ab_cdefu64;
-        for slice in 0..6 {
-            write(
-                &t,
-                slice,
-                0,
-                [128, 128, 1],
-                1,
-                &seeded(128 * 128, &mut seed),
-            );
-        }
-        generate(&queue, &t);
-        assert_once(&messages.take_notices(), &M3_MIPMAPS);
+        assert_once(&messages.take_notices(), &[]);
     }
     layer_reported_nothing_at_all(&messages);
 }
 
 /// Every format the filter computes, from random bytes (every bit pattern: NaNs, infinities,
-/// subnormals, out-of-range codes), in a 2D texture, one texel high, a square of a power of two
-/// (whose even levels read the values the level above kept), one past the M3 Max's tail's
-/// extent, a 2D array, a cube and a 3D texture, halving and not: every level the device wrote is
-/// the chain on the CPU from the first level as the device read it back, and the blit chain's
-/// near-equivalent is never announced. The kinds the chains' own facts force are announced once
-/// each: `mipmaps-as-apple-m4` where a chain's M3 Max passes are not known
-/// (`MipmapFilterChain::unlike_an_m3`), `mipmap-tie-rounding` where a level may take a rounding
-/// the chain does not fit (`MipmapFilterChain::near_ties`: the 8-bit sRGB formats among them).
+/// subnormals, out-of-range codes), in a 2D texture, one texel high, a square of a power of two,
+/// one past 65 texels, a 2D array, a cube and a 3D texture, halving and not: every level the
+/// device wrote is the chain on the CPU from the first level as the device read it back, and the
+/// blit chain's near-equivalent is never announced. `mipmap-tie-rounding` is announced once where
+/// a level may take a rounding the chain does not fit (`MipmapFilterChain::near_ties`: the 8-bit
+/// sRGB formats among them), and no chain differs from the M3 Max's
+/// (`MipmapFilterChain::unlike_an_m3`).
 #[test]
 fn every_format_the_filter_computes_is_its_filter_level_by_level() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        let rule = device.properties().metal_level.mipmap_rule();
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
         let shapes: [(TextureType, [usize; 3], usize, usize); 7] = [
@@ -498,7 +356,7 @@ fn every_format_the_filter_computes_is_its_filter_level_by_level() {
         ];
         let mut seed = 0x51f1_5eed_cafe_f00du64;
         let (mut checked, mut formats) = (0usize, 0usize);
-        let (mut unlike_an_m3, mut near_ties) = (false, false);
+        let mut near_ties = false;
         for &pf in PixelFormat::ALL {
             let plan = |extent: [usize; 3], layers: usize, levels: usize, volume: bool| {
                 MipmapFilterChain::plan(
@@ -508,7 +366,7 @@ fn every_format_the_filter_computes_is_its_filter_level_by_level() {
                     levels as u32,
                     volume,
                     compressed(extent.map(|a| a as u32)),
-                    rule,
+                    MipmapRule::Filter,
                     64,
                     u32::MAX,
                     [65535, 65535],
@@ -522,7 +380,10 @@ fn every_format_the_filter_computes_is_its_filter_level_by_level() {
             for (ty, extent, slices, levels) in shapes {
                 let volume = ty == TextureType::Type3D;
                 let chain = plan(extent, slices, levels, volume).expect("a chain");
-                unlike_an_m3 |= chain.unlike_an_m3;
+                assert!(
+                    !chain.unlike_an_m3,
+                    "{pf:?} {ty:?} {extent:?}: the M3 Max's"
+                );
                 near_ties |= chain.near_ties;
                 let at = |l: usize| extent.map(|a| (a >> l).max(1));
                 let texels = |l: usize| at(l).iter().product::<usize>();
@@ -555,14 +416,11 @@ fn every_format_the_filter_computes_is_its_filter_level_by_level() {
             device.name()
         );
         assert_eq!(formats, 36, "the formats the filter computes");
-        let kinds: Vec<Degradation> = [
-            (Degradation::MipmapsAsAppleM4, unlike_an_m3),
-            (Degradation::MipmapTieRounding, near_ties),
-        ]
-        .into_iter()
-        .filter_map(|(kind, holds)| holds.then_some(kind))
-        .collect();
-        let announced = assert_once(&messages.take_notices(), &kinds);
+        let kinds: &[Degradation] = match near_ties {
+            true => &TIE_MIPMAPS,
+            false => &[],
+        };
+        let announced = assert_once(&messages.take_notices(), kinds);
         assert!(
             !announced.contains_key(&Degradation::MipmapsWithinSpread),
             "no blit chain: {announced:?}"
@@ -571,103 +429,25 @@ fn every_format_the_filter_computes_is_its_filter_level_by_level() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// At macOS 26.7 (`MetalLevel::MacOS26_7`), the Apple M3 Max's passes past its tail's extent, from
-/// random bytes: a 256x256 `BGRA8Unorm` 2D
-/// texture of nine levels, a 640x480 `RGBA8Unorm` one of ten, a three-slice 200x150 `R8Unorm` array
-/// of eight, a 128x128 `RG32Float` cube of eight, a 2048x8 `BGRA8Unorm` strip of twelve, a 256x256
-/// `RGBA16Unorm` texture of nine and a 300x200 `BGR10_XR` one of nine, and textures Metal does not
-/// compress (`allowGPUOptimizedContents` off): a 256x256 `BGRA8Unorm` one of nine, whose run reads
-/// kept values and codes in turn, and a 1024x16 `RGBA16Float` one of eleven, are each the chain on
-/// the CPU from the first level as the device read it back (passes of the M3 Max's filter and the
-/// values it kept, then its tail) and announce nothing, as does a 256x256 `RG11B10Float` one of
-/// nine; a 4096x16 `BGRA8Unorm` texture of thirteen, compressed, whose first pass starts from a
-/// level 256 times wider than tall (past `PASS_ASPECT`), is the chain too and announces
-/// `mipmaps-as-apple-m4` once.
-#[test]
-fn mipmaps_past_65_texels_take_the_m3_max_s_passes() {
-    let cache = ScratchCache::new().unwrap();
-    let messages = Messages::default();
-    {
-        let device = device_at(MetalLevel::MacOS26_7, &messages, &cache);
-        let rule = device.properties().metal_level.mipmap_rule();
-        messages.take_notices();
-        let queue = device.new_command_queue().unwrap();
-        let mut seed = 0x6d69_7073_7061_7373u64;
-        let mut chain = |pf: PixelFormat, ty, extent: [usize; 3], levels, slices, allow| {
-            let chain = chain_of(pf, ty, extent, levels, slices, allow, rule);
-            let at = |l: usize| extent.map(|a| (a >> l).max(1));
-            let texels = |l: usize| at(l).iter().product::<usize>();
-            let texel = chain.levels[0].bytes as usize / (texels(0) * slices);
-            let t = texture_allowing(&device, pf, ty, extent, levels, slices, allow);
-            for slice in 0..slices {
-                let bytes: Vec<u8> = seeded(texels(0) * texel / 2 + 1, &mut seed)
-                    .iter()
-                    .flat_map(|c| c.to_le_bytes())
-                    .take(texels(0) * texel)
-                    .collect();
-                put(&t, slice, 0, at(0), texel, &bytes);
-            }
-            generate(&queue, &t);
-            let read = |l: usize| -> Vec<u8> {
-                (0..slices)
-                    .flat_map(|slice| get(&t, slice, l, at(l), texel))
-                    .collect()
-            };
-            let want = chain.expected_levels(&read(0)).expect("the levels");
-            for (l, want) in want.iter().enumerate().skip(1) {
-                assert_eq!(&read(l), want, "{pf:?} {ty:?} {extent:?} level {l}");
-            }
-            chain.unlike_an_m3
-        };
-        use PixelFormat as P;
-        use TextureType as T;
-        let known = [
-            chain(P::BGRA8Unorm, T::Type2D, [256, 256, 1], 9, 1, true),
-            chain(P::RGBA8Unorm, T::Type2D, [640, 480, 1], 10, 1, true),
-            chain(P::R8Unorm, T::Type2DArray, [200, 150, 1], 8, 3, true),
-            chain(P::RG32Float, T::Cube, [128, 128, 1], 8, 6, true),
-            chain(P::BGRA8Unorm, T::Type2D, [2048, 8, 1], 12, 1, true),
-            chain(P::RGBA16Unorm, T::Type2D, [256, 256, 1], 9, 1, true),
-            chain(P::BGR10XR, T::Type2D, [300, 200, 1], 9, 1, true),
-            chain(P::BGRA8Unorm, T::Type2D, [256, 256, 1], 9, 1, false),
-            chain(P::RGBA16Float, T::Type2D, [1024, 16, 1], 11, 1, false),
-            chain(P::RG11B10Float, T::Type2D, [256, 256, 1], 9, 1, true),
-        ];
-        assert_eq!(known, [false; 10], "the M3 Max's passes");
-        let announced = assert_once(&messages.take_notices(), &[]);
-        assert!(
-            !announced.contains_key(&Degradation::MipmapsAsAppleM4),
-            "where the M3 Max's passes are known: {announced:?}"
-        );
-        let unknown = chain(P::BGRA8Unorm, T::Type2D, [4096, 16, 1], 13, 1, true);
-        assert!(unknown, "a compressed pass past PASS_ASPECT");
-        assert_once(&messages.take_notices(), &M3_MIPMAPS);
-    }
-    layer_reported_nothing_at_all(&messages);
-}
-
 /// The kind a chain takes where a level may take a rounding the chain does not fit, every venue,
 /// in `mipmaps_near_ties_are_announced_where_the_rounding_is_not_fit`.
 pub(super) const TIE_MIPMAPS: [Degradation; 1] = [Degradation::MipmapTieRounding];
 
-/// At macOS 26.7 (`MetalLevel::MacOS26_7`), `mipmap-tie-rounding` is announced exactly where a
-/// level may take a rounding the chain does not fit: not for `RGBA8Unorm` or `RGBA32Float`, nor for `RGBA16Float` chains with no level read
-/// from kept values (one computed level, a 7x5 texture), nor for a 7x5 `RGB10A2Unorm` texture of
-/// two levels (its 10-bit grid exact); once, naming the texture, for a `BGRA8Unorm_sRGB` texture of
-/// two levels; and on a device of its own for a 16x16 `RGBA16Float` one of three (its second level
-/// reads the first's kept values).
+/// `mipmap-tie-rounding` is announced exactly where a level may take a rounding the chain does not
+/// fit: not for `RGBA8Unorm`, `RGBA32Float` or `RGBA16Float` chains, nor for a 7x5 `RGB10A2Unorm`
+/// texture of two levels (its 10-bit grid exact); once, naming the texture, for a
+/// `BGRA8Unorm_sRGB` texture of two levels.
 #[test]
 fn mipmaps_near_ties_are_announced_where_the_rounding_is_not_fit() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let mut seed = 0x7469_6573_7469_6573u64;
     let mut run = |cases: &[(PixelFormat, [usize; 3], usize)], named: Option<&str>| {
-        let device = device_at(MetalLevel::MacOS26_7, &messages, &cache);
-        let rule = device.properties().metal_level.mipmap_rule();
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
         for &(pf, extent, levels) in cases {
-            let chain = chain_of(pf, TextureType::Type2D, extent, levels, 1, true, rule);
+            let chain = chain_of(pf, TextureType::Type2D, extent, levels, 1);
             let texels = extent[0] * extent[1];
             let texel = chain.levels[0].bytes as usize / texels;
             let t = texture(&device, pf, TextureType::Type2D, extent, levels, 1);
@@ -707,6 +487,7 @@ fn mipmaps_near_ties_are_announced_where_the_rounding_is_not_fit() {
             (PixelFormat::RGBA32Float, [16, 16, 1], 5),
             (PixelFormat::RGBA16Float, [8, 8, 1], 2),
             (PixelFormat::RGBA16Float, [7, 5, 1], 3),
+            (PixelFormat::RGBA16Float, [16, 16, 1], 3),
             (PixelFormat::RGB10A2Unorm, [7, 5, 1], 2),
         ],
         None,
@@ -715,15 +496,11 @@ fn mipmaps_near_ties_are_announced_where_the_rounding_is_not_fit() {
         &[(PixelFormat::BGRA8UnormSRGB, [8, 8, 1], 2)],
         Some("BGRA8Unorm_sRGB"),
     );
-    run(
-        &[(PixelFormat::RGBA16Float, [16, 16, 1], 3)],
-        Some("RGBA16Float"),
-    );
     layer_reported_nothing_at_all(&messages);
 }
 
-/// At macOS 27.0.1 (`MetalLevel::MacOS27_0_1`), where the Apple M3 Max makes every level by its
-/// filter (`MipmapRule::Filter`), from random bytes: a 256x256 `BGRA8Unorm` 2D texture of nine
+/// The Apple M3 Max's filter at every level (`MipmapRule::Filter`, macOS 27.0.1's), from random
+/// bytes: a 256x256 `BGRA8Unorm` 2D texture of nine
 /// levels, a 4096x16 one of thirteen (compressed, past the old passes' `PASS_ASPECT`), a 640x480
 /// `RGBA8Unorm` one of ten, a 16x16 `RGBA16Float` one of three, an `A1BGR5Unorm` cube of 128x128
 /// and three levels, a 193x193 `BGR10_XR_sRGB` texture of eight, a 16x16x6 `RGBA16Unorm` 3D
@@ -732,18 +509,16 @@ fn mipmaps_near_ties_are_announced_where_the_rounding_is_not_fit() {
 /// read it back and announce nothing; a 129x129 `RGBA8Unorm_sRGB` texture of eight is the chain
 /// and announces `mipmap-tie-rounding` once.
 #[test]
-fn mipmaps_at_macos_27_0_1_are_the_m3_max_s_filter() {
+fn mipmaps_are_the_m3_max_s_filter() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = device_at(MetalLevel::MacOS27_0_1, &messages, &cache);
-        let rule = device.properties().metal_level.mipmap_rule();
-        assert_eq!(rule, MipmapRule::Filter);
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
         let mut seed = 0x6d69_7073_3237_3031u64;
         let mut chain = |pf: PixelFormat, ty, extent: [usize; 3], levels, slices| {
-            let chain = chain_of(pf, ty, extent, levels, slices, true, rule);
+            let chain = chain_of(pf, ty, extent, levels, slices);
             let at = |l: usize| extent.map(|a| (a >> l).max(1));
             let texels = |l: usize| at(l).iter().product::<usize>();
             let texel = chain.levels[0].bytes as usize / (texels(0) * slices);
@@ -1012,7 +787,6 @@ fn a_first_level_read_in_place_recovers_every_code() {
     let messages = Messages::default();
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        let rule = device.properties().metal_level.mipmap_rule();
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
         let (w, h, layers) = (512usize, 256usize, 2usize);
@@ -1025,7 +799,7 @@ fn a_first_level_read_in_place_recovers_every_code() {
                 2,
                 false,
                 compressed([w as u32, h as u32, 1]),
-                rule,
+                MipmapRule::Filter,
                 64,
                 u32::MAX,
                 [65535, 65535],

@@ -182,7 +182,7 @@
 use super::chroma_pairs::is_four_two_two;
 use super::copy_plan::block_extent;
 use super::image_plan::{compatible, view_formats, ImageFacts, ImagePlan};
-use super::metal_level::MetalLevel;
+use super::pixel_format_info::pixel_format_info;
 use super::texture_descriptor::TextureLayout;
 use super::two_planes;
 use super::values::StorageMode;
@@ -308,8 +308,8 @@ pub enum BufferTextureProblem {
     },
 }
 
-/// Whether a buffer can back a texture of `pf` (the module's rule), of a format the device's
-/// Metal level describes: not `Invalid`, compressed, depth or stencil.
+/// Whether a buffer can back a texture of `pf` (the module's rule), of a format Metal describes:
+/// not `Invalid`, compressed, depth or stencil.
 pub(super) fn is_linear(pf: PixelFormat) -> bool {
     use PixelFormat as P;
     let compressed = block_extent(pf).is_some() || matches!(pf, P::GBGR422 | P::BGRG422);
@@ -325,16 +325,13 @@ fn backed(pf: PixelFormat) -> Result<(), BufferTextureProblem> {
     }
 }
 
-/// `pf`'s alignment in a buffer ([`LINEAR_ALIGNMENT`]) on a device answering at `level`, or why
-/// no buffer can back it: also a format the level describes none of
-/// ([`MetalLevel::describes`]), whose alignment queries Metal asserts on, and one it describes as a
-/// depth or a stencil format, `AnyDepth` and `AnyStencil` among them, which Vulkan has no format
-/// for ("Linear textures do not support depth/stencil pixel formats").
-pub(super) fn linear_alignment(
-    pf: PixelFormat,
-    level: MetalLevel,
-) -> Result<u64, BufferTextureProblem> {
-    let info = level.pixel_format_info(u64::from(pf.as_raw()));
+/// `pf`'s alignment in a buffer ([`LINEAR_ALIGNMENT`]), or why no buffer can back it: also a
+/// format Metal describes none of (`pixel_format_info::describes`), whose alignment queries Metal
+/// asserts on, and one it describes as a depth or a stencil format, `AnyDepth` and `AnyStencil`
+/// among them, which Vulkan has no format for ("Linear textures do not support depth/stencil pixel
+/// formats").
+pub(super) fn linear_alignment(pf: PixelFormat) -> Result<u64, BufferTextureProblem> {
+    let info = pixel_format_info(u64::from(pf.as_raw()));
     if !info.describes_a_format() || info.depth_or_stencil() {
         return Err(BufferTextureProblem::NotLinear { pixel_format: pf });
     }
@@ -541,8 +538,8 @@ pub(super) fn plan_buffer_texture(
     let layout = &texture.layout;
     // A surface's 4:2:2 plane is made (the module docs).
     let surface = matches!(texture.call, BufferTextureCall::IoSurfacePlane { .. });
-    // A format the device's Metal level describes none of was stopped by the descriptor's check
-    // before (`TextureDescriptor::check_made`).
+    // A format Metal describes none of was stopped by the descriptor's check before
+    // (`TextureDescriptor::check_made`).
     // Over a plane of a surface with planes Metal makes a depth or stencil texture, laid out as
     // a colour texture's in its one aspect's units (the module docs).
     let planar_depth = matches!(

@@ -134,7 +134,6 @@ impl OwnHandlerWait {
             ));
         };
         Ok(crate::record::never_returned(
-            metal2vulkan_runtime::MetalLevel::NEWEST,
             from,
             call,
             PROBED_ON,
