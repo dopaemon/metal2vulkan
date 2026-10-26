@@ -210,7 +210,8 @@ pub struct TextureDescriptor {
     /// `resourceIndex` with `forceResourceIndex` (Apple's private properties, a runtime
     /// extension): where the texture goes in the space of texture resource IDs
     /// (`resource_ids.rs`). [`IdPlacement::Outside`], no ID at all, is
-    /// [`Device::new_texture`](crate::Device::new_texture)'s alone.
+    /// [`Device::new_texture`](crate::Device::new_texture)'s and
+    /// [`Device::new_texture_with_vk_image`](crate::Device::new_texture_with_vk_image)'s alone.
     pub placement: IdPlacement,
     /// `framebufferOnly` (`setFramebufferOnly:`, SPI): the texture is meant for render passes
     /// alone. Plain Metal makes such a texture over an IOSurface plane only

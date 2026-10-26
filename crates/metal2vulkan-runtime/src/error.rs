@@ -812,9 +812,9 @@ pub enum Problem {
         limit: u64,
     },
     /// [`IdPlacement::Outside`](crate::IdPlacement::Outside) for anything but a texture
-    /// `Device::new_texture` makes: a sampler state, a pipeline state, an indirect command
-    /// buffer, a view, or a heap's, a buffer's, a shared or a caller's texture. A runtime
-    /// extension's misuse: Metal has no such placement.
+    /// `Device::new_texture` or `Device::new_texture_with_vk_image` makes: a sampler state, a
+    /// pipeline state, an indirect command buffer, a view, or a heap's, a buffer's or a shared
+    /// texture. A runtime extension's misuse: Metal has no such placement.
     ///
     /// Basis: ours (a runtime extension's misuse: Metal has no such placement).
     OutsidePlacement,

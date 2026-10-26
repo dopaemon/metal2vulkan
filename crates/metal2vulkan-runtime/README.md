@@ -176,7 +176,8 @@ the runtime made.
 - `CommandBuffer::encode_wait_for_vk_semaphore` and `encode_signal_vk_semaphore` order a command
   buffer against the consumer's own work.
 - `Device::new_texture_with_vk_image` makes a `Private` texture over the consumer's `VkImage` (a
-  swapchain image, for presenting).
+  swapchain image, for presenting). Placed `IdPlacement::Outside`, it takes no resource ID, so the
+  program's textures are numbered as with no window.
 - `Device::new_buffer_with_vk_buffer` makes a buffer over the consumer's `VkBuffer` and memory,
   such as an imported dma-buf, made with `Device::vk_buffer_usage()`. The runtime never frees it.
 

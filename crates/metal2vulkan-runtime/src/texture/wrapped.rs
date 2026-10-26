@@ -33,6 +33,7 @@ use super::super::image_barrier::{image_barrier, ImageDst};
 use super::super::image_plan::{plan_image, ImagePlan};
 use super::super::key_hash::KeyMap;
 use super::super::resource::{Identity, ResourceKey};
+use super::super::resource_ids::IdPlacement;
 use super::super::sharing::Sharing;
 use super::super::texture_descriptor::{texture_usage, TextureDescriptor};
 use super::super::tracker::{Access, Use, UseRange};
@@ -505,6 +506,13 @@ impl Device {
     /// input attachment usage may be missing: a pass that fetches the texture renders into a
     /// stand-in that has it.
     ///
+    /// A runtime extension: Metal makes no texture over a Vulkan image. The descriptor's
+    /// `placement` gives the texture's resource ID as `new_texture`'s does
+    /// (`resource_ids.rs`), and [`IdPlacement::Outside`](crate::IdPlacement::Outside) gives it
+    /// none, as there: it answers 0, holds no slot, and counts in no plain allocation or
+    /// reservation, so a swapchain image moves no program texture's ID. Unlike `new_texture`,
+    /// the call takes no sampler ID for the device at any placement.
+    ///
     /// Refused: a descriptor Metal stops, as [`Device::new_texture`] refuses it; storage other
     /// than `Private` (`Invalid`, `StorageMode`); an image that contradicts the descriptor (a
     /// usage missing, [`WrappedImageProblem::Usage`]), a layout outside the contract, or a texture
@@ -535,12 +543,15 @@ impl Device {
     ) -> Result<Texture, Error> {
         const CALL: &str = "new_texture_with_vk_image";
         let descriptor = &self.texture_options(CALL, descriptor)?;
-        self.check_texture_placement(
-            CALL,
-            descriptor.placement,
-            descriptor.usage,
-            descriptor.texture_type,
-        )?;
+        // An `Outside` texture takes no ID, so no ID's limit applies.
+        if descriptor.placement != IdPlacement::Outside {
+            self.check_texture_placement(
+                CALL,
+                descriptor.placement,
+                descriptor.usage,
+                descriptor.texture_type,
+            )?;
+        }
         let wrapped = |problem| invalid(CALL, Problem::WrappedImage(problem));
         let options = descriptor.resource_options;
         let storage = options.storage_mode()?;

@@ -86,9 +86,11 @@
 //!   reserved, a defect the runtime does not copy: it places that state too. An indirect command
 //!   buffer is placed by its descriptor's `placement` (Metal's `resourceIndex`, unforced), keeping
 //!   the index's low 32 bits, as the same rules say (`address.rs`). A texture
-//!   [`Device::new_texture`](super::Device::new_texture) makes [`Outside`](IdPlacement::Outside)
-//!   takes no ID, as the runtime's own textures: a runtime extension for a caller's helper texture,
-//!   refused for every other resource.
+//!   [`Device::new_texture`](super::Device::new_texture) or
+//!   [`Device::new_texture_with_vk_image`](super::Device::new_texture_with_vk_image) makes
+//!   [`Outside`](IdPlacement::Outside) takes no ID, as the runtime's own textures: a runtime
+//!   extension for a caller's helper texture or its swapchain image, refused for every other
+//!   resource.
 //! - **Reservations** ([`Device::reserve_resource_ids`](super::Device::reserve_resource_ids),
 //!   textures, sampler states, pipeline states and indirect command buffers, Metal's types 0, 1,
 //!   4 and 5) keep IDs from plain allocation for good, whether a resource placed at one lives or
@@ -188,15 +190,17 @@ pub enum IdPlacement {
     Any,
     /// This ID, which the resource's `gpu_resource_id` then answers.
     At(ResourceId),
-    /// No ID, for a texture [`Device::new_texture`](super::Device::new_texture) makes: its
+    /// No ID, for a texture [`Device::new_texture`](super::Device::new_texture) or
+    /// [`Device::new_texture_with_vk_image`](super::Device::new_texture_with_vk_image) makes: its
     /// `gpu_resource_id` answers 0, the null handle, it holds no slot (no ID a function reads
     /// reaches it), and it counts in no plain allocation or reservation and starts no space, as
-    /// the runtime's own textures. It is otherwise made as with [`Any`](IdPlacement::Any), the
-    /// device's sampler ID included, so no Metal resource's ID depends on it: for a caller's
-    /// helper texture that stands behind a Metal one. Its views take their own IDs at their own
-    /// placements. A runtime extension, the counterpart of `AddressPlacement::Outside`: Metal has
-    /// no such placement. Refused (`Invalid`, `Problem::OutsidePlacement`) for every other
-    /// resource that takes its placement.
+    /// the runtime's own textures. It is otherwise made as with [`Any`](IdPlacement::Any) (by
+    /// `new_texture`, the device's sampler ID included), so no Metal resource's ID depends on it:
+    /// for a caller's helper texture that stands behind a Metal one, or a texture over the
+    /// caller's swapchain image, so a program's textures take the IDs they take with no window.
+    /// Its views take their own IDs at their own placements. A runtime extension, the counterpart
+    /// of `AddressPlacement::Outside`: Metal has no such placement. Refused (`Invalid`,
+    /// `Problem::OutsidePlacement`) for every other resource that takes its placement.
     Outside,
 }
 
@@ -1204,7 +1208,8 @@ impl Device {
     /// Refuse `placement` of a texture of `usage` and `texture_type` as the module docs say, for
     /// `call`: past the limit, or past a set-1 array the texture can be bound through (sampled
     /// where its usage reads, storage where it writes; a texture buffer through none); and
-    /// [`IdPlacement::Outside`], which only `new_texture` takes and does not check here.
+    /// [`IdPlacement::Outside`], which only `new_texture` and `new_texture_with_vk_image` take,
+    /// neither checking it here.
     pub(super) fn check_texture_placement(
         &self,
         call: &'static str,

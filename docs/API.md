@@ -3272,7 +3272,9 @@ each item named states the rule in full.
 - **The device counts the sampler IDs it holds** (`Device::sampler_ids_live`,
   `Device::sampler_id_pool_size`), runtime extensions for a consumer that models Metal's sampler
   heap.
-- **A texture can take no resource ID** (`IdPlacement::Outside`), for a consumer's helper textures.
+- **A texture can take no resource ID** (`IdPlacement::Outside`), for a consumer's helper textures
+  and its textures over its own images (`Device::new_texture_with_vk_image`), such as swapchain
+  images.
 - **An indirect command buffer placed at an ID** (`IndirectCommandBufferDescriptor::placement`,
   Apple's private `setResourceIndex:`) takes it as Metal does; an index of 16384 or more is refused.
 - **A pipeline state placed before any pipeline ID is made** (`PipelineOptions::placement`) is made,

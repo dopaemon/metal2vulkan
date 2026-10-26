@@ -1,6 +1,7 @@
 //! Device tests of step 10 on the device the cfg selects: presenting a texture the runtime rendered
 //! through a swapchain the test makes on a device it adopts, the caller's images around the
-//! runtime's batches, binary semaphores both ways, shared texture handles, and each refusal typed.
+//! runtime's batches, binary semaphores both ways, shared texture handles, the resource ID a
+//! texture over the caller's image takes, and each refusal typed.
 //!
 //! Two tests make their own instance and device, as a consumer that adopts its device does
 //! ([`Adopted`]): the validation layer, a debug-utils messenger that collects what the layer
@@ -23,9 +24,9 @@ use metal2vulkan::device::{DevicePolicy, EnableSet, VkExtension};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandBuffer, Device, Error, HazardTrackingMode, IdPlacement,
-    Invalid, LoadAction, Nil, Origin, Problem, RawDevice, ResourceOptions, SemaphoreProblem,
-    ShaderCacheOptions, Size, StorageMode, StoreAction, Texture, TextureDescriptor, VkImageLayouts,
-    WrappedImageProblem,
+    Invalid, LoadAction, Nil, Origin, Problem, RawDevice, ResourceId, ResourceIdKind,
+    ResourceOptions, SemaphoreProblem, ShaderCacheOptions, Size, StorageMode, StoreAction, Texture,
+    TextureDescriptor, VkImageLayouts, WrappedImageProblem,
 };
 use std::collections::BTreeSet;
 use std::ffi::{c_void, CStr, CString};
@@ -1159,6 +1160,143 @@ fn wrapped_images_order_across_queues() {
             raw.device.destroy_image(image, None);
             raw.device.free_memory(image_memory, None);
         }
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+/// A texture over an image the test makes through `Device::raw` (`UNDEFINED` at first, `GENERAL`
+/// between the runtime's batches), of [`target`]'s `RGBA8Unorm` descriptor placed `placement`,
+/// with the image and its memory, which [`destroy_callers`] destroys once nothing uses them.
+fn callers_texture(
+    device: &Device,
+    placement: IdPlacement,
+) -> (Texture, vk::Image, vk::DeviceMemory) {
+    // SAFETY: used only while the device lives.
+    let raw = unsafe { device.raw() };
+    // SAFETY: a physical device of the instance.
+    let memory = unsafe {
+        raw.instance
+            .get_physical_device_memory_properties(raw.physical_device)
+    };
+    let usage = vk::ImageUsageFlags::COLOR_ATTACHMENT
+        | vk::ImageUsageFlags::TRANSFER_SRC
+        | vk::ImageUsageFlags::TRANSFER_DST;
+    let info = shared_among(
+        image_info(vk::Format::R8G8B8A8_UNORM, usage),
+        raw.queue_families,
+    );
+    // SAFETY: the device is live; `destroy_callers` destroys them after their last use.
+    let (image, bound) = unsafe { made_image(raw.device, &memory, &info) };
+    let mut descriptor = target(PixelFormat::RGBA8Unorm);
+    descriptor.placement = placement;
+    // SAFETY: a live image of the device, made with `info`, bound, in `UNDEFINED` now; it
+    // outlives the texture and every command buffer that uses it, and nothing else uses it.
+    let texture = unsafe {
+        device.new_texture_with_vk_image(
+            &descriptor,
+            image,
+            &info,
+            VkImageLayouts::new(
+                vk::ImageLayout::UNDEFINED.into(),
+                vk::ImageLayout::GENERAL.into(),
+            ),
+        )
+    }
+    .unwrap();
+    (texture, image, bound)
+}
+
+/// Destroy `image` and its memory `bound`, which [`callers_texture`] made on `device`.
+///
+/// # Safety
+///
+/// Nothing uses them: their texture is gone and every command buffer that used it completed and
+/// is gone.
+unsafe fn destroy_callers(device: &Device, image: vk::Image, bound: vk::DeviceMemory) {
+    // SAFETY: used only while the device lives; the caller's contract.
+    unsafe {
+        let raw = device.raw();
+        raw.device.destroy_image(image, None);
+        raw.device.free_memory(bound, None);
+    }
+}
+
+/// A texture over the caller's image placed [`IdPlacement::Outside`] takes no resource ID, as a
+/// texture `new_texture` makes there does (`resource_ids::an_outside_texture_takes_no_id`), so a
+/// consumer's swapchain textures move no program texture's ID. After a reservation of 20000 it
+/// answers 0, and the plain texture made next takes 20001, the ID it takes on a device with no
+/// caller's texture; one placed `Any` takes 20001 itself and moves the plain texture to 20002.
+/// It starts no space: a reservation after it counts. It renders and copies as one placed `Any`
+/// does: what a clear of it wrote is what a copy of it reads.
+#[test]
+fn a_callers_image_placed_outside_takes_no_id() {
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    let plain = TextureDescriptor::texture_2d(PixelFormat::RGBA16Float, 4, 4, false);
+    let reserve = |device: &Device| {
+        device
+            .reserve_resource_ids(ResourceIdKind::Texture, &[ResourceId(20000)])
+            .unwrap()
+    };
+    // On a new device: the reservation, a texture over the caller's image at `placement` where
+    // there is one, and a plain texture; the IDs they answer.
+    let ids = |placement: Option<IdPlacement>| -> (Option<u64>, u64) {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        reserve(&device);
+        let callers = placement.map(|placement| callers_texture(&device, placement));
+        let next = device.new_texture(&plain).unwrap();
+        let answered = (
+            callers
+                .as_ref()
+                .map(|(texture, ..)| texture.gpu_resource_id().0),
+            next.gpu_resource_id().0,
+        );
+        if let Some((texture, image, bound)) = callers {
+            drop(texture);
+            // SAFETY: the texture is gone and no command buffer used it.
+            unsafe { destroy_callers(&device, image, bound) };
+        }
+        answered
+    };
+    let without = ids(None);
+    let any = ids(Some(IdPlacement::Any));
+    let outside = ids(Some(IdPlacement::Outside));
+    eprintln!(
+        "runtime ids: the plain texture after a reservation of 20000 answers {} with no \
+         caller's texture; {:?} after one placed Any; {:?} after one placed Outside",
+        without.1, any, outside
+    );
+    assert_eq!(without, (None, 20001));
+    assert_eq!(any, (Some(20001), 20002), "a caller's texture placed Any");
+    assert_eq!(
+        outside,
+        (Some(0), 20001),
+        "a caller's texture placed Outside"
+    );
+    {
+        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let (texture, image, bound) = callers_texture(&device, IdPlacement::Outside);
+        reserve(&device);
+        let next = device.new_texture(&plain).unwrap();
+        assert_eq!(
+            [texture.gpu_resource_id().0, next.gpu_resource_id().0],
+            [0, 20001],
+            "a reservation after a caller's texture placed Outside"
+        );
+        let queue = device.new_command_queue().unwrap();
+        let size = u64::from(SIDE * SIDE * 4);
+        let readback = device.new_buffer(size, ResourceOptions::shared()).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        clear(&command_buffer, &texture, [0.0, 1.0, 0.0, 1.0]);
+        copy_out(&command_buffer, &texture, &readback);
+        run(&command_buffer);
+        assert_eq!(
+            read_buffer(&readback, 0, size).unwrap(),
+            filled([0, 255, 0, 255])
+        );
+        drop((texture, command_buffer, queue));
+        // SAFETY: the texture is gone, and the command buffer that used it completed and is gone.
+        unsafe { destroy_callers(&device, image, bound) };
     }
     layer_reported_nothing_at_all(&messages);
 }
