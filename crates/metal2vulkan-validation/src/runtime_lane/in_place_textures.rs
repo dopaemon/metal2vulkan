@@ -20,6 +20,13 @@
 //!   shadow (`undeclared-usage-shadow`), never the aliasing image,
 //!   which stays the texture's (`vk_image` the same handle); every texel of the pages then holds the
 //!   value, and the bytes between the rows hold the pattern.
+//! - [`textures_that_render_or_write_count_their_shadows_apart`], under the validation layer: a
+//!   64x64 `R32Uint` texture over a no-copy buffer of anonymous pages, of each usage that renders
+//!   or writes, is a shadow counted by why: one that renders into it (`RenderTarget`, whatever else
+//!   it holds) as a render target's (`host_texture_shadows_render_target`), one that writes it
+//!   through a shader alone (`ShaderWrite`, `ShaderAtomic`) as a shader write's
+//!   (`host_texture_shadows_shader_write`), and under `HostPageTexturePolicy::Shadow` every one as
+//!   the exact form's (`host_texture_shadows_exact`).
 //! - [`a_failed_check_keeps_the_shadow_and_no_record`], under the validation layer: a device made
 //!   to fail its check (`DeviceOptions::fail_in_place_check`) answers failed or unchecked for every
 //!   class and makes such a texture a shadow counted as the failed check's, never in place, and
@@ -385,6 +392,94 @@ fn writes_and_passes_beyond_the_usage_take_their_shadows() {
             drop((texture, buffer));
             drop(mapping);
         }
+    }
+    layer_reported_nothing_at_all(&messages);
+}
+
+#[test]
+fn textures_that_render_or_write_count_their_shadows_apart() {
+    use TextureUsage as U;
+    // Each usage, and whether it counts as a render target's shadow (else a shader write's).
+    let usages = [
+        (U::SHADER_READ | U::RENDER_TARGET, true),
+        (U::SHADER_READ | U::SHADER_WRITE, false),
+        (U::SHADER_READ | U::SHADER_ATOMIC, false),
+        (U::SHADER_WRITE | U::SHADER_ATOMIC, false),
+        (U::SHADER_WRITE | U::RENDER_TARGET, true),
+        (U::SHADER_ATOMIC | U::RENDER_TARGET, true),
+        (U::UNKNOWN, true),
+    ];
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    for policy in [
+        HostPageTexturePolicy::InPlace,
+        HostPageTexturePolicy::Shadow,
+    ] {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.host_page_textures = policy;
+        })
+        .unwrap();
+        let (w, h, bpr) = (64u64, 64u64, 256u64);
+        let len = ((bpr * h) as usize).next_multiple_of(GUEST_PAGE);
+        let mapping = Mapping::anonymous(len);
+        // SAFETY: the mapping outlives the buffer and the textures (dropped first).
+        let buffer = match unsafe {
+            no_copy(
+                &device,
+                mapping.pointer(),
+                len,
+                ResourceOptions::default(),
+                None,
+            )
+        } {
+            Ok(buffer) => buffer,
+            Err(error) if not_importable(&error) => {
+                eprintln!("IN-PLACE-SHADOWS: the device imports no host memory: {error:?}");
+                return;
+            }
+            Err(error) => panic!("new_buffer_with_bytes_no_copy: {error:?}"),
+        };
+        for (usage, renders) in usages {
+            let mut d = TextureDescriptor::texture_2d(PixelFormat::R32Uint, w, h, false);
+            d.usage = usage;
+            d.resource_options = buffer.resource_options();
+            let before = device.work_counts();
+            let texture = match buffer.new_texture(&d, 0, bpr) {
+                Ok(texture) => texture,
+                // A usage the device refuses over a buffer counts nothing.
+                Err(error) => {
+                    eprintln!(
+                        "IN-PLACE-SHADOWS on {}: {usage:?}: refused: {error:?}",
+                        device.name()
+                    );
+                    continue;
+                }
+            };
+            let after = device.work_counts();
+            let delta = |counts: fn(&WorkCounts) -> u64| counts(&after) - counts(&before);
+            let counted = (
+                delta(|c| c.host_texture_shadows_render_target),
+                delta(|c| c.host_texture_shadows_shader_write),
+                delta(|c| c.host_texture_shadows_exact),
+            );
+            let due = match (policy, renders) {
+                (HostPageTexturePolicy::Shadow, _) => (0, 0, 1),
+                (_, true) => (1, 0, 0),
+                (_, false) => (0, 1, 0),
+            };
+            eprintln!(
+                "IN-PLACE-SHADOWS on {}: {policy:?} {usage:?}: (render target, shader write, \
+                 exact) {counted:?}",
+                device.name()
+            );
+            assert_eq!(counted, due, "{policy:?} {usage:?}");
+            // SAFETY: the handle is only read, while the texture lives.
+            assert!(unsafe { texture.vk_image() }.is_none(), "{usage:?}");
+            drop(texture);
+        }
+        messages.take_notices();
+        drop((buffer, device));
+        drop(mapping);
     }
     layer_reported_nothing_at_all(&messages);
 }

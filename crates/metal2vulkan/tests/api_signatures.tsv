@@ -2727,8 +2727,9 @@ field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_pitch	pub ho
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_placement	pub host_texture_shadows_refused_placement: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_rows	pub host_texture_shadows_refused_rows: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_refused_source	pub host_texture_shadows_refused_source: u64
+field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_render_target	pub host_texture_shadows_render_target: u64
+field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_shader_write	pub host_texture_shadows_shader_write: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_unchecked	pub host_texture_shadows_unchecked: u64
-field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_written	pub host_texture_shadows_written: u64
 field	metal2vulkan-runtime::WorkCounts.host_textures_in_place	pub host_textures_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.image_blits_recorded	pub image_blits_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.images_started_on_the_host	pub images_started_on_the_host: u64

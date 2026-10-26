@@ -263,7 +263,9 @@ Every other texture over host pages is a shadow (`shadowed-texture`, the notice 
 `HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one whose usage renders into it or
 writes it; one made before the check answered, or where it failed or made no image; and one no
 image in place serves (the bytes' pitch, placement or memory, or over dma-buf pages no dma-buf of
-the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each reason apart. A shadow
+the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each reason apart (one
+whose usage renders into it, `_render_target`, apart from one that writes it through a shader
+alone, `_shader_write`). A shadow
 is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages
 before a use and back (merged back: only the bytes the commands changed) after a write; no image
 is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and

@@ -136,8 +136,12 @@ impl Verdict {
 pub(crate) enum ShadowCause {
     /// The device's policy asks the shadow (`HostPageTexturePolicy::Shadow`).
     Exact,
-    /// Its usage renders into it or writes it (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`).
-    Written,
+    /// Its usage renders into it (`RenderTarget`, whatever else it holds; an `Unknown` usage,
+    /// every usage, among them).
+    RenderTarget,
+    /// Its usage writes it through a shader (`ShaderWrite` or `ShaderAtomic`) and does not render
+    /// into it.
+    ShaderWrite,
     /// Its class's check has not answered yet.
     CheckPending(PagesClass),
     /// Its class's check found a byte changed.
@@ -210,11 +214,12 @@ impl ShadowCause {
             ShadowCause::Exact => "the device's policy asks a shadow of every texture over host \
                                    pages (HostPageTexturePolicy::Shadow)"
                 .to_owned(),
-            ShadowCause::Written => "its usage renders into it or writes it (RenderTarget, \
-                                     ShaderWrite or ShaderAtomic), and an image bound to host \
-                                     pages starts UNDEFINED (VUID-VkImageCreateInfo-pNext-01443), \
-                                     its layout transitions and a render pass's load and store \
-                                     operations free to read and write every byte bound to it"
+            ShadowCause::RenderTarget | ShadowCause::ShaderWrite => "its usage renders into it or \
+                                     writes it (RenderTarget, ShaderWrite or ShaderAtomic), and \
+                                     an image bound to host pages starts UNDEFINED \
+                                     (VUID-VkImageCreateInfo-pNext-01443), its layout \
+                                     transitions and a render pass's load and store operations \
+                                     free to read and write every byte bound to it"
                 .to_owned(),
             ShadowCause::CheckPending(class) => format!(
                 "the device's check of the first move of an image over {} has not answered yet",
@@ -246,10 +251,11 @@ pub(crate) fn in_place(
     if policy == HostPageTexturePolicy::Shadow {
         return Err(ShadowCause::Exact);
     }
-    let writes =
-        TextureUsage::RENDER_TARGET | TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC;
-    if usage.intersects(writes) {
-        return Err(ShadowCause::Written);
+    if usage.contains(TextureUsage::RENDER_TARGET) {
+        return Err(ShadowCause::RenderTarget);
+    }
+    if usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC) {
+        return Err(ShadowCause::ShaderWrite);
     }
     match verdict(class) {
         Verdict::Passed => Ok(()),

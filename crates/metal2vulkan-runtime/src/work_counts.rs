@@ -301,7 +301,8 @@ pub(crate) struct Counters {
     fresh_page_textures_in_place: AtomicU64,
     pitched_host_images: AtomicU64,
     host_texture_shadows_exact: AtomicU64,
-    host_texture_shadows_written: AtomicU64,
+    host_texture_shadows_render_target: AtomicU64,
+    host_texture_shadows_shader_write: AtomicU64,
     host_texture_shadows_check_pending: AtomicU64,
     host_texture_shadows_check_failed: AtomicU64,
     host_texture_shadows_unchecked: AtomicU64,
@@ -2077,7 +2078,8 @@ impl Counters {
         use crate::in_place::ShadowCause as C;
         let counter = match cause {
             C::Exact => &self.host_texture_shadows_exact,
-            C::Written => &self.host_texture_shadows_written,
+            C::RenderTarget => &self.host_texture_shadows_render_target,
+            C::ShaderWrite => &self.host_texture_shadows_shader_write,
             C::CheckPending(_) => &self.host_texture_shadows_check_pending,
             C::CheckFailed(_) => &self.host_texture_shadows_check_failed,
             C::Unchecked(_) => &self.host_texture_shadows_unchecked,
@@ -4263,9 +4265,12 @@ pub struct WorkCounts {
     /// Textures over host pages made shadows because the device's policy asks it
     /// (`HostPageTexturePolicy::Shadow`).
     pub host_texture_shadows_exact: u64,
-    /// Textures over host pages made shadows because their usage renders into them or writes
-    /// them (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`).
-    pub host_texture_shadows_written: u64,
+    /// Textures over host pages made shadows because their usage renders into them
+    /// (`RenderTarget`, whatever else it holds; an `Unknown` usage among them).
+    pub host_texture_shadows_render_target: u64,
+    /// Textures over host pages made shadows because their usage writes them through a shader
+    /// (`ShaderWrite` or `ShaderAtomic`) and does not render into them.
+    pub host_texture_shadows_shader_write: u64,
     /// Textures over host pages made shadows because the device's check of their class had not
     /// answered yet (a first session's, before the verdict is kept).
     pub host_texture_shadows_check_pending: u64,
@@ -5212,8 +5217,11 @@ impl Device {
                 .load(Ordering::Relaxed),
             pitched_host_images: counters.pitched_host_images.load(Ordering::Relaxed),
             host_texture_shadows_exact: counters.host_texture_shadows_exact.load(Ordering::Relaxed),
-            host_texture_shadows_written: counters
-                .host_texture_shadows_written
+            host_texture_shadows_render_target: counters
+                .host_texture_shadows_render_target
+                .load(Ordering::Relaxed),
+            host_texture_shadows_shader_write: counters
+                .host_texture_shadows_shader_write
                 .load(Ordering::Relaxed),
             host_texture_shadows_check_pending: counters
                 .host_texture_shadows_check_pending

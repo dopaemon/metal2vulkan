@@ -2,10 +2,12 @@
 //! and why one is a shadow, and the record that keeps the device's check's verdicts.
 //!
 //! - **The decision.** Under `HostPageTexturePolicy::Shadow` every texture is a shadow, the check
-//!   never asked; under `InPlace` a texture whose usage renders into it or writes it
-//!   (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`, `Unknown`) is one, the check never asked; and
-//!   a texture that only samples or reads is tried in place exactly where its class's check passed,
-//!   else a shadow naming the check's answer (pending, failed, unchecked).
+//!   never asked; under `InPlace` a texture whose usage renders into it (`RenderTarget`,
+//!   `Unknown`) is one counted as a render target, and one that writes it through a shader and
+//!   does not render into it (`ShaderWrite`, `ShaderAtomic`) one counted as a shader write, the
+//!   check never asked; and a texture that only samples or reads is tried in place exactly where
+//!   its class's check passed, else a shadow naming the check's answer (pending, failed,
+//!   unchecked).
 //! - **The record.** Its verdicts read back for the identity it was written for, and nothing else
 //!   reads: a record cut short or grown, of another check version or runtime, of another identity,
 //!   with a byte changed (its checksum), or holding a pending or unknown verdict.
@@ -38,11 +40,17 @@ fn each_usage() -> Vec<TextureUsage> {
     ]
 }
 
-/// Whether `usage` renders into or writes a texture.
-fn writes(usage: TextureUsage) -> bool {
-    usage.intersects(
-        TextureUsage::RENDER_TARGET | TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC,
-    )
+/// The shadow `usage` takes whatever the check answers: a render target's where it renders
+/// into the texture, whatever else it holds, a shader write's where it writes it through a shader
+/// alone; `None` where it only samples or reads.
+fn written(usage: TextureUsage) -> Option<ShadowCause> {
+    if usage.contains(TextureUsage::RENDER_TARGET) {
+        Some(ShadowCause::RenderTarget)
+    } else if usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC) {
+        Some(ShadowCause::ShaderWrite)
+    } else {
+        None
+    }
 }
 
 #[test]
@@ -50,6 +58,18 @@ fn the_decision_takes_only_a_sampled_texture_whose_class_passed() {
     let mut usages = each_usage();
     usages.push(TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW);
     usages.push(TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET);
+    usages.push(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
+    usages.push(TextureUsage::RENDER_TARGET | TextureUsage::SHADER_WRITE);
+    usages.push(TextureUsage::RENDER_TARGET | TextureUsage::SHADER_ATOMIC);
+    usages.push(TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC);
+    // An `Unknown` usage, as Metal reports it: every usage.
+    usages.push(
+        TextureUsage::SHADER_READ
+            | TextureUsage::SHADER_WRITE
+            | TextureUsage::RENDER_TARGET
+            | TextureUsage::PIXEL_FORMAT_VIEW
+            | TextureUsage::SHADER_ATOMIC,
+    );
     usages.push(TextureUsage::empty());
     for class in PagesClass::ALL {
         for &usage in &usages {
@@ -69,8 +89,8 @@ fn the_decision_takes_only_a_sampled_texture_whose_class_passed() {
                     asked.set(true);
                     verdict
                 });
-                let expected = if writes(usage) {
-                    Err(ShadowCause::Written)
+                let expected = if let Some(cause) = written(usage) {
+                    Err(cause)
                 } else {
                     match verdict {
                         Verdict::Passed => Ok(()),
@@ -80,7 +100,7 @@ fn the_decision_takes_only_a_sampled_texture_whose_class_passed() {
                     }
                 };
                 assert_eq!(decided, expected, "{class:?} {usage:?} {verdict:?}");
-                assert_eq!(asked.get(), !writes(usage), "{class:?} {usage:?}");
+                assert_eq!(asked.get(), written(usage).is_none(), "{class:?} {usage:?}");
             }
         }
     }
@@ -90,7 +110,7 @@ fn the_decision_takes_only_a_sampled_texture_whose_class_passed() {
 fn every_shadow_cause_names_itself() {
     let causes = [
         ShadowCause::Exact,
-        ShadowCause::Written,
+        ShadowCause::RenderTarget,
         ShadowCause::CheckPending(PagesClass::Pointer),
         ShadowCause::CheckFailed(PagesClass::DmaBuf),
         ShadowCause::Unchecked(PagesClass::Fresh),
@@ -106,6 +126,8 @@ fn every_shadow_cause_names_itself() {
     assert!(words[0].contains("HostPageTexturePolicy::Shadow"));
     assert!(words[2].contains("not answered"));
     assert!(words[3].contains("dma-bufs"));
+    // A shader write's shadow announces what a render target's does: the notice is unchanged.
+    assert_eq!(ShadowCause::ShaderWrite.words(), words[1]);
 }
 
 /// A driver identity, every field set.
