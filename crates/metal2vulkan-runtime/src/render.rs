@@ -371,8 +371,8 @@ use metal2vulkan::metal::{
     Winding,
 };
 use metal2vulkan::pipeline::{
-    ColorGroup, GraphicsState, PushField, RuntimeFact, Stage, StorageAttachmentUse,
-    StorageAttachmentView,
+    ColorGroup, GraphicsState, PipelineInterface, PushField, RuntimeFact, Stage,
+    StorageAttachmentUse, StorageAttachmentView,
 };
 use pass_start_reads::{PassStartReads, PassStartTables};
 use pass_steps::{InstanceSteps, PassSteps, StagedDispatch, StagedRows};
@@ -7245,6 +7245,19 @@ impl RenderLowering {
         self.mesh.retain_exclusive(&mut self.core);
     }
 
+    /// Whether a function of `interface` statically uses a texture slot of its stage's table
+    /// that holds a memoryless texture (`ArgumentTable::uses_memoryless`).
+    fn uses_memoryless(&self, interface: &PipelineInterface) -> bool {
+        [
+            (Stage::Vertex, &self.vertex),
+            (Stage::Fragment, &self.fragment),
+            (Stage::Object, &self.object),
+            (Stage::Mesh, &self.mesh),
+        ]
+        .into_iter()
+        .any(|(stage, table)| table.uses_memoryless(interface, stage))
+    }
+
     /// [`draw`](Self::draw) with the heaps' textures resident.
     fn draw_resident(
         &mut self,
@@ -7286,6 +7299,18 @@ impl RenderLowering {
             if self.factors.buffer.is_none() {
                 return Err(draw_problem(call, DrawProblem::NoTessellationFactorBuffer));
             }
+        }
+        // A draw whose functions statically use a texture slot that holds a memoryless texture,
+        // an empty one too, fails the command buffer as plain Metal's does, from its pass on
+        // (`EncoderCore::fail_memoryless_use`), and records nothing. A draw recorded again into
+        // another instance was checked at its call. An execution's command is the runtime's gap:
+        // Metal's answer there is not measured.
+        if !self.rerouting && self.uses_memoryless(&pipeline.base().interface) {
+            if self.replaying {
+                return Err(Error::NotImplemented(RuntimeGap::IndirectRenderCommands));
+            }
+            self.core.fail_memoryless_use();
+            return Ok(());
         }
         // An empty draw draws nothing once the checks plain Metal keeps for one passed (a
         // pipeline state, not a tile one, of the draw's kind, and a patch draw's factor buffer:

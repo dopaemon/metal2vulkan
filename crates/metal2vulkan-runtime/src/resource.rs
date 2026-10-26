@@ -146,4 +146,10 @@ impl ResourceRef<'_> {
             ResourceRef::IndirectCommandBuffer(icb) => icb.storage_mode(),
         }
     }
+
+    /// Whether the resource is memoryless: a memoryless texture or texture buffer, whose use
+    /// fails Metal's command buffer (`CommandBufferError::InvalidResource`).
+    pub(super) fn is_memoryless(&self) -> bool {
+        self.storage_mode() == StorageMode::Memoryless
+    }
 }

@@ -925,11 +925,11 @@ impl Device {
     /// A `Memoryless` descriptor, of which plain Metal makes a texture (an Apple M3 Max under
     /// macOS 27.0.1: a 64-texel `RGBA8Unorm` texture buffer of `ShaderRead` usage answers
     /// `storageMode` 3, its other getters its descriptor's), lies over a `Private` buffer: no
-    /// Vulkan buffer takes memory lazily. The texture answers the descriptor's mode, and the
-    /// runtime refuses every use of it ([`Texture::check_not_memoryless`]), as Metal's validation
-    /// stops every use of a memoryless texture but as a render pass's attachment, which no
-    /// texture buffer is. Announced `memoryless-texture-buffer`: the bytes are memory Metal
-    /// spends none of.
+    /// Vulkan buffer takes memory lazily. The texture answers the descriptor's mode, and its uses
+    /// are a memoryless texture's (`texture.rs`): a command that uses it fails its command
+    /// buffer, as plain Metal's (a dispatch that reads it and a blit out of it, measured), its
+    /// views are nil, and its CPU access, at which plain Metal's process faults, is refused.
+    /// Announced `memoryless-texture-buffer`: the bytes are memory Metal spends none of.
     pub(super) fn new_texture_buffer(
         &self,
         descriptor: &TextureDescriptor,

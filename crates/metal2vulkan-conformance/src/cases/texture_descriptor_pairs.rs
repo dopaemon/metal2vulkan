@@ -612,9 +612,8 @@ impl Case for DescriptorPairs {
         //
         // It loosens no value. Every getter of the row compares exactly with Metal's -- the
         // texture answers the descriptor's memoryless mode as Metal's does -- and the whole of
-        // what the declaration covers is the announcement. The cost is bytes nothing reaches: the
-        // runtime refuses every use of a memoryless texture, as Metal's validation stops every one
-        // but as a render pass's attachment, which no texture buffer is.
+        // what the declaration covers is the announcement. The cost is bytes nothing reaches: a
+        // command that uses a memoryless texture fails its command buffer, as plain Metal's does.
         //
         // Selected by the table's own descriptors and not by the case's name, so a table that
         // gains such a row declares it and one that loses it stops declaring it.

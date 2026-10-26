@@ -5,9 +5,12 @@
 //!   Max and M4). A size of 0 on an axis a texture of the copy lacks (depth on all but 3D textures,
 //!   height on 1D textures and texture buffers) copies one texel there, and a copy with another
 //!   axis 0, or of no slices or levels, copies nothing while the encoder's other commands run, as
-//!   plain Metal does (its validation stops each). A copy to or from a memoryless texture, and its
-//!   mipmaps, are refused (`StorageMode`), as Metal's validation refuses them; the
-//!   `optimize_contents_*` hints take one, as Metal's do (a Metal probe on an M4).
+//!   plain Metal does (its validation stops each). A copy into or out of a memoryless texture, of
+//!   a size of 0 too, and its mipmaps' generation fail the command buffer as plain Metal's do
+//!   (`CommandBufferError::InvalidResource`: the encoder's run of blit encoders runs nothing, an M3
+//!   Max under macOS 27.0.1); a copy of no slices or levels, the mipmaps of one level, the
+//!   `optimize_contents_*` hints and `synchronize_resource` take one and do nothing, as plain
+//!   Metal's do (its validation stops each but the hints).
 //! - **Recording.** Each copy is one command of the encoder with what it reads and writes: a
 //!   texture's uses name its image's levels and layers (every aspect), so the encoder's order and
 //!   the commit's barriers cover views and their textures as one resource. A buffer layout
@@ -405,6 +408,19 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
+    /// Whether a texture of the copy is memoryless, a texture buffer too: plain Metal fails the
+    /// command buffer of a copy into or out of one, of a size of 0 too, and of its mipmaps'
+    /// generation (`CommandBufferError::InvalidResource`, the encoder's whole run of blit
+    /// encoders running nothing, an M3 Max under macOS 27.0.1), so the encoder fails it and the
+    /// copy records nothing.
+    fn fails_on_memoryless(&mut self, textures: &[&Texture]) -> bool {
+        let memoryless = textures.iter().any(|texture| texture.is_memoryless());
+        if memoryless {
+            self.core().fail_memoryless_use();
+        }
+        memoryless
+    }
+
     /// `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:
     /// destinationSlice:destinationLevel:destinationOrigin:options:`: `source_size` texels of
     /// the buffer, rows `source_bytes_per_row` apart and images `source_bytes_per_image` apart
@@ -464,7 +480,10 @@ impl BlitCommandEncoder {
                 const CALL: &str = "copy_from_buffer_to_texture";
                 this.core().check_device(CALL, source_buffer.device())?;
                 this.check_texture(CALL, destination_texture)?;
-                destination_texture.check_bytes_reached(CALL)?;
+                if this.fails_on_memoryless(&[destination_texture]) {
+                    return Ok(());
+                }
+                destination_texture.check_rotated_reach()?;
                 let Some(size) = copy_size(source_size, &[destination_texture.texture_type()])
                 else {
                     return Ok(());
@@ -642,9 +661,12 @@ impl BlitCommandEncoder {
             |this| {
                 const CALL: &str = "copy_from_texture_to_buffer";
                 this.check_texture(CALL, source_texture)?;
-                source_texture.check_bytes_reached(CALL)?;
                 this.core()
                     .check_device(CALL, destination_buffer.device())?;
+                if this.fails_on_memoryless(&[source_texture]) {
+                    return Ok(());
+                }
+                source_texture.check_rotated_reach()?;
                 let Some(size) = copy_size(source_size, &[source_texture.texture_type()]) else {
                     return Ok(());
                 };
@@ -1152,6 +1174,9 @@ impl BlitCommandEncoder {
             |this| {
                 const CALL: &str = "copy_from_texture_to_texture";
                 this.check_pair(CALL, source_texture, destination_texture)?;
+                if this.fails_on_memoryless(&[source_texture, destination_texture]) {
+                    return Ok(());
+                }
                 let types = [
                     source_texture.texture_type(),
                     destination_texture.texture_type(),
@@ -1219,7 +1244,12 @@ impl BlitCommandEncoder {
             |this| {
                 const CALL: &str = "copy_texture_slices";
                 this.check_pair(CALL, source_texture, destination_texture)?;
+                // No slices or levels copy nothing, of a memoryless texture too (plain Metal's
+                // command buffer completes, an M3 Max under macOS 27.0.1).
                 if slice_count == 0 || level_count == 0 {
+                    return Ok(());
+                }
+                if this.fails_on_memoryless(&[source_texture, destination_texture]) {
                     return Ok(());
                 }
                 let n = |value: u64| {
@@ -1265,6 +1295,9 @@ impl BlitCommandEncoder {
             |this| {
                 const CALL: &str = "copy_texture";
                 this.check_pair(CALL, source_texture, destination_texture)?;
+                if this.fails_on_memoryless(&[source_texture, destination_texture]) {
+                    return Ok(());
+                }
                 let copies = plan_whole_copy(&pair(source_texture, destination_texture)?)
                     .map_err(|refusal| copy_error(CALL, refusal))?;
                 this.texture_copies(CALL, source_texture, destination_texture, &copies)
@@ -1281,8 +1314,8 @@ impl BlitCommandEncoder {
     ) -> Result<(), Error> {
         self.check_texture(call, source)?;
         self.check_texture(call, destination)?;
-        source.check_bytes_reached(call)?;
-        destination.check_bytes_reached(call)?;
+        source.check_rotated_reach()?;
+        destination.check_rotated_reach()?;
         check_depth_view(source)?;
         check_depth_view(destination)
     }
@@ -1941,14 +1974,18 @@ impl BlitCommandEncoder {
         // texture as it is, over a buffer or not, and its API validation asserts. Every texture
         // over a buffer has one level.
         self.core().check_device(CALL, texture.device())?;
-        texture.check_bytes_reached(CALL)?;
+        texture.check_rotated_reach()?;
         let record = texture.record();
         let gap = || Error::Unsupported(Unsupported::not_implemented(Feature::MipmapGeneration));
-        // A texture of one level, of an extended-range format too: left as it is.
+        // A texture of one level, of an extended-range format too: left as it is, a memoryless
+        // one too (plain Metal's command buffer completes, an M3 Max under macOS 27.0.1).
         if leaves_as_is(record) {
             return Ok(());
         }
         self.check_texture(CALL, texture)?;
+        if self.fails_on_memoryless(&[texture]) {
+            return Ok(());
+        }
         let device = self.core().device().clone();
         let facts = device
             .shared()

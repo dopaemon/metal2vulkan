@@ -199,7 +199,6 @@ pub(super) fn check_textures<'a>(
     check_range(call, first, textures.len(), TEXTURE_SLOTS)?;
     for texture in textures.flatten() {
         check_device(device, call, texture.device())?;
-        texture.check_not_memoryless(call)?;
     }
     Ok(())
 }

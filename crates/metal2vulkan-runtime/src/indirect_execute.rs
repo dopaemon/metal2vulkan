@@ -104,6 +104,7 @@ use super::Device;
 use metal2vulkan::bind::indirect_commands::{Action, BufferBinding, BufferStage, CommandRecord};
 use metal2vulkan::bind::{Dispatch, ImageblockSize, ReplayFaults, StageInRegion};
 use metal2vulkan::error::{BindError, Feature, Unsupported};
+use metal2vulkan::pipeline::Stage;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -716,6 +717,13 @@ impl Bindings {
         forms: BufferForms,
     ) -> Result<DispatchTables<'a>, Error> {
         let table = if execute.icb.descriptor().inherit_buffers {
+            // A kernel that statically uses an inherited texture slot that holds a memoryless
+            // texture is the runtime's gap: Metal's answer for an execution is not measured (an
+            // encoder's own dispatch fails the command buffer, `ComputeCommandEncoder::
+            // dispatch_threadgroups`).
+            if (execute.table).uses_memoryless(pipeline.interface(), Stage::Kernel) {
+                return Err(Error::NotImplemented(RuntimeGap::CommandReplay));
+            }
             &execute.table
         } else {
             &self.table

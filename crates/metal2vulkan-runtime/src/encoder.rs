@@ -1916,6 +1916,20 @@ impl EncoderCore {
         self.fails_command_buffer = Some(error);
     }
 
+    /// A command of this encoder uses a memoryless texture's memory, which it has none of: plain
+    /// Metal fails the command buffer from the submission that holds the encoder on
+    /// (`CommandBufferError::InvalidResource`, `State::fail_submission_from`), its GPU running
+    /// none of that submission, so neither a hang nor a discard there happens. Another failure the
+    /// encoder found first keeps its error.
+    pub(super) fn fail_memoryless_use(&mut self) {
+        match self.fails_command_buffer {
+            None | Some(CommandBufferError::GpuHang | CommandBufferError::GpuRecoveryVictim) => {
+                self.fails_command_buffer = Some(CommandBufferError::InvalidResource);
+            }
+            Some(_) => {}
+        }
+    }
+
     /// Metal's GPU hangs at this encoder (a direct draw of primitive type 9, or a pass of no draw
     /// call over a mutable rasterization-rate map, `rate_mapped_pass.rs`), as the command
     /// buffer commits: it fails from the encoder on with `CommandBufferError::GpuHang`, unless
@@ -2074,6 +2088,10 @@ impl EncoderCore {
         match fails_command_buffer {
             Some(CommandBufferError::GpuHang) => {
                 state.hang_from(encoder, open.command_buffer.device())?;
+            }
+            // A memoryless texture's use fails Metal's whole submission (`InvalidResource`).
+            Some(error @ CommandBufferError::InvalidResource) => {
+                state.fail_submission_from(encoder, error);
             }
             Some(error) => state.fail_from(encoder, error),
             None => {}

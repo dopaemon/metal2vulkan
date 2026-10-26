@@ -34,10 +34,18 @@
 //!   in lazily allocated memory where the device has it, else in device-local memory, and start
 //!   undefined: Metal keeps no contents for them (a Metal probe on an M4). Metal makes them of
 //!   every type, with any usage (its validation stops all but the 2D, 2D array and multisample
-//!   types; plain Metal renders through a 1D, 3D or cube one); anything but a render pass's
-//!   attachment is refused (`Invalid`, `StorageMode`), as Metal's validation refuses CPU access,
-//!   blits, mipmaps, views and bindings of one; a pass may neither load nor store one
-//!   (`render_pass.rs`).
+//!   types; plain Metal renders through a 1D, 3D or cube one); a pass may neither load nor store
+//!   one (`render_pass.rs`). Its other uses are plain Metal's (an M3 Max under macOS 27.0.1;
+//!   Metal's API validation stops each): it binds at any texture slot, and a command that uses
+//!   it fails the command buffer (`CommandBufferError::InvalidResource`) from the submission
+//!   that holds the command on, as Metal splits the command buffer (a render pass alone, a run
+//!   of blit or of compute encoders that no event command splits): a draw, a tile dispatch or a
+//!   dispatch whose function statically uses its slot (`ArgumentTable::uses_memoryless`), whether
+//!   or not its run reads it, of nothing too; `use_resource` of it; and a blit into or out of it
+//!   or of its mipmaps. A binding no such function uses, one replaced before the command, and a
+//!   memory barrier or a hint that names it fail nothing. Its views are nil
+//!   (`Nil`, `StorageMode`); its CPU calls move nothing, and a texture buffer's, at which plain
+//!   Metal's process faults, are refused (`Invalid`, `StorageMode`).
 //! - **The caller's images** (`texture/wrapped.rs`): a texture over an image the caller made and
 //!   keeps. The runtime never destroys or frees it ([`Owner::Caller`]); the device's batches move
 //!   it from the caller's layout to `GENERAL` and back.
@@ -1610,8 +1618,8 @@ impl Device {
     /// A texture buffer's texels are a new buffer's, of the descriptor's options and as long as
     /// its row of texels, zero at first.
     ///
-    /// A `Memoryless` texture is a transient render attachment and nothing else (the module
-    /// docs).
+    /// A `Memoryless` texture is a transient render attachment: a command that uses it otherwise
+    /// fails its command buffer (the module docs).
     ///
     /// Refused: a descriptor Metal stops (`Invalid` with a [`TextureProblem`]); a
     /// format, size or sample count the device lacks (`Unsupported`, naming the format or limit;
@@ -4216,21 +4224,20 @@ impl Texture {
         Texture::made(&device, storage, record, None, id_use)
     }
 
-    /// Refused (`Invalid`, `StorageMode`) for a memoryless texture: Metal's validation stops every
-    /// use of one but as a render pass's attachment (a Metal probe on an M4: CPU access, blits,
-    /// mipmaps, views and bindings).
-    pub(super) fn check_not_memoryless(&self, call: &'static str) -> Result<(), Error> {
-        if self.storage_mode() == StorageMode::Memoryless {
-            return Err(invalid(call, Problem::StorageMode));
-        }
-        Ok(())
+    /// Whether the texture is memoryless: it has no memory, so a command that uses it fails its
+    /// command buffer, its views are nil, and its CPU access moves nothing (the module docs).
+    pub(super) fn is_memoryless(&self) -> bool {
+        self.storage_mode() == StorageMode::Memoryless
     }
 
-    /// Refused as [`check_not_memoryless`](Self::check_not_memoryless) refuses, and
-    /// (`NotImplemented(RotatedTexture)`) for a rotated texture whose bytes its CPU access and
-    /// blits address run past its buffer (`texture/rotation.rs`): the uses of its bytes.
-    pub(super) fn check_bytes_reached(&self, call: &'static str) -> Result<(), Error> {
-        self.check_not_memoryless(call)?;
+    /// Nil (`Nil`, `StorageMode`) for a view of a memoryless texture, a texture buffer's too, as
+    /// plain Metal answers every view of one (an M3 Max under macOS 27.0.1: of another pixel
+    /// format, of levels and slices, with a swizzle, and of its own format; its API validation
+    /// stops the call); refused as [`check_rotated_reach`](Self::check_rotated_reach) refuses.
+    fn check_viewable(&self, call: &'static str) -> Result<(), Error> {
+        if self.is_memoryless() {
+            return Err(nil(call, Problem::StorageMode));
+        }
         self.check_rotated_reach()
     }
 
@@ -5192,7 +5199,9 @@ impl Texture {
         })
     }
 
-    /// `newTextureViewWithPixelFormat:`: a view of the whole texture as `pixel_format`.
+    /// `newTextureViewWithPixelFormat:`: a view of the whole texture as `pixel_format`. Nil
+    /// (`Nil`, `StorageMode`) for a memoryless texture, a texture buffer too, as plain Metal
+    /// answers every view of one, of its own format too (its API validation stops the call).
     pub fn new_texture_view(&self, pixel_format: PixelFormat) -> Result<Texture, Error> {
         let request = ViewRequest::of_format(&self.0.record, pixel_format);
         self.view("new_texture_view", &request, IdPlacement::Any)
@@ -5213,6 +5222,7 @@ impl Texture {
 
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:`: a view of `levels` and
     /// `slices` (counted from this texture's own first) as `pixel_format` and `texture_type`.
+    /// Nil for a memoryless texture, as [`new_texture_view`](Self::new_texture_view) is.
     pub fn new_texture_view_with_levels_slices(
         &self,
         pixel_format: PixelFormat,
@@ -5280,7 +5290,7 @@ impl Texture {
         swizzle: Option<TextureSwizzleChannels>,
     ) -> Result<ViewRequest, Error> {
         use super::view_plan::ViewProblem;
-        self.check_bytes_reached(call)?;
+        self.check_viewable(call)?;
         let levels = narrow_range(&levels)
             .ok_or_else(|| invalid(call, Problem::TextureView(ViewProblem::LevelRange)))?;
         let slices = narrow_range(&slices)
@@ -5300,7 +5310,7 @@ impl Texture {
         request: &ViewRequest,
         placement: IdPlacement,
     ) -> Result<Texture, Error> {
-        self.check_bytes_reached(call)?;
+        self.check_viewable(call)?;
         self.device().check_texture_placement(
             call,
             placement,
@@ -5425,6 +5435,11 @@ impl Texture {
     /// Metal does, a region outside the level, a `bytes_per_row` off Metal's rules of a texture
     /// over a buffer or of 0 for more than one row and image (not measured), `bytes` shorter than
     /// the layout reads).
+    ///
+    /// A memoryless texture's call moves nothing, as plain Metal's (an M3 Max under macOS
+    /// 27.0.1; its validation stops it): a later `get_bytes` leaves the bytes too. A memoryless
+    /// texture buffer's is refused (`Invalid`, `StorageMode`): plain Metal's process faults in
+    /// the call.
     ///
     /// A PVRTC texture's whole level takes its blocks in plain Metal's CPU order, Z order with
     /// the y bit lowest, at a `bytes_per_row` of 0 or of the level's row of blocks and above,
@@ -5938,7 +5953,13 @@ impl Texture {
         bytes_per_image: u64,
     ) -> Result<Option<HostCopy>, Error> {
         let record = &self.0.record;
-        self.check_bytes_reached(call)?;
+        // A memoryless texture buffer's CPU access faults in plain Metal's call (SIGSEGV, an M3
+        // Max under macOS 27.0.1): refused. Another memoryless texture's moves nothing (below).
+        let memoryless = self.is_memoryless();
+        if memoryless && !matches!(self.0.storage, Storage::Image(_)) {
+            return Err(invalid(call, Problem::StorageMode));
+        }
+        self.check_rotated_reach()?;
         // A texture over a buffer the CPU reaches has its bytes there whatever its storage mode:
         // a `Private` IOSurface plane's `getBytes` and `replaceRegion` read and write the
         // surface's bytes on plain Metal. A texture over a `Private` buffer takes
@@ -5992,6 +6013,14 @@ impl Texture {
         let region = texture_region(region, level, slice)
             .ok_or_else(|| invalid(call, Problem::Copy(CopyProblem::Region)))?;
         if region.size.contains(&0) {
+            return Ok(None);
+        }
+        // A memoryless texture's CPU calls move nothing: plain Metal's `getBytes` leaves the
+        // bytes and its `replaceRegion` returns, a later `getBytes` leaving them too (an M3 Max
+        // under macOS 27.0.1; its API validation stops both).
+        if memoryless {
+            check_region(record, &region, &unit)
+                .map_err(|problem| invalid(call, Problem::Copy(problem)))?;
             return Ok(None);
         }
         // A packed two-plane YCbCr texture's CPU calls move nothing: Metal's `getBytes` leaves

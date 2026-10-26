@@ -166,6 +166,18 @@ pub(crate) fn metal_submissions(
     submissions
 }
 
+/// The first encoder of the submission among Metal's submissions of `encoders`
+/// ([`metal_submissions`]) that holds encoder `at`: `at` itself past them.
+pub(crate) fn submission_start(
+    encoders: impl IntoIterator<Item = (EncoderKind, usize, usize)>,
+    at: usize,
+) -> usize {
+    metal_submissions(encoders)
+        .into_iter()
+        .find(|(_, range)| range.contains(&at))
+        .map_or(at, |(_, range)| range.start)
+}
+
 impl State {
     /// Metal's submissions of its ended encoders, for its check, as it commits; nothing without
     /// a check, or a decision of its first batch's submission behind a hang (`hang.rs`).

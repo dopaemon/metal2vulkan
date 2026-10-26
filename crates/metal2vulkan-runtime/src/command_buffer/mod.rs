@@ -1232,6 +1232,26 @@ impl State {
         self.fails_from.get_or_insert((encoder, error));
     }
 
+    /// Ended encoder `encoder`, the last, fails the command buffer with `error` from the first
+    /// encoder of the submission Metal holds it in on (`checks::metal_submissions`: a render pass
+    /// alone, a run of blit or of compute encoders that no event command splits), as Metal fails
+    /// a submission that uses a memoryless texture (`CommandBufferError::InvalidResource`); an
+    /// earlier failure keeps its error, from the earlier of the two encoders.
+    pub(super) fn fail_submission_from(&mut self, encoder: usize, error: CommandBufferError) {
+        let records = self.ended.iter().map(|record| {
+            (
+                record.kind,
+                record.event_waits_before,
+                record.event_signals_before,
+            )
+        });
+        let first = checks::submission_start(records, encoder);
+        self.fails_from = Some(match self.fails_from {
+            Some((from, earlier)) => (from.min(first), earlier),
+            None => (first, error),
+        });
+    }
+
     /// Note the shadowed textures an ended encoder's pass took as attachments: how many of them
     /// no pass of the command buffer took before.
     pub(super) fn shadows_attached(&mut self, keys: &[ResourceKey]) -> usize {

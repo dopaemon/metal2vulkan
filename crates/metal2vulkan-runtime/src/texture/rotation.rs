@@ -19,7 +19,7 @@
 //!   (`tests::buffer_texture::no_rotated_plane_s_gpu_rows_share_bytes`). Where those rows run
 //!   past the buffer, whose bytes Metal reads past the stored frame, the runtime has no bytes,
 //!   and those uses are refused (`NotImplemented(RotatedTexture)`,
-//!   [`Texture::check_bytes_reached`]).
+//!   [`Texture::check_rotated_reach`]).
 //! - **Functions** see the stored frame unturned: `get_width()` and `get_height()` answer the
 //!   extent Metal stores the texture as, `read()` at `(x, y)` (in a fragment, a kernel, or a
 //!   `read_write` kernel) gives the plane's texel `(x, y)` of that extent, a position past it

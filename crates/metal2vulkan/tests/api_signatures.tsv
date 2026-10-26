@@ -11145,6 +11145,7 @@ variant	metal2vulkan-runtime::CommandBufferError::GpuRecoveryVictim	GpuRecoveryV
 variant	metal2vulkan-runtime::CommandBufferError::IndexPoolOverflow	IndexPoolOverflow
 variant	metal2vulkan-runtime::CommandBufferError::Injected	Injected(u64)
 variant	metal2vulkan-runtime::CommandBufferError::Internal	Internal(VkResultCode)
+variant	metal2vulkan-runtime::CommandBufferError::InvalidResource	InvalidResource
 variant	metal2vulkan-runtime::CommandBufferError::MeshGridPastLimits	MeshGridPastLimits
 variant	metal2vulkan-runtime::CommandBufferError::MeshRecordsOverflow	MeshRecordsOverflow(MeshRecordsOverflow)
 variant	metal2vulkan-runtime::CommandBufferError::OutOfMemory	OutOfMemory

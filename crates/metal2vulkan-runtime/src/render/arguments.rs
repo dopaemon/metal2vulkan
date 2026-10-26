@@ -68,6 +68,12 @@ impl RenderLowering {
         for resource in resources {
             self.core.check_device(call, resource.device())?;
         }
+        // A memoryless texture fails the command buffer from the pass on, with no draw after it
+        // too (`RenderCommandEncoder::use_resource`).
+        if resources.iter().any(ResourceRef::is_memoryless) {
+            self.core.fail_memoryless_use();
+            return Ok(());
+        }
         for &resource in resources {
             if let Some(used) = self.residency.use_resource(resource, usage, stages) {
                 self.core.made_resident(used);
@@ -161,7 +167,9 @@ impl RenderLowering {
 impl RenderCommandEncoder {
     /// `useResource:usage:stages:`: the encoder's later draws and tile dispatches may reach
     /// `resource` in render `stages` through an address or a resource ID held in memory, reading
-    /// or writing as `usage` says (the module docs).
+    /// or writing as `usage` says (the module docs). A memoryless texture, a texture buffer too,
+    /// fails the command buffer from the pass on as plain Metal's does, with no draw after it too
+    /// (`CommandBufferError::InvalidResource`, an M3 Max under macOS 27.0.1).
     ///
     /// Refused, changing nothing: a resource of another device (`Invalid`).
     pub fn use_resource(

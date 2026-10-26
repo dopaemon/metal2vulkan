@@ -909,6 +909,9 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::Threadgroups(groups, threads),
             |this| {
                 const CALL: &str = "dispatch_threadgroups";
+                if this.fails_on_memoryless() {
+                    return Ok(());
+                }
                 let Some(threads_per_group) = this.threadgroup(CALL, threads)? else {
                     return Ok(());
                 };
@@ -934,6 +937,9 @@ impl ComputeCommandEncoder {
             |_| ComputeCall::Threads(threads, per_group),
             |this| {
                 const CALL: &str = "dispatch_threads";
+                if this.fails_on_memoryless() {
+                    return Ok(());
+                }
                 let Some(threads_per_group) = this.threadgroup(CALL, per_group)? else {
                     return Ok(());
                 };
@@ -982,6 +988,8 @@ impl ComputeCommandEncoder {
             |this| {
                 const CALL: &str = "dispatch_threadgroups_indirect";
                 let Some(threads_per_group) = this.threadgroup(CALL, threads)? else {
+                    // A threadgroup that runs nothing fails as a direct dispatch's does.
+                    this.fails_on_memoryless();
                     return Ok(());
                 };
                 let arguments = Arguments::Threadgroups { threads_per_group };
@@ -1084,6 +1092,9 @@ impl ComputeCommandEncoder {
             offset,
             arguments.bytes(),
         )?;
+        if self.fails_on_memoryless() {
+            return Ok(());
+        }
         let tables = DispatchTables {
             pipeline: &pipeline,
             table: &self.table,
@@ -1169,7 +1180,9 @@ impl ComputeCommandEncoder {
 
     /// `useResource:usage:`: the encoder's later dispatches may reach `resource` through an
     /// address or a resource ID held in memory, reading or writing as `usage` says
-    /// (`residency`).
+    /// (`residency`). A memoryless texture, a texture buffer too, fails the command buffer as
+    /// plain Metal's does, with no dispatch after it too (`CommandBufferError::InvalidResource`:
+    /// the encoder's run of compute encoders runs nothing, an M3 Max under macOS 27.0.1).
     ///
     /// Refused, changing nothing: a resource of another device (`Invalid`).
     pub fn use_resource(
@@ -1204,6 +1217,10 @@ impl ComputeCommandEncoder {
     ) -> Result<(), Error> {
         for resource in resources {
             self.core.check_device(call, resource.device())?;
+        }
+        if resources.iter().any(ResourceRef::is_memoryless) {
+            self.core.fail_memoryless_use();
+            return Ok(());
         }
         for &resource in resources {
             let used = self
@@ -1632,6 +1649,20 @@ impl ComputeCommandEncoder {
         // A size other than the state's required one runs as given, as plain Metal runs it
         // (Metal's API validation stops it).
         Ok(Some(axes))
+    }
+
+    /// Whether the kernel statically uses a texture slot that holds a memoryless texture, a
+    /// texture buffer's too: plain Metal fails the command buffer of such a dispatch, of no
+    /// threadgroups or of an empty threadgroup too, the encoder's run of compute encoders running
+    /// nothing (`CommandBufferError::InvalidResource`, an M3 Max under macOS 27.0.1), so the
+    /// encoder fails it and the dispatch records nothing (`EncoderCore::fail_memoryless_use`).
+    fn fails_on_memoryless(&mut self) -> bool {
+        let uses = (self.pipeline.as_ref())
+            .is_some_and(|state| self.table.uses_memoryless(state.interface(), Stage::Kernel));
+        if uses {
+            self.core.fail_memoryless_use();
+        }
+        uses
     }
 
     /// Plan, bind, and record `dispatch` with the encoder's tables (the module's steps 2 to 4),

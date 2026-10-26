@@ -254,6 +254,7 @@ fn a_command_buffer_error_names_whose_failure_it_is() {
         (E::Execution(12), Metal, 12),
         (E::RenderTargetSize, Metal, 1),
         (E::DefaultRasterSampleCount, Metal, 1),
+        (E::InvalidResource, Metal, 9),
         (E::DetachedBacking, Metal, 8),
         (E::Internal(VkResultCode(-13)), Runtime, 1),
         (E::IndexPoolOverflow, Runtime, 8),
@@ -284,6 +285,34 @@ fn a_command_buffer_error_names_whose_failure_it_is() {
             "{error:?}"
         );
     }
+}
+
+/// Where a memoryless texture's use fails Metal's command buffer (`CommandBufferError::
+/// InvalidResource`): from the first encoder of the submission that holds the using encoder, in
+/// the probe's shapes (an M3 Max under macOS 27.0.1; C and B a compute and a blit encoder, c and b
+/// one that uses the texture, R a render pass, S an event signal): CcC and BbB run nothing, CbC
+/// and BcB their first encoder, BSbB and BRbB the encoders before b, and bSB and BbRB nothing.
+#[test]
+fn a_memoryless_use_fails_from_its_submission_s_first_encoder() {
+    use crate::command_buffer::checks::submission_start;
+    use crate::EncoderKind::{Blit, Compute, Render};
+    let start = |encoders: &[(crate::EncoderKind, usize, usize)], at: usize| {
+        submission_start(encoders.iter().copied(), at)
+    };
+    let (c, b, r) = ((Compute, 0, 0), (Blit, 0, 0), (Render, 0, 0));
+    assert_eq!(start(&[c, c, c], 1), 0);
+    assert_eq!(start(&[b, b, b], 1), 0);
+    assert_eq!(start(&[c, b, c], 1), 1);
+    assert_eq!(start(&[b, c, b], 1), 1);
+    assert_eq!(start(&[b, (Blit, 0, 1), (Blit, 0, 1)], 1), 1);
+    assert_eq!(start(&[b, (Blit, 0, 1)], 0), 0);
+    assert_eq!(start(&[b, r, b, b], 2), 2);
+    assert_eq!(start(&[b, b, r, b], 1), 0);
+    assert_eq!(start(&[c, (Compute, 0, 1)], 1), 1);
+    // A render pass is a submission of its own.
+    assert_eq!(start(&[r, r], 1), 1);
+    // Past the encoders: the encoder itself.
+    assert_eq!(start(&[b], 3), 3);
 }
 
 #[test]

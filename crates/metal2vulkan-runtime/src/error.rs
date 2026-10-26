@@ -1354,8 +1354,10 @@ pub enum RuntimeGap {
     /// attachment, the shader-side stencil, views, a fragment imageblock, a texture whose shadow
     /// the pass does not hold, or a memoryless attachment the pass backs and reads past its
     /// instances); an execution of render commands by a compute encoder, or of compute commands by
-    /// a render encoder; and, on a device that claims Apple10, a depth/stencil state's ID, which
-    /// names the state such a command sets.
+    /// a render encoder; a command whose functions statically use a texture slot of the encoder
+    /// that holds a memoryless texture, at which Metal's answer is not measured (an encoder's own
+    /// draw fails the command buffer, [`CommandBufferError::InvalidResource`]); and, on a device
+    /// that claims Apple10, a depth/stencil state's ID, which names the state such a command sets.
     IndirectRenderCommands,
     /// An indirect compute command's imageblock side past 65535, which Metal keeps: the record
     /// holds 16 bits a side, as a kernel's `set_imageblock_size` writes it, and no dispatch runs
@@ -1366,7 +1368,10 @@ pub enum RuntimeGap {
         /// The imageblock's height.
         height: u64,
     },
-    /// The device replay of indirect command buffers.
+    /// The device replay of indirect command buffers; and an executed compute command of a buffer
+    /// that inherits the encoder's buffers whose kernel statically uses a texture slot of the
+    /// encoder that holds a memoryless texture, at which Metal's answer is not measured (an
+    /// encoder's own dispatch fails the command buffer, [`CommandBufferError::InvalidResource`]).
     CommandReplay,
     /// Render attachments and their binding forms.
     RenderAttachments,
@@ -2125,6 +2130,24 @@ pub enum CommandBufferError {
     /// whatever samples its driver rasterizes; which encoders and signals Metal runs was
     /// measured for that size alone.
     DefaultRasterSampleCount,
+    /// A command of the command buffer used a memoryless texture's memory, which it has none of:
+    /// a draw or dispatch whose function statically uses a texture slot that holds one (a texture
+    /// the function reads only behind a branch that is never taken, and a draw or dispatch that
+    /// runs nothing, included), a tile dispatch alike, a `use_resource` that names one, and a
+    /// blit that copies from or into one or makes its mipmaps of more than one level (a copy of
+    /// no texels too). Metal
+    /// takes every such call and fails the command buffer with
+    /// `MTLCommandBufferErrorInvalidResource` (9, "Invalid Resource
+    /// (00000009:kIOGPUCommandBufferCallbackErrorInvalidResource)"): the submission that holds
+    /// the command, as Metal splits the command buffer (a render pass alone, a run of blit or of
+    /// compute encoders with no event command between them), runs nothing, not even a render
+    /// pass's load or clear, nor does any submission after it, and no event signal encoded from
+    /// that submission on fires; the submissions before it run and their signals fire; the queue
+    /// runs on (an M3 Max under macOS 27.0.1, plain Metal; Metal's API validation stops the
+    /// binding instead). A binding the function does not use, rebound before the draw or never
+    /// drawn with, a memory barrier that names one, a copy of no slices or levels, the mipmaps
+    /// of one level, and a blit's `optimize_contents_*` and `synchronize_resource` fail nothing.
+    InvalidResource,
     /// A render encoder's call that the runtime refused as it lowered the call, after the call
     /// returned (`RenderLoweringPolicy::Worker`): a refusal the call's own checks of its
     /// arguments and the encoder's state could not find, such as the binder's, or a failure to
@@ -2171,8 +2194,8 @@ pub enum FailureOrigin {
     /// [`CommandBufferError::PageFault`]), a lost device (Metal's `DeviceRemoved`, where Metal may
     /// report a hang or a fault of the work and keep the device), the device's memory, a failure
     /// measured on Metal ([`CommandBufferError::RenderTargetSize`],
-    /// [`CommandBufferError::DetachedBacking`], [`CommandBufferError::DefaultRasterSampleCount`]),
-    /// or the code the program committed the command
+    /// [`CommandBufferError::DetachedBacking`], [`CommandBufferError::DefaultRasterSampleCount`],
+    /// [`CommandBufferError::InvalidResource`]), or the code the program committed the command
     /// buffer as failed with ([`CommandBufferError::Injected`]).
     Metal,
     /// The runtime's own: Metal runs the work and fails no command buffer so, where the runtime
@@ -2288,8 +2311,8 @@ impl CommandBufferError {
     /// Metal's `MTLCommandBufferError` code for this error: `MTLCommandBufferErrorDeviceRemoved`
     /// (11) for a lost device, `OutOfMemory` (8) for the device's memory, the index pool's and the
     /// records pool's (mesh and tessellation), and a detached buffer's, `AccessRevoked` (4) for a
-    /// revoked queue's, `PageFault` (3), and
-    /// `Internal` (1), also for the runtime's refusals (a cubic argument sampler's reach among
+    /// revoked queue's, `PageFault` (3), `InvalidResource` (9) for a memoryless texture's use,
+    /// and `Internal` (1), also for the runtime's refusals (a cubic argument sampler's reach among
     /// them, a sampler state left out of an argument-sampler listing, a host step's object nothing
     /// made, a named use rebound before the submission, a predicated loop past its copies, and a
     /// mesh grid past the device's limits); a
@@ -2318,6 +2341,7 @@ impl CommandBufferError {
             | CommandBufferError::DefaultRasterSampleCount
             | CommandBufferError::CallRefused(_) => 1,
             CommandBufferError::PageFault => 3,
+            CommandBufferError::InvalidResource => 9,
             CommandBufferError::GpuHang => 2,
             CommandBufferError::GpuRecoveryVictim => 1,
             CommandBufferError::AccessRevoked => 4,
@@ -2353,7 +2377,8 @@ impl CommandBufferError {
             | CommandBufferError::DetachedBacking
             | CommandBufferError::PredicationOpenAtUnitEnd { .. }
             | CommandBufferError::ProtectedEncoder(_)
-            | CommandBufferError::DefaultRasterSampleCount => FailureOrigin::Metal,
+            | CommandBufferError::DefaultRasterSampleCount
+            | CommandBufferError::InvalidResource => FailureOrigin::Metal,
             CommandBufferError::Internal(_)
             | CommandBufferError::IndexPoolOverflow
             | CommandBufferError::CubicArgumentSampler

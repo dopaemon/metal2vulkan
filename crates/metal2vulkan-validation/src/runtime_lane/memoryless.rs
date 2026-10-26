@@ -6,21 +6,22 @@
 //! which uses its validation stops. Each pass here is one the probes ran, drawn with the owned
 //! fixture `rt6_resolves` and compared with the texels Metal left (a resolve Metal's, as
 //! `resolves.rs` holds every unorm, sRGB and float resolve). Each refusal is one Metal's validation
-//! stopped, refused typed before anything records; each use Metal took is taken.
+//! stopped, refused typed before anything records; each use Metal took is taken. Its uses past a
+//! pass's attachment, which plain Metal takes and fails the command buffer of, are
+//! `memoryless_uses.rs`'s.
 
 use super::degrade_notices::{assert_once, on_device};
 use super::resolves::{
     color_pass, lane, near, quiet, repeat, Channels, Lane, Shape, FULL, MSAA, ONE, SAMPLES, SIZE,
     WHITE,
 };
-use crate::runtime_lane::buffer_with;
 use metal2vulkan::device::{VkExtension, VkFeature};
 use metal2vulkan::error::{Capability, Needs};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     Attachment, BlitOption, CpuCacheMode, Degradation, Error, HazardTrackingMode, Invalid,
-    LoadAction, Origin, Problem, Region, RenderCommandEncoder, RenderPassDescriptor,
-    RenderPassProblem, ResourceOptions, Size, StorageMode, StoreAction, Texture, TextureDescriptor,
+    LoadAction, Nil, Problem, Region, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPassProblem, ResourceOptions, StorageMode, StoreAction, Texture, TextureDescriptor,
 };
 use std::cell::RefCell;
 
@@ -166,9 +167,9 @@ pub(super) const MEMORYLESS_TEXEL_BUFFERS: [Degradation; 1] =
 /// `Private` buffer of its row of texels, since no Vulkan buffer takes memory lazily, and announces
 /// `memoryless-texture-buffer` once, nothing more. The texture answers its descriptor's memoryless
 /// mode, its width and height and its default CPU cache mode, as Metal's does, and the hazard
-/// tracking mode Metal resolves rather than its descriptor's `Default`; its CPU access and its
-/// views are refused `StorageMode`, as Metal's validation stops every use of a memoryless texture
-/// but as a render pass's attachment, which no texture buffer is.
+/// tracking mode Metal resolves rather than its descriptor's `Default`; its CPU access, at which
+/// plain Metal's process faults, is refused `StorageMode`, and its views are nil, as plain Metal's
+/// are.
 ///
 /// Measured in plain Metal on an Apple M3 Max under macOS 27.0.1: a 64-texel `RGBA8Unorm` texture
 /// buffer of `ShaderRead` usage whose descriptor answers `resourceOptions` 48 (`0x30`:
@@ -181,7 +182,7 @@ pub(super) const MEMORYLESS_TEXEL_BUFFERS: [Degradation; 1] =
 /// and of shader-read usage alike, 304 untracked -- so the resolution is the texture's and not this
 /// shape's.
 #[test]
-fn a_memoryless_texture_buffer_is_announced_and_its_uses_refused() {
+fn a_memoryless_texture_buffer_is_announced_and_its_cpu_access_refused() {
     on_device(|device, messages| {
         let width = 64;
         let descriptor = TextureDescriptor::texture_buffer(
@@ -220,9 +221,14 @@ fn a_memoryless_texture_buffer_is_announced_and_its_uses_refused() {
             texture.replace_region(region, 0, 0, &bytes, row, 0),
             storage("replace_region")
         );
+        // Plain Metal answers nil for its views, and its CPU calls fault its process
+        // (`memoryless_uses.m`, an M3 Max under macOS 27.0.1).
         assert_eq!(
             texture.new_texture_view(PixelFormat::RGBA8Uint).map(|_| ()),
-            storage("new_texture_view")
+            Err(Error::Nil(Nil::new(
+                "new_texture_view",
+                Problem::StorageMode
+            )))
         );
         assert!(
             messages.take_notices().is_empty(),
@@ -422,16 +428,15 @@ fn a_memoryless_multisample_array_slice_resolves() {
     quiet(lane, &messages);
 }
 
-/// What Metal makes memoryless and what its validation stops of a memoryless texture (probes 6b,
-/// 6c, 6d and 6f), refused typed; the uses it takes are taken.
+/// What Metal makes memoryless and which of its passes' attachments it refuses (probes 6b, 6c,
+/// 6d and 6f), refused typed; the passes it takes are taken.
 #[test]
-fn memoryless_textures_are_refused_as_metal_refuses_them() {
+fn memoryless_textures_are_made_and_attached_as_metal_s() {
     let (messages, _cache, lane) = lane();
     let rgba8 = PixelFormat::RGBA8Unorm;
     let c0 = Attachment::Color(0);
     let invalid = |call, problem| Err(Error::Invalid(Invalid::new(call, problem)));
     let pass_problem = |call, problem| invalid(call, Problem::RenderPass(problem));
-    let storage = |call| invalid(call, Problem::StorageMode);
 
     // Made: 2D, 2D arrays and 2D multisample textures, with any usage, mipmapped or not, of a
     // color or a depth format (`make_*`), and a multisample array (`ms_array`). The other types
@@ -650,131 +655,6 @@ fn memoryless_textures_are_refused_as_metal_refuses_them() {
         Ok(())
     );
 
-    // CPU access (`get_bytes`, `replace_region`) and views (`view`).
-    let region = Region::new_2d(0, 0, SIZE, SIZE);
-    let mut bytes = vec![0; (SIZE * SIZE * 4) as usize];
-    assert_eq!(
-        target.get_bytes(&mut bytes, SIZE * 4, 0, region, 0, 0),
-        storage("get_bytes")
-    );
-    assert_eq!(
-        target.replace_region(region, 0, 0, &bytes, SIZE * 4, 0),
-        storage("replace_region")
-    );
-    assert_eq!(
-        target
-            .new_texture_view(PixelFormat::RGBA8UnormSRGB)
-            .map(|_| ()),
-        storage("new_texture_view")
-    );
-    assert_eq!(
-        target
-            .new_texture_view_with_levels_slices(rgba8, TextureType::Type2D, 0..1, 0..1)
-            .map(|_| ()),
-        storage("new_texture_view_with_levels_slices")
-    );
-
-    // Blits (`blit_from`, `blit_to`, `copy_to_buffer`, `copy_from_buffer`, `mipmaps`) are
-    // refused; the hints (`optimize_gpu`, `optimize_gpu_slice_level`, `optimize_cpu`) taken.
-    let buffer = buffer_with(&lane.device, &bytes).unwrap();
-    let other = lane.texture(
-        rgba8,
-        Shape {
-            shared: true,
-            ..ONE
-        },
-        TextureUsage::SHADER_READ,
-    );
-    let mipmapped = memoryless(
-        &lane,
-        TextureType::Type2D,
-        rgba8,
-        Shape { levels: 3, ..ONE },
-        TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
-    )
-    .unwrap();
-    let command_buffer = lane.queue.command_buffer().unwrap();
-    let mut blit = command_buffer.blit_command_encoder().unwrap();
-    let origin = Origin::new(0, 0, 0);
-    let size = Size::new(SIZE, SIZE, 1);
-    assert_eq!(
-        blit.copy_from_texture_to_buffer(
-            &target,
-            0,
-            0,
-            origin,
-            size,
-            &buffer,
-            0,
-            SIZE * 4,
-            0,
-            BlitOption::None
-        ),
-        storage("copy_from_texture_to_buffer")
-    );
-    assert_eq!(
-        blit.copy_from_buffer_to_texture(
-            &buffer,
-            0,
-            SIZE * 4,
-            0,
-            size,
-            &target,
-            0,
-            0,
-            origin,
-            BlitOption::None
-        ),
-        storage("copy_from_buffer_to_texture")
-    );
-    assert_eq!(
-        blit.copy_from_texture_to_texture(&target, 0, 0, origin, size, &other, 0, 0, origin),
-        storage("copy_from_texture_to_texture")
-    );
-    assert_eq!(
-        blit.copy_from_texture_to_texture(&other, 0, 0, origin, size, &target, 0, 0, origin),
-        storage("copy_from_texture_to_texture")
-    );
-    assert_eq!(
-        blit.generate_mipmaps(&mipmapped),
-        storage("generate_mipmaps")
-    );
-    assert_eq!(blit.optimize_contents_for_gpu_access(&target), Ok(()));
-    assert_eq!(
-        blit.optimize_contents_for_gpu_access_slice_level(&target, 0, 0),
-        Ok(())
-    );
-    assert_eq!(blit.optimize_contents_for_cpu_access(&target), Ok(()));
-    blit.end_encoding().unwrap();
-
-    // Bindings (`bind_fragment`, `bind_vertex`, `bind_unset`, `bind_compute`) are refused; a
-    // compute memory barrier naming one (`compute_barrier`) is taken.
-    let mut compute = command_buffer.compute_command_encoder().unwrap();
-    assert_eq!(
-        compute.set_texture(Some(&target), 0),
-        storage("set_texture")
-    );
-    assert_eq!(
-        compute.memory_barrier_with_resources(&[target.as_resource()]),
-        Ok(())
-    );
-    compute.end_encoding().unwrap();
-    let mut render = command_buffer
-        .render_command_encoder(&color_pass(&color, None, StoreAction::Store, (0, 0)))
-        .unwrap();
-    assert_eq!(
-        render.set_fragment_texture(Some(&target), 0),
-        storage("set_fragment_texture")
-    );
-    assert_eq!(
-        render.set_vertex_texture(Some(&target), 0),
-        storage("set_vertex_texture")
-    );
-    render.end_encoding().unwrap();
-    command_buffer.commit().unwrap();
-    command_buffer
-        .wait_until_completed_for(super::WAIT)
-        .unwrap();
-    assert_eq!(command_buffer.error(), None);
+    // Its CPU access, views, blits and bindings: `memoryless_uses.rs`.
     quiet(lane, &messages);
 }

@@ -603,9 +603,8 @@ degradations! {
         /// descriptor of `MTLStorageModeMemoryless`, which plain Metal makes), whose texels are a
         /// buffer's bytes (`buffer_texture.rs`): the buffer is a `Private` one of the device's,
         /// since no Vulkan buffer takes memory lazily. The texture answers the descriptor's
-        /// memoryless mode, as Metal's does, and the runtime refuses every use of it, as Metal's
-        /// validation stops every use of a memoryless texture but as a render pass's attachment,
-        /// which no texture buffer is (`Texture::check_not_memoryless`).
+        /// memoryless mode, as Metal's does, and a command that uses it fails its command buffer,
+        /// as plain Metal's (`Texture::is_memoryless`).
         MemorylessTextureBuffer = "memoryless-texture-buffer", Performance,
             "a Private buffer of the texture's row of texels: memory Metal spends none of on a \
              memoryless texture. Nothing reaches those bytes";

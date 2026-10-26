@@ -574,6 +574,8 @@ mod math_routines;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod memoryless;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod memoryless_uses;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod mesh_barriers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod mesh_commands;
