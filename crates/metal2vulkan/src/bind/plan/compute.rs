@@ -63,7 +63,7 @@ use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, mark_disjoint, plan_buffer, psb_variant,
     record_specialized, srgb_twin_variant, srgb_variant, storage_view_variant, used_uses,
-    ycbcr_variant,
+    ycbcr_in_place_variant, ycbcr_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -439,6 +439,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             | PushField::Specialized(_) => {}
             // A structure's instance count, which instantiation reads from the state.
             PushField::InstanceCount(_) => {}
+            // An in-place YCbCr texture's words, which instantiation reads from the state.
+            PushField::YCbCrInPlace(_) => {}
             // A stage-in buffer's bound stride, which instantiation reads from the state.
             PushField::StageInStride(_) => {}
             other => return Err(internal(format!("a compute push field {other:?}"))),
@@ -823,7 +825,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         &variant.cross_class,
     );
     variant.srgb_twins = srgb_twin_variant(device.profile(), &variant.srgb_textures, shape);
-    variant.ycbcr_textures = ycbcr_variant(&p.dependencies, shape);
+    variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
+    variant.ycbcr_textures = ycbcr_variant(&p.dependencies, shape, &variant.ycbcr_in_place);
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;
     variant.anisotropic_samplers = anisotropic_variant(&p.dependencies, shape);

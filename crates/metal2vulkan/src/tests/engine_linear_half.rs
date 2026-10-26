@@ -42,6 +42,7 @@ use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::{GlobalKind, TypedModule};
 
+mod in_place;
 mod levels;
 mod packed;
 mod ycbcr;

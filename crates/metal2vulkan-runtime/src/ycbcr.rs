@@ -57,6 +57,36 @@
 //!   word, past one storage range, or past the device's workgroup counts) or the planes' buffer
 //!   is not the one its set binds, the conversion copies the planes and converts whole
 //!   (`WorkCounts::ycbcr_refreshes`, `ycbcr_whole_conversions`).
+//! - **Planes read in place, by the device's kind.** On a device whose memory is the host's (Vulkan's
+//!   `deviceType` an integrated GPU or a CPU, `DeviceProperties::has_unified_memory`), a
+//!   `YCBCR8_420_2P` or `YCBCR10_420_2P` texture over plane 0 also states its planes as a function
+//!   reads them in place (`texture/ycbcr_image.rs`, `metal2vulkan::bind::YCbCrInPlace`): a slot
+//!   whose function only samples it (nearest or linear, no comparison, anisotropy or
+//!   `min_lod_clamp`) or reads its size binds a uniform texel buffer over the planes' bytes,
+//!   `R8G8_UINT` of 8-bit codes and `R16G16_UINT` of 10-bit ones, and the function fetches the codes
+//!   and converts and filters them as Metal does, exactly; the draw or dispatch reads those bytes
+//!   alone, and converts no image (`WorkCounts::ycbcr_textures_in_place`, `ycbcr_planes_bound`).
+//!   A read, a gather or any other use binds the image, converted as above. A discrete, virtual or
+//!   other GPU keeps the image alone (`ycbcr_images_kept_device`): it reads the host's planes
+//!   across its bus at every pass, where the image lies in its own memory. Both forms are exact; the
+//!   choice is the cheaper one by device kind, measured as GPU time of a 3840 x 2160 texture whose
+//!   planes lie in host memory composited into 1680 x 1050 (µs, best of 3 x 40; the image's form
+//!   the refresh's compare and the samples, over unchanged planes; Mesa 26.2.4, MoltenVK 1.4.2):
+//!
+//!   | Device | Codes | In place, 1 pass | Image, 1 pass | In place, 3 passes | Image, 3 passes |
+//!   |---|---|---|---|---|---|
+//!   | Radeon 780M (RADV) | 8-bit | 340 | 1178 | 1027 | 3013 |
+//!   | Radeon 780M (RADV) | 10-bit | 457 | 1509 | 1371 | 3344 |
+//!   | Radeon RX 7900 XTX (RADV) | 8-bit | 1819 | 1754 | 5460 | 1876 |
+//!   | Radeon RX 7900 XTX (RADV) | 10-bit | 3614 | 3479 | 10843 | 3613 |
+//!   | Apple M3 Max (MoltenVK) | 8-bit | 127 | 259 | 375 | 634 |
+//!   | Apple M3 Max (MoltenVK) | 10-bit | 125 | 364 | 378 | 737 |
+//!
+//!   Where the planes changed, the image's form also converts every texel: 1055 to 1252 µs more on
+//!   the 780M, 1790 to 3636 on the 7900 XTX, 350 on the M3 Max. A texture whose planes' first byte
+//!   misses `minTexelBufferOffsetAlignment`, whose planes hold more elements than
+//!   `maxTexelBufferElements` or reach past their buffer, or which has a swizzle, keeps the image on
+//!   every device, counted by the reason (`ycbcr_images_kept_*`).
 //! - **The texels Metal's copies move** are the luma plane's bytes, a code's bytes a texel
 //!   (for 4:2:2 and 4:4:4 and, for the code formats): `get_bytes`, `replace_region` and a blit to
 //!   or from a buffer move the luma rows (Metal keeps the chroma plane), the texture's `Texels`

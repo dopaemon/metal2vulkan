@@ -131,6 +131,9 @@ pub(crate) struct Counters {
     fills_by_transfers: AtomicU64,
     ycbcr_refreshes: AtomicU64,
     ycbcr_whole_conversions: AtomicU64,
+    ycbcr_textures_in_place: AtomicU64,
+    ycbcr_images_kept: [AtomicU64; 7],
+    ycbcr_planes_bound: AtomicU64,
     attachment_clears_recorded: AtomicU64,
     image_blits_recorded: AtomicU64,
     query_result_copies_recorded: AtomicU64,
@@ -649,6 +652,30 @@ impl Counters {
     /// A YCbCr texture's conversion was recorded whole (`ycbcr.rs`).
     pub(crate) fn ycbcr_converted_whole(&self) {
         self.ycbcr_whole_conversions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A two-plane YCbCr texture was made with its planes read in place
+    /// (`texture/ycbcr_image.rs`).
+    pub(crate) fn ycbcr_texture_in_place(&self) {
+        self.ycbcr_textures_in_place.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A two-plane YCbCr texture was made keeping its image alone for `kept`
+    /// (`texture/ycbcr_image.rs`).
+    pub(crate) fn ycbcr_image_kept(&self, kept: crate::texture::KeptImage) {
+        let at = crate::texture::KeptImage::ALL
+            .iter()
+            .position(|k| *k == kept)
+            .unwrap_or(0);
+        if let Some(counter) = self.ycbcr_images_kept.get(at) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A binding of a two-plane YCbCr texture's planes read in place was written
+    /// (`binding.rs`).
+    pub(crate) fn ycbcr_planes_bound(&self) {
+        self.ycbcr_planes_bound.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A `VkCommandPool` was made for a command buffer, none of the device's spares taken.
@@ -3241,6 +3268,33 @@ pub struct WorkCounts {
     /// over every texel, where the refresh is not made (planes not whole words, or past one
     /// storage binding) or the planes' `VkBuffer` is not the one it binds.
     pub ycbcr_whole_conversions: u64,
+    /// Two-plane YCbCr textures made with their planes read in place: a slot whose function reads
+    /// the texture only as the in-place form reads binds a uniform texel buffer over the planes'
+    /// bytes, and its draws and dispatches convert no image (`texture/ycbcr_image.rs`).
+    pub ycbcr_textures_in_place: u64,
+    /// Two-plane YCbCr textures that keep their image alone because the device keeps every one's:
+    /// a discrete, virtual or other GPU, whose image reads the planes across the bus once per
+    /// change where the planes in place would read them at every pass.
+    pub ycbcr_images_kept_device: u64,
+    /// Two-plane YCbCr textures that keep their image alone because the form reads no such
+    /// layout: a format other than `YCBCR8_420_2P` and `YCBCR10_420_2P`, plane 1, a P3 surface.
+    pub ycbcr_images_kept_layout: u64,
+    /// Two-plane YCbCr textures that keep their image alone because of their swizzle.
+    pub ycbcr_images_kept_swizzle: u64,
+    /// Two-plane YCbCr textures that keep their image alone because their planes' first byte is
+    /// off the device's `minTexelBufferOffsetAlignment` in their buffer.
+    pub ycbcr_images_kept_alignment: u64,
+    /// Two-plane YCbCr textures that keep their image alone because their planes hold more
+    /// elements than the device's `maxTexelBufferElements`.
+    pub ycbcr_images_kept_elements: u64,
+    /// Two-plane YCbCr textures that keep their image alone because their planes reach past their
+    /// buffer, whose bytes past its end Metal reads as zeros.
+    pub ycbcr_images_kept_reach: u64,
+    /// Two-plane YCbCr textures that keep their image alone because the device views no uniform
+    /// texel buffer of their planes' format in a buffer of the runtime's usage.
+    pub ycbcr_images_kept_view: u64,
+    /// Bindings of two-plane YCbCr textures' planes read in place written into descriptor sets.
+    pub ycbcr_planes_bound: u64,
     // The commands MoltenVK 1.4.1 compiles a pipeline for per command pool on Apple's GPUs
     // (`PoolCompiled`), each counted as the runtime records it: a run's survey of which can
     // stall a commit behind a compile storm, as the fill did.
@@ -4862,6 +4916,15 @@ impl Device {
             fills_by_transfers: counters.fills_by_transfers.load(Ordering::Relaxed),
             ycbcr_refreshes: counters.ycbcr_refreshes.load(Ordering::Relaxed),
             ycbcr_whole_conversions: counters.ycbcr_whole_conversions.load(Ordering::Relaxed),
+            ycbcr_textures_in_place: counters.ycbcr_textures_in_place.load(Ordering::Relaxed),
+            ycbcr_images_kept_device: counters.ycbcr_images_kept[0].load(Ordering::Relaxed),
+            ycbcr_images_kept_layout: counters.ycbcr_images_kept[1].load(Ordering::Relaxed),
+            ycbcr_images_kept_swizzle: counters.ycbcr_images_kept[2].load(Ordering::Relaxed),
+            ycbcr_images_kept_alignment: counters.ycbcr_images_kept[3].load(Ordering::Relaxed),
+            ycbcr_images_kept_elements: counters.ycbcr_images_kept[4].load(Ordering::Relaxed),
+            ycbcr_images_kept_reach: counters.ycbcr_images_kept[5].load(Ordering::Relaxed),
+            ycbcr_images_kept_view: counters.ycbcr_images_kept[6].load(Ordering::Relaxed),
+            ycbcr_planes_bound: counters.ycbcr_planes_bound.load(Ordering::Relaxed),
             attachment_clears_recorded: counters.attachment_clears_recorded.load(Ordering::Relaxed),
             image_blits_recorded: counters.image_blits_recorded.load(Ordering::Relaxed),
             query_result_copies_recorded: counters

@@ -204,6 +204,15 @@ impl DeviceProfile {
         crate::memory::contain::device_drops_texel_writes(self, texel_buffer)
     }
 
+    /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
+    /// the texture only so (`bind::YCbCrInPlace`): on an integrated GPU or a CPU device, which
+    /// reads host memory with no bus between; elsewhere every such texture's image of converted
+    /// texels is read. Both forms read Metal's texels exactly. The runtime reads it to state a
+    /// texture's planes (`TextureFacts::ycbcr_in_place`).
+    pub fn reads_ycbcr_planes_in_place(&self) -> bool {
+        self.fields.ycbcr_in_place
+    }
+
     /// Whether a `half` or `float` read of a 16-bit float texture answers the texel's own bits,
     /// read through the texture's unsigned-integer alias at the slot's second binding
     /// (`DevicePolicy::half_texel_bits`,
@@ -576,6 +585,15 @@ pub struct ProfileFields {
     /// Elsewhere the device filters such a texture as any other. Derived, so a profile that answers
     /// alike under both policies keys the same.
     pub ycbcr_variant: bool,
+    /// Whether a two-plane YCbCr texture's planes may be read in place
+    /// (`bind::YCbCrInPlace`): on a device whose GPU reads the planes' memory with no bus between
+    /// (`VkPhysicalDeviceType` integrated or CPU), a texture slot whose function reads such a
+    /// texture only as the in-place form reads records `RuntimeFact::YCbCrInPlace`, and the
+    /// consumer states the planes of each texture it holds so. A discrete, virtual or other
+    /// device, or one of no stated type, keeps every such texture's image of converted texels,
+    /// which its refresh reads across the bus once per encoder where the in-place form would read
+    /// the planes there at every pass. Both forms read Metal's texels exactly.
+    pub ycbcr_in_place: bool,
     /// Whose operand Metal's minimum and maximum functions pick (`lower::arith::native_min_max`):
     /// Metal's, or the device's `NMin`, `NMax` and `NClamp` as they are (the policy's
     /// `NanMinMaxPolicy::Native`). Derived, so a device that keeps Metal's picks keys the same

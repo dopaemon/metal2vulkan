@@ -851,7 +851,7 @@ fn ycbcr_textures_read_the_texels_metal_converts() {
 
 /// The fractions, in 1/256 steps, at which `sample_between` samples past each texel's centre:
 /// `(0.90625, 0.71875)` texels past its corner.
-const BETWEEN: [u32; 2] = [104, 56];
+pub(super) const BETWEEN: [u32; 2] = [104, 56];
 
 /// Metal's step of a linear sample of a `YCBCR8_420_2P` texture at fractions `[a, b]` past texel
 /// `(x, y)`, from the texels' steps `read`: the taps `(x, y)` to `(x + 1, y + 1)` clamped to the
@@ -1259,7 +1259,9 @@ const DEVICE_FILTER_BOUND: f32 = 0.5;
 /// device's filter of them), within [`DEVICE_FILTER_BOUND`] of Metal's step. On a device that
 /// samples natively the module's `device-sampling` is announced and no filter notice; on one that
 /// samples through Metal's own sampler `ycbcr-filter-not-exact`, once, naming the slot and the
-/// format, and no `device-sampling`.
+/// format, and no `device-sampling`. A device whose memory is the host's reads the planes in place
+/// instead (`ycbcr_in_place.rs`): one pipeline more, its samples Metal's step exactly, announced by
+/// no filter notice, as under the exact switch.
 #[test]
 fn a_ycbcr_slot_takes_the_devices_filter_in_the_pipeline_its_creation_made() {
     ycbcr_draws_under(YCbCrFilterPolicy::Device);
@@ -1306,7 +1308,10 @@ fn ycbcr_draws_under(filter: YCbCrFilterPolicy) {
             .enabled()
             .properties
             .contains(&VkProperty::MetalSampler);
-        let exact = filter == YCbCrFilterPolicy::Exact;
+        // A device whose memory is the host's reads the planes in place, Metal's filter exactly,
+        // in the slot's in-place variant under either policy.
+        let in_place = super::ycbcr_in_place::reads_in_place(device);
+        let exact = filter == YCbCrFilterPolicy::Exact || in_place;
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
@@ -1508,7 +1513,11 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
 /// naming the slot and the format, and no generic filter notice; through a constexpr sampler an
 /// anisotropic one, one with a linear mip filter and one whose filters differ announce the
 /// generic `float-sample-filter` once (the constexpr note holds whatever the slot holds, so it
-/// names no format). Each case runs on a device of its own.
+/// names no format). Each case runs on a device of its own. On a device that reads the planes in
+/// place (`ycbcr_in_place.rs`) the constexpr linear mip filter is read there, Metal's filter of the
+/// texture's one level whatever the mip filter, as a runtime sampler's is everywhere: Metal's step,
+/// with no YCbCr filter notice (the function's generic note, of its sample of any other texture,
+/// stays where the device emulates Metal's sampler).
 #[test]
 fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
     let anisotropic = |d: &mut SamplerDescriptor| d.max_anisotropy = 16;
@@ -1559,7 +1568,7 @@ fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
                 .collect();
             let source = argument_linear_samples::kernel(false, through, false, false);
             let state = pipeline_of(device, &llvm_assemble_text(&source).unwrap(), "k");
-            run_held(
+            let got = run_held(
                 device,
                 (&texture, Held::Slot, sampler.as_ref()),
                 &state,
@@ -1569,6 +1578,22 @@ fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
             let notices = messages.take_notices();
             let counts = counts(&notices);
             let case = format!("{name} through {through:?}: {counts:?}");
+            let in_place = super::ycbcr_in_place::reads_in_place(device);
+            if in_place && name == "linear mip filter" {
+                // The function's own note, of the sample it makes of any other texture, stays
+                // where the device emulates Metal's sampler; no YCbCr filter is announced.
+                assert_eq!(counts.get(&YCBCR_FILTERS[0]), None, "{case}");
+                let model = modelled(&surface_bytes(9), YCbCrRange::Video, YCbCrMatrix::Bt601);
+                for (i, texel) in (0..W * H).zip(got.as_chunks::<4>().0.iter()) {
+                    let at = (i % W, i / W);
+                    let want: [f32; 4] = std::array::from_fn(|c| match c {
+                        3 => 1.0,
+                        c => metal_step(&model, at, BETWEEN, c) as f32 / 2048.0,
+                    });
+                    assert_eq!(*texel, want, "{case}: texel {at:?}");
+                }
+                return;
+            }
             match through {
                 Through::Runtime => {
                     assert_eq!(counts.get(&YCBCR_FILTERS[0]), Some(&1), "{case}");
@@ -3339,7 +3364,9 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
 /// texels clamped to the edge. A dispatch again of a made variant, after the texture's shadow
 /// copy, records in a `VkCommandBuffer` of its own exactly where the driver loses baked samplers
 /// after a copy (`RuntimeDriverDefect::ImmutableSamplersLostAfterCopies`: lavapipe 26.0.8 sampled
-/// it as Repeat in place).
+/// it as Repeat in place). On a device that reads the planes in place (`ycbcr_in_place.rs`) the
+/// 4:2:0 textures' variant is the in-place one, which bakes no sampler and copies no image, so it
+/// records with the rest.
 #[test]
 fn a_constexpr_sampler_takes_a_ycbcr_map_through_one_variant() {
     on_device(|device, _| {
@@ -3451,8 +3478,11 @@ fn a_constexpr_sampler_takes_a_ycbcr_map_through_one_variant() {
         let (got, modules, pipelines, recorded_apart) = dispatched(&ten_420);
         assert_eq!(got, want[1], "YCBCR10_420_2P, again");
         assert_eq!((modules, pipelines), (0, 0), "YCBCR10_420_2P, again");
+        // A variant that reads the planes in place bakes no sampler and copies no image.
+        let in_place = super::ycbcr_in_place::reads_in_place(device);
         assert_eq!(
-            recorded_apart, apart,
+            recorded_apart,
+            apart * u64::from(!in_place),
             "YCBCR10_420_2P, again: recorded apart"
         );
         let (got, modules, _, _) = dispatched(&eight_420);

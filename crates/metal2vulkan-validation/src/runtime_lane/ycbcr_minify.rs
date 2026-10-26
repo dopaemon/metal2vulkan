@@ -28,13 +28,15 @@
 //! A second `read` converts through the texture's refresh (`WorkCounts::ycbcr_refreshes`): the
 //! planes, unchanged, are compared with the staging buffer's copy, none of their bytes copied
 //! (`copy_regions_split` unchanged over [`PADDED`]'s span of 25,440,128 bytes, no multiple of
-//! 4 KiB), and it reads the first one's texels.
+//! 4 KiB), and it reads the first one's texels. On a device whose memory is the host's the bands,
+//! the grid and the draw read the planes in place (`ycbcr_in_place.rs`): they bind the planes
+//! (`WorkCounts::ycbcr_planes_bound`) and convert nothing; elsewhere they bind no planes.
 
 use super::argument_linear_samples::{kernel, LINEAR_EDGE};
 use super::degrade_notices::{counts, on_device};
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::pixel_downscales::RENDER;
-use super::{buffer_with, read_buffer, ycbcr_textures, WAIT};
+use super::{buffer_with, read_buffer, ycbcr_in_place, ycbcr_textures, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{
@@ -522,6 +524,10 @@ fn samples_as_metal_does(layout: Layout, what: &str) {
             made(Through::Runtime),
             made(Through::Constexpr(LINEAR_EDGE)),
         );
+        // The samples and the draw read the planes in place on a device whose memory is the
+        // host's, converting nothing; elsewhere the image the reads converted.
+        let in_place = ycbcr_in_place::reads_in_place(device);
+        let before = device.work_counts();
         for (set, jobs) in [("bandx", band(0)), ("bandy", band(1)), ("grid", grid())] {
             for (name, kernel, sampler) in [
                 ("sample_rt", &runtime, Some(&state)),
@@ -546,6 +552,12 @@ fn samples_as_metal_does(layout: Layout, what: &str) {
             }
         }
         let target = draw(device, &texture, &state);
+        let work = ycbcr_in_place::ycbcr_work(&before, &device.work_counts());
+        eprintln!("{what}: in place {in_place}, work {work:?}");
+        match in_place {
+            true => assert!(work[2] >= 7 && work[3..] == [0, 0], "{what}: in place"),
+            false => assert_eq!(work[2], 0, "{what}: planes bound"),
+        }
         let got = hash(&target);
         let is = verdict("draw", &got);
         eprintln!("{what} draw: {is:?} hash {got}");

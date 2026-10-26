@@ -785,6 +785,16 @@ for dependency in &pipeline.dependencies {
   pipeline of its own: leave out a slot bound at offsets that move, so that its draws keep one
   shape and one pipeline (the runtime leaves out each slot of a state once it finds one bound at
   an offset the alignment does not divide).
+- A two-plane YCbCr texture whose planes a function may read in place states them in its facts
+  (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
+  device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated
+  GPU or a CPU device). A slot whose function only samples it (nearest or linear, no comparison,
+  anisotropy or `min_lod_clamp`) or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
+  pipeline's in-place variant (`VariantKey::ycbcr_in_place`): the slot binds a uniform texel buffer
+  over the planes' bytes (`WriteSource::YCbCrInPlace`, in `YCbCrInPlace::format`), its push field
+  (`PushField::YCbCrInPlace`) holds `YCbCrInPlace::words`, and the function converts and filters
+  the codes as Metal does, exactly. Any other slot, and any texture without the fact, binds the
+  texture's image of converted texels.
 - `interface.reaches_command_buffers` and `interface.texture_writing_stages` say, provably, which
   pipelines may touch an indirect command buffer and which stages may write a texture.
   `interface.command_writes` (`CommandWrites`) says what its functions may write into the

@@ -693,6 +693,32 @@ impl ResourcePlanner<'_> {
         WriteSource::TileMap { slot }
     }
 
+    /// The write of `slot`'s binding under its in-place variant: the planes' texel buffer of the
+    /// two-plane YCbCr texture the shape binds there (`TextureFacts::ycbcr_in_place`), a read of
+    /// their bytes; the neutral texel buffer where it binds none, which the plan's choice of the
+    /// variant does not leave (`slots::ycbcr_in_place_variant`).
+    fn in_place_write(&mut self, slot: SlotRef) -> (WriteSource, NeutralResource) {
+        let neutral = NeutralResource::TexelBuffer {
+            format: vk::Format::R8G8_UINT,
+        };
+        match self.texture_shape(slot) {
+            Some(TextureShape::Texture {
+                ycbcr_in_place: true,
+                ..
+            }) => {
+                self.uses.push(ResourceUse {
+                    resource: UseTarget::Slot(slot),
+                    access: AccessSet::READ,
+                    class: AccessClass::YCbCrPlanes,
+                    stages: (self.stage_flags)(slot.stage),
+                    range: None,
+                });
+                (WriteSource::YCbCrInPlace { slot }, neutral)
+            }
+            _ => (WriteSource::Neutral(neutral), neutral),
+        }
+    }
+
     fn texture_use(&mut self, slot: SlotRef, t: &TextureSlot, storage: bool) {
         self.uses.push(ResourceUse {
             resource: UseTarget::Slot(slot),
@@ -827,6 +853,13 @@ impl ResourcePlanner<'_> {
         ty: vk::DescriptorType,
         slot: SlotRef,
     ) -> Result<(WriteSource, NeutralResource), BindError> {
+        // A texture slot that is no texture buffer is declared a uniform texel buffer only under
+        // its in-place variant (`VariantKey::ycbcr_in_place`).
+        if ty == vk::DescriptorType::UNIFORM_TEXEL_BUFFER
+            && self.texture_slot(slot)?.texture_type != TextureType::TextureBuffer
+        {
+            return Ok(self.in_place_write(slot));
+        }
         let levels_read = self.has_fact(RuntimeFact::StorageTextureLevels { slot });
         let write = self.plain_texture(set, binding, ty, slot, false)?;
         self.write_rounding(slot, &write.0)?;

@@ -34,6 +34,7 @@ fn shape(ty: TextureType, pf: PixelFormat, samples: u32, usage: TextureUsage) ->
         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
         offset_base_axes: 0,
         own_format_views: false,
+        ycbcr_in_place: false,
         texture_type: ty,
         pixel_format: pf,
         sample_count: samples,

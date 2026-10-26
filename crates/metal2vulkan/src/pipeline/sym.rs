@@ -1169,6 +1169,12 @@ pub enum PushField {
     /// `BindState::alpha_test_reference`), which the function compares its color 0's alpha's code
     /// with.
     AlphaTestReference,
+    /// The planes of the two-plane YCbCr texture bound to the slot, read in place
+    /// (`RuntimeFact::YCbCrInPlace`, `LoweringInputs::ycbcr_in_place`): two `uvec4`s, the
+    /// texture's size, its planes' first elements and rows in the slot's texel buffer, and its
+    /// conversion (`bind::YCbCrInPlace::words`), from the bound texture's facts
+    /// (`TextureFacts::ycbcr_in_place`).
+    YCbCrInPlace(SlotRef),
     /// The value a draw or dispatch binds for specialization key `key`, carried as data rather
     /// than specialized: one `u32` holding exactly the value the binder computes for the key's
     /// specialization constant from the bound textures and samplers (a boolean key as 1 or 0; a

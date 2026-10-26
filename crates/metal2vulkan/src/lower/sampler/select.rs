@@ -1045,11 +1045,176 @@ fn select_slot(
         }
         _ => sampler,
     };
+    if let Some(sample) = select_in_place(cx, call, index, &sampler, arm)? {
+        return Ok(TextureStrategy::InPlaceSample(Box::new(sample)));
+    }
     match crate::lower::texture::extended_range(cx, ImageRef::Slot(index))? {
         Some(form) => select_extended(cx, call, (index, form), sampler, m),
         None => select_one(cx, call, ImageRef::Slot(index), sampler, arm, m)
             .map(|x| TextureStrategy::Sampling(Box::new(x))),
     }
+}
+
+/// Observe sampling call `call` of texture slot `index` through `sampler` for the slot's in-place
+/// form (`slot::InPlaceReads`), and where the slot's variant reads a two-plane YCbCr texture's
+/// planes in place (`LoweringInputs::ycbcr_in_place`) select the form's sample
+/// ([`in_place_sample`]); else `None`, and the slot's other forms sample it. A call the form does
+/// not read keeps the slot from it, so its variant never meets one.
+fn select_in_place(
+    cx: &mut SelectCx<'_>,
+    call: Call<'_>,
+    index: u32,
+    sampler: &SamplerArg,
+    arm: Option<bool>,
+) -> Result<Option<super::in_place::Sample>, Error> {
+    let variant = crate::lower::texture::ycbcr_in_place(cx, index)?;
+    let Some((sample, samplers)) = in_place_sample(cx, call, index, sampler, arm)? else {
+        crate::lower::texture::not_in_place(cx, index);
+        return Ok(None);
+    };
+    let Some(s) = cx.families.texture.slots.get_mut(&index) else {
+        return Err(cx.invariant("an unplanned texture slot"));
+    };
+    s.in_place.samplers |= samplers;
+    if !variant {
+        return Ok(None);
+    }
+    // The slot's planes are fetched, as a read fetches texels.
+    s.observe(call.t.image, Some(TexelClass::Float))?;
+    s.uses.read = true;
+    s.offset_base |= sample.offset_base;
+    // A runtime sampler's word states the filter, the coordinates, the address modes and the
+    // border color.
+    if let super::extended::State::Slot { sampler: n } = sample.state {
+        let Some(r) = cx.families.sampler.slots.get_mut(&n) else {
+            return Err(cx.invariant("an unplanned sampler slot"));
+        };
+        r.linear = true;
+    }
+    if !matches!(
+        sample.state,
+        super::extended::State::Constant { linear: false, .. }
+    ) {
+        cx.families
+            .sampler
+            .bicubic_routines
+            .insert(super::bicubic::routines::Routine::Quad);
+    }
+    Ok(Some(sample))
+}
+
+/// Sampling call `call` of texture slot `index` through `sampler` as the in-place form reads it
+/// (`in_place`), with the runtime sampler slots it reads (bit `n` `[[sampler(n)]]`); `None` where
+/// the form does not: anything but a 2D texture's sample or gradient sample without comparison,
+/// with a `float` or `half` result, a constant texel offset or none, no `min_lod_clamp`, and no
+/// status word observed, through a constexpr sampler of one filter for minification and
+/// magnification (nearest or linear), no anisotropy and the weighted-average reduction, or a
+/// runtime sampler slot, whose bound word the binder holds to the same
+/// (`bind::plan::slots::in_place_word`); and not an arm of a switch-at-use. Metal's sample reads
+/// the texture's one level whatever the mip filter, the level, the bias or the gradients, so the
+/// form reads none of them.
+fn in_place_sample(
+    cx: &mut SelectCx<'_>,
+    call: Call<'_>,
+    index: u32,
+    sampler: &SamplerArg,
+    arm: Option<bool>,
+) -> Result<Option<(super::in_place::Sample, u32)>, Error> {
+    use super::bicubic::TapAddress;
+    use super::extended::State;
+    let Call { at, inst, t, args } = call;
+    let ops = Operands { t, args };
+    let shape = t.image;
+    if arm.is_some() || shape.dim != ImageDim::D2 || shape.array || shape.ms || shape.depth {
+        return Ok(None);
+    }
+    let has_offset = match t.op {
+        TexOp::Sample {
+            compare: false,
+            offset,
+            ..
+        }
+        | TexOp::SampleGrad {
+            compare: false,
+            offset,
+        } => offset,
+        _ => return Ok(None),
+    };
+    if clamp_value(cx, &ops)?.is_some() || crate::lower::texture::observes_status(cx, at) {
+        return Ok(None);
+    }
+    let offset = match fetch_offset(cx, &ops, has_offset, 2)? {
+        None => None,
+        Some(Offset::Const(k)) => Some(k),
+        Some(Offset::Dynamic(..)) => return Ok(None),
+    };
+    let Ok((form, _)) = texel(t, 4) else {
+        return Ok(None);
+    };
+    let half = match form.conv {
+        TexelConv::F16 => true,
+        TexelConv::F32 => false,
+        _ => return Ok(None),
+    };
+    let (state, samplers) = match *sampler {
+        SamplerArg::Static(SamplerRef::Constexpr(words), _) => {
+            let s = super::state_of(words)?;
+            let linear = match (s.min_filter, s.mag_filter) {
+                (Filter::Linear, Filter::Linear) => true,
+                (Filter::Nearest, Filter::Nearest) => false,
+                _ => return Ok(None),
+            };
+            if s.max_anisotropy > 1 || s.reduction != crate::air::abi::Reduction::WeightedAverage {
+                return Ok(None);
+            }
+            let address = [s.address_s, s.address_t]
+                .into_iter()
+                .map(|m| match m {
+                    AddressMode::ClampToEdge => TapAddress::Edge,
+                    AddressMode::Repeat => TapAddress::Repeat,
+                    AddressMode::MirroredRepeat => TapAddress::Mirror,
+                    AddressMode::ClampToZero | AddressMode::ClampToBorder => TapAddress::Border,
+                })
+                .collect();
+            let state = State::Constant {
+                linear,
+                address,
+                border: s.border_color,
+                pixel: s.coordinates == Coordinates::Pixel,
+            };
+            (state, 0)
+        }
+        SamplerArg::Static(SamplerRef::Slot(n), _) if n < 32 => {
+            (State::Slot { sampler: n }, 1 << n)
+        }
+        _ => return Ok(None),
+    };
+    // An offset on an axis that may repeat or mirror is placed by Metal's rule, which reads a
+    // view's parent's base-level size: the slot's `OffsetBaseAxes` states where it differs.
+    let offset_base = offset.as_deref().is_some_and(|o| {
+        o.iter().enumerate().any(|(a, k)| {
+            *k != 0
+                && match &state {
+                    State::Constant { address, .. } => address
+                        .get(a)
+                        .is_some_and(|m| matches!(m, TapAddress::Repeat | TapAddress::Mirror)),
+                    State::Slot { .. } => true,
+                }
+        })
+    });
+    let coord = ops
+        .get(TexRole::Coord)
+        .ok_or_else(|| cx.invariant("a sampling call without a coordinate"))?;
+    let sample = super::in_place::Sample {
+        texture: index,
+        state,
+        offset,
+        offset_base,
+        coord: id(cx, coord)?,
+        half,
+        result: cx.lowered_repr(Value::Inst(at), inst.ty)?,
+    };
+    Ok(Some((sample, samplers)))
 }
 
 /// Select sampling call `call` of texture slot `index`, whose variant binds the extended-range

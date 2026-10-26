@@ -157,6 +157,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::QuadPrimitiveIds,
         RuntimeFact::RotatedWeights,
         RuntimeFact::PrivateList,
+        RuntimeFact::YCbCrInPlace { slot, samplers: 1 },
         RuntimeFact::MeshLastFirst,
         RuntimeFact::AbsentArgumentRead {
             stage: Stage::Fragment,
@@ -387,6 +388,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RotatedWeights => 95,
         RuntimeFact::PrivateList => 96,
         RuntimeFact::MeshLastFirst => 97,
+        RuntimeFact::YCbCrInPlace { .. } => 99,
     }
 }
 
@@ -394,7 +396,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..99).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..100).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -468,6 +470,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::MergedDraws
                 | RuntimeFact::QuadPrimitiveIds
                 | RuntimeFact::PrivateList
+                | RuntimeFact::YCbCrInPlace { .. }
                 | RuntimeFact::ZeroedColor { .. }
                 | RuntimeFact::DroppedColor { .. }
                 | RuntimeFact::DepthClampRange

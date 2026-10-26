@@ -191,6 +191,7 @@ mod usage_shadow;
 mod view_shadow;
 pub(super) mod wrapped;
 mod ycbcr_image;
+pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
 
 pub(crate) use attached_reads::feedback_candidate;
 pub use shared::SharedTextureHandle;
@@ -452,6 +453,10 @@ pub(super) struct TextureShared {
     ///
     /// [`facts`]: Texture::facts
     facts: OnceLock<TextureFacts>,
+    /// A two-plane YCbCr texture's planes as a function reads them in place
+    /// (`texture/ycbcr_image.rs`): a slot of a function that reads it only so binds them, not the
+    /// image. `None` for every other texture, a view of one among them.
+    planes_in_place: Option<PlanesInPlace>,
 }
 
 impl Drop for TextureShared {
@@ -4125,6 +4130,18 @@ impl Texture {
         parent: Option<Texture>,
         id_use: IdUse,
     ) -> Texture {
+        Texture::made_with_planes(device, (storage, None), record, parent, id_use)
+    }
+
+    /// [`made`](Self::made), of a two-plane YCbCr texture whose planes a function may read in
+    /// place where `planes_in_place` holds them.
+    fn made_with_planes(
+        device: &Device,
+        (storage, planes_in_place): (Storage, Option<PlanesInPlace>),
+        record: ViewRecord,
+        parent: Option<Texture>,
+        id_use: IdUse,
+    ) -> Texture {
         let ids = &device.shared().resource_ids;
         let id = match id_use {
             IdUse::Program(placement) => IdHold::take(ids, IdSpace::Texture, placement),
@@ -4153,6 +4170,7 @@ impl Texture {
             render_shadow: Mutex::new(None),
             heap,
             facts: OnceLock::new(),
+            planes_in_place,
         }));
         if let Some(objects) = texture.0.storage.objects() {
             objects.object_made();
@@ -4719,6 +4737,8 @@ impl Texture {
         // (`MultisampleDepthTwinPolicy::Exact`).
         facts.depth_twin = self.holds_depth_in_colour();
         facts.sparse = self.is_sparse();
+        // A two-plane YCbCr texture whose planes a function may read in place.
+        facts.ycbcr_in_place = self.0.planes_in_place.map(|p| p.words);
         // A wrapped image made without `MUTABLE_FORMAT` takes no view in a storage binding's
         // other formats (a half-float texture's unsigned integer alias): its storage slots keep
         // its own format's view. A texture whose storage binding takes the usage shadow binds

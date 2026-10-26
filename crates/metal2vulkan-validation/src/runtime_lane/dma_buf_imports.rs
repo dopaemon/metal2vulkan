@@ -33,13 +33,15 @@ use super::keep_alives::eventually;
 use super::no_copy_heaps::{
     blit_into, blit_texels, encode_texels_in, encode_texels_out, shared, staged,
 };
+use super::ycbcr_in_place::{reads_in_place, sampler, texels, ycbcr_work, Kernels, Surface};
 use super::{
     layer_reported_nothing, layer_reported_nothing_at_all, read_buffer, validated_device,
     validated_device_with, Messages, ScratchCache,
 };
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::bind::{YCbCrMatrix, YCbCrRange};
 use metal2vulkan::device::HostPageTexturePolicy;
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
     BlitOption, Buffer, BufferContents, BufferDescriptor, CommandBuffer, CommandQueue,
@@ -684,6 +686,90 @@ fn a_view_past_one_udmabuf_s_limits_is_assembled_from_chunks() {
             (None, Err(error)) => eprintln!("{TEST}: on {}: {error:?}", device.name()),
             (Some(_), Err(error)) => panic!("{TEST}: {error:?}"),
         }
+    });
+}
+
+/// A `YCBCR8_420_2P` texture over a no-copy buffer of more discontiguous pages than one udmabuf
+/// takes (`list_limit + 76` single pages, every other page of the file, each row of both planes a
+/// page of its own). Where the device refuses the pointer and binds sparse buffers of dma-bufs
+/// (RADV), the buffer is assembled from chunks, counted, and the planes cross from one chunk into
+/// the next; where its memory is the host's (an integrated GPU, a CPU device), a kernel's samples
+/// read the planes in place across them (`WorkCounts::ycbcr_planes_bound`), converting nothing.
+/// Every nearest sample at a texel's centre is Metal's texel of the codes, on every device.
+#[test]
+fn a_ycbcr_texture_over_a_buffer_of_chunks_reads_its_planes_in_place() {
+    const TEST: &str = "dma-buf ycbcr planes";
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    on_device(|device| {
+        let page = host_page();
+        let runs = Limits::of_host().items + 76;
+        // Two luma rows a chroma row, every row its own page.
+        let rows = 2 * (runs / 3);
+        let surface = Surface {
+            format: PixelFormat::YCBCR84202P,
+            ostype: *b"420v",
+            matrix: None,
+            conversion: (YCbCrRange::Video, YCbCrMatrix::Bt601),
+            size: [512, rows as u64],
+            row: page as u64,
+            chroma_at: (rows * page) as u64,
+        };
+        assert!(surface.length() as usize <= runs * page);
+        let ram = Memfd::new(2 * runs * page);
+        let pieces: Vec<(usize, usize)> = (0..runs).map(|run| (2 * run * page, page)).collect();
+        let view = ram.view(&pieces);
+        let bytes = surface.bytes(11);
+        for (run, piece) in bytes.chunks(page).enumerate() {
+            ram.whole.write(2 * run * page, piece);
+        }
+        let calls = Calls::default();
+        let before = dma_buf_counts(device);
+        let buffer = match no_copy(device, &view, 0, runs * page, ram.source(&view, &calls)) {
+            Ok(buffer) => buffer,
+            Err(error) if imports_dma_buf(device).is_none() => {
+                eprintln!("{TEST}: on {}: {error:?}", device.name());
+                return;
+            }
+            Err(error) => panic!("{TEST}: {error:?}"),
+        };
+        let (imports, sparse) = dma_buf_counts(device);
+        let chunks = calls.lock().unwrap().iter().map(|(_, n)| n).sum::<usize>();
+        eprintln!(
+            "{TEST} on {}: {} imports, {} sparse buffers, {chunks} chunks",
+            device.name(),
+            imports - before.0,
+            sparse - before.1
+        );
+        if imports_dma_buf(device) == Some(true) {
+            assert!(chunks >= 2, "{TEST}: the source's chunks");
+            assert_eq!(sparse - before.1, 1, "{TEST}: a sparse buffer");
+        }
+        let in_place = reads_in_place(device);
+        let texture = surface.texture(&buffer, 0).unwrap();
+        let kernels = Kernels::new(device);
+        let nearest = sampler(device, SamplerMinMagFilter::Nearest);
+        let counted = device.work_counts();
+        let got = texels(
+            device,
+            &kernels.sample,
+            (&texture, surface.size),
+            Some(&nearest),
+        );
+        let work = ycbcr_work(&counted, &device.work_counts());
+        eprintln!(
+            "{TEST} on {}: in place {in_place}, work {work:?}",
+            device.name()
+        );
+        let model = surface.model(&bytes);
+        let wrong = got.iter().zip(&model).filter(|(a, b)| a != b).count();
+        assert_eq!(wrong, 0, "{TEST}: texels not Metal's");
+        if in_place {
+            assert_eq!(work[2..], [1, 0, 0], "{TEST}: the planes read in place");
+        }
+        drop(texture);
+        drop(buffer);
     });
 }
 

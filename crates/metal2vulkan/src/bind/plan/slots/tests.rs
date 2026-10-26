@@ -738,6 +738,115 @@ fn only_a_map_that_moves_a_constexpr_mode_enters_the_variant() {
     assert!(address_map_variant(&repeat, &BindShape::default()).is_empty());
 }
 
+/// A slot that states the in-place form enters `VariantKey::ycbcr_in_place` only where the bound
+/// texture's planes are read in place and each runtime sampler the slot samples through states a
+/// filter the form reads: one filter, no anisotropy, cubic filter, comparison or other reduction.
+/// Such a slot leaves `VariantKey::ycbcr_textures`, whose image it no longer reads.
+#[test]
+fn the_in_place_variant_takes_a_slot_its_texture_and_samplers_read() {
+    use crate::bind::state::{BoundSampler, SamplerDescriptor, TextureFacts};
+    use crate::bind::ycbcr_convert::{YCbCrCodes, YCbCrMatrix, YCbCrPlanes, YCbCrRange};
+    use crate::bind::YCbCrInPlace;
+    use metal::{CompareFunction, SamplerMinMagFilter as F, SamplerReductionMode};
+    let texture = |index| SlotRef {
+        stage: Stage::Kernel,
+        class: SlotClass::Texture,
+        index,
+    };
+    let pf = metal::PixelFormat::YCBCR84202P;
+    let codes = metal::format::ycbcr_format(pf)
+        .and_then(YCbCrCodes::of)
+        .expect("codes");
+    let planes = YCbCrPlanes::new(
+        [8, 4],
+        [0, 16],
+        [64, 16],
+        (YCbCrRange::Video, YCbCrMatrix::Bt709),
+        codes,
+    );
+    // Slot 0 and 1 bind textures whose planes are read in place, slot 2 one whose are not.
+    let shape = |sampler: SamplerDescriptor| {
+        let mut stage = StageShape::default();
+        for (index, in_place) in [(0, true), (1, true), (2, false)] {
+            let mut facts = TextureFacts::new(metal::TextureType::Type2D, pf);
+            if in_place {
+                facts.ycbcr_in_place = YCbCrInPlace::of(&planes);
+            }
+            stage.textures.insert(index, facts.shape());
+        }
+        stage.samplers.insert(3, BoundSampler::new(sampler).shape());
+        let mut s = BindShape::default();
+        s.stages.insert(Stage::Kernel, stage);
+        s
+    };
+    let fact = |slot, samplers| RuntimeDependency {
+        fact: RuntimeFact::YCbCrInPlace { slot, samplers },
+        mechanism: Mechanism::Variant,
+    };
+    let image = |slot| RuntimeDependency {
+        fact: RuntimeFact::YCbCrTexture { slot },
+        mechanism: Mechanism::Variant,
+    };
+    // Slot 0 samples through constexpr samplers alone, slot 1 also through `[[sampler(3)]]`.
+    let deps = [
+        fact(texture(0), 0),
+        fact(texture(1), 1 << 3),
+        fact(texture(2), 0),
+        image(texture(0)),
+        image(texture(2)),
+    ];
+    let linear = SamplerDescriptor {
+        min_filter: F::Linear,
+        mag_filter: F::Linear,
+        ..SamplerDescriptor::new()
+    };
+    let both = std::collections::BTreeSet::from([texture(0), texture(1)]);
+    let s = shape(linear);
+    let in_place = ycbcr_in_place_variant(&deps, &s);
+    assert_eq!(in_place, both);
+    assert_eq!(
+        ycbcr_variant(&deps, &s, &in_place),
+        std::collections::BTreeSet::from([texture(2)])
+    );
+    assert_eq!(
+        ycbcr_in_place_variant(&deps, &shape(SamplerDescriptor::new())),
+        both
+    );
+    // A sampler the form does not read keeps slot 1 from it, not slot 0.
+    let unread = [
+        SamplerDescriptor {
+            min_filter: F::Linear,
+            ..SamplerDescriptor::new()
+        },
+        SamplerDescriptor {
+            max_anisotropy: 4,
+            ..linear
+        },
+        SamplerDescriptor {
+            min_filter: F::Cubic,
+            mag_filter: F::Cubic,
+            ..SamplerDescriptor::new()
+        },
+        SamplerDescriptor {
+            compare_function: CompareFunction::Less,
+            ..linear
+        },
+        SamplerDescriptor {
+            reduction_mode: SamplerReductionMode::Minimum,
+            ..linear
+        },
+    ];
+    for sampler in unread {
+        assert_eq!(
+            ycbcr_in_place_variant(&deps, &shape(sampler)),
+            std::collections::BTreeSet::from([texture(0)]),
+            "{sampler:?}"
+        );
+    }
+    // A slot that states no form takes none, whatever its texture.
+    assert!(ycbcr_in_place_variant(&[image(texture(0))], &s).is_empty());
+}
+
 /// A stage's dropped-store word reaches the shape over the slots it binds a buffer at, and is
 /// what `SpecKey::DroppedStoreSlots` takes there: a bit of a slot the state binds nothing at names
 /// nothing a store can reach, so the shape leaves it out and one set of bindings keeps one shape

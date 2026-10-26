@@ -521,6 +521,9 @@ pub(super) struct Texture {
     /// The slot's `SpecKey::OffsetBaseAxes` tests, by which a texel offset is placed
     /// (`position::offset_dropped`), where the sample reads them ([`Sample::offset_base`]).
     pub parent: Option<crate::lower::texture::OffsetBase>,
+    /// The base level's size (a `uvec2`) where the image's own query does not state it: an
+    /// in-place texture's, whose image is its planes' texel buffer (`super::in_place`).
+    pub size: Option<SValue>,
 }
 
 /// How a sample's raw texels decode: by one form, a slot's variant's, through the form's sRGB
@@ -540,6 +543,9 @@ pub(super) enum Decode {
         /// The routine of a `float` result, and of a `half` one where the access rounds to it.
         routines: (FuncId, Option<FuncId>),
     },
+    /// The planes of a two-plane YCbCr texture read in place, each tap converted as Metal reads
+    /// it (`super::in_place::texel`).
+    InPlace(super::in_place::Planes),
 }
 
 /// Where a sample reads: its plane coordinate (two floats), a 2D array's layer (an integer), the
@@ -739,6 +745,7 @@ fn sampled(
         flags: value(fb, flags)?,
         swizzle,
         parent,
+        size: None,
     };
     let at = At {
         coord,
@@ -846,9 +853,39 @@ fn sampled(
     swizzled(fb, &tex, x)
 }
 
+/// The footprint over `taps` of the sample at `at` of `tex`, the border color seen through the
+/// channels `bits` state: its size the image's query of the taps' level, or `tex`'s stated size.
+fn footprint_of(
+    fb: &mut FunctionBuilder<'_>,
+    t: &Tys,
+    at: &At<'_>,
+    tex: &Texture,
+    bits: Bits,
+    taps: &Taps<'_>,
+) -> BResult<Footprint> {
+    match tex.size {
+        Some(size) => super::bicubic::footprint_sized(
+            fb,
+            t,
+            (at.coord, at.layer, at.passed),
+            (size, tex.image),
+            bits,
+            (taps, tex.parent),
+        ),
+        None => footprint_of_image(
+            fb,
+            t,
+            (at.coord, at.layer, at.passed),
+            (tex.img, tex.image),
+            bits,
+            (taps, tex.parent),
+        ),
+    }
+}
+
 /// The filtered texel at `at` of `tex` (unswizzled) by `state`: a constexpr sampler's linear or
 /// nearest filter, or the filter a runtime sampler's word states.
-fn filters(
+pub(super) fn filters(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     t: &Tys,
@@ -1126,14 +1163,7 @@ fn block_taps(
         base: TapBase::Quantized,
         level: at.level,
     };
-    let fp = footprint_of_image(
-        fb,
-        t,
-        (at.coord, at.layer, at.passed),
-        (tex.img, tex.image),
-        Bits::Value(tex.flags),
-        (&taps, tex.parent),
-    )?;
+    let fp = footprint_of(fb, t, at, tex, Bits::Value(tex.flags), &taps)?;
     let [(kx, xs), (ky, ys), (kz, zs)] = &fp.axes[..] else {
         return Err(cx.fail("an extended-range 3D linear sample without three plane axes"));
     };
@@ -1201,14 +1231,7 @@ fn quad_taps(
         base: TapBase::Quantized,
         level: at.level,
     };
-    let fp = footprint_of_image(
-        fb,
-        t,
-        (at.coord, at.layer, at.passed),
-        (tex.img, tex.image),
-        Bits::Value(tex.flags),
-        (&taps, tex.parent),
-    )?;
+    let fp = footprint_of(fb, t, at, tex, Bits::Value(tex.flags), &taps)?;
     let [(kx, xs), (ky, ys)] = &fp.axes[..] else {
         return Err(cx.fail("an extended-range linear sample without two plane axes"));
     };
@@ -1290,7 +1313,7 @@ fn level_taps(
 
 /// Whether runtime sampler word `word` states linear minification and magnification (a `bool`): a
 /// mip filter, which the word's level reads, filters nothing within a level.
-fn word_linear(fb: &mut FunctionBuilder<'_>, t: &Tys, word: SValue) -> BResult<SValue> {
+pub(super) fn word_linear(fb: &mut FunctionBuilder<'_>, t: &Tys, word: SValue) -> BResult<SValue> {
     let mask = SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
     let mask = scalar(fb, t.u32_, u64::from(mask))?;
     let mask = value(fb, mask)?;
@@ -1313,14 +1336,7 @@ fn bicubic(
     let span = cubic.span();
     let taps = cubic.taps(span);
     let bits = Bits::Value(tex.flags);
-    let fp = footprint_of_image(
-        fb,
-        t,
-        (at.coord, at.layer, at.passed),
-        (tex.img, tex.image),
-        bits,
-        (&taps, tex.parent),
-    )?;
+    let fp = footprint_of(fb, t, at, tex, bits, &taps)?;
     let zero = fb.u32_const(0)?;
     let zero = value(fb, zero)?;
     let size = fb.query(ImageQuery::SizeLod(zero), tex.img)?;
@@ -1421,14 +1437,7 @@ pub(super) fn nearest(
         base: TapBase::Floor,
         level: at.level,
     };
-    let fp = footprint_of_image(
-        fb,
-        t,
-        (at.coord, at.layer, at.passed),
-        (tex.img, tex.image),
-        Bits::Value(tex.flags),
-        (&taps, tex.parent),
-    )?;
+    let fp = footprint_of(fb, t, at, tex, Bits::Value(tex.flags), &taps)?;
     // Each plane axis's one tap (a 3D texture's three).
     let mut site = Vec::with_capacity(fp.axes.len());
     for (_, taps) in &fp.axes {
@@ -1445,7 +1454,7 @@ pub(super) fn nearest(
             let v = texel(cx, fb, &fp, tex, &site, false)?;
             crate::lower::arith::extended_range::bfloat_sample_half(fb, v)
         }
-        (true, Decode::Form { .. }) => texel(cx, fb, &fp, tex, &site, true),
+        (true, Decode::Form { .. } | Decode::InPlace(_)) => texel(cx, fb, &fp, tex, &site, true),
         // A heap handle's form: both roundings of the one raw texel, chosen by the form.
         (true, Decode::Heap { bfloat, .. }) => {
             let (raw, inside) = tap(fb, &fp, tex, &site)?;
@@ -1480,14 +1489,7 @@ pub(super) fn gathered(
         base: TapBase::Quantized,
         level: at.level,
     };
-    let fp = footprint_of_image(
-        fb,
-        t,
-        (at.coord, at.layer, at.passed),
-        (tex.img, tex.image),
-        Bits::Value(tex.flags),
-        (&taps, tex.parent),
-    )?;
+    let fp = footprint_of(fb, t, at, tex, Bits::Value(tex.flags), &taps)?;
     let [(_, xs), (_, ys)] = &fp.axes[..] else {
         return Err(cx.fail("an extended-range gather without two plane axes"));
     };
@@ -1514,6 +1516,11 @@ pub(super) fn texel(
     site: &[Tap],
     half: bool,
 ) -> BResult<SValue> {
+    if let Decode::InPlace(planes) = tex.decode {
+        let (at, inside) = fp.site(fb, site)?;
+        let v = super::in_place::texel(fb, &planes, tex.img, at, half)?;
+        return fp.border(fb, v, inside);
+    }
     let (raw, inside) = tap(fb, fp, tex, site)?;
     let v = decoded(cx, fb, tex, raw, half)?;
     fp.border(fb, v, inside)
@@ -1599,6 +1606,7 @@ fn decoded(
             fb.call(routine, &[raw, form, inside])?
                 .ok_or_else(missing_routine)
         }
+        Decode::InPlace(_) => Err(cx.fail("an in-place tap decoded as a raw texel")),
     }
 }
 

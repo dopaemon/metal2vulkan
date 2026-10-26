@@ -80,6 +80,7 @@ fn value(
             return Ok(None);
         }
         TextureStrategy::ExtendedSample(e) => crate::lower::sampler::extended::emit(cx, fb, e)?,
+        TextureStrategy::InPlaceSample(e) => crate::lower::sampler::in_place::emit(cx, fb, e)?,
         TextureStrategy::AbsentArgument(a) => {
             if a.marks {
                 crate::lower::access::absent::mark(cx, fb)?;
@@ -4479,6 +4480,9 @@ fn query_value(
     q: &QueryOp,
     (decl, img, storage): (&ImageDecl, SValue, bool),
 ) -> BResult<SValue> {
+    if decl.in_place {
+        return in_place_query(cx, fb, q);
+    }
     let sampled_mips =
         decl.usage == ImageUsage::Sampled && !decl.multisampled && decl.dim != Dim::Buffer;
     let n = coord_len(decl);
@@ -4570,6 +4574,36 @@ fn query_value(
         QueryKind::NoLevels => u32s(fb, 1, 0)?,
         QueryKind::Samples => fb.query(ImageQuery::Samples, img)?,
     })
+}
+
+/// The answer of query `q` of a slot under its in-place variant (`sampler::in_place`): its
+/// texture's width or height from the slot's push field, at a level as at any texture's
+/// ([`level_extent`]), and its one level.
+fn in_place_query(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    q: &QueryOp,
+) -> BResult<SValue> {
+    let ImageRef::Slot(index) = q.image else {
+        return Err(cx.fail("an in-place query of a heap element"));
+    };
+    let Some(slot) = cx.plan.families.texture.slots.get(&index).map(|s| s.slot) else {
+        return Err(cx.fail(format!("texture slot {index} is not planned")));
+    };
+    match q.kind {
+        QueryKind::Size { component } => {
+            let e = crate::lower::sampler::in_place::extent(cx, fb, slot, component)?;
+            match q.level {
+                Some(l) => {
+                    let l = cx.operand(fb, l)?;
+                    level_extent(fb, e, l)
+                }
+                None => Ok(e),
+            }
+        }
+        QueryKind::Levels => u32s(fb, 1, 1),
+        _ => Err(cx.fail("an in-place query the form does not answer")),
+    }
 }
 
 /// The extent Metal answers at level `l` of a texture whose first level's extent is `e`:

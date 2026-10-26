@@ -96,6 +96,17 @@ pub struct Uses {
     pub narrow_result: bool,
 }
 
+/// How a slot's accesses read a two-plane YCbCr texture bound there, for its planes read in
+/// place (`sampler::in_place`, `RuntimeFact::YCbCrInPlace`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct InPlaceReads {
+    /// An access the form does not read: anything but a sample it builds (`sampler::select`'s
+    /// `in_place_sample`) and a query of the width, the height or the level count.
+    pub blocked: bool,
+    /// The runtime sampler slots the slot's samples read, bit `n` `[[sampler(n)]]`.
+    pub samplers: u32,
+}
+
 /// The `OpTypeImage` a slot is declared as, and the conversion a storage image's class needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageDecl {
@@ -121,6 +132,10 @@ pub struct ImageDecl {
     /// after the class's conversion, its reads take alpha 1 and its writes store green in the
     /// fourth channel.
     pub x_channel: bool,
+    /// The slot's variant reads a two-plane YCbCr texture's planes in place
+    /// (`LoweringInputs::ycbcr_in_place`): the image is the planes' uniform texel buffer of
+    /// unsigned codes (`sampler::in_place`), the texture's size its push field's.
+    pub in_place: bool,
 }
 
 impl ImageDecl {
@@ -253,6 +268,8 @@ pub struct SlotPlan {
     /// specialization, which states the axes on which the base-level size the rule reads, a
     /// view's parent's, is not a power of two where the bound view's is.
     pub offset_base: bool,
+    /// How its accesses read a two-plane YCbCr texture's planes in place.
+    pub in_place: InPlaceReads,
     /// The declaration, set by [`finish`] for a slot that is read, written, or queried, or
     /// whose faces are fetched.
     pub decl: Option<ImageDecl>,
@@ -285,6 +302,7 @@ impl SlotPlan {
             swizzle: false,
             constant_lanes: false,
             offset_base: false,
+            in_place: InPlaceReads::default(),
             decl: None,
         }
     }
@@ -584,6 +602,7 @@ fn declare_heap(
         level_views: None,
         extended: None,
         x_channel: false,
+        in_place: false,
     };
     Ok((class, decl))
 }
@@ -1031,6 +1050,27 @@ fn declare_slot(
 ) -> Result<ImageDecl, Error> {
     let images = &cx.profile.fields().images;
     let storage = s.storage();
+    // A slot under its in-place variant is the uniform texel buffer of its texture's planes, of
+    // unsigned codes, with the field of their words (`sampler::in_place`).
+    if cx.inputs.ycbcr_in_place.contains(&s.slot) {
+        push.push(PushField::YCbCrInPlace(s.slot));
+        counts.sampled_images = counts.sampled_images.saturating_add(1);
+        return Ok(ImageDecl {
+            dim: Dim::Buffer,
+            arrayed: false,
+            multisampled: false,
+            depth: false,
+            usage: ImageUsage::Sampled,
+            format: crate::spv::ImageFormat::Unknown,
+            texel: TexelClass::Uint,
+            cube_as_array: false,
+            class: StorageImageClass::Identity,
+            level_views: None,
+            extended: None,
+            x_channel: false,
+            in_place: true,
+        });
+    }
     // A slot bound in an extended-range format holds its raw texels in an unsigned integer
     // image.
     let extended = cx.inputs.extended_range.get(&s.slot).copied();
@@ -1166,7 +1206,23 @@ fn declare_slot(
         level_views: views,
         extended,
         x_channel,
+        in_place: false,
     })
+}
+
+/// Whether every access of slot `s` is one its texture's planes read in place answer
+/// (`sampler::in_place`), on a profile that takes the form (`ProfileFields::ycbcr_in_place`): a
+/// sampled 2D texture's (not an array, multisampled or depth one), of a `float` class or only
+/// queried, used, and no access blocked ([`InPlaceReads::blocked`]).
+fn in_place_reads(cx: &SelectCx<'_>, s: &SlotPlan) -> bool {
+    let used = s.uses.read || s.uses.query || s.uses.sample;
+    cx.profile.fields().ycbcr_in_place
+        && used
+        && !s.in_place.blocked
+        && !s.storage()
+        && s.shape
+            .is_some_and(|x| x.dim == ImageDim::D2 && !x.array && !x.ms && !x.depth)
+        && matches!(s.texel, None | Some(TexelClass::Float))
 }
 
 /// Whether a slot of `shape` can have a tile map: a single-sample 2D, 2D array, or 3D color texture
@@ -1244,6 +1300,22 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     for s in cx.families.texture.slots.values() {
         if s.shape.is_some_and(|shape| cross_reads(s, shape)) {
             facts.push(RuntimeFact::CrossClassReads { slot: s.slot });
+        }
+    }
+    // The slots whose every access the in-place form reads, on a profile that takes it: their
+    // compile under the form states the same, which its plan holds to.
+    for s in cx.families.texture.slots.values() {
+        let reads = in_place_reads(cx, s);
+        if !reads && cx.inputs.ycbcr_in_place.contains(&s.slot) {
+            return Err(
+                cx.invariant("an in-place texture slot whose accesses the form does not read")
+            );
+        }
+        if reads {
+            facts.push(RuntimeFact::YCbCrInPlace {
+                slot: s.slot,
+                samplers: s.in_place.samplers,
+            });
         }
     }
     let mut heap = Vec::new();

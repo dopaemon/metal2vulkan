@@ -337,7 +337,7 @@ pub(crate) fn conversions() -> Vec<YCbCrConversion> {
 
 /// The `(kb, kr)` of red, green and blue for `range` and `matrix`, in the units of the module
 /// docs' conversion (measured, the module docs).
-fn coefficients(range: YCbCrRange, matrix: YCbCrMatrix) -> [(i32, i32); 3] {
+pub(crate) fn coefficients(range: YCbCrRange, matrix: YCbCrMatrix) -> [(i32, i32); 3] {
     match (range, matrix) {
         (YCbCrRange::Video, YCbCrMatrix::Bt601) => [(-9, 13123), (-3218, -6686), (16591, 9)],
         (YCbCrRange::Video, YCbCrMatrix::Bt709) => [(-1, 14743), (-1753, -4383), (17373, 1)],

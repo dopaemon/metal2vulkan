@@ -1508,7 +1508,17 @@ impl Texels {
         storage: bool,
         range: BufferRange,
     ) -> Result<vk::BufferView, Error> {
-        let key = (format, storage, range.offset, range.range);
+        self.view_of(format, storage, (range.offset, range.range))
+    }
+
+    /// [`view`](Self::view) of `range` bytes from `offset` in the viewed `VkBuffer`.
+    pub(super) fn view_of(
+        &self,
+        format: Format,
+        storage: bool,
+        (offset, range): (u64, u64),
+    ) -> Result<vk::BufferView, Error> {
+        let key = (format, storage, offset, range);
         let mut views = lock(&self.views.views);
         if let Some(&view) = views.get(&key) {
             return Ok(view);
@@ -1526,8 +1536,8 @@ impl Texels {
         let mut info = vk::BufferViewCreateInfo::default()
             .buffer(buffer)
             .format(format.into())
-            .offset(range.offset)
-            .range(range.range);
+            .offset(offset)
+            .range(range);
         if let Some(named) = usage.named() {
             only = only.usage(named);
             info = info.push_next(&mut only);

@@ -896,6 +896,7 @@ codec_enum! {
         TessellationChunk,
         MergedDrawAddress,
         AlphaTestReference,
+        YCbCrInPlace(f0),
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1293,6 +1294,7 @@ codec_enum! {
         MergedDraws,
         QuadPrimitiveIds,
         PrivateList,
+        YCbCrInPlace { slot, samplers },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

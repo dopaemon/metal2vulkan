@@ -69,7 +69,7 @@ fn inputs(variant: bool) -> LowerInputs {
 /// Metal's step of a 2D linear sample of a YCbCr format: the taps' steps `k` (`(i, j)`, `(i + 1,
 /// j)`, `(i, j + 1)`, `(i + 1, j + 1)`) under the fractions `a` and `b` in 1/256 steps, a merged
 /// axis's 0; a signed term and sum floored.
-fn metal_step(taps: [i64; 4], a: i64, b: i64) -> i64 {
+pub(super) fn metal_step(taps: [i64; 4], a: i64, b: i64) -> i64 {
     let w = [(256 - a) * (256 - b), a * (256 - b), (256 - a) * b, a * b];
     let t: i64 = taps.iter().zip(w).map(|(k, w)| (k * w) >> 7).sum();
     (t + 256) >> 9
@@ -98,7 +98,7 @@ fn half_away(k: i64, d: i64) -> u16 {
 
 /// The result lanes of steps `steps` on grid `d` (alpha 1): `k / d` as `f32` bits (exact), or as
 /// `half` bits rounded with ties away from zero when `half`.
-fn result_bits(steps: [i64; 3], half: bool, d: i64) -> [u32; 4] {
+pub(super) fn result_bits(steps: [i64; 3], half: bool, d: i64) -> [u32; 4] {
     let lanes = [steps[0], steps[1], steps[2], d];
     lanes.map(|k| match half {
         true => u32::from(half_away(k, d)),

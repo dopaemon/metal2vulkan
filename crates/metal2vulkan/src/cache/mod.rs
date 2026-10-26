@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1867;
+pub const SEMANTICS_VERSION: u32 = 1868;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 451;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1648;
+pub const RUNTIME_VERSION: u32 = 1649;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -215,6 +215,13 @@ pub struct VariantKey {
     /// (`metal::format::ycbcr_format`). The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub ycbcr_textures: BTreeSet<SlotRef>,
+    /// Texture slots whose function reads the two-plane YCbCr texture the shape binds there in
+    /// place: every slot of a `RuntimeFact::YCbCrInPlace` the shape binds a texture whose planes
+    /// are read so (`TextureShape::Texture::ycbcr_in_place`). Each such slot binds the planes'
+    /// texel buffer alone, and its accesses read the codes and convert them as Metal does
+    /// (`bind::YCbCrInPlace`). The plan of a pipeline compiled under it states it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ycbcr_in_place: BTreeSet<SlotRef>,
     /// Texture slots a constexpr sampler samples, each with the address-mode map of the texture
     /// the shape binds there where it is not the identity: every slot of a
     /// `RuntimeFact::ConstexprSampled` the shape binds such a texture at. The function's constexpr
@@ -554,6 +561,7 @@ impl VariantKey {
             && self.srgb_twins.is_empty()
             && self.snapshot_textures.is_empty()
             && self.ycbcr_textures.is_empty()
+            && self.ycbcr_in_place.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
             && !self.replay_bindings
@@ -671,6 +679,12 @@ impl VariantKey {
             .collect();
         out.ycbcr_textures = self
             .ycbcr_textures
+            .iter()
+            .filter(|s| s.stage == stage)
+            .copied()
+            .collect();
+        out.ycbcr_in_place = self
+            .ycbcr_in_place
             .iter()
             .filter(|s| s.stage == stage)
             .copied()

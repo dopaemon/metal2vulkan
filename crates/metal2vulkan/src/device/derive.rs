@@ -412,6 +412,12 @@ fn derive_fields(
                     && policy.ycbcr_filter == YCbCrFilterPolicy::Exact
             }
         },
+        // The planes of a two-plane YCbCr texture read in place where the GPU reads host memory
+        // with no bus between: an integrated GPU's, a CPU device's.
+        ycbcr_in_place: matches!(
+            desc.device_type,
+            Some(vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
+        ),
         // Metal's picks where the device's minimum and maximum are measured to be Metal's or its
         // functions are Metal's own; elsewhere the device's where the policy takes them.
         min_max: if deviates(DriverDeviation::MetalMinMax)

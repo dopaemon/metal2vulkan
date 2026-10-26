@@ -828,6 +828,20 @@ pub enum RuntimeFact {
     /// `PushHole::CaptureIndexAddress`, each list position run once. Its plans state the variant
     /// the shape asks for (`BindShape::private_list`).
     PrivateList,
+    /// The function reads the texture bound to the slot only as the in-place form of a two-plane
+    /// YCbCr texture reads it (`bind::YCbCrInPlace`): sampled through a constexpr sampler or
+    /// through the runtime sampler slots whose bits `samplers` holds (bit `n` for
+    /// `[[sampler(n)]]` of the slot's stage), read, or its size queried, as a 2D `float` texture.
+    /// Recorded on a profile that reads planes in place (`ProfileFields::ycbcr_in_place`). Where
+    /// the binder binds a texture whose planes are read so (`TextureShape::Texture::ycbcr_in_place`)
+    /// and each of those samplers states a filter the form reads (one filter for minification and
+    /// magnification, no anisotropy, no cubic filter, comparison or reduction), the slot joins the
+    /// plan's variant (`VariantKey::ycbcr_in_place`, `LoweringInputs::ycbcr_in_place`), under
+    /// which the slot's one binding is the planes' texel buffer (`WriteSource::YCbCrInPlace`) and
+    /// every access of it reads the codes and converts them as Metal does, its words in the slot's
+    /// push field (`PushField::YCbCrInPlace`). Elsewhere the slot binds the texture's image as
+    /// before.
+    YCbCrInPlace { slot: SlotRef, samplers: u32 },
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

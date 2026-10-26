@@ -1169,8 +1169,10 @@ impl TextureFacts {
     /// The facts of an image texture that can change a plan (its view facts): the type, the pixel
     /// format, the sample count, the usage, whether it is sparse, its level count, which decides a
     /// storage slot's level views and pushed level count, whether it is held with a depth twin, its
-    /// swizzle, its address-mode map, and its [`offset_base_axes`](Self::offset_base_axes). Its
-    /// array length only changes the view's subresource range, which is every layer.
+    /// swizzle, its address-mode map, its [`offset_base_axes`](Self::offset_base_axes), and
+    /// whether its planes are read in place ([`ycbcr_in_place`](Self::ycbcr_in_place), whose
+    /// words the slot's push field carries, not the shape). Its array length only changes the
+    /// view's subresource range, which is every layer.
     ///
     /// The level count is stated whatever the usage: plain Metal writes a texture made without
     /// `ShaderWrite` at every level, through every write form, as one made with it.
@@ -1190,6 +1192,7 @@ impl TextureFacts {
             address_modes: self.address_modes,
             offset_base_axes: self.offset_base_axes(),
             own_format_views: self.own_format_views,
+            ycbcr_in_place: self.ycbcr_in_place.is_some(),
         }
     }
 }
@@ -1421,6 +1424,16 @@ pub struct TextureFacts {
     /// (`StorageImageClass::HalfBits`) the image cannot take.
     #[cfg_attr(feature = "serde", serde(default))]
     pub own_format_views: bool,
+    /// The texture's two planes, where a function reads them in place
+    /// ([`YCbCrInPlace`](crate::bind::YCbCrInPlace), the runtime's extension): a two-plane YCbCr
+    /// texture of a converted 4:2:0 format whose planes the consumer views as one texel buffer.
+    /// A slot whose function reads it only as the in-place form reads
+    /// (`RuntimeFact::YCbCrInPlace`) takes its in-place variant (`VariantKey::ycbcr_in_place`),
+    /// which binds that texel buffer ([`WriteSource::YCbCrInPlace`](crate::bind::WriteSource))
+    /// and pushes these words (`PushField::YCbCrInPlace`); any other slot binds the texture's
+    /// image. `None` for every other texture.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ycbcr_in_place: Option<crate::bind::YCbCrInPlace>,
 }
 
 impl TextureFacts {
@@ -1440,6 +1453,7 @@ impl TextureFacts {
             parent_relative_level: 0,
             parent_base_size: [0; 3],
             own_format_views: false,
+            ycbcr_in_place: None,
         }
     }
 
@@ -2056,6 +2070,11 @@ pub enum TextureShape {
         /// another choice serves.
         #[cfg_attr(feature = "serde", serde(default))]
         own_format_views: bool,
+        /// The texture's planes are read in place where a slot's function reads them so
+        /// ([`TextureFacts::ycbcr_in_place`]): such a slot takes its in-place variant
+        /// (`VariantKey::ycbcr_in_place`).
+        #[cfg_attr(feature = "serde", serde(default))]
+        ycbcr_in_place: bool,
     },
     Buffer {
         pixel_format: metal::PixelFormat,

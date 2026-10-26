@@ -624,6 +624,12 @@ pub enum WriteSource {
         image: ImageSource,
         sampler: SamplerSource,
     },
+    /// The planes of the two-plane YCbCr texture bound at `slot`, read in place
+    /// (`TextureFacts::ycbcr_in_place`): a uniform texel buffer over the planes' bytes in
+    /// `YCbCrInPlace::format`, from the first byte of the first plane for
+    /// `YCbCrInPlace::view_bytes`. Only a slot under its in-place variant binds it
+    /// (`VariantKey::ycbcr_in_place`).
+    YCbCrInPlace { slot: SlotRef },
     /// The texture buffer bound at `slot`, as a texel buffer view.
     TexelBuffer {
         slot: SlotRef,
@@ -1075,6 +1081,9 @@ pub enum AccessClass {
     Index,
     Indirect,
     Attachment,
+    /// A two-plane YCbCr texture's planes, read in place through the slot's uniform texel buffer
+    /// (`WriteSource::YCbCrInPlace`): a read of the planes' bytes, not of the texture's image.
+    YCbCrPlanes,
 }
 
 /// A byte range relative to the bound offset.

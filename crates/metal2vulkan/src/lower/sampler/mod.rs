@@ -171,6 +171,7 @@ pub mod face;
 pub mod fetched;
 pub mod footprint;
 pub mod heap_raw;
+pub mod in_place;
 pub mod level;
 pub mod linear;
 mod native;
@@ -1705,6 +1706,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             level_views: None,
             extended: None,
             x_channel: false,
+            in_place: false,
         };
         let symbol = ResourceSlot {
             stage: cx.stage,

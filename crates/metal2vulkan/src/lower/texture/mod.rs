@@ -643,6 +643,9 @@ pub enum TextureStrategy {
     /// A sample of a texture slot bound in an extended-range format, emulated by fetches of its
     /// raw texels (`sampler::extended`).
     ExtendedSample(Box<crate::lower::sampler::extended::Sample>),
+    /// A sample of a two-plane YCbCr texture slot whose variant reads its planes in place,
+    /// computed from their codes (`sampler::in_place`).
+    InPlaceSample(Box<crate::lower::sampler::in_place::Sample>),
     /// An operation on the absent handle: a texture or sampler a function constant removed
     /// (`memory::handles::Candidate::Absent`).
     AbsentArgument(AbsentArgument),
@@ -900,6 +903,7 @@ impl TextureStrategy {
             TextureStrategy::ImageblockSlice(s) if s.guard => "texture.imageblock_slice_guarded",
             TextureStrategy::ImageblockSlice(_) => "texture.imageblock_slice",
             TextureStrategy::ExtendedSample(e) => e.name(),
+            TextureStrategy::InPlaceSample(e) => e.name(),
             TextureStrategy::AbsentArgument(_) => AbsentArgument::NAME,
         })
     }
@@ -967,6 +971,7 @@ impl TextureStrategy {
             TextureStrategy::Switch(s) => s.words(),
             TextureStrategy::ImageblockSlice(s) => s.words(),
             TextureStrategy::ExtendedSample(e) => e.words(),
+            TextureStrategy::InPlaceSample(e) => e.words(),
             // `access::absent::AbsentRead`'s status write, and the zero, a constant.
             TextureStrategy::AbsentArgument(a) => {
                 if a.marks {
@@ -2483,6 +2488,7 @@ pub fn select(
             _ => Vec::new(),
         };
         for index in slots {
+            not_in_place(cx, index);
             if extended_range(cx, ImageRef::Slot(index))?.is_some() {
                 return Err(Unsupported::not_implemented(Feature::Format).into());
             }
@@ -2524,7 +2530,9 @@ pub fn select(
             let mut arms = Vec::with_capacity(cands.len());
             for c in cands {
                 let arm = match c {
+                    // A switch-at-use's arm reads its slot's image.
                     Candidate::Texture(index) => {
+                        not_in_place(cx, index);
                         select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)?
                     }
                     Candidate::Absent => AbsentArgument::select(cx, at, inst, t)?,
@@ -3112,6 +3120,26 @@ pub(crate) fn extended_range(
     Ok(cx.inputs.extended_range.get(&slot).copied())
 }
 
+/// Whether texture slot `index`'s variant reads a two-plane YCbCr texture's planes in place
+/// (`LoweringInputs::ycbcr_in_place`, `sampler::in_place`).
+pub(crate) fn ycbcr_in_place(cx: &SelectCx<'_>, index: u32) -> Result<bool, Error> {
+    let slot = slot_of(cx, index)?.slot;
+    Ok(cx.inputs.ycbcr_in_place.contains(&slot))
+}
+
+/// Record an access of texture slot `index` that its in-place form does not read
+/// (`slot::InPlaceReads::blocked`): no texture is read in place there.
+pub(crate) fn not_in_place(cx: &mut SelectCx<'_>, index: u32) {
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.in_place.blocked = true;
+    }
+}
+
+/// Whether the function observes any of texture call `at`'s status word.
+pub(crate) fn observes_status(cx: &mut SelectCx<'_>, at: InstId) -> bool {
+    status_use(cx, at).is_some()
+}
+
 /// The numeric class of the texture texture slot `image`'s variant binds where it is not the
 /// class the function declares there (`LoweringInputs::cross_class`), else `None`: the slot's
 /// image is declared of that class (`slot::image_class`), and its reads, samples and gathers take
@@ -3282,6 +3310,15 @@ fn select_image(
     m: &mut Meter,
 ) -> Result<TextureStrategy, Error> {
     let shape = t.image;
+    // The in-place form reads a slot's width, height and level count, and nothing else here.
+    if let ImageRef::Slot(index) = image {
+        if !matches!(
+            t.op,
+            TexOp::Query(Query::Width | Query::Height | Query::NumMipLevels)
+        ) {
+            not_in_place(cx, index);
+        }
+    }
     let texel = match t.texel {
         Some(x) if matches!(t.op, TexOp::Read | TexOp::Write | TexOp::Atomic(_)) => Some(
             image_texel_conv(x.ty.elem, x.sign, cx.profile).map(|(c, class)| {

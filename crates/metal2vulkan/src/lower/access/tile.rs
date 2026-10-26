@@ -1050,6 +1050,7 @@ fn image_decl(s: &TileSlot) -> ImageDecl {
         level_views: None,
         extended: None,
         x_channel: false,
+        in_place: false,
     }
 }
 

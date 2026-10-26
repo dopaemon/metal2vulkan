@@ -1166,6 +1166,25 @@ pub(super) fn footprint_of_image(
     footprint_at(fb, t, &at, (size, base, image), bits, taps)
 }
 
+/// [`footprint_of_image`] of an image whose base-level size `size` (a `uvec2`) the caller states:
+/// an in-place texture's (`super::in_place`), whose taps read the base level of its one level.
+pub(super) fn footprint_sized(
+    fb: &mut FunctionBuilder<'_>,
+    t: &Tys,
+    (coord, layer, offset): (SValue, Option<SValue>, Option<(SValue, u8)>),
+    (size, image): (SValue, CombinedImage),
+    bits: Bits,
+    (taps, parent): (&Taps<'_>, Option<OffsetBase>),
+) -> BResult<Footprint> {
+    let at = At {
+        coord,
+        layer,
+        parent,
+        offset,
+    };
+    footprint_at(fb, t, &at, (size, None, image), bits, taps)
+}
+
 /// The footprint of sample `s` over `taps` on an image of level-0 size `size` (image facts
 /// `image`), the border color seen through the channels of the bound format's treatment `bits`.
 pub(super) fn footprint_on(

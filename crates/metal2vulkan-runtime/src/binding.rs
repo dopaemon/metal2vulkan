@@ -1374,6 +1374,13 @@ fn texel_descriptor(
         WriteSource::Neutral(NeutralResource::TexelBuffer { format }) => {
             device.neutral_texel_view(*format, storage)
         }
+        // The planes of a two-plane YCbCr texture read in place (`texture/ycbcr_image.rs`).
+        WriteSource::YCbCrInPlace { slot } => {
+            let texture = slot_texture(tables, *slot)
+                .ok_or_else(|| internal("the plan binds an unbound texture slot's planes"))?;
+            device.shared().counts.ycbcr_planes_bound();
+            texture.planes_view()
+        }
         other => Err(unexpected(other)),
     }
 }
@@ -2199,6 +2206,17 @@ pub(super) fn command_uses_into(
                     // An unbound slot takes a neutral image; a texture whose image and usage
                     // lack the binding's usage, its shadow (`texture/usage_shadow.rs`), as does
                     // a draw's sampled one its instance renders (`texture/attached_reads.rs`).
+                    // A two-plane YCbCr texture's planes read in place: their bytes, not the
+                    // image, which converts for no such read (`texture/ycbcr_image.rs`).
+                    if let (Some(texture), AccessClass::YCbCrPlanes) =
+                        (slot_texture(tables, slot), resource.class)
+                    {
+                        let read = vk::AccessFlags2::SHADER_SAMPLED_READ;
+                        let used = texture.planes_use(access(read, resource.access.read))?;
+                        name(&mut named, &reached, used.key);
+                        uses.push(used);
+                        continue;
+                    }
                     if let Some(texture) = slot_texture(tables, slot) {
                         let (read, write) = image_access(resource.class)?;
                         let storage = resource.class == AccessClass::StorageImage;

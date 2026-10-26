@@ -435,16 +435,19 @@ pub(crate) fn cross_variant(
 /// YCbCr format, on a profile that takes the variant (`RuntimeFact::YCbCrTexture`,
 /// `ProfileFields::ycbcr_variant`), at which `shape` binds a texture of a two-plane YCbCr format
 /// (`metal::format::ycbcr_format`), whose view Metal's sampler filters as the view's format, not as
-/// Metal's filter of the YCbCr format: the plan's `VariantKey::ycbcr_textures`. The variant's
+/// Metal's filter of the YCbCr format: the plan's `VariantKey::ycbcr_textures`. A slot whose
+/// planes the function reads in place (`in_place`, [`ycbcr_in_place_variant`]) reads no image
+/// there, and its in-place variant's compile states no such fact, so it is not one. The variant's
 /// compile states the same facts, so its plan for the same shape states the same key.
 pub(crate) fn ycbcr_variant(
     dependencies: &[RuntimeDependency],
     shape: &BindShape,
+    in_place: &std::collections::BTreeSet<SlotRef>,
 ) -> std::collections::BTreeSet<SlotRef> {
     dependencies
         .iter()
         .filter_map(|d| match d.fact {
-            RuntimeFact::YCbCrTexture { slot } => Some(slot),
+            RuntimeFact::YCbCrTexture { slot } if !in_place.contains(&slot) => Some(slot),
             _ => None,
         })
         .filter(|slot| {
@@ -452,6 +455,59 @@ pub(crate) fn ycbcr_variant(
                 if metal::format::ycbcr_format(*pixel_format).is_some())
         })
         .collect()
+}
+
+/// The texture slots whose function reads a two-plane YCbCr texture only as its in-place form
+/// reads it (`RuntimeFact::YCbCrInPlace`) at which `shape` binds a texture whose planes are read
+/// in place (`TextureShape::Texture::ycbcr_in_place`), and each runtime sampler the function
+/// samples the slot through states a filter the form reads ([`in_place_word`]): the plan's
+/// `VariantKey::ycbcr_in_place`. Any other slot binds the texture's image. The variant's compile
+/// states the same facts, so its plan for the same shape states the same key.
+pub(crate) fn ycbcr_in_place_variant(
+    dependencies: &[RuntimeDependency],
+    shape: &BindShape,
+) -> std::collections::BTreeSet<SlotRef> {
+    dependencies
+        .iter()
+        .filter_map(|d| match d.fact {
+            RuntimeFact::YCbCrInPlace { slot, samplers } => Some((slot, samplers)),
+            _ => None,
+        })
+        .filter(|&(slot, samplers)| {
+            let in_place = matches!(
+                bound_texture(shape, slot),
+                Some(TextureShape::Texture {
+                    ycbcr_in_place: true,
+                    ..
+                })
+            );
+            let stage = shape.stages.get(&slot.stage);
+            let words = (0..32).filter(|n| samplers >> n & 1 != 0).map(|n| {
+                stage
+                    .and_then(|s| s.samplers.get(&n))
+                    .map_or(0, |s| s.word.0)
+            });
+            in_place && words.into_iter().all(in_place_word)
+        })
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+/// Whether a runtime sampler of word `word` samples a two-plane YCbCr texture in a way its
+/// in-place form reads: one filter for minification and magnification (nearest or linear), no
+/// anisotropy, no cubic filter, no comparison and the weighted-average reduction. Its mip filter
+/// and level clamps read the texture's one level, as Metal's sample of it reads it whatever its
+/// mip filter (`lower::sampler::in_place`); every address mode, border color and coordinate
+/// space is the form's to address. An unbound slot's word is 0, a nearest sampler's.
+pub(crate) fn in_place_word(word: u32) -> bool {
+    use crate::metal::sampler::SamplerWord;
+    let filter = word & (SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR);
+    let one_filter = filter == 0 || filter == SamplerWord::LINEAR;
+    let other = SamplerWord::CUBIC
+        | SamplerWord::ANISOTROPIC
+        | SamplerWord::COMPARE
+        | SamplerWord::REDUCTION;
+    one_filter && word & other == 0
 }
 
 /// The texture slots a constexpr sampler samples (`RuntimeFact::ConstexprSampled`) at which

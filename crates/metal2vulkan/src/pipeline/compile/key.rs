@@ -219,6 +219,11 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.ycbcr_textures).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
+    if !inputs.ycbcr_in_place.is_empty() {
+        h.bytes(b"ycbcr-in-place")
+            .bytes(format!("{:?}", inputs.ycbcr_in_place).as_bytes());
+    }
+    // Appended only when set, as `storage_view_slots`.
     if !inputs.extended_range.is_empty() {
         h.bytes(b"extended-range")
             .bytes(format!("{:?}", inputs.extended_range).as_bytes());

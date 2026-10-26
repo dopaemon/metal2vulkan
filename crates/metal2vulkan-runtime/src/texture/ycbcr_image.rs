@@ -6,25 +6,37 @@
 //! image of 10-bit codes or an `R8G8B8A8_UNORM` one of 8-bit codes, which the conversion writes
 //! packed through an `R32_UINT` view (a store of its bits, where a store of `code / (2^b - 1)`
 //! through the image's own format would be the device's conversion to the code).
+//!
+//! **Planes read in place** (`PlanesInPlace`). On a device that reads host memory with no bus
+//! between (`ProfileFields::ycbcr_in_place`: an integrated GPU, a CPU device), a texture of
+//! `YCBCR8_420_2P` or `YCBCR10_420_2P` over plane 0 of a two-plane surface, without a swizzle,
+//! also states its planes as a function reads them in place (`bind::YCbCrInPlace`): a slot whose
+//! function reads the texture only so binds a uniform texel buffer over the planes' bytes, and the
+//! draw or dispatch reads those bytes alone, so the image is not converted for it. Where a plane
+//! cannot be viewed so, the texture keeps its image alone, counted by the reason
+//! (`WorkCounts::ycbcr_images_kept_*`): the device, the layout, a swizzle, the planes' first byte
+//! off `minTexelBufferOffsetAlignment`, more elements than `maxTexelBufferElements`, planes past
+//! their buffer, or a format the device views no uniform texel buffer of.
 
 use super::{image_error, IdUse, Image, Storage, Texture};
 use crate::address_map::AddressModeMap;
 use crate::binding_view::VkView;
-use crate::buffer_texture::Texels;
+use crate::buffer_texture::{view_usage, Texels};
 use crate::device::lock;
 use crate::error::{internal, Error};
 use crate::image_plan::plan_image;
+use crate::resource::ResourceKey;
 use crate::shadow::{ShadowBuffer, ShadowCopies, ShadowSource};
 use crate::shadow_merge::ScratchSpares;
 use crate::texture_descriptor::{TextureDescriptor, TextureLayout};
-use crate::tracker::UseRange;
+use crate::tracker::{Access, Use, UseRange};
 use crate::values::ResourceOptions;
 use crate::view_plan::ViewRecord;
 use crate::ycbcr::{YCbCrConversion, YCbCrWriteBack};
 use crate::Device;
 use ash::vk;
-use metal2vulkan::bind::{YCbCrCodes, YCbCrOutput, YCbCrPlanes};
-use metal2vulkan::device::FormatUsage;
+use metal2vulkan::bind::{YCbCrCodes, YCbCrInPlace, YCbCrOutput, YCbCrPlanes};
+use metal2vulkan::device::{FormatUsage, VkFeature};
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::{
     vk_format, ycbcr_format, ycbcr_renders, ChromaSubsampling, YCbCrReads,
@@ -125,7 +137,93 @@ fn over_read(read: [TextureSwizzle; 3], swizzle: TextureSwizzleChannels) -> Text
     }
 }
 
+/// A two-plane YCbCr texture's planes as a function reads them in place (the module docs): their
+/// words, and their first byte in the texels' buffer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlanesInPlace {
+    pub(super) words: YCbCrInPlace,
+    start: u64,
+}
+
+/// Why a two-plane YCbCr texture keeps its image alone, its planes read in place by no function
+/// (the module docs), in `WorkCounts::ycbcr_images_kept_*`'s order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeptImage {
+    /// The device's type: a discrete, virtual or other GPU, or none stated.
+    Device,
+    /// A layout the form does not read: another format, plane 1, a P3 surface's codes.
+    Layout,
+    /// The texture's swizzle, which the form does not apply.
+    Swizzle,
+    /// The planes' first byte is off `minTexelBufferOffsetAlignment` in the buffer.
+    Alignment,
+    /// The planes hold more elements than `maxTexelBufferElements`.
+    Elements,
+    /// The planes reach past their buffer, whose bytes past its end Metal reads as zeros.
+    Reach,
+    /// The device views no uniform texel buffer of the planes' format in a buffer of the runtime's
+    /// usage (`buffer_texture::view_usage`).
+    View,
+}
+
+impl KeptImage {
+    /// The reasons, in their counters' order.
+    pub(crate) const ALL: [KeptImage; 7] = [
+        KeptImage::Device,
+        KeptImage::Layout,
+        KeptImage::Swizzle,
+        KeptImage::Alignment,
+        KeptImage::Elements,
+        KeptImage::Reach,
+        KeptImage::View,
+    ];
+}
+
 impl Device {
+    /// The planes in place of a converted texture of `descriptor` over `texels`, whose planes
+    /// `planes` lie in `span` of the texels' buffer (the module docs), or why it keeps its image
+    /// alone.
+    fn planes_in_place(
+        &self,
+        texels: &Texels,
+        descriptor: &TextureDescriptor,
+        (planes, span): (&YCbCrPlanes, &Range<u64>),
+    ) -> Result<PlanesInPlace, KeptImage> {
+        let profile = self.compile_device().profile();
+        if !profile.reads_ycbcr_planes_in_place() {
+            return Err(KeptImage::Device);
+        }
+        let words = YCbCrInPlace::of(planes).ok_or(KeptImage::Layout)?;
+        if texels.staged().is_some() {
+            return Err(KeptImage::Layout);
+        }
+        if descriptor.swizzle != TextureSwizzleChannels::DEFAULT {
+            return Err(KeptImage::Swizzle);
+        }
+        if span.start.saturating_add(words.view_bytes()) > span.end {
+            return Err(KeptImage::Reach);
+        }
+        let limits = profile.limits();
+        let (_, at) = texels.buffer.at(span.start);
+        if !at.is_multiple_of(limits.min_texel_buffer_offset_alignment.max(1)) {
+            return Err(KeptImage::Alignment);
+        }
+        if words.elements() > u64::from(limits.max_texel_buffer_elements) {
+            return Err(KeptImage::Elements);
+        }
+        let maintenance5 = self.enabled().features.contains(&VkFeature::Maintenance5);
+        view_usage(
+            |usage| profile.supports_format(words.format(), usage),
+            false,
+            maintenance5,
+        )
+        .map_err(|_| KeptImage::View)?;
+        Ok(PlanesInPlace {
+            words,
+            start: span.start,
+        })
+    }
+
     /// The two-plane YCbCr texture of `descriptor` (checked as `layout`) over `texels`, the luma
     /// plane, for Metal's `call`, whose planes `planes` lie in `span` of the texels' buffer: its
     /// image of the texels Metal reads and the conversion (`ycbcr.rs`). It reads alpha 1 and maps
@@ -149,9 +247,16 @@ impl Device {
         let texels = Arc::new(texels);
         let mut record = ViewRecord::of_descriptor(layout, &descriptor);
         if !codes_alone(layout.pixel_format, planes) {
+            let in_place = self.planes_in_place(&texels, &descriptor, (planes, &span));
+            let counts = &self.shared().counts;
+            match &in_place {
+                Ok(_) => counts.ycbcr_texture_in_place(),
+                Err(kept) => counts.ycbcr_image_kept(*kept),
+            }
             let storage =
                 self.converted_storage(call, texels, &descriptor, layout, (planes, span))?;
-            return Ok(Texture::made(self, storage, record, None, id_use));
+            let made = (storage, in_place.ok());
+            return Ok(Texture::made_with_planes(self, made, record, None, id_use));
         }
         // Over a surface of a P3 matrix: an image of the codes of the code-reading format, its
         // luma, Cb and Cr (green, blue and red there) read as red, green and blue.
@@ -281,6 +386,37 @@ impl Device {
 }
 
 impl Texture {
+    /// The uniform texel buffer view of the texture's planes read in place (the module docs), made
+    /// at its first bind and kept with the texels. Internal for a texture whose planes are not.
+    pub(crate) fn planes_view(&self) -> Result<vk::BufferView, Error> {
+        let (Some(p), Some(texels)) = (self.0.planes_in_place, self.buffer_texels()) else {
+            return Err(internal(
+                "a planes view of a texture without planes in place",
+            ));
+        };
+        let (_, at) = texels.buffer.at(p.start);
+        texels.view_of(p.words.format(), false, (at, p.words.view_bytes()))
+    }
+
+    /// A read by `read` of the bytes of the texture's planes read in place, which a binding of
+    /// them makes (the module docs). Internal for a texture whose planes are not.
+    pub(crate) fn planes_use(&self, read: Access) -> Result<Use<ResourceKey>, Error> {
+        let (Some(p), Some(texels)) = (self.0.planes_in_place, self.buffer_texels()) else {
+            return Err(internal(
+                "a planes use of a texture without planes in place",
+            ));
+        };
+        let end = p.start.saturating_add(p.words.view_bytes());
+        let (identity, range) = texels.buffer.tracked(p.start..end);
+        Ok(Use {
+            key: identity.key,
+            tracked: texels.tracked(),
+            range: UseRange::Bytes(range),
+            read,
+            write: Access::NONE,
+        })
+    }
+
     /// The storage of a view presenting `record` of this texture in its `_sRGB` twin's format
     /// (`view_plan::check_format` admits `YCBCR8_420_2P` as `YCBCR8_420_2P_sRGB` and
     /// `YCBCR10_420_2P` as `YCBCR10_420_2P_sRGB`, as Metal makes them, its usage `ShaderRead`

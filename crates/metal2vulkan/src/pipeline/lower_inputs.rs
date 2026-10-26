@@ -179,6 +179,13 @@ pub struct LoweringInputs {
     /// Ignored on any other profile, and for a slot of no such sample.
     #[cfg_attr(feature = "serde", serde(default))]
     pub ycbcr_textures: BTreeSet<SlotRef>,
+    /// Texture slots bound to a two-plane YCbCr texture whose planes are read in place
+    /// (`VariantKey::ycbcr_in_place`, `RuntimeFact::YCbCrInPlace`): each is declared as the
+    /// planes' uniform texel buffer, and its samples, reads and size queries read the codes and
+    /// convert them as Metal does (`bind::YCbCrInPlace`). Ignored on a profile that does not read
+    /// planes in place (`ProfileFields::ycbcr_in_place`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub ycbcr_in_place: BTreeSet<SlotRef>,
     /// The fragment function's render pipeline has a vertex function that writes
     /// `[[viewport_array_index]]`. That function stores `ViewportIndex` as 0 for an index at or
     /// past the draw's viewport count, where Metal draws through viewport 0 and its fragment

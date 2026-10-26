@@ -787,6 +787,25 @@ pub(crate) fn slot_field(
                 .map_or(0, |s| s.instance_count);
             Some(FieldBytes::of(&count.to_le_bytes()))
         }
+        // The in-place planes of the texture bound at the slot, zeros where none is (the plan
+        // names the slot's variant only where one is).
+        PushField::YCbCrInPlace(slot) => {
+            let words = match state
+                .stages
+                .get(&slot.stage)
+                .and_then(|t| t.textures.get(&slot.index))
+            {
+                Some(BoundTexture::Texture { facts, .. }) => facts
+                    .ycbcr_in_place
+                    .map_or([0; crate::bind::YCbCrInPlace::WORDS], |p| p.words()),
+                _ => [0; crate::bind::YCbCrInPlace::WORDS],
+            };
+            let mut bytes = [0u8; 4 * crate::bind::YCbCrInPlace::WORDS];
+            for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            Some(FieldBytes::of(&bytes))
+        }
         // The level count the plan bound.
         PushField::TextureLevels(slot) => resources
             .texture_levels

@@ -231,6 +231,12 @@ the runtime made.
   `HostPageTexturePolicy::Shadow`, one that renders or writes, one made before the check answered
   or whose check did not pass), where the device's linear images cannot hold Metal's layout, and
   where the rows lie with bytes between them.
+- **Two-plane YCbCr textures** (`YCBCR8_420_2P` and its kin over a surface's planes) hold an
+  image of the texels Metal reads, converted from the planes before a command buffer's first use
+  where they changed. Where `has_unified_memory`, a function that only samples a `YCBCR8_420_2P`
+  or `YCBCR10_420_2P` texture reads the planes' codes in place instead and converts them in the
+  shader, exactly as the image holds them (`WorkCounts::ycbcr_textures_in_place`,
+  `ycbcr_planes_bound`; a texture that keeps the image counts why, `ycbcr_images_kept_*`).
 
 ## Runtime extensions
 

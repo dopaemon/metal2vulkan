@@ -116,6 +116,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::StorageKeptChannels => FieldShape::U32,
         // A specialization key's value carried as data: every such key is a `u32` or a boolean.
         PushField::Specialized(_) => FieldShape::U32,
+        // An in-place YCbCr texture's size, planes and conversion.
+        PushField::YCbCrInPlace(_) => FieldShape::UVec4Array(2),
         PushField::ColorWriteRule(_) => FieldShape::U32,
         // The residual is below `min{Storage,Uniform}BufferOffsetAlignment`.
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
