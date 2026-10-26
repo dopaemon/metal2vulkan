@@ -59,8 +59,9 @@
 //!   (`VUID-VkImageCreateInfo-pNext-01443`), and its move "may perform read and write accesses
 //!   on all memory bound to the image subresource range": a no-copy heap's texture bound to the
 //!   heap's bytes (`texture/heap.rs`) takes such a move. A texture over a no-copy buffer's host
-//!   pages takes no such image: it is a shadow, whose copies address its texels alone
-//!   (`texture.rs`'s `storage_over_buffer`).
+//!   pages (or fresh pages) takes one only where the device's check showed that move keeping every
+//!   byte over such pages (`in_place.rs`); elsewhere it is a shadow, whose copies address its texels
+//!   alone (`texture.rs`'s `storage_over_buffer`).
 //! - **The work.** A barrier from every command before (memory other commands wrote), then the
 //!   buffers' fills with zeros, then their copies of staged bytes after a barrier, then a
 //!   barrier carrying each image's move (after the fills: an image placed in a new heap moves

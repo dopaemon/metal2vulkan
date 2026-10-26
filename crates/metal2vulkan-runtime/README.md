@@ -220,11 +220,16 @@ the runtime made.
   bytes widened to 16-byte granules from the device's offset alignment, so it reports hazards
   between commands whose bytes are apart, as it does between untracked uses Metal leaves to the
   program; no order of either changes a result.
-- **Textures over buffers** share the buffer's bytes. The runtime keeps a copy and announces it
-  (`shadowed-texture`) over a no-copy buffer's host pages or such a long buffer's fresh pages (an
-  image bound to them would start `UNDEFINED`, and its first move may rewrite any byte bound to
-  it), where the device's linear
-  images cannot hold Metal's layout, and where the rows lie with bytes between them.
+- **Textures over buffers** share the buffer's bytes. Over a no-copy buffer's host pages or such
+  a long buffer's fresh pages, an image bound to them would start `UNDEFINED`, and Vulkan lets its
+  first move rewrite any byte bound to it: by default (`HostPageTexturePolicy::InPlace`) a texture
+  there that only samples or reads is an image in place wherever the device's own check showed
+  that move keeping every byte for that kind of pages (run once per driver and release on a
+  thread of its own, kept in the shader cache). The runtime keeps a copy and announces it
+  (`shadowed-texture`, naming why) for every other texture there (under
+  `HostPageTexturePolicy::Shadow`, one that renders or writes, one made before the check answered
+  or whose check did not pass), where the device's linear images cannot hold Metal's layout, and
+  where the rows lie with bytes between them.
 
 ## Runtime extensions
 

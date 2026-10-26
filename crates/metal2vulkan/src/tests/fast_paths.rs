@@ -9,8 +9,8 @@
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, FloatMathsPolicy,
     HalfBlendPolicy, HalfRoundingPolicy, HalfTexelBitsPolicy, HeapCompressionPolicy,
-    MultisampleDepthTwinPolicy, NanMinMaxPolicy, RenderLoweringPolicy, ResolvePolicy,
-    RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, TileStorePolicy,
+    HostPageTexturePolicy, MultisampleDepthTwinPolicy, NanMinMaxPolicy, RenderLoweringPolicy,
+    ResolvePolicy, RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, TileStorePolicy,
     Unorm8LinearFilterPolicy, VertexNormalizedPolicy, YCbCrFilterPolicy,
 };
 use crate::pipeline::PrecisionNote;
@@ -76,7 +76,8 @@ fn choices() -> Vec<Choice> {
         // texels of a carried texture's decoded twin, a heap's compressed
         // texture's image, when the host sees a command buffer complete, a loaded attachment's
         // tile store, a multisampled color attachment's resolve, how a batch begins after the
-        // earlier ones of its queue, and where a render encoder's calls are lowered.
+        // earlier ones of its queue, where a render encoder's calls are lowered, and what holds a
+        // sampled texture over host pages.
         multisample_depth_twin: _,
         decoded_texels: _,
         heap_compression: _,
@@ -85,6 +86,7 @@ fn choices() -> Vec<Choice> {
         resolve: _,
         batch_order: _,
         render_lowering: _,
+        host_page_textures: _,
     } = p;
     vec![
         choice!(p.unorm8_linear_filter: Unorm8LinearFilterPolicy { Exact, DeviceWithinOneCode }),
@@ -106,6 +108,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.resolve: ResolvePolicy { Device, Exact }),
         choice!(p.batch_order: BatchOrderPolicy { Ends, Exact }),
         choice!(p.render_lowering: RenderLoweringPolicy { AtCall, Worker }),
+        choice!(p.host_page_textures: HostPageTexturePolicy { InPlace, Shadow }),
     ]
 }
 
@@ -548,4 +551,36 @@ fn the_runtime_s_decoded_texels_choice_keys_no_profile() {
         assert_eq!(stem, other);
         assert_eq!(a.fingerprint(), e.fingerprint(), "{stem}");
     }
+}
+
+/// The runtime's choice of what holds a sampled texture over host pages (`host_page_textures`)
+/// moves no committed profile's fingerprint: no profile carries it, so no translation follows it.
+#[test]
+fn the_runtime_s_host_page_textures_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let in_place = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let shadow = committed_profiles_with(DevicePolicy {
+        host_page_textures: HostPageTexturePolicy::Shadow,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(in_place.len(), shadow.len());
+    for ((stem, a), (other, s)) in in_place.iter().zip(&shadow) {
+        assert_eq!(stem, other);
+        assert_eq!(a.fingerprint(), s.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` takes the shadow for every texture over host pages, and the
+/// default takes the image in place where the device's check passed.
+#[test]
+fn exact_answers_shadow_every_texture_over_host_pages() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.host_page_textures,
+        HostPageTexturePolicy::InPlace
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().host_page_textures,
+        HostPageTexturePolicy::Shadow
+    );
 }

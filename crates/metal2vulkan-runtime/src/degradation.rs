@@ -240,10 +240,17 @@ degradations! {
         /// A 2D texture over a buffer is a shadow image: the buffer is over host pages (a no-copy
         /// buffer's, imported by their pointer or as dma-bufs, or the fresh pages a host-visible
         /// buffer of the runtime's own longer than 32 MiB lies in, `fresh_pages.rs`), where an
-        /// image bound to them would
-        /// start `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) and Vulkan lets its layout
-        /// transitions (its first move among them) read and write any byte bound to it, where
-        /// Metal keeps every CPU write; or its rows (or an array's slices) lie with the buffer's
+        /// image bound to them would start `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`) and
+        /// Vulkan lets its layout transitions (its first move among them) read and write any byte
+        /// bound to it, where Metal keeps every CPU write, and the device takes no image in place
+        /// there (`in_place.rs`): the policy keeps the exact form
+        /// ([`metal2vulkan::device::HostPageTexturePolicy::Shadow`]), the texture's usage renders
+        /// into it or writes it (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`), the device's
+        /// check that the move keeps every byte over that kind of pages has not answered yet,
+        /// found a byte changed or made no image, or no image in place serves the texels (its rows
+        /// share bytes, the device lays no linear image's rows at the buffer's pitch, the image's
+        /// placement or memory misses the pages, the bytes were detached, or no dma-buf of the
+        /// texture's own pages serves); the notice names which; or its rows (or an array's slices) lie with the buffer's
         /// bytes between them, which an image over them would hold in its subresource, where
         /// Vulkan lets the image's layout transitions read and write any byte of its subresources,
         /// and a render pass's load and store operations read and write back any byte of an
@@ -2471,12 +2478,13 @@ impl Degradation {
         ),
         (
             // An aliasing image's first move over a no-copy buffer's host pages changed bytes the
-            // host kept across it, on pages the process maps read-only. No image is bound to a
-            // no-copy buffer's host pages: a texture over them is a shadow, which writes no byte
-            // its commands do not write.
+            // host kept across it, on pages the process maps read-only. The host keeps no bytes
+            // across a first move: an image is bound to host pages only where the device's check
+            // showed its first move keeping every byte (`in_place.rs`), and elsewhere a texture
+            // over them is a shadow, which writes no byte its commands do not write.
             "metal2vulkan-degrade-unrestored-first-move-bytes",
-            "none: a texture over a no-copy buffer's host pages is a shadow, which takes no first \
-             move over them",
+            "none: a texture over host pages takes a first move over them only where the device's \
+             check showed that move keeping every byte; elsewhere it is a shadow, which takes none",
         ),
         (
             // A sampler state made while a committed command buffer that listed the argument

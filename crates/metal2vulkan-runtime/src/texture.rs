@@ -82,6 +82,7 @@ use super::image_plan::{
     check_image_limits, holds_depth_in_colour, plan_image, plan_images, DepthImageFacts,
     ImageFacts, ImagePlan, ImageRefusal,
 };
+use super::in_place::{self, PagesClass, Refusal, ShadowCause, Verdict};
 use super::key_hash::KeyMap;
 use super::linear_plan::{
     aliases, check_linear_limits, holding, linear_lack, LinearImage, LinearLack,
@@ -127,7 +128,7 @@ use heap_tiled::{FreshDepth, FreshPattern};
 use heap_two_planes::TwoPlaneHeapLayout;
 use metal2vulkan::bind::{AstcDecode, EtcDecode, ImageViewDesc, PvrtcDecode, TextureFacts};
 use metal2vulkan::device::{
-    DeviceDescription, DeviceProfile, DriverFact, FormatSupport, VkFeature,
+    DeviceDescription, DeviceProfile, DriverFact, FormatSupport, HostPageTexturePolicy, VkFeature,
 };
 use metal2vulkan::error::{
     Capability, Feature, LinearNeed, RuntimeDriverDefect, SparseNeed, Unsupported,
@@ -165,6 +166,7 @@ pub(super) mod heap_two_planes;
 pub(crate) mod held_depth;
 pub(crate) mod host_copy;
 pub(crate) mod host_shadow;
+mod in_place_image;
 pub(super) mod kept_image;
 pub(super) mod requirements;
 #[cfg(unix)]
@@ -2186,8 +2188,9 @@ impl Device {
 
     /// A 2D texture or array of `descriptor` (checked as `layout`) over `texels`, for Metal's
     /// `call`: a linear image aliasing the texels in the buffer's memory where the device makes
-    /// one that lies on Metal's layout (`alias_image`), else an image of the descriptor's usage,
-    /// tracked as the buffer is, which the encoders copy the texels into and back (`shadow.rs`).
+    /// one that lies on Metal's layout (`alias_image`; over host pages, the image in place,
+    /// `in_place.rs`), else an image of the descriptor's usage, tracked as the buffer is, which
+    /// the encoders copy the texels into and back (`shadow.rs`).
     /// Refused as `new_texture` refuses the image, and (`NotImplemented`) where the device
     /// cannot copy a shadowed texture's format. Its resource ID is as `id_use` says (the runtime's
     /// own for a texture buffer's attachment twin, `Texture::attachment_twin`).
@@ -2205,8 +2208,9 @@ impl Device {
     }
 
     /// The storage of a texture of `descriptor` (checked as `layout`) over `texels`, as
-    /// [`new_texture_over_buffer`](Self::new_texture_over_buffer) makes it: an aliasing image,
-    /// else a shadow (announced once). Refused as it is.
+    /// [`new_texture_over_buffer`](Self::new_texture_over_buffer) makes it: an aliasing image (one
+    /// in place over host pages), else a shadow (announced once, counted by why over host pages).
+    /// Refused as it is.
     fn storage_over_buffer(
         &self,
         call: &'static str,
@@ -2223,79 +2227,120 @@ impl Device {
         let usage = texture_usage(descriptor.usage, descriptor.swizzle);
         let plan = plan_image(layout, usage, false, &facts)
             .map_err(|refusal| image_error(call, refusal))?;
-        // The usage the texture lacks, as for a texture of its own: plain Metal writes a texture
-        // over a buffer made without `ShaderWrite` and reads one made without `ShaderRead`. A
-        // linear image aliasing the buffer's memory takes it where one with it
-        // still lies on Metal's layout there: a linear image is never compressed, and its memory is
-        // the buffer's, so the usage costs it nothing. Else the image without it, and else the
-        // shadow, with it where that costs the shadow nothing.
-        let wider = undeclared_usage(plan.clone(), layout, usage, false, &facts, |_, wider| {
-            Ok(wider)
-        })?;
-        // Whether an image may hold the texels: none where their rows (or slices) lie with the
-        // buffer's bytes between them (`linear_plan::holding`), and else why.
-        let holds = holding(&texels.layout, usage);
-        // Over bytes detached from their pages (`detach.rs`) no image aliases them: the texture
-        // is their shadow, which presents a stand-in until they lie in pages again.
-        let detached = texels.buffer.detached();
-        // Nor over the caller's host pages (a no-copy buffer's, or a no-copy heap's buffer's,
-        // imported by their pointer or as dma-bufs): an image bound to imported memory starts
-        // `UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), and its first move, a layout
-        // transition or an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT`, "may perform read and write
-        // accesses on all memory bound to the image subresource range", whatever the texture's
-        // usage. A CPU write to the bytes then could be undone, where Metal keeps every one, and
-        // Metal's contract leaves no moment the CPU may not write them. The shadow's copies
-        // address its texels alone, through the buffer.
-        let host = texels.buffer.caller_memory() == Some(CallerMemory::HostPages);
-        // Nor over fresh pages the runtime imported for a long buffer of its own
-        // (`fresh_pages.rs`), for the same reason.
-        let fresh = texels.buffer.in_fresh_pages();
-        // The plans a linear image aliasing the bytes is tried with, the first the device makes:
-        // with the feedback loop usage a draw takes that reads the texture its own pass renders
-        // through a snapshot (`feedback_candidate`, `texture/attached_reads.rs`), which costs a
-        // linear image nothing as the usage the texture lacks does; then the usage the texture
-        // lacks; then the texture's own.
-        let feedback = feedback_candidate(&wider, self);
-        let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
-        if wider != plan {
-            plans.push(&wider);
-        }
-        plans.push(&plan);
-        // An aliasing image, counted where it took the feedback loop usage.
-        let alias = |image: Arc<Image>, texels: Arc<Texels>| {
-            let usage = image.plan().usage;
-            if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
-                self.shared().counts.feedback_loop_alias_image();
+        // Over host pages (a no-copy buffer's, or a no-copy heap's buffer's, imported by their
+        // pointer or as dma-bufs; or fresh pages the runtime imported for a long buffer of its
+        // own, `fresh_pages.rs`), the image in place, with the texture's declared plan alone,
+        // where the device's policy, the texture's usage and the device's check of the pages'
+        // class take it (`in_place.rs`); else the shadow, its notice naming why. The device's
+        // check's own textures take it whatever the verdict, and are neither counted nor
+        // announced.
+        let class = match texels.buffer.caller_memory() {
+            Some(CallerMemory::HostPages) if texels.buffer.over_dma_buf() => {
+                Some(PagesClass::DmaBuf)
             }
-            Ok(Storage::Alias { image, texels })
+            Some(CallerMemory::HostPages) => Some(PagesClass::Pointer),
+            None if texels.buffer.in_fresh_pages() => Some(PagesClass::Fresh),
+            _ => None,
         };
-        // Where no image aliases the bytes, the reason the plan's attempt gives is the notice's.
-        let why = if detached {
-            "the buffer's bytes were detached from their pages (detach_backing) as the texture \
-             was made"
-                .to_owned()
-        } else if host {
-            "the buffer's bytes are the caller's host pages, which an image could alias only from \
-             UNDEFINED, whose first move Vulkan lets read and write every byte it is bound to, \
-             where Metal keeps every CPU write"
-                .to_owned()
-        } else if fresh {
-            self.shared().counts.shadow_over_fresh_pages();
-            "the buffer's bytes lie in fresh host pages imported for it, which an image could alias \
-             only from UNDEFINED, whose first move Vulkan lets read and write every byte it is \
-             bound to, where Metal keeps every CPU write"
-                .to_owned()
-        } else {
-            let over = (&*texels, &holds);
-            for &wider in &plans[..plans.len() - 1] {
-                let made = self.alias_image(wider.clone(), descriptor, over, &facts)?;
-                if let Ok(image) = made {
-                    return alias(image, texels);
+        let why = match class {
+            Some(class) => {
+                let checking = in_place::checking();
+                let cause = if texels.buffer.detached() {
+                    // Over bytes detached from their pages (`detach.rs`) no image is bound to
+                    // them: the texture is their shadow, which presents a stand-in until they lie
+                    // in pages again.
+                    ShadowCause::Refused(
+                        Refusal::Detached,
+                        "the buffer's bytes were detached from their pages (detach_backing) as the \
+                         texture was made"
+                            .to_owned(),
+                    )
+                } else {
+                    // The check's own textures measure the device whatever its policy.
+                    let policy = match checking {
+                        true => HostPageTexturePolicy::InPlace,
+                        false => self.compile_device().policy().host_page_textures,
+                    };
+                    let verdict = |class| match checking {
+                        true => Verdict::Passed,
+                        false => self.in_place_verdict(class),
+                    };
+                    match in_place::in_place(policy, usage, class, verdict) {
+                        Ok(()) => {
+                            match self.in_place_image(&plan, descriptor, &texels, class, &facts)? {
+                                Ok((image, pitched)) => {
+                                    if !checking {
+                                        self.shared().counts.host_texture_in_place(class, pitched);
+                                    }
+                                    return Ok(Storage::Alias { image, texels });
+                                }
+                                Err((refusal, why)) => ShadowCause::Refused(refusal, why),
+                            }
+                        }
+                        Err(cause) => cause,
+                    }
+                };
+                if checking {
+                    return Err(internal(
+                        "the in-place check's texture takes no image in place",
+                    ));
                 }
+                self.shared().counts.host_texture_shadowed(&cause);
+                if class == PagesClass::Fresh {
+                    self.shared().counts.shadow_over_fresh_pages();
+                }
+                format!(
+                    "the buffer's bytes are {}, and {}",
+                    class.words(),
+                    cause.words()
+                )
             }
-            match self.alias_image(plan.clone(), descriptor, over, &facts)? {
-                Ok(image) => return alias(image, texels),
-                Err(why) => why,
+            None => {
+                // Whether an image may hold the texels: none where their rows (or slices) lie
+                // with the buffer's bytes between them (`linear_plan::holding`), and else why.
+                let holds = holding(&texels.layout, usage);
+                // The usage the texture lacks, as for a texture of its own: plain Metal writes a
+                // texture over a buffer made without `ShaderWrite` and reads one made without
+                // `ShaderRead`. A linear image aliasing the buffer's memory takes it where one
+                // with it still lies on Metal's layout there: a linear image is never
+                // compressed, and its memory is the buffer's, so the usage costs it nothing.
+                // Else the image without it, and else the shadow, with it where that costs the
+                // shadow nothing.
+                let wider =
+                    undeclared_usage(plan.clone(), layout, usage, false, &facts, |_, w| Ok(w))?;
+                // The plans a linear image aliasing the bytes is tried with, the first the device
+                // makes: with the feedback loop usage a draw takes that reads the texture its own
+                // pass renders through a snapshot (`feedback_candidate`,
+                // `texture/attached_reads.rs`), which costs a linear image nothing as the usage
+                // the texture lacks does; then the usage the texture lacks; then the texture's
+                // own.
+                let feedback = feedback_candidate(&wider, self);
+                let mut plans: Vec<&ImagePlan> = feedback.iter().collect();
+                if wider != plan {
+                    plans.push(&wider);
+                }
+                plans.push(&plan);
+                // An aliasing image, counted where it took the feedback loop usage.
+                let alias = |image: Arc<Image>, texels: Arc<Texels>| {
+                    let usage = image.plan().usage;
+                    if usage.contains(ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT) {
+                        self.shared().counts.feedback_loop_alias_image();
+                    }
+                    Ok(Storage::Alias { image, texels })
+                };
+                // Where no image aliases the bytes, the reason the plan's attempt gives is the
+                // notice's.
+                let over = (&*texels, &holds);
+                for &wider in &plans[..plans.len() - 1] {
+                    let made = self.alias_image(wider.clone(), descriptor, over, &facts)?;
+                    if let Ok(image) = made {
+                        return alias(image, texels);
+                    }
+                }
+                match self.alias_image(plan.clone(), descriptor, over, &facts)? {
+                    Ok(image) => return alias(image, texels),
+                    Err(why) => why,
+                }
             }
         };
         let plan = self.with_undeclared_usage(plan, layout, usage, false, &facts)?;
@@ -2558,8 +2603,8 @@ impl Device {
     /// in the `GENERAL` layout and holding the buffer's bytes, where the device makes one that
     /// lies exactly on Metal's layout there (`linear_plan::linear_lack` and `aliases`); why not
     /// where it does not, and for a buffer over the caller's `VkBuffer`, whose memory's handle type
-    /// an image bound to it would have to be made for (a texture over the caller's host pages is
-    /// always a shadow: `storage_over_buffer`). It starts `PREINITIALIZED`, which its move to
+    /// an image bound to it would have to be made for (a texture over the caller's host pages
+    /// takes the image in place or a shadow: `storage_over_buffer`, `in_place.rs`). It starts `PREINITIALIZED`, which its move to
     /// `GENERAL` keeps. The image's hazard tracking is the buffer's. `holds`: whether an image may
     /// hold the texels (`linear_plan::holding`), or why not.
     fn alias_image(

@@ -492,6 +492,12 @@ calls! {
     CreateImage => c"vkCreateImage",
     GetImageMemoryRequirements => c"vkGetImageMemoryRequirements",
     BindImageMemory => c"vkBindImageMemory",
+    // A texture's image in place over host pages, made by the device's check of its first move on
+    // the check's thread as the program's thread makes it (`in_place_check.rs`,
+    // `texture/in_place_image.rs`): its requirements, and its linear layout, which priming does
+    // not make ([`UNPRIMED`](crate::device::prime::UNPRIMED)).
+    GetImageMemoryRequirements2 => c"vkGetImageMemoryRequirements2",
+    GetImageSubresourceLayout => c"vkGetImageSubresourceLayout",
     CreateRenderPass => c"vkCreateRenderPass",
     CreateRenderPass2 => c"vkCreateRenderPass2",
     CreateFramebuffer => c"vkCreateFramebuffer",

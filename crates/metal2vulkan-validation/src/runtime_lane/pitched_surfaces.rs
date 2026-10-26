@@ -8,7 +8,10 @@
 //! lie one after another, of a height that is no multiple of 4, with the pages' later bytes past
 //! their last row (a surface's next plane).
 //!
-//! Each texture is a shadow (no image over the pages: `vk_image` answers none), and every step
+//! Each texture is a shadow (no image over the pages: `vk_image` answers none) on the lane's
+//! devices, which take the exact answers (`HostPageTexturePolicy::Shadow`); the tests named
+//! `_in_place` run on a device of `HostPageTexturePolicy::InPlace`, where a texture that only reads
+//! is an image aliasing the pages if the device's check passed and its pitch is taken. Every step
 //! reads and writes Metal's bytes at Metal's places, and no write reaches the bytes between the
 //! rows or past the last. The steps:
 //!
@@ -40,9 +43,12 @@
 //! counts its copies (`WorkCounts::shadow_copies`: some for its uses), and
 //! [`a_padded_texture_that_renders_or_writes_is_a_shadow`] keeps a render target's, a written
 //! texture's and an `Unknown` usage's shadow.
+//! [`a_texture_that_only_reads_keeps_every_byte_of_its_pages_in_place`] takes the same steps
+//! where such a texture is in place.
 //!
 //! [`a_texture_over_read_only_pages_reads_them`] makes a texture that only reads over pages the
-//! process maps read-only: its first use reads their texels and writes none of their bytes.
+//! process maps read-only: its first use reads their texels and writes none of their bytes;
+//! [`a_texture_over_read_only_pages_reads_them_in_place`] likewise where it is in place.
 //!
 //! [`a_loaded_color_beside_a_cleared_depth_copies_inside_its_scissor`] draws under a scissor
 //! beside a depth attachment the pass clears and stores, of the color's size and larger, whose
@@ -61,12 +67,13 @@
 //! and the textures each command buffer takes them on (`WorkCounts::shadow_attachment_passes`,
 //! `shadow_attachment_textures`).
 //!
-//! Printed per layout (`PITCHED-SURFACE`): the shadows the making counted
+//! Printed per layout (`PITCHED-SURFACE`): the texture's form, the shadows the making counted
 //! (`WorkCounts::shadowed_textures`), and the shadow's reason. Printed once
 //! (`SHADOW-COPY-BACK`, [`a_pass_copies_in_and_back_only_the_texels_its_scissors_reach`]): whether
 //! a shadow's copy back ran as a dispatch (`WorkCounts::shadow_copies_back_dispatched`).
 
 use super::draw_work::pushes;
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::memoryless::memoryless_options;
 use super::no_copy_textures::{blending, blending_beside_scratch, floats, rects_beside, staged};
@@ -77,7 +84,7 @@ use super::{
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::device::DriverFact;
+use metal2vulkan::device::{DriverFact, HostPageTexturePolicy};
 use metal2vulkan::metal::{
     BarrierScope, PixelFormat, PrimitiveType, RenderStages, SamplerMinMagFilter, TextureUsage,
 };
@@ -87,7 +94,7 @@ use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitOption, Buffer, ClearColor, CommandQueue, Degradation, Device, IoSurfacePlane, LoadAction,
     Origin, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    SamplerState, ScissorRect, Size, StoreAction, Texture, TextureDescriptor, Viewport,
+    SamplerState, ScissorRect, Size, StoreAction, Texture, TextureDescriptor, Viewport, WorkCounts,
 };
 
 /// A surface's plane: its name, pixel format and texel bytes, width, height and bytes per row.
@@ -452,7 +459,9 @@ pub(super) fn sampler(device: &Device, filter: SamplerMinMagFilter) -> SamplerSt
 /// A texture of `layout` over a no-copy buffer of new anonymous pages, made as a surface's with
 /// `usage`: the pages hold a pattern of their own, the texels `texels_of(.., 1)` laid at the rows;
 /// with the buffer, the mapping and the pages as written. `None` where the device imports no host
-/// memory. It is a shadow, whatever its usage: counted so, and `vk_image` answers no image.
+/// memory. It is a shadow, whatever its usage: counted so, and `vk_image` answers no image; on a
+/// device that takes such textures in place ([`in_place_form`]) one that only reads may be in
+/// place instead, counted so, and `vk_image` answers its image.
 fn surface(device: &Device, layout: &Layout, usage: TextureUsage) -> Option<Surface> {
     let len = layout.len().next_multiple_of(GUEST_PAGE);
     let mapping = Mapping::anonymous(len);
@@ -490,15 +499,8 @@ fn surface(device: &Device, layout: &Layout, usage: TextureUsage) -> Option<Surf
     let texture = buffer
         .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, layout.bpr, false))
         .unwrap();
-    let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
     let what = format!("{} ({}, {usage:?})", layout.name, layout.pf.name());
-    assert_eq!(shadowed, 1, "{what}: {shadowed} shadows counted");
-    // SAFETY: the handle is only compared, while the texture lives.
-    let image = unsafe { texture.vk_image() };
-    assert_eq!(
-        image, None,
-        "{what}: a texture over host pages answered an image"
-    );
+    let (shadowed, aliased) = in_place_form(device, &before, &texture, usage, &what);
     Some(Surface {
         texture,
         buffer,
@@ -507,7 +509,43 @@ fn surface(device: &Device, layout: &Layout, usage: TextureUsage) -> Option<Surf
         len,
         what,
         shadowed,
+        aliased,
     })
+}
+
+/// The form a texture over host pages of `usage` took, its making counted from `before`: the
+/// shadows counted, and whether it is in place. A shadow, `vk_image` answering none, on a device
+/// of `HostPageTexturePolicy::Shadow` and for any usage that renders or writes; else one of
+/// `ShaderRead` usage alone may be in place, counted so (`host_textures_in_place`), and `vk_image`
+/// answers its image.
+fn in_place_form(
+    device: &Device,
+    before: &WorkCounts,
+    texture: &Texture,
+    usage: TextureUsage,
+    what: &str,
+) -> (u64, bool) {
+    let counts = device.work_counts();
+    let shadowed = counts.shadowed_textures - before.shadowed_textures;
+    let in_place = counts.host_textures_in_place - before.host_textures_in_place;
+    let policy = device.compile_device().policy().host_page_textures;
+    let may_alias = policy == HostPageTexturePolicy::InPlace && usage == TextureUsage::SHADER_READ;
+    // SAFETY: the handle is only compared, while the texture lives.
+    let aliased = unsafe { texture.vk_image() }.is_some();
+    assert!(
+        !aliased || may_alias,
+        "{what}: a texture over host pages answered an image"
+    );
+    let expected = match aliased {
+        true => (0, 1),
+        false => (1, 0),
+    };
+    assert_eq!(
+        (shadowed, in_place),
+        expected,
+        "{what}: its form not counted"
+    );
+    (shadowed, aliased)
 }
 
 /// A texture over a no-copy buffer's pages ([`surface`]).
@@ -523,6 +561,8 @@ struct Surface {
     what: String,
     /// The shadows its making counted.
     shadowed: u64,
+    /// Whether it is in place: an image aliasing the pages.
+    aliased: bool,
 }
 
 impl Surface {
@@ -554,9 +594,10 @@ impl Surface {
             .map(|notice| format!(": {}", notice.reason))
             .unwrap_or_default();
         eprintln!(
-            "PITCHED-SURFACE on {}: {}: shadowed (shadows {}){reason}",
+            "PITCHED-SURFACE on {}: {}: {} (shadows {}){reason}",
             device.name(),
             self.what,
+            if self.aliased { "in place" } else { "shadowed" },
             self.shadowed,
         );
         let Surface {
@@ -783,7 +824,8 @@ const PACKED: [Layout; 2] = [
 /// pages at the import, `a_read_only_page_is_refused_on_linux_and_read_elsewhere`, but not later),
 /// or, where `from_the_start`, before it (a guest's pages the host maps read-only, which MoltenVK
 /// imports in place). It is a shadow, whose first use copies the pages' texels in and stores
-/// nothing into them: a store into the read-only pages would end the process (`SIGBUS` on macOS,
+/// nothing into them, or in place ([`in_place_form`]), whose first move the device's check showed
+/// keeping every byte: a store into the read-only pages would end the process (`SIGBUS` on macOS,
 /// `SIGSEGV` on Linux). The read gives the pages' texels and every byte of the pages stays.
 /// Printed (`FIRST-USE-READ-ONLY`). `None` where the device makes no buffer over the pages.
 fn first_use_over_read_only_pages(
@@ -835,7 +877,6 @@ fn first_use_over_read_only_pages(
     let texture = buffer
         .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, layout.bpr, false))
         .unwrap();
-    let shadowed = device.work_counts().shadowed_textures - before.shadowed_textures;
     let what = format!(
         "{} ({}), read-only {}",
         layout.name,
@@ -846,12 +887,13 @@ fn first_use_over_read_only_pages(
             "after the buffer"
         }
     );
-    assert_eq!(shadowed, 1, "{what}: {shadowed} shadows counted");
+    let (_, aliased) = in_place_form(device, &before, &texture, d.usage, &what);
     let read = drawn(&queue, &layout, &reads, &texture, None);
     let (count, first) = differing(&read, &rows(&layout, &pages), layout.texel);
     eprintln!(
-        "FIRST-USE-READ-ONLY on {}: {what}: shadowed, {count} texels read differ",
+        "FIRST-USE-READ-ONLY on {}: {what}: {}, {count} texels read differ",
         device.name(),
+        if aliased { "in place" } else { "shadowed" },
     );
     assert!(
         count == 0,
@@ -875,7 +917,20 @@ fn first_use_over_read_only_pages(
 /// contract: RADV failed the command buffers submitted after it), so only they take the case.
 #[test]
 fn a_texture_over_read_only_pages_reads_them() {
-    on_shared_device(|device, messages| {
+    on_shared_device(read_only_pages_read);
+}
+
+/// [`a_texture_over_read_only_pages_reads_them`] on a device that takes a texture that only reads
+/// in place where its check passed.
+#[test]
+fn a_texture_over_read_only_pages_reads_them_in_place() {
+    on_in_place_device(read_only_pages_read);
+}
+
+/// [`first_use_over_read_only_pages`] over [`PACKED`] on `device`, as
+/// [`a_texture_over_read_only_pages_reads_them`] says.
+fn read_only_pages_read(device: &Device, messages: &Messages) {
+    {
         let driver = device.properties().description.driver_id;
         let keeps_running = matches!(
             driver,
@@ -901,7 +956,7 @@ fn a_texture_over_read_only_pages_reads_them() {
                 }
             }
         }
-    });
+    }
 }
 
 /// A texture over a buffer's padded rows (the browser's tile, [`LAYOUTS`]' first) is a shadow on
@@ -1932,11 +1987,29 @@ fn passes_on_one_shadow_count_once_a_command_buffer() {
 /// case prints its own reason; then fail on any validation message, leaks included. Each case
 /// takes its own validation messages first, to fail by name.
 fn on_shared_device(test: impl FnOnce(&Device, &Messages)) {
+    on_device_of(HostPageTexturePolicy::Shadow, test);
+}
+
+/// [`on_shared_device`] on a device of `HostPageTexturePolicy::InPlace`, once its check answered
+/// (printed, `IN-PLACE-CHECK`).
+fn on_in_place_device(test: impl FnOnce(&Device, &Messages)) {
+    on_device_of(HostPageTexturePolicy::InPlace, |device, messages| {
+        assert!(device.settle_in_place_checks(CHECK_WAIT));
+        for line in device.in_place_check_report() {
+            eprintln!("IN-PLACE-CHECK on {}: {line}", device.name());
+        }
+        test(device, messages);
+    });
+}
+
+/// [`on_shared_device`] on a device of `policy`.
+fn on_device_of(policy: HostPageTexturePolicy, test: impl FnOnce(&Device, &Messages)) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.announce_each.insert(Degradation::ShadowedTexture);
+            options.policy.host_page_textures = policy;
         })
         .unwrap();
         test(&device, &messages);
@@ -2104,13 +2177,23 @@ fn reads_and_blits_as_metal(device: &Device, messages: &Messages, layout: Layout
 /// it. Every layout on one device.
 #[test]
 fn a_texture_that_only_reads_keeps_every_byte_of_its_pages() {
-    on_shared_device(|device, messages| {
-        for layout in LAYOUTS {
-            if reads_and_blits_as_metal(device, messages, layout).is_none() {
-                return;
-            }
+    on_shared_device(every_layout_reads_and_blits_as_metal);
+}
+
+/// [`a_texture_that_only_reads_keeps_every_byte_of_its_pages`] on a device that takes such a
+/// texture in place where its check passed and the device takes its pitch.
+#[test]
+fn a_texture_that_only_reads_keeps_every_byte_of_its_pages_in_place() {
+    on_in_place_device(every_layout_reads_and_blits_as_metal);
+}
+
+/// [`reads_and_blits_as_metal`] over each of [`LAYOUTS`] on `device`.
+fn every_layout_reads_and_blits_as_metal(device: &Device, messages: &Messages) {
+    for layout in LAYOUTS {
+        if reads_and_blits_as_metal(device, messages, layout).is_none() {
+            return;
         }
-    });
+    }
 }
 
 /// A texture that only reads over padded rows (each padded layout of [`LAYOUTS`] over a no-copy

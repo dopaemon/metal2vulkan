@@ -778,6 +778,36 @@ impl Importer {
         result.result_with_success(properties.memory_type_bits)
     }
 
+    /// A dma-buf of `memory`, an allocation of the importer's device made exportable as one
+    /// (`vkGetMemoryFdKHR`): the device's check of textures over dma-buf pages makes its pages so
+    /// (`in_place_check.rs`). `ERROR_FEATURE_NOT_PRESENT` where the device imports no dma-bufs.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the importer's device, and `memory` a live allocation of it made with
+    /// `VkExportMemoryAllocateInfo` naming dma-bufs.
+    #[cfg(unix)]
+    pub(super) unsafe fn exported_dma_buf(
+        &self,
+        device: &ash::Device,
+        memory: vk::DeviceMemory,
+    ) -> Result<std::os::fd::OwnedFd, vk::Result> {
+        use std::os::fd::FromRawFd;
+        let functions = self
+            .dma_buf
+            .as_ref()
+            .ok_or(vk::Result::ERROR_FEATURE_NOT_PRESENT)?;
+        let info = vk::MemoryGetFdInfoKHR::default()
+            .memory(memory)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+        let mut fd = -1;
+        // SAFETY: the caller's contract; the function was loaded for this device.
+        let result = unsafe { (functions.get_memory_fd_khr)(device.handle(), &info, &mut fd) };
+        result.result()?;
+        // SAFETY: a new descriptor Vulkan handed over, which the caller owns from here on.
+        Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    }
+
     /// The memory types `pointer` can be imported into (`vkGetMemoryHostPointerPropertiesEXT`).
     ///
     /// # Safety

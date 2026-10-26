@@ -1,7 +1,8 @@
 //! Device tests of 2D textures (and 2D arrays) over no-copy buffers on the device the cfg selects.
 //! A texture over the caller's host pages is a shadow image the encoders copy the texels into and
-//! back (`shadowed-texture`): it reads and writes the caller's bytes as Metal's texture over the
-//! buffer does.
+//! back (`shadowed-texture`), or under `HostPageTexturePolicy::InPlace` one that only reads is an
+//! image aliasing the pages where the device's check passed: either reads and writes the caller's
+//! bytes as Metal's texture over the buffer does.
 //!
 //! - [`textures_over_no_copy_buffers_read_and_write_the_caller_s_pages`], under the validation
 //!   layer: the consumer's surface formats (and `BGR10_XR`, an extended-range format held in an
@@ -14,11 +15,15 @@
 //!   read through the buffer by a blit, and the other way round, in one blit encoder and in two of
 //!   one command buffer, read the write (the texture and its buffer are one resource to hazard
 //!   tracking, which on MoltenVK leaves blits to Metal's tracking). Padded rows' bytes between
-//!   the rows are never written. Each texture's form is printed (`NOCOPY-TEXTURE`): a shadow, which
-//!   `vk_image` answers no image for, counted (`WorkCounts::shadowed_textures`) and made without
-//!   zeroing its image (`shadows_zeroed`, `images_started_on_the_host`: its copy in writes every
-//!   texel first); making it, and making it again, asks the driver no format's modifier features
-//!   (`modifier_feature_queries`), and the second takes the same form.
+//!   the rows are never written. Each runs under both settings of `host_page_textures`: under
+//!   `Shadow` every texture is a shadow, which `vk_image` answers no image for, counted
+//!   (`WorkCounts::shadowed_textures`) and made without zeroing its image (`shadows_zeroed`,
+//!   `images_started_on_the_host`: its copy in writes every texel first), and making it, and
+//!   making it again, asks the driver no format's modifier features (`modifier_feature_queries`);
+//!   under `InPlace`, once the device's check answered, one of `ShaderRead` usage alone is in place
+//!   (`vk_image` answers its image, `host_textures_in_place`) or a shadow counted by why, and every
+//!   other a shadow. The second making takes the same form. Each texture's form is printed
+//!   (`NOCOPY-TEXTURE`).
 //! - [`two_slice_arrays_over_no_copy_buffers_read_and_write_the_caller_s_pages`], under the
 //!   validation layer: two-slice `RGBA8Unorm` 2D arrays made by the linear call, a 4x4 sampled one
 //!   and an 8x8 render target, read and written a slice at a time at Metal's slice places
@@ -39,6 +44,7 @@
 //!   to completion), and what the device announced.
 
 use super::degrade_notices::counts;
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::{
     layer_reported_nothing_at_all, validated_device, validated_device_with, Messages, ScratchCache,
@@ -46,6 +52,7 @@ use super::{
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{
     BlendFactor, ColorWriteMask, PixelFormat, PrimitiveType, TextureType, TextureUsage,
 };
@@ -295,10 +302,31 @@ fn ordered(
 /// zeroing its image; on ANV a padded texture is an image at Metal's row pitch. The form of each
 /// is printed. One test a format and pitch, each its own process.
 fn read_and_write_the_caller_s_pages(pf: PixelFormat, texel: u64, pad: u64) {
+    for policy in [
+        HostPageTexturePolicy::Shadow,
+        HostPageTexturePolicy::InPlace,
+    ] {
+        read_and_write_the_caller_s_pages_under(pf, texel, pad, policy);
+    }
+}
+
+/// [`read_and_write_the_caller_s_pages`] on a device of `policy`.
+fn read_and_write_the_caller_s_pages_under(
+    pf: PixelFormat,
+    texel: u64,
+    pad: u64,
+    policy: HostPageTexturePolicy,
+) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.host_page_textures = policy;
+        })
+        .unwrap();
+        if policy == HostPageTexturePolicy::InPlace {
+            assert!(device.settle_in_place_checks(CHECK_WAIT));
+        }
         let queue = device.new_command_queue().unwrap();
         let usages = [
             TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
@@ -324,12 +352,29 @@ fn read_and_write_the_caller_s_pages(pf: PixelFormat, texel: u64, pad: u64) {
             let texture = buffer.new_texture(&d, 0, bpr).unwrap();
             let counted = device.work_counts();
             let made = aliased(&texture);
-            let what = format!("{} usage {usage:?}, rows of {bpr} bytes", pf.name());
+            let what = format!(
+                "{policy:?}, {} usage {usage:?}, rows of {bpr} bytes",
+                pf.name()
+            );
             let shadowed = counted.shadowed_textures - before.shadowed_textures;
-            // A texture over host pages is a shadow, whose copy in writes every texel before any
-            // command reads it: no zeros first.
-            assert!(!made, "{what}: a texture over host pages aliased");
-            assert_eq!(shadowed, 1, "{what}: a shadow not counted");
+            let in_place = counted.host_textures_in_place - before.host_textures_in_place;
+            // Under `Shadow`, and for a texture that renders or writes, a shadow; under `InPlace`
+            // one that only reads may be in place, counted so.
+            let may_alias =
+                policy == HostPageTexturePolicy::InPlace && usage == TextureUsage::SHADER_READ;
+            assert!(
+                !made || may_alias,
+                "{what}: a texture over host pages aliased"
+            );
+            assert_eq!(
+                (shadowed, in_place),
+                match made {
+                    true => (0, 1),
+                    false => (1, 0),
+                },
+                "{what}: its form not counted"
+            );
+            // A shadow's copy in writes every texel before any command reads it: no zeros first.
             assert_eq!(
                 counted.shadows_zeroed - before.shadows_zeroed,
                 0,
@@ -344,11 +389,13 @@ fn read_and_write_the_caller_s_pages(pf: PixelFormat, texel: u64, pad: u64) {
             // which takes the same form.
             let again = buffer.new_texture(&d, 0, bpr).unwrap();
             let asked = device.work_counts();
-            assert_eq!(
-                asked.modifier_feature_queries - before.modifier_feature_queries,
-                0,
-                "{what}: the texture's making asked the driver's modifier features"
-            );
+            if !may_alias {
+                assert_eq!(
+                    asked.modifier_feature_queries - before.modifier_feature_queries,
+                    0,
+                    "{what}: the texture's making asked the driver's modifier features"
+                );
+            }
             assert_eq!(aliased(&again), made, "{what}: made again in another form");
             drop(again);
             let between = padding(&mapping.read(0..n), bpr, row);

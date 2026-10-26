@@ -99,6 +99,17 @@ use submit::{Internal, OwnTimeline};
 #[derive(Clone)]
 pub struct Device(Arc<DeviceShared>);
 
+/// A handle on a device that does not keep it ([`Device::downgrade`]).
+#[derive(Clone)]
+pub(crate) struct WeakDevice(Weak<DeviceShared>);
+
+impl WeakDevice {
+    /// The device, while it lives.
+    pub(crate) fn upgrade(&self) -> Option<Device> {
+        self.0.upgrade().map(Device)
+    }
+}
+
 impl std::fmt::Debug for Device {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Device")
@@ -297,6 +308,9 @@ pub(super) struct DeviceShared {
     pub(super) textures: super::texture::TextureState,
     /// The translated-shader cache on disk and the driver's pipeline cache.
     pub(super) shader_cache: ShaderCache,
+    /// Its check of the first move of an image over host pages, per class of pages, and its
+    /// verdicts (`in_place.rs`).
+    pub(crate) in_place: crate::in_place::InPlaceChecks,
     /// How no-copy buffers import host memory, or why they are refused.
     pub(super) host_import: Result<Importer, metal2vulkan::error::Unsupported>,
     /// Whether the device imports a pointer to shared memory, once asked
@@ -896,6 +910,11 @@ impl Device {
         &self.0.properties
     }
 
+    /// A handle on the device that does not keep it.
+    pub(crate) fn downgrade(&self) -> WeakDevice {
+        WeakDevice(Arc::downgrade(&self.0))
+    }
+
     /// The compile-and-plan device this device compiles and plans for. No Metal counterpart.
     pub fn compile_device(&self) -> &metal2vulkan::device::Device {
         &self.0.compile
@@ -1070,6 +1089,9 @@ pub(super) struct Parts {
     pub(super) lowering_refuses: BTreeSet<Degradation>,
     /// Its command buffers keep execution records (`DeviceOptions::record_executions`).
     pub(super) record_executions: bool,
+    /// Its check of the first move over host pages fails whatever the moves did
+    /// (`DeviceOptions::fail_in_place_check`).
+    pub(super) fail_in_place_check: bool,
     /// Its views may reinterpret an image's components ([`DeviceShared`]'s field), outside
     /// `enabled`'s vocabulary.
     pub(super) view_reinterpretation: bool,
@@ -1138,6 +1160,7 @@ impl Device {
             announce_each,
             lowering_refuses,
             record_executions,
+            fail_in_place_check,
             view_reinterpretation,
             generated_commands,
             host_image_copy,
@@ -1728,6 +1751,7 @@ impl Device {
             lost,
             textures,
             shader_cache,
+            in_place: crate::in_place::InPlaceChecks::new(fail_in_place_check),
             host_import,
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
@@ -1820,6 +1844,8 @@ impl Device {
             (device.shared().scheduler).wake_recorder(Arc::clone(recorder));
         }
         device.say_unmeasured_driver();
+        // The verdicts of its check of textures over host pages, where a record holds them.
+        device.recall_in_place_checks();
         device.degrade_argument_buffers_unread();
         device.degrade_float_tininess();
         if let Some((kind, notice)) = metal_level.announcement() {

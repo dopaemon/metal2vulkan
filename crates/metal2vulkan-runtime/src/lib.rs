@@ -123,6 +123,8 @@ mod host_residency;
 mod host_shared_pointers;
 mod image_barrier;
 mod image_plan;
+mod in_place;
+mod in_place_check;
 mod index_bounds;
 mod index_rewrite;
 mod indirect_command_buffer;

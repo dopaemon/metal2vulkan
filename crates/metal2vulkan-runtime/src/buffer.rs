@@ -152,6 +152,9 @@ pub(super) struct HostCell {
     /// and in it), which a detach makes present stand-ins (`detach.rs`), and the textures being
     /// made over them, which a detach refuses while one is.
     textures: Mutex<TexturesOver>,
+    /// The images in place over the buffer's bytes (a no-copy heap's: over its buffers'), which a
+    /// rebind makes again over its new pages (`texture/in_place_image.rs`).
+    in_place: Mutex<Vec<InPlaceWatch>>,
     /// The reasons the buffer's Metal address was handed out for (`Buffer::gpu_address`,
     /// `Buffer::exposed_address`), a bit each ([`ReadApart`]): once any is, its import is kept
     /// imported for good (`host_residency.rs`), and a call for a reason noted need not look
@@ -167,6 +170,24 @@ pub(super) struct HostCell {
     /// The deallocator of the pages its last detach let go of (`detach.rs`), held back until its
     /// next rebind or its release, as Metal runs it then ([`Release::hold_back`]).
     held_back: Mutex<Option<Arc<HeldBack>>>,
+}
+
+/// An image in place over a buffer's host pages ([`HostCell`], `texture/in_place_image.rs`),
+/// which a rebind makes again over the new pages: the image (`texture.rs`'s `Image`), held weakly
+/// and by type erased as [`NotedTexture`] holds it, where its texels lie in bytes from the pages'
+/// first byte, and how Metal lays them out from there.
+#[derive(Clone)]
+pub(super) struct InPlaceWatch {
+    pub(super) image: Weak<dyn Any + Send + Sync>,
+    pub(super) from_base: u64,
+    pub(super) layout: crate::linear_plan::BufferLayout,
+}
+
+impl InPlaceWatch {
+    /// Whether the image lives.
+    fn lives(&self) -> bool {
+        self.image.strong_count() > 0
+    }
 }
 
 /// The textures over a buffer's host pages ([`HostCell`]): their images, which a detach makes
@@ -471,6 +492,20 @@ impl HostCell {
         let mut textures = lock(&self.textures);
         textures.noted.retain(NotedTexture::lives);
         textures.noted.push(noted);
+    }
+
+    /// Note `watch`, an image in place over the buffer's bytes, forgetting those gone.
+    fn watch_in_place(&self, watch: InPlaceWatch) {
+        let mut in_place = lock(&self.in_place);
+        in_place.retain(InPlaceWatch::lives);
+        in_place.push(watch);
+    }
+
+    /// The live images in place over the buffer's bytes, which a rebind makes again.
+    pub(super) fn in_place_images(&self) -> Vec<InPlaceWatch> {
+        let mut in_place = lock(&self.in_place);
+        in_place.retain(InPlaceWatch::lives);
+        in_place.clone()
     }
 
     /// The textures over the buffer's bytes, locked, where none is being made: none is made
@@ -2418,6 +2453,7 @@ impl Device {
             pages: Mutex::new(Lying::In(Arc::new(host))),
             texels: Mutex::new(Vec::new()),
             textures: Mutex::new(TexturesOver::default()),
+            in_place: Mutex::new(Vec::new()),
             exposed: AtomicU8::new(0),
             device: self.clone(),
             drops_writes,
@@ -2673,6 +2709,18 @@ impl Buffer {
     /// The length padded to 16 bytes: the bytes the `VkBuffer` holds from [`Buffer::base`].
     pub(super) fn padded_length(&self) -> u64 {
         self.0.length.next_multiple_of(16)
+    }
+
+    /// The bytes of the buffer's memory from its byte 0 ([`Buffer::memory`]'s offset) to the end
+    /// of the memory's placement: an import's, for a buffer over host pages (its last page's bytes
+    /// past the buffer's among them), or a heap's.
+    pub(super) fn memory_room(&self) -> u64 {
+        match &self.0.bytes {
+            Bytes::Own(own) => own.with(ReadApart::Texture, |pages| {
+                pages.memory.placement.size().saturating_sub(pages.offset)
+            }),
+            Bytes::Heap(bytes) => bytes.bytes.memory_room().saturating_sub(bytes.offset),
+        }
     }
 
     /// Set the buffer's padded length of bytes to zero: through the mapping for `Shared` and
@@ -3160,7 +3208,7 @@ impl Buffer {
     /// The hold on the host pages the buffer's bytes lie in: a no-copy buffer's own, a buffer
     /// of a no-copy heap its heap's buffer's; `None` for bytes of the runtime's memory or of the
     /// caller's `VkBuffer`.
-    fn pages_cell(&self) -> Option<&Arc<HostCell>> {
+    pub(super) fn pages_cell(&self) -> Option<&Arc<HostCell>> {
         match &self.0.bytes {
             Bytes::Own(OwnBytes {
                 lie: Lie::Host(cell),
@@ -3257,6 +3305,15 @@ impl Buffer {
                 self.device().note_stale(cell, reached);
             }
             cell.watch_texture(noted);
+        }
+    }
+
+    /// Note `watch`, an image in place over the buffer's bytes, where they are host pages (a
+    /// no-copy buffer's, or for a heap's buffer its heap's): a rebind makes it again over its new
+    /// pages (`texture/in_place_image.rs`).
+    pub(super) fn watch_in_place(&self, watch: InPlaceWatch) {
+        if let Some(cell) = self.pages_cell() {
+            cell.watch_in_place(watch);
         }
     }
 

@@ -293,6 +293,21 @@ pub(crate) struct Counters {
     shadowed_textures: AtomicU64,
     shadows_zeroed: AtomicU64,
     shadows_over_fresh_pages: AtomicU64,
+    host_textures_in_place: AtomicU64,
+    dma_buf_textures_in_place: AtomicU64,
+    fresh_page_textures_in_place: AtomicU64,
+    pitched_host_images: AtomicU64,
+    host_texture_shadows_exact: AtomicU64,
+    host_texture_shadows_written: AtomicU64,
+    host_texture_shadows_check_pending: AtomicU64,
+    host_texture_shadows_check_failed: AtomicU64,
+    host_texture_shadows_unchecked: AtomicU64,
+    host_texture_shadows_refused: [AtomicU64; 7],
+    in_place_checks_run: AtomicU64,
+    in_place_checks_passed: AtomicU64,
+    in_place_checks_failed: AtomicU64,
+    in_place_checks_unchecked: AtomicU64,
+    in_place_checks_recalled: AtomicU64,
     fresh_page_buffers_made: AtomicU64,
     fresh_page_bytes: AtomicU64,
     new_buffer_bytes_cleared: AtomicU64,
@@ -2007,6 +2022,59 @@ impl Counters {
     /// buffer imported (`fresh_pages.rs`).
     pub(crate) fn shadow_over_fresh_pages(&self) {
         (self.shadows_over_fresh_pages).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture over host pages of `class` was made an image in place over them (`in_place.rs`),
+    /// its rows at Metal's pitch in a `DRM_FORMAT_MOD_LINEAR` image made for host allocations
+    /// where `pitched`.
+    pub(crate) fn host_texture_in_place(&self, class: crate::in_place::PagesClass, pitched: bool) {
+        use crate::in_place::PagesClass as P;
+        self.host_textures_in_place.fetch_add(1, Ordering::Relaxed);
+        match class {
+            P::Pointer => {}
+            P::DmaBuf => {
+                self.dma_buf_textures_in_place
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            P::Fresh => {
+                (self.fresh_page_textures_in_place).fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if pitched {
+            self.pitched_host_images.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A texture over host pages was made a shadow of them for `cause` (`in_place.rs`).
+    pub(crate) fn host_texture_shadowed(&self, cause: &crate::in_place::ShadowCause) {
+        use crate::in_place::ShadowCause as C;
+        let counter = match cause {
+            C::Exact => &self.host_texture_shadows_exact,
+            C::Written => &self.host_texture_shadows_written,
+            C::CheckPending(_) => &self.host_texture_shadows_check_pending,
+            C::CheckFailed(_) => &self.host_texture_shadows_check_failed,
+            C::Unchecked(_) => &self.host_texture_shadows_unchecked,
+            C::Refused(refusal, _) => &self.host_texture_shadows_refused[refusal.index()],
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The device's check of the first move over host pages answered `verdict` for a class it
+    /// ran (`in_place_check.rs`).
+    pub(crate) fn in_place_check_ran(&self, verdict: crate::in_place::Verdict) {
+        use crate::in_place::Verdict as V;
+        self.in_place_checks_run.fetch_add(1, Ordering::Relaxed);
+        let counter = match verdict {
+            V::Passed => &self.in_place_checks_passed,
+            V::Failed => &self.in_place_checks_failed,
+            V::Unchecked | V::Pending => &self.in_place_checks_unchecked,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A class's verdict was read from the record of an earlier check (`in_place.rs`).
+    pub(crate) fn in_place_check_recalled(&self) {
+        (self.in_place_checks_recalled).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A buffer was made in `bytes` of fresh pages it imported, which read zero unwritten
@@ -4123,6 +4191,74 @@ pub struct WorkCounts {
     /// (`fresh_page_buffers_made`): an image bound to imported memory starts `UNDEFINED`, and its
     /// first move may write any byte bound to it.
     pub shadows_over_fresh_pages: u64,
+    /// Textures over host pages (a no-copy buffer's, a no-copy heap's buffer's, or a buffer in
+    /// fresh pages it imported) that only sample or read, made an image aliasing the pages in
+    /// place, where the device's check passed for their class (`HostPageTexturePolicy::InPlace`):
+    /// no shadow, and no copy in or back.
+    pub host_textures_in_place: u64,
+    /// Of `host_textures_in_place`, those over pages imported as dma-bufs: each a
+    /// `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages (also counted in
+    /// `dma_buf_images`).
+    pub dma_buf_textures_in_place: u64,
+    /// Of `host_textures_in_place`, those over a buffer in fresh pages it imported.
+    pub fresh_page_textures_in_place: u64,
+    /// Of `host_textures_in_place`, those whose rows lie at Metal's pitch in a
+    /// `DRM_FORMAT_MOD_LINEAR` image made for host allocations, where the driver's own linear
+    /// image lays them out otherwise.
+    pub pitched_host_images: u64,
+    /// Textures over host pages made shadows because the device's policy asks it
+    /// (`HostPageTexturePolicy::Shadow`).
+    pub host_texture_shadows_exact: u64,
+    /// Textures over host pages made shadows because their usage renders into them or writes
+    /// them (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`).
+    pub host_texture_shadows_written: u64,
+    /// Textures over host pages made shadows because the device's check of their class had not
+    /// answered yet (a first session's, before the verdict is kept).
+    pub host_texture_shadows_check_pending: u64,
+    /// Textures over host pages made shadows because the device's check of their class found a
+    /// byte changed.
+    pub host_texture_shadows_check_failed: u64,
+    /// Textures over host pages made shadows because the device's check made no image of their
+    /// class.
+    pub host_texture_shadows_unchecked: u64,
+    /// Textures over host pages made shadows because their rows share bytes (an IOSurface
+    /// plane's GPU rows).
+    pub host_texture_shadows_refused_rows: u64,
+    /// Textures over host pages made shadows because their bytes were detached from their pages.
+    pub host_texture_shadows_refused_detached: u64,
+    /// Textures over host pages made shadows because the device makes no such linear image of
+    /// their plan (format features, usage, limits, an import only a dedicated allocation takes).
+    pub host_texture_shadows_refused_image: u64,
+    /// Textures over host pages made shadows because no image the device makes lays their rows
+    /// (or slices) at the buffer's pitch.
+    pub host_texture_shadows_refused_pitch: u64,
+    /// Textures over host pages made shadows because the image's alignment, size or memory type
+    /// misses their bytes' place.
+    pub host_texture_shadows_refused_placement: u64,
+    /// Textures over host pages imported as dma-bufs made shadows because the caller's source
+    /// made no one dma-buf of their own pages: it failed (a source of `udmabuf`s does where the
+    /// pages are more runs of its file than one `udmabuf` takes; its error is in the notice), or
+    /// answered with several chunks. Whether the buffer's own import took several chunks does not
+    /// decide it: the image asks for its own pages alone.
+    pub host_texture_shadows_refused_source: u64,
+    /// Textures over host pages imported as dma-bufs made shadows because no
+    /// `DRM_FORMAT_MOD_LINEAR` image over one dma-buf of their own pages was made for another
+    /// reason than the source or the pitch (counted in `host_texture_shadows_refused_pitch`): the
+    /// modifier's features or limits, the image's memory past the pages, or the driver's import.
+    pub host_texture_shadows_refused_dma_buf: u64,
+    /// Classes of host pages (pointer, dma-buf, fresh) the device's check of the first move ran
+    /// for in this process: `in_place_checks_passed`, `in_place_checks_failed` and
+    /// `in_place_checks_unchecked` together.
+    pub in_place_checks_run: u64,
+    /// Of `in_place_checks_run`, those whose every image's first move left every byte alone.
+    pub in_place_checks_passed: u64,
+    /// Of `in_place_checks_run`, those that found a byte changed (or were made to fail).
+    pub in_place_checks_failed: u64,
+    /// Of `in_place_checks_run`, those that made no image of the class.
+    pub in_place_checks_unchecked: u64,
+    /// Classes whose verdict was read from the record of an earlier check of the same driver,
+    /// device and runtime: no check ran for them.
+    pub in_place_checks_recalled: u64,
     /// Buffers of the runtime's own made in fresh anonymous pages imported by their pointer
     /// (`VK_EXT_external_memory_host`), which read zero with nothing written: host-visible ones
     /// longer than half a pooled block, not of a heap, where the device takes such pages. A
@@ -5006,6 +5142,44 @@ impl Device {
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),
             shadowed_textures: counters.shadowed_textures.load(Ordering::Relaxed),
             shadows_over_fresh_pages: counters.shadows_over_fresh_pages.load(Ordering::Relaxed),
+            host_textures_in_place: counters.host_textures_in_place.load(Ordering::Relaxed),
+            dma_buf_textures_in_place: counters.dma_buf_textures_in_place.load(Ordering::Relaxed),
+            fresh_page_textures_in_place: counters
+                .fresh_page_textures_in_place
+                .load(Ordering::Relaxed),
+            pitched_host_images: counters.pitched_host_images.load(Ordering::Relaxed),
+            host_texture_shadows_exact: counters.host_texture_shadows_exact.load(Ordering::Relaxed),
+            host_texture_shadows_written: counters
+                .host_texture_shadows_written
+                .load(Ordering::Relaxed),
+            host_texture_shadows_check_pending: counters
+                .host_texture_shadows_check_pending
+                .load(Ordering::Relaxed),
+            host_texture_shadows_check_failed: counters
+                .host_texture_shadows_check_failed
+                .load(Ordering::Relaxed),
+            host_texture_shadows_unchecked: counters
+                .host_texture_shadows_unchecked
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_rows: counters.host_texture_shadows_refused[0]
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_detached: counters.host_texture_shadows_refused[1]
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_image: counters.host_texture_shadows_refused[2]
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_pitch: counters.host_texture_shadows_refused[3]
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_placement: counters.host_texture_shadows_refused[4]
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_source: counters.host_texture_shadows_refused[5]
+                .load(Ordering::Relaxed),
+            host_texture_shadows_refused_dma_buf: counters.host_texture_shadows_refused[6]
+                .load(Ordering::Relaxed),
+            in_place_checks_run: counters.in_place_checks_run.load(Ordering::Relaxed),
+            in_place_checks_passed: counters.in_place_checks_passed.load(Ordering::Relaxed),
+            in_place_checks_failed: counters.in_place_checks_failed.load(Ordering::Relaxed),
+            in_place_checks_unchecked: counters.in_place_checks_unchecked.load(Ordering::Relaxed),
+            in_place_checks_recalled: counters.in_place_checks_recalled.load(Ordering::Relaxed),
             fresh_page_buffers_made: counters.fresh_page_buffers_made.load(Ordering::Relaxed),
             fresh_page_bytes: counters.fresh_page_bytes.load(Ordering::Relaxed),
             new_buffer_bytes_cleared: counters.new_buffer_bytes_cleared.load(Ordering::Relaxed),

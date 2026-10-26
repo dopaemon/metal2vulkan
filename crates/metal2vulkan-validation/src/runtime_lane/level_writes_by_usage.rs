@@ -103,7 +103,7 @@ declare void @air.write_texture_2d.v4f16(ptr addrspace(1), <2 x i32>, <4 x half>
 "#;
 
 /// Kernel `name` of [`KERNELS`] on `device`.
-fn kernel(device: &Device, name: &str) -> ComputePipelineState {
+pub(super) fn kernel(device: &Device, name: &str) -> ComputePipelineState {
     let library = device
         .new_library_with_air(&llvm_assemble_text(KERNELS).unwrap())
         .unwrap();

@@ -427,6 +427,12 @@ impl ShaderCache {
         })
     }
 
+    /// The device's view of the directory: what reads and writes its content records (the
+    /// device's check of textures over host pages keeps its verdicts there, `in_place.rs`).
+    pub(crate) fn content_store(&self) -> &Store {
+        &self.store
+    }
+
     /// Destroy the `VkPipelineCache` of every record the device holds, then stop the cache
     /// thread, which writes what is queued first: the device is going.
     ///

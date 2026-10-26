@@ -4,13 +4,14 @@
 use crate::device::profile::{GuestIsolation, HandleDomain, PointerDomain};
 
 /// Policy inputs of `Device::new`. Every field but `decoded_texels`, `heap_compression`,
-/// `completion`, `tile_store`, `resolve`, `batch_order` and `render_lowering` can change emitted
-/// code, so the profile carries it (containment as the encoding it selects) and its fingerprint
-/// covers it; those seven are the runtime's alone (the texels of a carried texture's decoded twin,
-/// a heap's compressed texture's image, when the host sees a command buffer complete, what a render
-/// pass's load leaves in the texels its draws do not write, how a multisampled color attachment
-/// resolves, how a batch begins after the earlier ones of its queue, and where a render encoder's
-/// calls are lowered), and no profile carries them.
+/// `completion`, `tile_store`, `resolve`, `batch_order`, `render_lowering` and
+/// `host_page_textures` can change emitted code, so the profile carries it (containment as the
+/// encoding it selects) and its fingerprint covers it; those eight are the runtime's alone (the
+/// texels of a carried texture's decoded twin, a heap's compressed texture's image, when the host
+/// sees a command buffer complete, what a render pass's load leaves in the texels its draws do not
+/// write, how a multisampled color attachment resolves, how a batch begins after the earlier ones
+/// of its queue, where a render encoder's calls are lowered, and what holds a sampled texture over
+/// host pages), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -107,6 +108,12 @@ pub struct DevicePolicy {
     /// (the default), or after it returned, a refusal only the lowering finds failing its command
     /// buffer. The runtime's choice alone: no emitted code changes.
     pub render_lowering: RenderLoweringPolicy,
+    /// Whether a texture that only samples or reads, over a no-copy buffer's host pages or over a
+    /// buffer the runtime placed in fresh host pages, is an image aliasing those pages in place
+    /// (the default, where the device's own check shows its first move keeps every byte), or a
+    /// shadow the encoders copy the texels into and back. The runtime's choice alone: no emitted
+    /// code changes.
+    pub host_page_textures: HostPageTexturePolicy,
 }
 
 impl DevicePolicy {
@@ -120,7 +127,8 @@ impl DevicePolicy {
     /// heap's texture Metal keeps compressed, command buffers ready together in one kernel
     /// submission, the device's load and store of a signed normalized or `RGB9E5Float` color
     /// attachment, the device's resolve of a multisampled color attachment, batches of one
-    /// queue ordered by their ends where the driver runs them one after another.
+    /// queue ordered by their ends where the driver runs them one after another, and a sampled
+    /// texture over host pages in place where the device's check passed.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -145,6 +153,7 @@ impl DevicePolicy {
         resolve: ResolvePolicy::Device,
         batch_order: BatchOrderPolicy::Ends,
         render_lowering: RenderLoweringPolicy::AtCall,
+        host_page_textures: HostPageTexturePolicy::InPlace,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: its maths functions,
@@ -162,9 +171,11 @@ impl DevicePolicy {
     /// at its own end ([`CompletionPolicy::Exact`]), a loaded attachment's texels as its tile
     /// store leaves them ([`TileStorePolicy::Exact`]), its multisample color resolve
     /// ([`ResolvePolicy::Exact`]), each batch ordered after the earlier ones of its queue by
-    /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), and each render encoder
+    /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), each render encoder
     /// call lowered inside the call, which returns every refusal
-    /// ([`RenderLoweringPolicy::AtCall`]). Sampling and every other field are kept.
+    /// ([`RenderLoweringPolicy::AtCall`]), and every texture over host pages a shadow, whose
+    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]). Sampling and every
+    /// other field are kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             ycbcr_filter: YCbCrFilterPolicy::Exact,
@@ -184,6 +195,7 @@ impl DevicePolicy {
             resolve: ResolvePolicy::Exact,
             batch_order: BatchOrderPolicy::Exact,
             render_lowering: RenderLoweringPolicy::AtCall,
+            host_page_textures: HostPageTexturePolicy::Shadow,
             ..self
         }
     }
@@ -752,4 +764,28 @@ pub enum RenderLoweringPolicy {
     /// returns from the call itself.
     #[default]
     AtCall,
+}
+
+/// What holds a texture over host pages whose declared usage only samples or reads it (no
+/// `RenderTarget`, `ShaderWrite` or `ShaderAtomic`): over a no-copy buffer's pages (imported by
+/// their pointer or as dma-bufs) or over a buffer the runtime placed in fresh host pages it
+/// imported. Vulkan makes an image bound to imported memory start `UNDEFINED`
+/// (`VUID-VkImageCreateInfo-pNext-01443`), and lets its first layout transition read and write
+/// every byte bound to it, where Metal keeps every CPU write to those bytes. The runtime's choice
+/// alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HostPageTexturePolicy {
+    /// A linear image aliasing the pages (the default), on a device whose own check, run once per
+    /// driver and release, shows that this first move of such an image leaves every byte alone
+    /// while the CPU writes beside it; and where the device lays the image out at the buffer's
+    /// row pitch. Elsewhere, and for a texture that renders or writes, the shadow below. A
+    /// texture made before the check's verdict is known is a shadow too.
+    #[default]
+    InPlace,
+    /// A shadow on every device: an image of the runtime's own memory the encoders copy the
+    /// texels into before each use and merge back after each write, whose copies touch the
+    /// texels alone.
+    Shadow,
 }

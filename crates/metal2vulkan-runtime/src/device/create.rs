@@ -199,6 +199,12 @@ pub struct DeviceOptions {
     /// diagnostic, for running a measured device as an unmeasured one of its driver runs (a
     /// report from a GPU no venue measured). No Metal counterpart.
     pub assume_unmeasured_identity: bool,
+    /// Make each device's check of the first move of an image over host pages fail whatever the
+    /// moves did (`in_place_check.rs`), and keep no record of it: every texture over host pages
+    /// is then a shadow, its notice naming the failed check. Off by default. A test hook, for the
+    /// lanes that hold the shadow to a failed check. No Metal counterpart.
+    #[doc(hidden)]
+    pub fail_in_place_check: bool,
 }
 
 /// One setting of an instance layer (`VkLayerSettingEXT`).
@@ -1452,6 +1458,7 @@ fn create_on(
         announce_each: options.announce_each.clone(),
         lowering_refuses: options.lowering_refuses.clone(),
         record_executions: options.record_executions,
+        fail_in_place_check: options.fail_in_place_check,
         view_reinterpretation,
         generated_commands,
         host_image_copy,
@@ -1582,6 +1589,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         metal_level,
         record_executions,
         assume_unmeasured_identity,
+        fail_in_place_check,
     } = a;
     *policy == b.policy
         && *layers == b.layers
@@ -1603,6 +1611,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *metal_level == b.metal_level
         && *record_executions == b.record_executions
         && *assume_unmeasured_identity == b.assume_unmeasured_identity
+        && *fail_in_place_check == b.fail_in_place_check
 }
 
 /// The group of `made` for `options`: the live one, or a new one on a new instance. Its index.

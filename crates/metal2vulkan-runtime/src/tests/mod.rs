@@ -136,6 +136,7 @@ mod host_shadow;
 mod host_step_neutrals;
 mod image_barriers;
 mod image_plan;
+mod in_place;
 mod inbox;
 mod indirect_command_buffer;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

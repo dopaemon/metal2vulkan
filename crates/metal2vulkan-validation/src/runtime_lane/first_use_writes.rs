@@ -10,18 +10,30 @@
 //! half, the byte after each such row's texels where the rows are padded, and bytes past the last
 //! row: one row after another, [`SPACING`] apart, starting at each of [`STARTS`] from the commit
 //! (a fresh texture each), so the writes cover the commit, the submission and the first use. Every
-//! write stays, and the pass reads the texels of the top half as they were. A texture over host
-//! pages is a shadow, whose first use copies the texels in and writes none of the pages' bytes; an
-//! image bound to the pages would start `UNDEFINED`, and its first move, which Vulkan lets read
-//! and write every byte it is bound to, could be kept only by writing the bytes back over such a
-//! write. Printed (`FIRST-USE-WRITES`): per layout and start, the writes undone and the texels read
-//! that differ.
+//! write stays, and the pass reads the texels of the top half as they were.
+//!
+//! Under both settings of `HostPageTexturePolicy`, each held to the path it took:
+//!
+//! - **`InPlace`** (the default), once the device's check of the first move over host pages
+//!   answered (`Device::settle_in_place_checks`): where it passed for pages imported by their
+//!   pointer, the texture is an image aliasing the pages (`vk_image` answers one;
+//!   `WorkCounts::host_textures_in_place`), its first move the image's own layout transition from
+//!   `UNDEFINED`, which Vulkan lets read and write every byte bound to it and the device's check
+//!   showed leaving them alone; or a shadow its refusal counts (`host_texture_shadows_refused_*`:
+//!   the driver lays no image at the plane's pitch). Where the check did not pass, a shadow counted
+//!   by why.
+//! - **`Shadow`**: a shadow, whose first use copies the texels in and writes none of the pages'
+//!   bytes (`host_texture_shadows_exact`).
+//!
+//! Printed (`FIRST-USE-WRITES`): per setting, layout and start, the form, the writes undone and
+//! the texels read that differ; and the check's verdicts (`IN-PLACE-CHECK`).
 
 use super::host_memory::{counting, no_copy, not_importable, Mapping, GUEST_PAGE};
 use super::no_copy_textures::{floats, staged};
 use super::pitched_surfaces::reading;
-use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache, WAIT};
+use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan_runtime::{
     BlitOption, ClearColor, IoSurfacePlane, LoadAction, Origin, RenderPassDescriptor,
@@ -64,13 +76,54 @@ struct Pages(NonNull<u8>);
 // SAFETY: see the type's docs; the thread writes bytes no other thread reads or writes meanwhile.
 unsafe impl Send for Pages {}
 
+/// How long a lane waits for the device's check of the first move over host pages.
+pub(crate) const CHECK_WAIT: Duration = Duration::from_secs(300);
+
 #[test]
 fn a_cpu_write_to_bytes_a_first_use_does_not_read_stays() {
+    let mut lapses = Vec::new();
+    for policy in [
+        HostPageTexturePolicy::InPlace,
+        HostPageTexturePolicy::Shadow,
+    ] {
+        first_use_writes_under(policy, &mut lapses);
+    }
+    assert!(
+        lapses.is_empty(),
+        "a first use undid a CPU write, or changed or misread bytes, or took another path:\n{}",
+        lapses.join("\n")
+    );
+}
+
+/// The lane's rounds on a device of `policy`, their lapses pushed to `lapses`.
+fn first_use_writes_under(policy: HostPageTexturePolicy, lapses: &mut Vec<String>) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let mut lapses = Vec::new();
     {
-        let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.host_page_textures = policy;
+        })
+        .unwrap();
+        // The check answers before any texture is made, so each takes the path its verdict says.
+        let in_place = policy == HostPageTexturePolicy::InPlace;
+        if in_place {
+            assert!(
+                device.settle_in_place_checks(CHECK_WAIT),
+                "the check answered"
+            );
+            for line in device.in_place_check_report() {
+                eprintln!("IN-PLACE-CHECK on {}: {line}", device.name());
+            }
+            eprintln!(
+                "IN-PLACE-CHECK on {}: took {:?}",
+                device.name(),
+                device.in_place_check_took()
+            );
+        }
+        let pointer_passed = device
+            .in_place_check_report()
+            .iter()
+            .any(|line| line == "Pointer: Passed");
         let queue = device.new_command_queue().unwrap();
         let reads = reading(&device, PixelFormat::BGRA8Unorm, "tob_read");
         let corners = staged(&device, &floats([-1.0, -1.0, 1.0, 1.0]));
@@ -114,14 +167,42 @@ fn a_cpu_write_to_bytes_a_first_use_does_not_read_stays() {
                 let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
                 d.usage = TextureUsage::SHADER_READ;
                 d.resource_options = buffer.resource_options();
+                let before = device.work_counts();
                 let texture = buffer
                     .new_texture_with_iosurface_plane(&d, IoSurfacePlane::new(0, bpr, false))
                     .unwrap();
+                let after = device.work_counts();
+                // The path the texture took, held to the setting and the check's verdict.
+                let aliased = after.host_textures_in_place - before.host_textures_in_place;
+                let refused = [
+                    after.host_texture_shadows_refused_pitch
+                        - before.host_texture_shadows_refused_pitch,
+                    after.host_texture_shadows_refused_image
+                        - before.host_texture_shadows_refused_image,
+                    after.host_texture_shadows_refused_placement
+                        - before.host_texture_shadows_refused_placement,
+                ]
+                .iter()
+                .sum::<u64>();
+                let exact = after.host_texture_shadows_exact - before.host_texture_shadows_exact;
                 // SAFETY: the handle is only compared, while the texture lives.
                 let form = match unsafe { texture.vk_image() } {
                     Some(_) => "aliased",
                     None => "shadowed",
                 };
+                let took = match (in_place, pointer_passed) {
+                    (false, _) => exact == 1 && form == "shadowed",
+                    (true, true) => {
+                        (aliased == 1 && form == "aliased") || (refused == 1 && form == "shadowed")
+                    }
+                    (true, false) => aliased == 0 && form == "shadowed",
+                };
+                if !took {
+                    lapses.push(format!(
+                        "{policy:?}, {name}: the texture is {form} (in place {aliased}, refused \
+                         {refused}, exact {exact}), the pointer check passed: {pointer_passed}"
+                    ));
+                }
                 let mut d = TextureDescriptor::texture_2d(PixelFormat::BGRA8Unorm, w, h, false);
                 d.usage = TextureUsage::RENDER_TARGET;
                 d.resource_options = ResourceOptions::private();
@@ -211,7 +292,7 @@ fn a_cpu_write_to_bytes_a_first_use_does_not_read_stays() {
                         got[out..out + 4] != pages[at..at + 4]
                     })
                     .count();
-                let what = format!("{name}, writes from {start} us of the commit");
+                let what = format!("{policy:?}, {name}, writes from {start} us of the commit");
                 eprintln!(
                     "FIRST-USE-WRITES on {}: {what}: {form}: {} of {} writes undone, {changed} \
                      other bytes changed, {differ} texels read differ",
@@ -240,9 +321,4 @@ fn a_cpu_write_to_bytes_a_first_use_does_not_read_stays() {
         }
     }
     layer_reported_nothing_at_all(&messages);
-    assert!(
-        lapses.is_empty(),
-        "a first use undid a CPU write, or changed or misread bytes:\n{}",
-        lapses.join("\n")
-    );
 }

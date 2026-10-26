@@ -232,20 +232,43 @@ the device refuses (`HostMemory::with_dma_buf`), `VK_EXT_external_memory_dma_buf
 `VK_KHR_external_memory_fd`, and `VK_EXT_image_drm_format_modifier` with
 `VK_EXT_queue_family_foreign` beside them, wherever a device lists them.
 
-A texture over a no-copy buffer's host pages (imported by their pointer or as dma-bufs) is a shadow
-(`shadowed-texture`), as is one over a host-visible buffer of the runtime's own longer than 32 MiB
-where the device imports host pointers and the memory class's best type for the buffer takes such
-an import: that buffer lies in fresh anonymous pages imported by their pointer, zero as mapped, so
-that nothing writes its zeros (`WorkCounts::fresh_page_buffers_made`,
-`shadows_over_fresh_pages`). Such a shadow is an optimal image of the runtime's own memory, whose
-texels the encoders copy in from the pages before a use and back (merged back: only the bytes the
-commands changed) after a write. No image is bound to the pages: an image bound to imported memory
-starts in `VK_IMAGE_LAYOUT_UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), and its first move,
-like any layout transition, may read and write every byte bound to it, where Metal keeps every CPU
-write to bytes a command buffer does not write. `Texture::vk_image` gives `None` for such a texture. A class whose best memory type takes no such
-import -- a discrete card's write-combined class, whose best type for the buffer is a device-local
-host-visible one -- is placed as ever and its bytes set to zero on the host; the buffer reads zero
-either way, which is all a program sees.
+A texture over host pages is one over a no-copy buffer's (imported by their pointer or as
+dma-bufs), or over a host-visible buffer of the runtime's own longer than 32 MiB where the device
+imports host pointers and the memory class's best type for the buffer takes such an import: that
+buffer lies in fresh anonymous pages imported by their pointer, zero as mapped, so that nothing
+writes its zeros (`WorkCounts::fresh_page_buffers_made`). A class whose best memory type takes no
+such import -- a discrete card's write-combined class, whose best type for the buffer is a
+device-local host-visible one -- is placed as ever and its bytes set to zero on the host; the
+buffer reads zero either way, which is all a program sees.
+
+An image bound to imported memory starts in `VK_IMAGE_LAYOUT_UNDEFINED`
+(`VUID-VkImageCreateInfo-pNext-01443`), and its first move, like any layout transition, may read
+and write every byte bound to it, where Metal keeps every CPU write to bytes a command buffer does
+not write. Under the default `HostPageTexturePolicy::InPlace` the runtime relies on the driver
+there, checked: a texture over host pages whose declared usage only samples or reads it (none of
+`RenderTarget`, `ShaderWrite` and `ShaderAtomic`) is a linear image aliasing the pages (one over
+dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages, acquired from
+`VK_QUEUE_FAMILY_FOREIGN_EXT`) wherever the device's own check passed for that kind of pages
+(`WorkCounts::host_textures_in_place`, `dma_buf_textures_in_place`,
+`fresh_page_textures_in_place`). The check makes such images of every texel size, small and
+3840x2160, over each kind of pages while a CPU thread writes beside their texels, and passes a kind
+only where every first move kept every byte. It runs on a thread of its own, which the first such
+texture starts, once per driver, driver version and runtime release: its verdict is kept in the
+shader cache's directory (a device without one checks once per process) and recalled as the next
+device is made (`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`,
+`_recalled`). Such a texture's commands read the texels in the memory the buffer's commands read,
+so a CPU write reaches them as it reaches the buffer's.
+
+Every other texture over host pages is a shadow (`shadowed-texture`, the notice naming why): under
+`HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one whose usage renders into it or
+writes it; one made before the check answered, or where it failed or made no image; and one no
+image in place serves (the bytes' pitch, placement or memory, or over dma-buf pages no dma-buf of
+the texture's own pages). `WorkCounts::host_texture_shadows_*` counts each reason apart. A shadow
+is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages
+before a use and back (merged back: only the bytes the commands changed) after a write; no image
+is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
+is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
+attachment stand-in, whose copies touch its texels alone.
 A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its
 first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image over a buffer of the
 runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its
@@ -1190,7 +1213,14 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   pointer or as dma-bufs, or the fresh pages a host-visible buffer of the runtime's own longer than
   32 MiB lies in), where an image bound to them would start `UNDEFINED` and Vulkan lets its layout
   transitions (its first move among them) read and write any byte bound to it, where Metal keeps
-  every CPU write; or its rows (or an array's slices) lie with the buffer's bytes between them,
+  every CPU write, and the device takes no image in place there: the policy keeps the exact form
+  (`HostPageTexturePolicy::Shadow`), the texture's usage renders into it or writes it
+  (`RenderTarget`, `ShaderWrite`, `ShaderAtomic`), the device's check that the move keeps every
+  byte over that kind of pages has not answered yet, found a byte changed or made no image, or no
+  image in place serves the texels (its rows share bytes, the device lays no linear image's rows at
+  the buffer's pitch, the image's placement or memory misses the pages, the bytes were detached, or
+  no dma-buf of the texture's own pages serves); the notice names which, and
+  `WorkCounts::host_texture_shadows_*` counts each; or its rows (or an array's slices) lie with the buffer's bytes between them,
   which an image over them would hold in its subresource, where Vulkan lets the image's layout
   transitions read and write any byte of its subresources, and a render pass's load and store
   operations read and write back any byte of an attachment's image subresource, and Metal leaves
@@ -3150,8 +3180,9 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-unordered-framebuffer-fetch` (retired). No replacement: the opt-in
   unordered framebuffer fetch is removed; a fetch no ordered form serves on the device is refused
   (Unsupported FramebufferFetch).
-- `metal2vulkan-degrade-unrestored-first-move-bytes` (retired). No replacement: a texture over a
-  no-copy buffer's host pages is a shadow, which takes no first move over them.
+- `metal2vulkan-degrade-unrestored-first-move-bytes` (retired). No replacement: a texture over
+  host pages takes a first move over them only where the device's check showed that move keeping
+  every byte; elsewhere it is a shadow, which takes none.
 - `metal2vulkan-degrade-resource-id-takeover` (retired). No replacement: a command reads the
   sampler states live as its batch is submitted, so a state made before the event wait that orders
   its ID's write is the one its function reads, as on Metal.

@@ -631,9 +631,11 @@ impl Device {
             return Err(invalid(call, Problem::Heap(problem)));
         }
         // The texel views and copies of the textures over the bytes are planned at their offset
-        // in the `VkBuffer`, the bytes' offset in their page.
+        // in the `VkBuffer`, the bytes' offset in their page; and their images in place are bound
+        // where Metal lays their texels out, which keeps their alignment only at that offset.
         let texels = cell.texels();
-        if !texels.is_empty() && window.offset != cell.offset() {
+        let in_place = cell.in_place_images();
+        if (!texels.is_empty() || !in_place.is_empty()) && window.offset != cell.offset() {
             return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
         }
         // Detached bytes are given pages with no texture being made over them, and none is
@@ -683,12 +685,18 @@ impl Device {
                                 call, importer, pointer, length, window, source, class, false,
                             )
                         }?;
-                        // The heap's images bound to its bytes, made over dma-bufs of their own
-                        // pages, each of which the source makes: still with no lock held.
+                        // The heap's images bound to its bytes, and the images in place over them,
+                        // made over dma-bufs of their own pages, each of which the source makes:
+                        // still with no lock held.
                         let again = match heap {
                             Some(heap) => self.dma_buf_images_again(heap, &placement, pointer),
                             None => Ok(Remade::default()),
                         };
+                        let again = again.and_then(|mut remade| {
+                            let watches = &in_place;
+                            self.dma_buf_in_place_again(watches, &placement, pointer, &mut remade)?;
+                            Ok(remade)
+                        });
                         let remade = match again {
                             Ok(remade) => remade,
                             Err(error) => {
@@ -726,10 +734,15 @@ impl Device {
         // The heap's images bound to its bytes, made again over the new pages. A refusal drops
         // them and the new pages unreleased: the deallocator goes unrun.
         let mut remade = remade;
-        let swaps = match heap {
+        let mut swaps = match heap {
             Some(heap) => self.rebound_heap_images(heap, &pages, &mut remade)?,
             None => Vec::new(),
         };
+        // The images in place over the bytes (`texture/in_place_image.rs`), made again over the
+        // new pages.
+        if !in_place.is_empty() {
+            swaps.extend(self.rebound_in_place_images(&in_place, &pages, &mut remade)?);
+        }
         let (old, again) = shared
             .rebinds
             .replace(key, cell, Arc::clone(&pages))

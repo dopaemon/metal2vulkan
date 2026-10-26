@@ -92,11 +92,13 @@ use super::functions::Vk;
 use super::QueueSlot;
 
 /// The table's entry points priming cannot make before the hook is registered for the device it
-/// primes: the release of a device, an instance and a messenger, and the commands of a mesh draw
-/// and of an execution of commands the GPU generates, which take pipelines of their own kinds.
-/// The first release of each in the process, and the first replay of each command
-/// (`recorder`), registers the hook again as its section ends (`exit_guard::called`).
-pub(crate) const UNPRIMED: [Call; 8] = [
+/// primes: the release of a device, an instance and a messenger, the commands of a mesh draw
+/// and of an execution of commands the GPU generates, which take pipelines of their own kinds, and
+/// the layout of a linear image, of which a device need make none of any format. The first
+/// release of each in the process, the first replay of each command (`recorder`), and the first
+/// layout read in a section, registers the hook again as its section ends
+/// (`exit_guard::called`).
+pub(crate) const UNPRIMED: [Call; 9] = [
     Call::DestroyDevice,
     Call::DestroyDebugUtilsMessenger,
     Call::DestroyInstance,
@@ -105,6 +107,7 @@ pub(crate) const UNPRIMED: [Call; 8] = [
     Call::CmdDrawMeshTasksIndirectCount,
     Call::CmdExecuteGeneratedCommands,
     Call::CmdPreprocessGeneratedCommands,
+    Call::GetImageSubresourceLayout,
 ];
 
 /// The table's entry points a queue family that writes no timestamps (`timestampValidBits` 0)
@@ -968,6 +971,10 @@ impl Primer<'_> {
             self.made(Call::CreateImage);
             let requirements = device.get_image_memory_requirements(image);
             self.made(Call::GetImageMemoryRequirements);
+            let mut requirements2 = vk::MemoryRequirements2::default();
+            let query = vk::ImageMemoryRequirementsInfo2::default().image(image);
+            device.get_image_memory_requirements2(&query, &mut requirements2);
+            self.made(Call::GetImageMemoryRequirements2);
             let memory = match self.allocate(requirements, vk::MemoryPropertyFlags::empty(), false)
             {
                 Ok(memory) => memory,

@@ -241,15 +241,31 @@ used (no command reaches them unnamed yet), `host_rebind_imports_made` those reb
 `host_rebind_imports_covered` those whose pages lay within bytes a buffer over host pages lay over
 already.
 
-A texture over a no-copy buffer's host pages, imported by their pointer or as dma-bufs, is a
-shadow (`shadowed-texture`) on every device, whatever its usage and row pitch: an optimal image of
-the runtime's own memory, its texels copied in from the pages before a use and merged back after a
-write. An image bound to imported memory starts in `VK_IMAGE_LAYOUT_UNDEFINED`
-(`VUID-VkImageCreateInfo-pNext-01443`), and its layout transitions "may perform read and write
-accesses on all memory bound to the image subresource range"; every image takes one, its first move
-from the layout it is made in, before any use, and the host could keep the bytes across it only by
-reading them before it and writing them back after, which would undo a CPU write made meanwhile,
-where Metal keeps every write to bytes a command buffer does not write.
+A texture over a no-copy buffer's host pages, imported by their pointer or as dma-bufs (or over a
+buffer the runtime placed in fresh host pages), meets a rule Metal does not have. An image bound to
+imported memory starts in `VK_IMAGE_LAYOUT_UNDEFINED` (`VUID-VkImageCreateInfo-pNext-01443`), and
+its layout transitions "may perform read and write accesses on all memory bound to the image
+subresource range"; every image takes one, its first move from the layout it is made in, before any
+use, and the host could keep the bytes across it only by reading them before it and writing them
+back after, which would undo a CPU write made meanwhile, where Metal keeps every write to bytes a
+command buffer does not write.
+
+By default (`HostPageTexturePolicy::InPlace`) the runtime relies on the driver there, checked. A
+texture whose declared usage only samples or reads it is a linear image aliasing the pages wherever
+the device's own check passed for that kind of pages (pointer imports, dma-buf imports, fresh
+pages): the check makes such images while a CPU thread writes beside their texels and passes a kind
+only where every first move kept every byte. It runs on a thread of its own, started by the first
+such texture, once per driver, driver version and runtime release; with a shader-cache directory
+its verdict is kept there and recalled as the next device is made, else it runs once per process.
+Until it answers, a texture is a shadow (`WorkCounts::host_texture_shadows_check_pending`), so the
+first frames of a first session pay the shadow's copies. A texture that renders or writes
+(`RenderTarget`, `ShaderWrite`, `ShaderAtomic`), one the check failed or could not cover, and one
+no image in place serves (a pitch the device's linear images do not take --
+`host_texture_shadows_refused_pitch`; over dma-buf pages, a source that makes no one dma-buf of
+the texture's own pages, as a chunked `udmabuf` import does -- `host_texture_shadows_refused_source`)
+is a shadow (`shadowed-texture`, naming why): an optimal image of the runtime's own memory, its
+texels copied in from the pages before a use and merged back after a write. `HostPageTexturePolicy::Shadow` (in `DevicePolicy::exact_answers`) keeps every such
+texture a shadow and runs no check.
 
 A texture over another buffer's bytes (the runtime's own memory) is a linear image over them where
 its rows lie one after another (`bytes_per_row` is its texels' bytes, or it has one row; an array's

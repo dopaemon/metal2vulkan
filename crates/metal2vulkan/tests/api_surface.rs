@@ -243,6 +243,7 @@ surface! {
         enum ResolvePolicy N;
         enum BatchOrderPolicy N;
         enum RenderLoweringPolicy N;
+        enum HostPageTexturePolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;
