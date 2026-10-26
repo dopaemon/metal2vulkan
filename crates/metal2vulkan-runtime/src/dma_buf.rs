@@ -1462,9 +1462,11 @@ unsafe impl Send for ExportedPages {}
 
 impl ExportedPages {
     /// `length` bytes of host-visible, host-coherent memory, exported as a dma-buf and mapped, of
-    /// the first such type that is not device-local where one is; `None` where the device imports
-    /// no dma-bufs, makes no images over them, exports no such memory but as a dedicated
-    /// allocation, or refuses it.
+    /// the first such type that is host-cached and not device-local where one is (system memory as
+    /// the CPU caches it, as a guest's pages are; the check reads every byte back, which took 3.1 s
+    /// for a 3840x2160 surface's 33 MB through RADV's uncached type on the Radeon 780M, against
+    /// 7.2 ms cached), else not device-local; `None` where the device imports no dma-bufs, makes no
+    /// images over them, exports no such memory but as a dedicated allocation, or refuses it.
     pub(super) fn make(device: &Device, length: u64) -> Option<ExportedPages> {
         let shared = device.shared();
         let importer = shared.host_import.as_ref().ok()?;
@@ -1502,10 +1504,16 @@ impl ExportedPages {
                 .map_while(|index| memory.type_flags(index).map(|flags| (index, flags)))
                 .filter(|(_, flags)| flags.contains(wanted))
                 .collect();
-            let system = types
-                .iter()
-                .find(|(_, flags)| !flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL));
-            system.or(types.first()).map(|&(index, _)| index)?
+            let system = |cached: bool| {
+                types.iter().find(|(_, flags)| {
+                    !flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+                        && (!cached || flags.contains(vk::MemoryPropertyFlags::HOST_CACHED))
+                })
+            };
+            system(true)
+                .or(system(false))
+                .or(types.first())
+                .map(|&(index, _)| index)?
         };
         let raw_device = shared.vk();
         let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(DMA_BUF);

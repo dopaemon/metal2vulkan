@@ -24,6 +24,7 @@
 
 use super::degrade_notices;
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
+use super::first_use_writes::CHECK_WAIT;
 use super::host_memory::READ_ONLY_PAGES;
 use super::host_memory::{
     counting, gpu_fill, gpu_read, host_page, not_importable, on_device, run, Mapping,
@@ -32,8 +33,12 @@ use super::keep_alives::eventually;
 use super::no_copy_heaps::{
     blit_into, blit_texels, encode_texels_in, encode_texels_out, shared, staged,
 };
-use super::{read_buffer, validated_device, Messages, ScratchCache};
+use super::{
+    layer_reported_nothing, layer_reported_nothing_at_all, read_buffer, validated_device,
+    validated_device_with, Messages, ScratchCache,
+};
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan_runtime::{
@@ -1486,6 +1491,114 @@ fn check_texture_request(
         (Some(_), _) => assert!(asked.is_empty(), "{test}: the source's calls: {asked:?}"),
         (None, _) => eprintln!("{test}: on {}: the source's calls {asked:?}", device.name()),
     }
+}
+
+/// Under `HostPageTexturePolicy::InPlace`, once the device's check answered (printed), a texture
+/// that only reads over a no-copy buffer of memfd memory takes the image in place over a dma-buf
+/// of its own pages where the source makes one, and its shadow where it makes none: over one run
+/// of the file (64x16 `RGBA8Unorm`, rows 256 bytes apart), one dma-buf; over more discontiguous
+/// runs than one udmabuf takes (a `page / 4`-wide `RGBA8Unorm` texture of a row a page, over
+/// `list_limit + 76` single pages, the guest surface whose pages are scattered), the source makes
+/// no one dma-buf, and the shadow is counted as the source's refusal
+/// (`host_texture_shadows_refused_source`). Where the device imports dma-bufs (RADV) and its check
+/// passed for them, the first is in place (`dma_buf_textures_in_place`) and the second the
+/// source's refusal; elsewhere the forms are printed. Either way a blit reads the CPU's bytes and
+/// the CPU's later bytes. Printed (`DMA-BUF-IN-PLACE`): each texture's form and the shadow's
+/// counted reasons.
+#[test]
+fn sampled_textures_over_dma_buf_pages_are_in_place_where_their_pages_make_one_dma_buf() {
+    const TEST: &str = "DMA-BUF-IN-PLACE";
+    if !udmabuf_openable(TEST) {
+        return;
+    }
+    let cache = ScratchCache::new().unwrap();
+    let messages = Messages::default();
+    {
+        let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
+            options.policy.host_page_textures = HostPageTexturePolicy::InPlace;
+        })
+        .unwrap();
+        assert!(device.settle_in_place_checks(CHECK_WAIT));
+        let report = device.in_place_check_report();
+        eprintln!("{TEST} on {}: the check: {report:?}", device.name());
+        let passed = report.iter().any(|line| line == "DmaBuf: Passed");
+        let radv = imports_dma_buf(&device) == Some(true);
+        let queue = device.new_command_queue().unwrap();
+        let page = host_page();
+        let runs = Limits::of_host().items + 76;
+        // What, the memfd and its view, the texture's width, height and pitch, and whether the
+        // source makes one dma-buf of its pages.
+        let one_run = {
+            let ram = Memfd::new(10 * page);
+            let view = ram.view(&[(2 * page, 8 * page)]);
+            ram.whole.write(2 * page, &counting(8 * page, 13));
+            ("one run", ram, view, (64u64, 16u64, 256usize), true)
+        };
+        let scattered = {
+            let (ram, view, _) = every_other_page(runs);
+            let width = (page / 4) as u64;
+            (
+                "scattered runs",
+                ram,
+                view,
+                (width, runs as u64, page),
+                false,
+            )
+        };
+        for (what, ram, view, (width, height, pitch), one) in [one_run, scattered] {
+            let calls = Calls::default();
+            let buffer = no_copy(&device, &view, 0, view.len, ram.source(&view, &calls)).unwrap();
+            let before = device.work_counts();
+            let texture = buffer
+                .new_texture(
+                    &read_only(PixelFormat::RGBA8Unorm, width, height),
+                    0,
+                    pitch as u64,
+                )
+                .unwrap();
+            let after = device.work_counts();
+            // SAFETY: the handle is only compared, while the texture lives.
+            let aliased = unsafe { texture.vk_image() }.is_some();
+            let in_place = after.dma_buf_textures_in_place - before.dma_buf_textures_in_place;
+            let source = after.host_texture_shadows_refused_source
+                - before.host_texture_shadows_refused_source;
+            let pitched = after.host_texture_shadows_refused_pitch
+                - before.host_texture_shadows_refused_pitch;
+            let other = after.host_texture_shadows_refused_dma_buf
+                - before.host_texture_shadows_refused_dma_buf;
+            eprintln!(
+                "{TEST} on {}: {what}, {width}x{height} rows {pitch} bytes apart: {} (in place \
+                 {in_place}, refused for the source {source}, the pitch {pitched}, other \
+                 dma-buf reasons {other}), the source's calls {:?}",
+                device.name(),
+                if aliased { "in place" } else { "shadowed" },
+                calls.lock().unwrap(),
+            );
+            assert_eq!(in_place, u64::from(aliased), "{TEST}: {what}");
+            if radv && passed {
+                assert_eq!((aliased, source), (one, u64::from(!one)), "{TEST}: {what}");
+            }
+            let (row, rows) = (4 * width as usize, height as usize);
+            let size = (width, height);
+            let bytes = view.read(0..pitch * rows);
+            assert!(
+                blit_texels(&queue, &texture, size, 4) == packed(&bytes, 0, pitch, row, rows),
+                "{TEST}: {what}: the CPU's bytes"
+            );
+            let later = counting(pitch * rows, 41);
+            view.write(0, &later);
+            assert!(
+                blit_texels(&queue, &texture, size, 4) == packed(&later, 0, pitch, row, rows),
+                "{TEST}: {what}: the CPU's later bytes"
+            );
+            drop(texture);
+            drop(buffer);
+            drop(view);
+            drop(ram);
+        }
+        messages.take_notices();
+    }
+    layer_reported_nothing_at_all(&messages);
 }
 
 /// Textures over a no-copy buffer of memfd memory (the consumer's display-path surfaces), rows 256
