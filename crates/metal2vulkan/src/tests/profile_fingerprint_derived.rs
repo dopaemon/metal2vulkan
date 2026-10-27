@@ -37,7 +37,8 @@
 
 use crate::budget::{Budget, Meter};
 use crate::device::profile::fingerprints_derived;
-use crate::device::{Device, DeviceDescription, DevicePolicy};
+use crate::device::profile::GuestIsolation;
+use crate::device::{ContainmentPolicy, Device, DeviceDescription, DevicePolicy};
 use crate::library::FunctionConstantValues;
 use crate::library::Library;
 use crate::pipeline::compile::{compile_stage, InputsFrom};
@@ -138,14 +139,16 @@ fn profiles_that_differ_carry_their_own_fingerprints() {
          each read the other's cache entries"
     );
     // The derivation is of the fields the profile holds, whatever built them.
-    let exact = Device::new(
-        description("moltenvk-m3"),
-        DevicePolicy::default().exact_answers(),
-    )
-    .expect("device under the exact policy");
+    let uncontained = DevicePolicy {
+        containment: ContainmentPolicy::UnsafeOff,
+        isolation: GuestIsolation::Off,
+        ..DevicePolicy::default()
+    };
+    let uncontained = Device::new(description("moltenvk-m3"), uncontained)
+        .expect("device under the uncontained policy");
     assert_ne!(
         m3.profile_fingerprint(),
-        exact.profile_fingerprint(),
+        uncontained.profile_fingerprint(),
         "the policy is part of the profile's fields, so it is part of the fingerprint"
     );
     let mut edited = m3.profile().clone();

@@ -1132,8 +1132,9 @@ fn a_stale_cell_names_the_key_that_moved_and_not_an_unmoved_cell() {
     assert_eq!(d.changed, ["f.ll | main | a-gpu: was -> now"]);
 }
 
-/// The exact table takes the fixtures that sample, under Metal's exact answers: its fingerprints
-/// are not the default table's.
+/// The exact table takes the fixtures that sample, under Metal's exact answers. Those answers are
+/// the runtime's switches alone, which no profile carries, so its profiles' fingerprints are the
+/// default table's.
 #[test]
 fn the_exact_table_takes_the_sampling_fixtures_under_the_exact_answers() {
     assert_eq!(EXACT.policy, DevicePolicy::default().exact_answers());
@@ -1150,7 +1151,7 @@ fn the_exact_table_takes_the_sampling_fixtures_under_the_exact_answers() {
     }
     let (stem, default) = &devices(DEFAULT.policy)[0];
     let (_, exact) = &devices(EXACT.policy)[0];
-    assert_ne!(
+    assert_eq!(
         default.profile().fingerprint(),
         exact.profile().fingerprint(),
         "{stem}"
