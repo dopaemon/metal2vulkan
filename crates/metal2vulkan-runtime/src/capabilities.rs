@@ -139,17 +139,9 @@ pub struct DeviceProperties {
     /// ([`Needs::RuntimeDriverDefect`](metal2vulkan::error::Needs::RuntimeDriverDefect)).
     pub driver_defects: BTreeSet<RuntimeDriverDefect>,
     /// What the device's driver is measured to answer where Vulkan leaves the result undefined,
-    /// from its identity and release ([`DeviceDescription::driver_facts`]): the runtime relies on
-    /// one only where the driver has it, and elsewhere takes the exact path that needs none.
+    /// from its identity and GPU ([`DeviceDescription::driver_facts`]): the runtime relies on one
+    /// only where the driver has it, and elsewhere takes the exact path that needs none.
     pub driver_facts: BTreeSet<DriverFact>,
-    /// The answer facts the device's driver is measured to give on another release or GPU, which
-    /// the device does not take because its identity (driver, GPU and release) is not measured
-    /// ([`DeviceDescription::driver_facts_withheld`]): the runtime takes the exact path instead,
-    /// assumes the driver's measured defects ([`driver_facts`](Self::driver_facts),
-    /// [`driver_defects`](Self::driver_defects)), and says so once as it is made in an
-    /// informational message, `metal2vulkan-unmeasured-driver` (`driver_facts.rs`, no degrade
-    /// notice, as the paths it takes are exact).
-    pub driver_facts_withheld: BTreeSet<DriverFact>,
     /// The pixel interlock is enabled, so every fragment function's raster order groups are
     /// ordered.
     raster_order_groups: bool,
@@ -237,7 +229,6 @@ impl DeviceProperties {
             max_vertex_amplification_count,
             driver_defects: driver_defects::of(&description),
             driver_facts: description.driver_facts(),
-            driver_facts_withheld: description.driver_facts_withheld(),
             description,
         }
     }

@@ -4663,8 +4663,8 @@ fn the_binder_states_a_view_s_parent_base_axes() {
 /// filter: it records `DeviceUnorm8LinearFilter` under the slot's class (and a runtime slot's
 /// word), requires `VkProperty::Unorm8LinearFilter`, and validates. A texel offset, pixel
 /// coordinates, a 1D or 3D texture, every sample under the default policy, and every sample on
-/// an unmeasured profile (lavapipe's capture, Mesa 26.2.3, below the measured 26.2.4) keep
-/// Metal's filter emulated: no note, no requirement. The plan's word estimate bounds each.
+/// an unmeasured profile (the RTX 50 desktop GPU's capture, a GPU no row names) keep Metal's
+/// filter emulated: no note, no requirement. The plan's word estimate bounds each.
 #[test]
 fn a_measured_device_filters_the_eight_bit_classes_itself() {
     let edge = linear(1, false, 0);
@@ -4720,7 +4720,7 @@ fn a_measured_device_filters_the_eight_bit_classes_itself() {
     assert!(measured.takes_driver_deviation(D::Unorm8LinearFilter));
     let exact = profile("nvidia-rtx5080-laptop", emulated).expect("profile");
     assert!(!exact.takes_driver_deviation(D::Unorm8LinearFilter));
-    let unmeasured = profile("lavapipe", accepting).expect("profile");
+    let unmeasured = profile("nvidia-rtx50-linux", accepting).expect("profile");
     assert!(!unmeasured.takes_driver_deviation(D::Unorm8LinearFilter));
     for (name, sampler, form, float, native) in cases {
         let Some(bc) = assemble(name, &kernel_of(sampler, form, float)) else {
@@ -4729,7 +4729,7 @@ fn a_measured_device_filters_the_eight_bit_classes_itself() {
         for (stem, p, want) in [
             ("nvidia-rtx5080-laptop accepting", &measured, native),
             ("nvidia-rtx5080-laptop by default", &exact, false),
-            ("lavapipe accepting", &unmeasured, false),
+            ("nvidia-rtx50-linux accepting", &unmeasured, false),
         ] {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));

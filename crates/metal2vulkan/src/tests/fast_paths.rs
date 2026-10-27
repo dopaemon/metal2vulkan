@@ -201,7 +201,6 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             CubeFaceReciprocal,
             QuadsCountedBeforeDiscard,
             DeviceDepthComparison,
-            BeyondMeasuredDeviation,
             ViewBaseTexelOffset,
             DeviceColorConversion,
             QuadsSplitByClipping,

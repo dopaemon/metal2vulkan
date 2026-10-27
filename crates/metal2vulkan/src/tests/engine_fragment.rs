@@ -2076,7 +2076,7 @@ fn a_replacing_blend_or_a_write_that_stores_nothing_takes_the_storage_form() {
 /// switched to fast math refuses it by its gap (`ExtendedRangeBlend`). The consumer's mask blend
 /// (G345: color source factor zero over one minus the source's alpha) is computed in the shader
 /// too, for the `half4` output and for the `float4` fill (rounded to `half` first), and makes the
-/// whole pipeline on both MoltenVK profiles.
+/// whole pipeline on the MoltenVK profile.
 /// A fast-math function's source-alpha-over blend (source alpha and one minus it, added, for
 /// color and alpha, every channel written) into color 0 of `BGR10_XR_sRGB` or
 /// `RGB10A8_2P_XR10_sRGB`, beside an `R8Unorm` color 1 under the same blend (a consumer's

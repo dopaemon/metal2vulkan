@@ -727,7 +727,6 @@ fn capability_members(description: &DeviceDescription) -> Value {
             "device_id",
             "device_name",
             "device_type",
-            "assumed_unmeasured",
             "extensions",
             "features",
             "formats",

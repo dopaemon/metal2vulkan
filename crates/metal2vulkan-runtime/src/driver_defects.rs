@@ -1,20 +1,17 @@
 //! The defects of a device's driver in commands the runtime records for itself, keyed on the
-//! driver's identity, release and GPU: `VkPhysicalDeviceDriverProperties`'s `driverID`, and
-//! `VkPhysicalDeviceProperties`'s `driverVersion`, which each driver raises with every release
-//! (Mesa encodes it as `VK_MAKE_API_VERSION`, MoltenVK as `major * 10000 + minor * 100 + patch`),
-//! and `deviceID`. A device's defects are in its properties
-//! ([`DeviceProperties::driver_defects`](super::DeviceProperties::driver_defects)), and what a
-//! defect breaks is taken another way where an exact one exists, else refused there, typed
+//! driver's identity and GPU: `VkPhysicalDeviceDriverProperties`'s `driverID` and
+//! `VkPhysicalDeviceProperties`'s `deviceID`, never its release. A device's defects are in its
+//! properties ([`DeviceProperties::driver_defects`](super::DeviceProperties::driver_defects)), and
+//! what a defect breaks is taken another way where an exact one exists, else refused there, typed
 //! ([`Needs::RuntimeDriverDefect`]), never run wrong unannounced: only where a refusal would
 //! withhold a feature of the families the device claims (a row of the feature table,
 //! `families/features.rs`) does it run, announced as a degradation.
 //!
-//! Each defect lists the drivers that have it and, for each, the measured identities a probe found
-//! clean: a GPU (`deviceID`, the one it was measured under for a GPU that reports several:
-//! `DeviceDescription::canonical_device_id`) at one release, which the device layer measured
-//! (`DeviceDescription::measured_identity`). Every other release and GPU of the driver has it,
-//! measured broken or not measured at all, so a release or GPU nobody probed takes the exact path,
-//! and one probed clean then needs only its identity in the list, not new code.
+//! Each defect lists the drivers that have it and, for each, the GPUs a probe found clean
+//! (`deviceID`, the one it was measured under for a GPU that reports several:
+//! `DeviceDescription::canonical_device_id`). Every other GPU of the driver has it, measured broken
+//! or not measured at all, so a GPU nobody probed takes the exact path, and one probed clean then
+//! needs only its `deviceID` in the list, not new code.
 //!
 //! None is a translation's (`DriverWorkaround` covers those), so none is in the compile profile,
 //! a cache key or a digest.
@@ -30,9 +27,9 @@ use std::collections::BTreeSet;
 pub(super) struct Affected {
     pub(super) defect: RuntimeDriverDefect,
     pub(super) driver: DriverId,
-    /// The measured identities a probe found without the defect, each a GPU (`deviceID`) at one
-    /// release (`driverVersion`); every other GPU and release of the driver has it.
-    pub(super) clean: &'static [(u32, u32)],
+    /// The GPUs (`deviceID`) a probe found without the defect; every other GPU of the driver
+    /// has it.
+    pub(super) clean: &'static [u32],
 }
 
 /// Every known defect, by driver.
@@ -428,8 +425,8 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::MultisampledStencilColourCopies,
         driver: DriverId::NVIDIA_PROPRIETARY,
-        // The RTX 5080 Laptop GPU at 615.71.09, measured clean.
-        clean: &[(0x2c19, (615 << 22) | (71 << 14) | (9 << 6))],
+        // The RTX 5080 Laptop GPU, measured clean.
+        clean: &[0x2c19],
     },
     Affected {
         defect: RuntimeDriverDefect::NormalizedDepthPastUnitRange,
@@ -489,8 +486,8 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::ImplicitPreprocessAfterExecutionSet,
         driver: DriverId::MESA_RADV,
-        // The Radeon 780M at 26.2.4, measured clean.
-        clean: &[(0x15bf, (26 << 22) | (2 << 12) | 4)],
+        // The Radeon 780M, measured clean.
+        clean: &[0x15bf],
     },
     Affected {
         defect: RuntimeDriverDefect::FreedAddressMemoryFailsPendingWork,
@@ -530,29 +527,26 @@ pub(super) const AFFECTED: &[Affected] = &[
 ];
 
 /// The defects of the driver and device `description` names, its GPU read by the `deviceID` it
-/// was measured under (`DeviceDescription::measured_gpu`).
+/// was measured under (`DeviceDescription::canonical_device_id`).
 pub(super) fn of(description: &DeviceDescription) -> BTreeSet<RuntimeDriverDefect> {
     among(
         AFFECTED,
         description.driver_id,
-        description.measured_gpu(),
-        description.driver_version,
+        description.canonical_device_id(),
     )
 }
 
-/// The defects of `table` that the driver `driver` has on the device `device` at release
-/// `version`: each of the driver's but those a probe found clean on that GPU at that release. A
-/// `device` of `None` is a GPU no probe ran (`DeviceDescription::measured_gpu`): it has them all.
+/// The defects of `table` that the driver `driver` has on the GPU `device`: each of the driver's
+/// but those a probe found clean on that GPU.
 pub(super) fn among(
     table: &[Affected],
     driver: Option<DriverId>,
-    device: Option<u32>,
-    version: u32,
+    device: u32,
 ) -> BTreeSet<RuntimeDriverDefect> {
     table
         .iter()
         .filter(|affected| Some(affected.driver) == driver)
-        .filter(|affected| !device.is_some_and(|d| affected.clean.contains(&(d, version))))
+        .filter(|affected| !affected.clean.contains(&device))
         .map(|affected| affected.defect)
         .collect()
 }

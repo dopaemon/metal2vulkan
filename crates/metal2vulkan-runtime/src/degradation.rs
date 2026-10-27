@@ -2139,7 +2139,6 @@ degradations! {
         QuadsCountedBeforeDiscard = "quads-counted-before-discard";
         DeviceDepthComparison = "device-depth-comparison";
         DeviceTexelDenormals = "device-texel-denormals";
-        BeyondMeasuredDeviation = "beyond-measured-deviation";
         ViewBaseTexelOffset = "view-base-texel-offset";
         DeviceColorConversion = "device-color-conversion";
         DeviceInterpolation = "device-interpolation";
@@ -3856,8 +3855,7 @@ impl Device {
     }
 
     /// Why a stage that records `note` degrades: the note, and for
-    /// `PrecisionNote::BeyondMeasuredDeviation` each deviation the device's profile takes past
-    /// its measurement, with the last release measured.
+    /// `PrecisionNote::FragmentSimdgroupGrouping` the device's grouping.
     fn note_reason(&self, note: PrecisionNote) -> String {
         let recorded = format!("its translation records `PrecisionNote::{note:?}`");
         if note == PrecisionNote::FragmentSimdgroupGrouping {
@@ -3867,21 +3865,7 @@ impl Device {
                 self.name()
             );
         }
-        if note != PrecisionNote::BeyondMeasuredDeviation {
-            return recorded;
-        }
-        let profile = self.compile_device().profile();
-        let named: Vec<String> = profile
-            .driver_deviations()
-            .iter()
-            .map(|(deviation, last)| {
-                format!("{deviation:?} (measured through driverVersion {last:#x})")
-            })
-            .collect();
-        format!(
-            "{recorded}: the driver's deviations measured on earlier releases: {}",
-            named.join(", ")
-        )
+        recorded
     }
 
     /// Announce what the pass `layout` (an ended encoder's, recorded) degrades: separate depth

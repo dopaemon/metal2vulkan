@@ -1529,9 +1529,9 @@ fn a_signed_integer_attachment_compiles_the_fragment_for_it() {
 /// its center varyings where Vulkan shades, is refused as needing the input. A pipeline of one
 /// sample keeps the fragment's common-path key. `moltenvk-m3`, whose `InterpolateAtOffset` reads
 /// off the pixel center, reads the center varyings at the pixel center itself, as Metal does, so
-/// its pipeline is as lavapipe's. At MoltenVK 1.4.0, not measured so, the key is the same and the
-/// sample-rate function's center varyings have no pixel form: the pipeline is refused naming the
-/// property it lacks, compiled under the input or not.
+/// its pipeline is as lavapipe's. As the Apple8 family under macOS 27 (`deviceID` 0x1B00_0208), not
+/// measured so, the key is the same and the sample-rate function's center varyings have no pixel
+/// form: the pipeline is refused naming the property it lacks, compiled under the input or not.
 #[test]
 fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
     let Some(bc) = fixture("multisample") else {
@@ -1554,23 +1554,23 @@ fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
         mantissa: 10,
         signed: true,
     }); 4];
-    // MoltenVK 1.4.0 as its `driverVersion` encodes it.
-    const MOLTENVK_1_4_0: u32 = 10400;
+    // The Apple8 family under macOS 27, as MoltenVK's `deviceID` encodes it.
+    const APPLE8_MACOS_27: u32 = 0x1B00_0208;
     for (stem, release) in [
         ("moltenvk-m3", None),
-        ("moltenvk-m3", Some(MOLTENVK_1_4_0)),
+        ("moltenvk-m3", Some(APPLE8_MACOS_27)),
         ("lavapipe", None),
     ] {
         let dev = match release {
             None => device(stem),
-            Some(version) => {
+            Some(device_id) => {
                 let path = Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../metal2vulkan-validation/profiles")
                     .join(format!("{stem}.json"));
                 let text = std::fs::read_to_string(&path).expect("profile");
                 let mut desc =
                     DeviceDescription::from_khronos_json(&text, None).expect("description");
-                desc.driver_version = version;
+                desc.device_id = device_id;
                 Device::new(desc, DevicePolicy::default()).expect("device")
             }
         };

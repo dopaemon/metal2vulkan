@@ -2083,7 +2083,6 @@ field	metal2vulkan-runtime::DeviceHandles.physical_device	pub physical_device: v
 field	metal2vulkan-runtime::DeviceHandles.queue_families	pub queue_families: &'a [u32]
 field	metal2vulkan-runtime::DeviceHandles.queue_family	pub queue_family: u32
 field	metal2vulkan-runtime::DeviceOptions.announce_each	pub announce_each: BTreeSet<crate::Degradation>
-field	metal2vulkan-runtime::DeviceOptions.assume_unmeasured_identity	pub assume_unmeasured_identity: bool
 field	metal2vulkan-runtime::DeviceOptions.device_extensions	pub device_extensions: Vec<CString>
 field	metal2vulkan-runtime::DeviceOptions.fail_in_place_check	pub fail_in_place_check: bool
 field	metal2vulkan-runtime::DeviceOptions.gpu_times_from_host	pub gpu_times_from_host: bool
@@ -2110,7 +2109,6 @@ field	metal2vulkan-runtime::DeviceProperties.device_id	pub device_id: u32
 field	metal2vulkan-runtime::DeviceProperties.device_uuid	pub device_uuid: [u8; 16]
 field	metal2vulkan-runtime::DeviceProperties.driver_defects	pub driver_defects: BTreeSet<RuntimeDriverDefect>
 field	metal2vulkan-runtime::DeviceProperties.driver_facts	pub driver_facts: BTreeSet<DriverFact>
-field	metal2vulkan-runtime::DeviceProperties.driver_facts_withheld	pub driver_facts_withheld: BTreeSet<DriverFact>
 field	metal2vulkan-runtime::DeviceProperties.drm_render	pub drm_render: Option<(i64, i64)>
 field	metal2vulkan-runtime::DeviceProperties.gpu_core_count	pub gpu_core_count: Option<u32>
 field	metal2vulkan-runtime::DeviceProperties.has_unified_memory	pub has_unified_memory: bool
@@ -3728,7 +3726,6 @@ field	metal2vulkan::device::DescriptorCaps.update_unused_while_pending	pub updat
 field	metal2vulkan::device::DescriptorCaps.variable_descriptor_count	pub variable_descriptor_count: bool
 field	metal2vulkan::device::DeviceDescription.allocation	pub allocation: AllocationLimits
 field	metal2vulkan::device::DeviceDescription.api_version	pub api_version: ApiVersion
-field	metal2vulkan::device::DeviceDescription.assumed_unmeasured	pub assumed_unmeasured: bool
 field	metal2vulkan::device::DeviceDescription.device_id	pub device_id: u32
 field	metal2vulkan::device::DeviceDescription.device_name	pub device_name: String
 field	metal2vulkan::device::DeviceDescription.device_type	pub device_type: Option<vk::PhysicalDeviceType>
@@ -5012,7 +5009,6 @@ macro-member	metal2vulkan-runtime::Degradation::AmplificationDraws	Amplification
 macro-member	metal2vulkan-runtime::Degradation::AnisotropicFilter	AnisotropicFilter = "anisotropic-filter";
 macro-member	metal2vulkan-runtime::Degradation::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling = "argument-pixel-sampler-scaling";
 macro-member	metal2vulkan-runtime::Degradation::AttachmentReadInPlace	AttachmentReadInPlace = "attachment-read-in-place", Precision,
-macro-member	metal2vulkan-runtime::Degradation::BeyondMeasuredDeviation	BeyondMeasuredDeviation = "beyond-measured-deviation";
 macro-member	metal2vulkan-runtime::Degradation::BiasedDepthPastUnitRange	BiasedDepthPastUnitRange = "biased-depth-past-unit-range", Precision,
 macro-member	metal2vulkan-runtime::Degradation::BicubicFilterArithmetic	BicubicFilterArithmetic = "bicubic-filter-arithmetic";
 macro-member	metal2vulkan-runtime::Degradation::BlendedWriteRounding	BlendedWriteRounding = "blended-write-rounding";
@@ -7853,7 +7849,6 @@ method	metal2vulkan-runtime::DeviceProperties::supports_texture_write_rounding_m
 method	metal2vulkan-runtime::DeviceProperties::supports_vertex_amplification_count	pub fn supports_vertex_amplification_count(&self, count: u64) -> Result<bool, RuntimeGap>
 method	metal2vulkan-runtime::DrawPrimitiveType::from_raw	pub fn from_raw(raw: u64) -> Result<DrawPrimitiveType, Error>
 method	metal2vulkan-runtime::DrawPrimitiveType::raw	pub fn raw(self) -> u64
-method	metal2vulkan-runtime::DriverFact::assumed_where_unmeasured	pub const fn assumed_where_unmeasured(self) -> bool
 method	metal2vulkan-runtime::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
 method	metal2vulkan-runtime::DriverFact::unreliable_linear_tiling	pub const fn unreliable_linear_tiling(self) -> FormatFeatureFlags2
 method	metal2vulkan-runtime::DynamicLibrary::device	pub fn device(&self) -> &Device
@@ -8829,12 +8824,9 @@ method	metal2vulkan::device::Device::tile_pipeline_key	pub fn tile_pipeline_key(
 method	metal2vulkan::device::DeviceDescription::blendless_color_formats	pub fn blendless_color_formats(&self) -> Vec<Format>
 method	metal2vulkan::device::DeviceDescription::canonical_device_id	pub fn canonical_device_id(&self) -> u32
 method	metal2vulkan::device::DeviceDescription::driver_facts	pub fn driver_facts(&self) -> BTreeSet<DriverFact>
-method	metal2vulkan::device::DeviceDescription::driver_facts_withheld	pub fn driver_facts_withheld(&self) -> BTreeSet<DriverFact>
 method	metal2vulkan::device::DeviceDescription::from_khronos_json	pub fn from_khronos_json(json: &str, profile: Option<&str>) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceDescription::has	pub fn has(&self, feature: VkFeature) -> bool
 method	metal2vulkan::device::DeviceDescription::has_format_feature_flags2	pub fn has_format_feature_flags2(&self) -> bool
-method	metal2vulkan::device::DeviceDescription::measured_gpu	pub fn measured_gpu(&self) -> Option<u32>
-method	metal2vulkan::device::DeviceDescription::measured_identity	pub fn measured_identity(&self) -> bool
 method	metal2vulkan::device::DeviceDescription::new	pub fn new(api_version: ApiVersion) -> DeviceDescription
 method	metal2vulkan::device::DeviceDescription::query	pub unsafe fn query(instance: &ash::Instance, physical_device: avk::PhysicalDevice, instance_api_version: ApiVersion) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceDescription::recommended_enables	pub fn recommended_enables(&self, policy: &DevicePolicy) -> EnableSet
@@ -8851,7 +8843,6 @@ method	metal2vulkan::device::DeviceProfile::containment	pub fn containment(&self
 method	metal2vulkan::device::DeviceProfile::descriptors	pub fn descriptors(&self) -> &DescriptorCaps
 method	metal2vulkan::device::DeviceProfile::device_drops_texel_writes	pub fn device_drops_texel_writes(&self, texel_buffer: bool) -> bool
 method	metal2vulkan::device::DeviceProfile::device_reads_texels	pub fn device_reads_texels(&self, texel_buffer: bool) -> bool
-method	metal2vulkan::device::DeviceProfile::driver_deviations	pub fn driver_deviations(&self) -> &BTreeMap<DriverDeviation, u32>
 method	metal2vulkan::device::DeviceProfile::enabled	pub fn enabled(&self) -> &EnabledCaps
 method	metal2vulkan::device::DeviceProfile::fingerprint	pub fn fingerprint(&self) -> Hash256
 method	metal2vulkan::device::DeviceProfile::fragment	pub fn fragment(&self) -> &FragmentCaps
@@ -8873,7 +8864,6 @@ method	metal2vulkan::device::DeviceProfile::ulong_atomic_gaps	pub fn ulong_atomi
 method	metal2vulkan::device::DeviceProfile::union_requirements	pub fn union_requirements(&self, a: &Requirements, b: &Requirements) -> Requirements
 method	metal2vulkan::device::DeviceProfile::vertex_entry_inputs	pub fn vertex_entry_inputs(&self, d: &EntryDescriptor<'_>, vertex: Option<&VertexDescriptor>, budget: &Budget) -> Result<LoweringInputs, Error>
 method	metal2vulkan::device::DeviceProfile::workarounds	pub fn workarounds(&self) -> &[DriverWorkaround]
-method	metal2vulkan::device::DriverFact::assumed_where_unmeasured	pub const fn assumed_where_unmeasured(self) -> bool
 method	metal2vulkan::device::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
 method	metal2vulkan::device::DriverFact::unreliable_linear_tiling	pub const fn unreliable_linear_tiling(self) -> FormatFeatureFlags2
 method	metal2vulkan::device::EnableSet::new	pub fn new() -> EnableSet
@@ -13634,7 +13624,6 @@ variant	metal2vulkan::pipeline::PatchDomain::Quad	Quad
 variant	metal2vulkan::pipeline::PatchDomain::Triangle	Triangle
 variant	metal2vulkan::pipeline::PrecisionNote::AnisotropicFilter	AnisotropicFilter
 variant	metal2vulkan::pipeline::PrecisionNote::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling
-variant	metal2vulkan::pipeline::PrecisionNote::BeyondMeasuredDeviation	BeyondMeasuredDeviation
 variant	metal2vulkan::pipeline::PrecisionNote::BicubicFilterArithmetic	BicubicFilterArithmetic
 variant	metal2vulkan::pipeline::PrecisionNote::BlendedWriteRounding	BlendedWriteRounding
 variant	metal2vulkan::pipeline::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit

@@ -4,13 +4,12 @@
 //! only field that selects a pointer model; every other field selects leaf encodings or feeds the
 //! requirement check.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::device::description::{
     AllocationLimits, DeviceDescription, GeneratedCommandsProperties, APPLE_VENDOR_ID,
 };
-use crate::device::driver_facts::Standing;
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::{
@@ -69,14 +68,13 @@ impl Device {
     /// `device::enables` states), and a policy that turns containment off while guest isolation
     /// is on (`InvalidDescriptor`).
     pub fn new(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
-        // The driver's measured deviations at its release, never its name.
+        // The driver's measured deviations on its GPU, never its name.
         let deviations = super::driver_facts::deviations(&desc);
         Device::with_deviations(desc, policy, deviations)
     }
 
-    /// [`Device::new`] with `deviation` taken (at its measured standing where the driver's
-    /// release has it) or not, and the release's other deviations as measured: a test's way to
-    /// take one route alone, which no driver release in the table gives.
+    /// [`Device::new`] with `deviation` taken or not, and the driver's other deviations as
+    /// measured: a test's way to take one route alone, which no driver in the table gives.
     #[cfg(test)]
     pub(crate) fn with_deviation(
         desc: DeviceDescription,
@@ -87,7 +85,7 @@ impl Device {
         let mut deviations = super::driver_facts::deviations(&desc);
         match taken {
             true => {
-                deviations.entry(deviation).or_insert(Standing::Measured);
+                deviations.insert(deviation);
             }
             false => {
                 deviations.remove(&deviation);
@@ -99,7 +97,7 @@ impl Device {
     fn with_deviations(
         desc: DeviceDescription,
         policy: DevicePolicy,
-        deviations: BTreeMap<DriverDeviation, Standing>,
+        deviations: BTreeSet<DriverDeviation>,
     ) -> Result<Device, Error> {
         if desc.api_version < ApiVersion::V1_2 {
             return Err(Unsupported::needs(
@@ -187,9 +185,9 @@ impl Device {
 /// filter's where the policy keeps Metal's filter exact (`Unorm8LinearFilterPolicy::Exact`, the
 /// default), so the translation emulates it as on an unmeasured device.
 fn accepted(
-    mut deviations: BTreeMap<DriverDeviation, Standing>,
+    mut deviations: BTreeSet<DriverDeviation>,
     policy: &DevicePolicy,
-) -> BTreeMap<DriverDeviation, Standing> {
+) -> BTreeSet<DriverDeviation> {
     if policy.unorm8_linear_filter == Unorm8LinearFilterPolicy::Exact {
         deviations.remove(&DriverDeviation::Unorm8LinearFilter);
     }
@@ -199,7 +197,7 @@ fn accepted(
 fn derive_fields(
     desc: &DeviceDescription,
     policy: &DevicePolicy,
-    deviations: &BTreeMap<DriverDeviation, Standing>,
+    deviations: &BTreeSet<DriverDeviation>,
 ) -> ProfileFields {
     let has = |f: VkFeature| desc.has(f);
     let ext = |e: VkExtension| desc.extensions.contains(&e);
@@ -334,7 +332,7 @@ fn derive_fields(
     };
 
     let (vertex_formats, storage_formats, image_formats) = format_tables(desc);
-    let deviates = |d: DriverDeviation| deviations.contains_key(&d);
+    let deviates = |d: DriverDeviation| deviations.contains(&d);
     ProfileFields {
         buffer_access,
         pointer_domain: policy.pointer_domain,
@@ -465,21 +463,12 @@ fn derive_fields(
                 compute: route(&[(DriverDeviation::CubeGradientRoute, CubeGradientRoute::Metal)]),
             }
         },
-        // The deviations taken past their last measured release, which a module records
-        // `PrecisionNote::BeyondMeasuredDeviation` for (the coordinator's ruling of 2026-10-06).
-        deviations_beyond: deviations
-            .iter()
-            .filter_map(|(&deviation, &standing)| match standing {
-                Standing::Beyond { last } => Some((deviation, last)),
-                Standing::Measured => None,
-            })
-            .collect(),
     }
 }
 
 /// The driver workarounds of the driver `desc` names (`driver_id`), on its GPU (`vendor_id`, or its
-/// generation's `device_id`s) where the defect is the GPU's, and those its release has by the
-/// measured table (`driver_facts::DEFECTS`), in order.
+/// generation's `device_id`s) where the defect is the GPU's, and those of the measured table
+/// (`driver_facts::DEFECTS`), in order.
 fn workarounds(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
     let mut found = by_identity(desc);
     // Every rasterizer but Apple's hands a clipped primitive's fragments their coverage by the
@@ -766,7 +755,7 @@ pub(crate) fn usage_class(usage: FormatUsage) -> UsageClass {
 
 fn enabled_caps(
     desc: &DeviceDescription,
-    deviations: &BTreeMap<DriverDeviation, Standing>,
+    deviations: &BTreeSet<DriverDeviation>,
     policy: &DevicePolicy,
 ) -> EnabledCaps {
     let sg = &desc.subgroup;
@@ -842,97 +831,97 @@ fn enabled_caps(
     if desc.interpolates_at_offset_centered() {
         properties.insert(VkProperty::InterpolateAtOffsetCentered);
     }
-    if deviations.contains_key(&DriverDeviation::SimdgroupLockstep) {
+    if deviations.contains(&DriverDeviation::SimdgroupLockstep) {
         properties.insert(VkProperty::SimdgroupLockstep);
     }
-    if deviations.contains_key(&DriverDeviation::MetalSampler) {
+    if deviations.contains(&DriverDeviation::MetalSampler) {
         properties.insert(VkProperty::MetalSampler);
     } else if policy.sampling == SamplingPolicy::NativeDevice {
         // Native device sampling, the policy's default, where the device's sampler is not Metal's.
         properties.insert(VkProperty::DeviceSampling);
     }
-    if deviations.contains_key(&DriverDeviation::MetalColorWrites) {
+    if deviations.contains(&DriverDeviation::MetalColorWrites) {
         properties.insert(VkProperty::MetalColorWrites);
     }
-    if deviations.contains_key(&DriverDeviation::MetalFloatColorNans) {
+    if deviations.contains(&DriverDeviation::MetalFloatColorNans) {
         properties.insert(VkProperty::MetalFloatColorNans);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfColorNans) {
+    if deviations.contains(&DriverDeviation::MetalHalfColorNans) {
         properties.insert(VkProperty::MetalHalfColorNans);
     }
-    if deviations.contains_key(&DriverDeviation::HalfColorOutputBits) {
+    if deviations.contains(&DriverDeviation::HalfColorOutputBits) {
         properties.insert(VkProperty::HalfColorOutputBits);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfFma) {
+    if deviations.contains(&DriverDeviation::MetalHalfFma) {
         properties.insert(VkProperty::MetalHalfFma);
     }
-    if deviations.contains_key(&DriverDeviation::MetalFloatDenormals) {
+    if deviations.contains(&DriverDeviation::MetalFloatDenormals) {
         properties.insert(VkProperty::MetalFloatDenormals);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfQuantize) {
+    if deviations.contains(&DriverDeviation::MetalHalfQuantize) {
         properties.insert(VkProperty::MetalHalfQuantize);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfConversion) {
+    if deviations.contains(&DriverDeviation::MetalHalfConversion) {
         properties.insert(VkProperty::MetalHalfConversion);
     }
-    if deviations.contains_key(&DriverDeviation::MetalCenterVaryings) {
+    if deviations.contains(&DriverDeviation::MetalCenterVaryings) {
         properties.insert(VkProperty::MetalCenterVaryings);
     }
-    if deviations.contains_key(&DriverDeviation::MetalSmallFloatColorWrites) {
+    if deviations.contains(&DriverDeviation::MetalSmallFloatColorWrites) {
         properties.insert(VkProperty::MetalSmallFloatColorWrites);
     }
-    if deviations.contains_key(&DriverDeviation::MetalNorm16ColorWrites) {
+    if deviations.contains(&DriverDeviation::MetalNorm16ColorWrites) {
         properties.insert(VkProperty::MetalNorm16ColorWrites);
     }
-    if deviations.contains_key(&DriverDeviation::MetalMinMax) {
+    if deviations.contains(&DriverDeviation::MetalMinMax) {
         properties.insert(VkProperty::MetalMinMax);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfArithmetic) {
+    if deviations.contains(&DriverDeviation::MetalHalfArithmetic) {
         properties.insert(VkProperty::MetalHalfArithmetic);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfStorageWrites) {
+    if deviations.contains(&DriverDeviation::MetalHalfStorageWrites) {
         properties.insert(VkProperty::MetalHalfStorageWrites);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfStorageNans) {
+    if deviations.contains(&DriverDeviation::MetalHalfStorageNans) {
         properties.insert(VkProperty::MetalHalfStorageNans);
     }
-    if deviations.contains_key(&DriverDeviation::MetalFloatStorageNans) {
+    if deviations.contains(&DriverDeviation::MetalFloatStorageNans) {
         properties.insert(VkProperty::MetalFloatStorageNans);
     }
-    if deviations.contains_key(&DriverDeviation::MetalFragmentSimdgroups) {
+    if deviations.contains(&DriverDeviation::MetalFragmentSimdgroups) {
         properties.insert(VkProperty::MetalFragmentSimdgroups);
     }
-    if deviations.contains_key(&DriverDeviation::MetalVertexSimdgroups) {
+    if deviations.contains(&DriverDeviation::MetalVertexSimdgroups) {
         properties.insert(VkProperty::MetalVertexSimdgroups);
     }
-    if deviations.contains_key(&DriverDeviation::CenterFragCoordDepth) {
+    if deviations.contains(&DriverDeviation::CenterFragCoordDepth) {
         properties.insert(VkProperty::CenterFragCoordDepth);
     }
-    if deviations.contains_key(&DriverDeviation::SampleFragCoordDepth) {
+    if deviations.contains(&DriverDeviation::SampleFragCoordDepth) {
         properties.insert(VkProperty::SampleFragCoordDepth);
     }
-    if deviations.contains_key(&DriverDeviation::MetalHalfTexelWrites) {
+    if deviations.contains(&DriverDeviation::MetalHalfTexelWrites) {
         properties.insert(VkProperty::MetalHalfTexelWrites);
     }
-    if deviations.contains_key(&DriverDeviation::MetalNormStorageWrites) {
+    if deviations.contains(&DriverDeviation::MetalNormStorageWrites) {
         properties.insert(VkProperty::MetalNormStorageWrites);
     }
-    if deviations.contains_key(&DriverDeviation::Unorm8LinearFilter) {
+    if deviations.contains(&DriverDeviation::Unorm8LinearFilter) {
         properties.insert(VkProperty::Unorm8LinearFilter);
     }
-    if deviations.contains_key(&DriverDeviation::MetalDepth16Stores) {
+    if deviations.contains(&DriverDeviation::MetalDepth16Stores) {
         properties.insert(VkProperty::MetalDepth16Stores);
     }
-    if deviations.contains_key(&DriverDeviation::MetalDepth16BiasedStores) {
+    if deviations.contains(&DriverDeviation::MetalDepth16BiasedStores) {
         properties.insert(VkProperty::MetalDepth16BiasedStores);
     }
-    if deviations.contains_key(&DriverDeviation::MetalInterpolation) {
+    if deviations.contains(&DriverDeviation::MetalInterpolation) {
         properties.insert(VkProperty::MetalInterpolation);
     }
-    if deviations.contains_key(&DriverDeviation::MetalFirstVertexIndices) {
+    if deviations.contains(&DriverDeviation::MetalFirstVertexIndices) {
         properties.insert(VkProperty::MetalFirstVertexIndices);
     }
-    if deviations.contains_key(&DriverDeviation::MetalFullQuads) {
+    if deviations.contains(&DriverDeviation::MetalFullQuads) {
         properties.insert(VkProperty::MetalFullQuads);
     }
     if desc

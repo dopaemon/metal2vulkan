@@ -2836,11 +2836,6 @@ fn compile_kept<K>(
         precision.push(note);
         precision.sort_unstable();
     }
-    // A driver release past its deviations' measurement: every module relies on them.
-    if !p.fields().deviations_beyond.is_empty() {
-        precision.push(PrecisionNote::BeyondMeasuredDeviation);
-        precision.sort_unstable();
-    }
     if helper_guard.exposed {
         precision.push(PrecisionNote::HelperBranchDropsSimdgroupStores);
         precision.sort_unstable();

@@ -245,15 +245,6 @@ impl DeviceProfile {
             .then_some(REGISTER_ALLOCATOR_MODULE_WORD_BOUND)
     }
 
-    /// The driver deviations the profile takes at a driver release newer than the last one
-    /// measured, each with that release's `driverVersion` (`device::driver_facts`): a module
-    /// compiled for the profile records each as
-    /// [`PrecisionNote::BeyondMeasuredDeviation`](crate::pipeline::PrecisionNote::BeyondMeasuredDeviation).
-    /// Empty on a measured release.
-    pub fn driver_deviations(&self) -> &BTreeMap<DriverDeviation, u32> {
-        &self.fields.deviations_beyond
-    }
-
     /// Whether the profile's device answers samples, gathers and comparisons with its own
     /// sampler, with no emulation of Metal's in the module: a device that samples through Metal's
     /// own sampler (`VkProperty::MetalSampler`, MoltenVK on Apple's GPU), whose answers are
@@ -271,8 +262,7 @@ impl DeviceProfile {
     }
 
     /// Whether the profile takes the driver deviation `deviation` (`device::driver_facts`): its
-    /// driver is measured with it at the device's release, or at an older one
-    /// ([`DeviceProfile::driver_deviations`] lists those), so the translation relies on it. A
+    /// driver is measured with it on the device's GPU, so the translation relies on it. A
     /// profile that does not take it compiles the conservative route the deviation's
     /// documentation names. A gate lane that checks a deviation on the device asks this before
     /// expecting the deviation's answer.
@@ -609,15 +599,10 @@ pub struct ProfileFields {
     /// not measured more ([`FunctionStorage::Assumed`]).
     pub function_storage: FunctionStorage,
     /// How the driver hands a cube sample's explicit gradients to the GPU, in a graphics and in
-    /// a compute pipeline: Vulkan's cube derivative rule unless the driver's release is measured
-    /// with another (`DriverDeviation::CubeGradientRoute`, `GraphicsCubeGradientRoute` and
+    /// a compute pipeline: Vulkan's cube derivative rule unless the driver is measured with
+    /// another (`DriverDeviation::CubeGradientRoute`, `GraphicsCubeGradientRoute` and
     /// `GraphicsCubeGradientTangents`).
     pub cube_gradients: CubeGradients,
-    /// The driver's deviations the profile takes at a release newer than the last one measured
-    /// (`device::driver_facts`), each with that release's `driverVersion`: taken, and recorded
-    /// by every module compiled for the profile as `PrecisionNote::BeyondMeasuredDeviation`.
-    /// Empty on a measured release.
-    pub deviations_beyond: BTreeMap<DriverDeviation, u32>,
 }
 
 /// How a driver hands a cube sample's explicit gradients to the GPU

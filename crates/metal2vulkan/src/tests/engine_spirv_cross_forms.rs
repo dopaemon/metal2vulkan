@@ -340,5 +340,5 @@ fn a_half_fused_multiply_add_is_inline_on_moltenvk() {
         inline += usize::from(moltenvk);
         compiles_as_moltenvk_msl(&stem, words, &what);
     }
-    assert_eq!(inline, 2, "both MoltenVK captures");
+    assert_eq!(inline, 1, "the MoltenVK capture");
 }

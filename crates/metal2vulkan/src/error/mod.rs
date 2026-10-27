@@ -538,9 +538,8 @@ pub enum Needs {
 }
 
 /// A departure of a driver from the specifications that translation relies on, measured per
-/// driver and release (`device::driver_facts`): the profile takes it on a measured release, and on
-/// a later one with `PrecisionNote::BeyondMeasuredDeviation` recorded
-/// (`ProfileFields::deviations_beyond`); elsewhere the translation takes its conservative route.
+/// driver and GPU (`device::driver_facts`): the profile takes it on every release of a driver
+/// measured with it; elsewhere the translation takes its conservative route.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DriverDeviation {

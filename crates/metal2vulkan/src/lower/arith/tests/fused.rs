@@ -819,7 +819,7 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         fma::FLOAT_ROUTES.into_iter().collect(),
         "every float route is some committed profile's"
     );
-    assert!(f16.len() >= 2, "{f16:?}");
+    assert!(!f16.is_empty(), "{f16:?}");
     assert!(checked >= 1, "{checked} profiles check OpFmaKHR");
     assert!(
         flushing >= 1,

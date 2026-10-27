@@ -1,50 +1,18 @@
 //! What a driver is measured to do where the specifications leave the answer to it, keyed on
-//! the driver's identity and release: `VkPhysicalDeviceDriverProperties`'s `driverID`,
-//! `VkPhysicalDeviceProperties`'s `vendorID` where the measurement is of one GPU vendor's, and
-//! `driverVersion`. One table type serves both kinds of fact: the description's deviations, which
+//! the driver's identity: `VkPhysicalDeviceDriverProperties`'s `driverID`, and
+//! `VkPhysicalDeviceProperties`'s `vendorID` and `deviceID` where the measurement is of one GPU
+//! vendor's or one GPU's. No row names a release: a row holds at every `driverVersion` of its
+//! driver. One table type serves both kinds of fact: the description's deviations, which
 //! translation reads and the compile profile holds ([`DriverDeviation`]), and the runtime's driver
 //! facts, which no translation reads ([`DriverFact`], in this table as `MEASURED`): a description
 //! names its driver's through [`DeviceDescription::driver_facts`], which the runtime puts in its
 //! device's properties. None of those is in the compile profile, a cache key or a digest.
 //!
-//! Each row names a driver and the first and last releases measured with the fact (the
-//! coordinator's ruling of 2026-10-06). For the description's deviations and translation's
-//! defects (`DEVIATIONS`, `DEFECTS`, read through `among`):
-//! - **Measured**: a release from the first through the last. Its fact is taken.
-//! - **Beyond**: a release newer than the last. Its fact is taken too, but recorded as a
-//!   near-equivalent naming the fact and the last release measured, announced once, so it is
-//!   never a silent guess. The lane that measured the fact runs at each master gate on the venues
-//!   with that driver, so an upgrade of a venue's driver that changes it fails there.
-//! - **Unmeasured**: a release older than the first, or another driver or vendor. The fact is not
-//!   taken: the reader takes its conservative route, the exact path where one exists.
-//!
-//! The runtime's driver facts follow one rule instead (the owner's "correct by default"): **a
-//! device whose identity was not measured is unmeasured**. An identity is the exact quadruple
-//! `driverID`, `vendorID`, `deviceID` and `driverVersion`; `MEASURED_DEVICES` lists the ones the
-//! lanes measure (a driver at one release on one GPU: the device class is the GPU's `deviceID`,
-//! never a host's name), and [`DeviceDescription::measured_identity`] answers whether a description
-//! is one. A GPU that reports more than one `deviceID` is one device class under each: every table
-//! here names it by the ID it was measured under, and a description is read by its
-//! [`DeviceDescription::canonical_device_id`]. A `deviceID` that names more than one GPU
-//! (MoltenVK's on Apple's GPUs is the macOS release and the GPU family) is one device class for
-//! every release measured on each of its GPUs; a release measured on one of them alone names that
-//! GPU by its `deviceName` (`NAMED_RELEASES`), and is no measured identity of the others.
-//! - **On a measured identity** an answer fact is taken where a row of its driver names the
-//!   identity's release (from the first through the last) and, where it names them, its vendor and
-//!   GPU: as measured. A defect fact is taken from the first release measured on, past the last as
-//!   well, as the deviations' table keeps one ([`among`]): the driver goes on doing otherwise than
-//!   Metal until a measurement clears it, so a release re-measured for some facts and not for this
-//!   one keeps the workaround rather than losing it unannounced. An identity measured at that
-//!   release is withheld nothing ([`DeviceDescription::driver_facts_withheld`] speaks for
-//!   unmeasured ones alone), so a defect dropped by its window would be the one gap nothing says.
-//! - **On any other identity** (another release of a measured driver, newer or older, another
-//!   GPU of it, or another driver) no answer fact is taken: the runtime takes the exact path that
-//!   needs none. A defect fact ([`DriverFact::assumed_where_unmeasured`], the driver doing
-//!   otherwise than Metal where the runtime has a workaround) is taken wherever a row of the
-//!   same driver names it, at any release and on any GPU: the workaround, never the path a
-//!   measurement has not cleared. The runtime says so once as such a device is made, in an
-//!   informational message (`metal2vulkan-unmeasured-driver`; no degrade notice, as the paths it
-//!   takes are exact).
+//! A GPU that reports more than one `deviceID` is one device class under each: every table here
+//! names it by the ID it was measured under, and a description is read by its
+//! [`DeviceDescription::canonical_device_id`]. MoltenVK's `deviceID` on Apple's GPUs is the macOS
+//! release and the GPU family, so a row of one names every GPU of the family under that macOS.
+//! A driver or GPU no row names takes no fact: the reader takes its conservative route.
 
 use crate::device::description::APPLE_VENDOR_ID;
 use crate::device::profile::DriverWorkaround;
@@ -52,9 +20,9 @@ use crate::device::DeviceDescription;
 use crate::error::DriverDeviation;
 use crate::vk::{DriverId, DynamicState, Format, FormatFeatureFlags2, PrimitiveTopology};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-/// One driver measured to have the fact `F`, over the releases measured.
+/// One driver measured to have the fact `F`, at every release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Measured<F> {
     pub(crate) fact: F,
@@ -66,66 +34,24 @@ pub(crate) struct Measured<F> {
     /// it is the driver's on every GPU of the vendor: a fact one GPU of a vendor answers and
     /// another does not (the graphics cube route).
     pub(crate) device: Option<u32>,
-    /// The first release (its `driverVersion`) measured with the fact.
-    pub(crate) first: u32,
-    /// The last release measured with the fact.
-    pub(crate) last: u32,
 }
 
-/// Where a driver's release stands to a fact measured of it (the module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum Standing {
-    /// A release from the first measured through the last.
-    Measured,
-    /// A release newer than the last measured, whose `driverVersion` is `last`: the fact is
-    /// taken and recorded as a near-equivalent.
-    Beyond {
-        /// The last release measured with the fact.
-        last: u32,
-    },
-}
-
-/// The facts of `table` that the driver `driver` on GPU `device` of `vendor`, named `name`
-/// (`VkPhysicalDeviceProperties::deviceName`), has at release `version`, each with its standing;
-/// an unmeasured fact is absent. A `device` of `None` is a GPU no row names
-/// (`DeviceDescription::measured_gpu`): only the rows of every GPU hold for it. Where `version` of
-/// the identity was measured on another GPU of it alone ([`NAMED_RELEASES`]), no row of its GPU
-/// that covers `version` holds, so the rows of earlier releases stand beyond their last; a `name`
-/// of `None` is put out by no named release.
+/// The facts of `table` that the driver `driver` has on GPU `device` of `vendor`, read by the
+/// `deviceID` it was measured under ([`DeviceDescription::canonical_device_id`]), at any release.
 pub(crate) fn among<F: Copy + Ord>(
     table: &[Measured<F>],
     driver: Option<DriverId>,
-    (vendor, device): (u32, Option<u32>),
-    version: u32,
-    name: Option<&str>,
-) -> BTreeMap<F, Standing> {
-    let out = name.is_some_and(|name| named_out(driver, (vendor, device), version, name));
-    let mut facts = BTreeMap::new();
-    for row in table {
-        let ours = Some(row.driver) == driver
-            && row.vendor.is_none_or(|v| v == vendor)
-            && row.device.is_none_or(|d| Some(d) == device);
-        if !ours || version < row.first {
-            continue;
-        }
-        if out && row.device.is_some() && version <= row.last {
-            continue;
-        }
-        let standing = match version <= row.last {
-            true => Standing::Measured,
-            false => Standing::Beyond { last: row.last },
-        };
-        // Two rows of one fact (a driver measured on two vendors, or at two releases) keep the
-        // better standing: measured, else beyond the later last release measured.
-        let kept = facts.entry(row.fact).or_insert(standing);
-        *kept = match (*kept, standing) {
-            (Standing::Beyond { last: a }, Standing::Beyond { last: b }) => {
-                Standing::Beyond { last: a.max(b) }
-            }
-            _ => Standing::Measured,
-        };
-    }
-    facts
+    (vendor, device): (u32, u32),
+) -> BTreeSet<F> {
+    table
+        .iter()
+        .filter(|row| {
+            Some(row.driver) == driver
+                && row.vendor.is_none_or(|v| v == vendor)
+                && row.device.is_none_or(|d| d == device)
+        })
+        .map(|row| row.fact)
+        .collect()
 }
 
 /// Every measured deviation translation relies on, by driver. Each but the two color-NaN stores
@@ -491,7 +417,7 @@ pub(crate) fn among<F: Copy + Ord>(
 /// GPU left them.
 ///
 /// MoltenVK 1.4.2 (its SPIRV-Cross `6c09849f`) on the M3 Max under macOS 27.0.1
-/// ([`moltenvk_142`]; 2026-10-21, the runtime lanes in release builds under `--cfg m2v_gpu`): every
+/// (2026-10-21, the runtime lanes in release builds under `--cfg m2v_gpu`): every
 /// deviation of the 1.4.1 rows of [`APPLE_M4`]'s identity, each taken, passed the lanes that
 /// measured it (`driver_deviations`' lockstep, float function, denormal, half, minimum and
 /// maximum, cube gradient, fragment and vertex simdgroup checks, `color_writes`, `first_vertex`,
@@ -503,185 +429,183 @@ pub(crate) fn among<F: Copy + Ord>(
 /// `helper_tangle`, `driver_deviations::fragment_simdgroup_lanes_are_metal_s` and the public
 /// render cases) answer Metal's with it.
 ///
-/// Another driver has none of them, as Vulkan states, but a listed driver at a release outside
-/// its rows, or on another vendor's GPU (or another GPU than a row's), is unmeasured: the profile
-/// then takes each one's conservative route (`derive.rs`).
+/// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
+/// (or another GPU than a row's) is unmeasured: the profile then takes each one's conservative
+/// route (`derive.rs`).
 pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
-    moltenvk_141(DriverDeviation::SimdgroupLockstep),
-    moltenvk_141(DriverDeviation::MetalFloatFunctions),
-    moltenvk_141(DriverDeviation::MetalCanonicalNans),
-    moltenvk_141(DriverDeviation::MetalSampler),
-    moltenvk_141(DriverDeviation::CubeGradientRoute),
+    moltenvk_on_apple(DriverDeviation::SimdgroupLockstep),
+    moltenvk_on_apple(DriverDeviation::MetalFloatFunctions),
+    moltenvk_on_apple(DriverDeviation::MetalCanonicalNans),
+    moltenvk_on_apple(DriverDeviation::MetalSampler),
+    moltenvk_on_apple(DriverDeviation::CubeGradientRoute),
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::GraphicsCubeGradientRoute)
+        ..moltenvk_on_apple(DriverDeviation::GraphicsCubeGradientRoute)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::GraphicsCubeGradientTangents)
+        ..moltenvk_on_apple(DriverDeviation::GraphicsCubeGradientTangents)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalColorWrites)
+        ..moltenvk_on_apple(DriverDeviation::MetalColorWrites)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalColorWrites)
+        ..moltenvk_on_apple(DriverDeviation::MetalColorWrites)
     },
-    nvidia_61571(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_3090),
-    nvidia_61571(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_5080_LAPTOP),
-    nvidia_61571(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_3090),
-    nvidia_61571(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_5080_LAPTOP),
+    nvidia_on(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_3090),
+    nvidia_on(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_5080_LAPTOP),
+    nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_3090),
+    nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_5080_LAPTOP),
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::HalfColorOutputBits)
+        ..moltenvk_on_apple(DriverDeviation::HalfColorOutputBits)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::HalfColorOutputBits)
+        ..moltenvk_on_apple(DriverDeviation::HalfColorOutputBits)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalHalfFma)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfFma)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalHalfFma)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfFma)
     },
     Measured {
         fact: DriverDeviation::MetalFloatColorNans,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalFloatDenormals)
+        ..moltenvk_on_apple(DriverDeviation::MetalFloatDenormals)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalFloatDenormals)
+        ..moltenvk_on_apple(DriverDeviation::MetalFloatDenormals)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalFloatDenormals,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalFloatDenormals,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalFloatDenormals,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
-    nvidia_61571(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_3090),
-    nvidia_61571(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_5080_LAPTOP),
+    nvidia_on(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_3090),
+    nvidia_on(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_5080_LAPTOP),
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalHalfQuantize)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfQuantize)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalHalfQuantize)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfQuantize)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfQuantize,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfQuantize,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfQuantize,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalHalfConversion)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfConversion)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalHalfConversion)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfConversion)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalCenterVaryings)
+        ..moltenvk_on_apple(DriverDeviation::MetalCenterVaryings)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalCenterVaryings)
+        ..moltenvk_on_apple(DriverDeviation::MetalCenterVaryings)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalSmallFloatColorWrites,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalSmallFloatColorWrites,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalSmallFloatColorWrites,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
-    nvidia_61571(DriverDeviation::MetalSmallFloatColorWrites, NVIDIA_RTX_3090),
-    mesa_2624(
+    nvidia_on(DriverDeviation::MetalSmallFloatColorWrites, NVIDIA_RTX_3090),
+    mesa_on(
         DriverDeviation::MetalNorm16ColorWrites,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalMinMax)
+        ..moltenvk_on_apple(DriverDeviation::MetalMinMax)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalMinMax)
+        ..moltenvk_on_apple(DriverDeviation::MetalMinMax)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalHalfArithmetic)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfArithmetic)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalHalfArithmetic)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfArithmetic)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalHalfStorageWrites)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageWrites)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalHalfStorageWrites)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageWrites)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfStorageWrites,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfStorageWrites,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfStorageWrites,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
-    nvidia_61571(DriverDeviation::MetalHalfStorageWrites, NVIDIA_RTX_3090),
-    nvidia_61571(
+    nvidia_on(DriverDeviation::MetalHalfStorageWrites, NVIDIA_RTX_3090),
+    nvidia_on(
         DriverDeviation::MetalHalfStorageWrites,
         NVIDIA_RTX_5080_LAPTOP,
     ),
@@ -690,32 +614,30 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalHalfStorageNans)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageNans)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalHalfStorageNans)
+        ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageNans)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalFloatStorageNans)
+        ..moltenvk_on_apple(DriverDeviation::MetalFloatStorageNans)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalFloatStorageNans)
+        ..moltenvk_on_apple(DriverDeviation::MetalFloatStorageNans)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalFloatStorageNans,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    nvidia_61571(DriverDeviation::MetalFloatStorageNans, NVIDIA_RTX_3090),
-    nvidia_61571(
+    nvidia_on(DriverDeviation::MetalFloatStorageNans, NVIDIA_RTX_3090),
+    nvidia_on(
         DriverDeviation::MetalFloatStorageNans,
         NVIDIA_RTX_5080_LAPTOP,
     ),
@@ -724,70 +646,68 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalFragmentSimdgroups)
+        ..moltenvk_on_apple(DriverDeviation::MetalFragmentSimdgroups)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalFragmentSimdgroups)
+        ..moltenvk_on_apple(DriverDeviation::MetalFragmentSimdgroups)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::MetalVertexSimdgroups)
+        ..moltenvk_on_apple(DriverDeviation::MetalVertexSimdgroups)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalVertexSimdgroups)
+        ..moltenvk_on_apple(DriverDeviation::MetalVertexSimdgroups)
     },
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_141(DriverDeviation::CenterFragCoordDepth)
+        ..moltenvk_on_apple(DriverDeviation::CenterFragCoordDepth)
     },
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::CenterFragCoordDepth)
+        ..moltenvk_on_apple(DriverDeviation::CenterFragCoordDepth)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::SampleFragCoordDepth,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalHalfTexelWrites,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    nvidia_61571(DriverDeviation::MetalHalfTexelWrites, NVIDIA_RTX_3090),
-    nvidia_61571(
+    nvidia_on(DriverDeviation::MetalHalfTexelWrites, NVIDIA_RTX_3090),
+    nvidia_on(
         DriverDeviation::MetalHalfTexelWrites,
         NVIDIA_RTX_5080_LAPTOP,
     ),
     Measured {
         device: Some(APPLE_M4),
-        ..moltenvk_141(DriverDeviation::MetalNormStorageWrites)
+        ..moltenvk_on_apple(DriverDeviation::MetalNormStorageWrites)
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalNormStorageWrites,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    nvidia_61571(DriverDeviation::Unorm8LinearFilter, NVIDIA_RTX_3090),
-    nvidia_61571(DriverDeviation::Unorm8LinearFilter, NVIDIA_RTX_5080_LAPTOP),
-    mesa_2624(
+    nvidia_on(DriverDeviation::Unorm8LinearFilter, NVIDIA_RTX_3090),
+    nvidia_on(DriverDeviation::Unorm8LinearFilter, NVIDIA_RTX_5080_LAPTOP),
+    mesa_on(
         DriverDeviation::Unorm8LinearFilter,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::Unorm8LinearFilter,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::Unorm8LinearFilter,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
@@ -797,60 +717,35 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalDepth16Stores,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalDepth16Stores,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
-    mesa_2624(
+    mesa_on(
         DriverDeviation::MetalDepth16Stores,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
-    moltenvk_141(DriverDeviation::MetalDepth16Stores),
-    mesa_2624(
+    moltenvk_on_apple(DriverDeviation::MetalDepth16Stores),
+    mesa_on(
         DriverDeviation::MetalDepth16BiasedStores,
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    moltenvk_141(DriverDeviation::MetalDepth16BiasedStores),
-    moltenvk_141(DriverDeviation::MetalInterpolation),
-    moltenvk_141(DriverDeviation::MetalFirstVertexIndices),
-    moltenvk_142(DriverDeviation::SimdgroupLockstep),
-    moltenvk_142(DriverDeviation::MetalFloatFunctions),
-    moltenvk_142(DriverDeviation::MetalCanonicalNans),
-    moltenvk_142(DriverDeviation::MetalSampler),
-    moltenvk_142(DriverDeviation::CubeGradientRoute),
-    moltenvk_142(DriverDeviation::GraphicsCubeGradientTangents),
-    moltenvk_142(DriverDeviation::MetalColorWrites),
-    moltenvk_142(DriverDeviation::HalfColorOutputBits),
-    moltenvk_142(DriverDeviation::MetalHalfFma),
-    moltenvk_142(DriverDeviation::MetalFloatDenormals),
-    moltenvk_142(DriverDeviation::MetalHalfQuantize),
-    moltenvk_142(DriverDeviation::MetalHalfConversion),
-    moltenvk_142(DriverDeviation::MetalCenterVaryings),
-    moltenvk_142(DriverDeviation::MetalMinMax),
-    moltenvk_142(DriverDeviation::MetalHalfArithmetic),
-    moltenvk_142(DriverDeviation::MetalHalfStorageWrites),
-    moltenvk_142(DriverDeviation::MetalHalfStorageNans),
-    moltenvk_142(DriverDeviation::MetalFloatStorageNans),
-    moltenvk_142(DriverDeviation::MetalFragmentSimdgroups),
-    moltenvk_142(DriverDeviation::MetalVertexSimdgroups),
-    moltenvk_142(DriverDeviation::CenterFragCoordDepth),
-    moltenvk_142(DriverDeviation::MetalNormStorageWrites),
-    moltenvk_142(DriverDeviation::MetalDepth16Stores),
-    moltenvk_142(DriverDeviation::MetalDepth16BiasedStores),
-    moltenvk_142(DriverDeviation::MetalInterpolation),
-    moltenvk_142(DriverDeviation::MetalFirstVertexIndices),
-    moltenvk_142(DriverDeviation::MetalFullQuads),
+    moltenvk_on_apple(DriverDeviation::MetalDepth16BiasedStores),
+    moltenvk_on_apple(DriverDeviation::MetalInterpolation),
+    moltenvk_on_apple(DriverDeviation::MetalFirstVertexIndices),
+    Measured {
+        device: Some(APPLE_M4),
+        ..moltenvk_on_apple(DriverDeviation::MetalFullQuads)
+    },
 ];
 
 /// NVIDIA's `vendorID`.
@@ -863,15 +758,13 @@ pub(crate) const NVIDIA_RTX_3090: u32 = 0x2204;
 /// `nvidia-rtx5080-laptop`).
 pub(crate) const NVIDIA_RTX_5080_LAPTOP: u32 = 0x2c19;
 
-/// The row of `fact` measured on NVIDIA's 615.71.09 on the GPU `device`.
-const fn nvidia_61571(fact: DriverDeviation, device: u32) -> Measured<DriverDeviation> {
+/// The row of `fact` measured on NVIDIA's driver on the GPU `device`.
+const fn nvidia_on<F>(fact: F, device: u32) -> Measured<F> {
     Measured {
         fact,
         driver: DriverId::NVIDIA_PROPRIETARY,
         vendor: Some(NVIDIA_VENDOR_ID),
         device: Some(device),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
     }
 }
 
@@ -894,19 +787,13 @@ pub(crate) const INTEL_UHD_770_RPL_S: u32 = 0xa780;
 /// `intel-irisxe-rplp-anv`).
 pub(crate) const INTEL_IRIS_XE_RPL_P: u32 = 0xa7a0;
 
-/// The row of `fact` measured on Mesa 26.2.4's `driver` on the GPU `(vendor, device)`.
-const fn mesa_2624(
-    fact: DriverDeviation,
-    driver: DriverId,
-    (vendor, device): (u32, u32),
-) -> Measured<DriverDeviation> {
+/// The row of `fact` measured on Mesa's `driver` on the GPU `(vendor, device)`.
+const fn mesa_on<F>(fact: F, driver: DriverId, (vendor, device): (u32, u32)) -> Measured<F> {
     Measured {
         fact,
         driver,
         vendor: Some(vendor),
         device: Some(device),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     }
 }
 
@@ -926,38 +813,19 @@ pub(crate) const APPLE_M3_MAX: u32 = 0x1A06_0209;
 /// the M3 Max, or named as the M4's alone.
 pub(crate) const APPLE_M4: u32 = 0x1B00_0209;
 
-/// The row of `fact` measured on MoltenVK 1.4.1 on Apple's GPUs.
-const fn moltenvk_141(fact: DriverDeviation) -> Measured<DriverDeviation> {
+/// The row of `fact` measured on MoltenVK on Apple's GPUs.
+const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
     Measured {
         fact,
         driver: DriverId::MOLTENVK,
         vendor: Some(APPLE_VENDOR_ID),
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     }
 }
 
-/// The row of `fact` measured on MoltenVK 1.4.2 (`driverVersion` 10402, Homebrew's build, its
-/// SPIRV-Cross `6c09849f`) on the Apple M3 Max under macOS 27.0.1, whose `deviceID` is
-/// [`APPLE_M4`]'s: the identity [`MEASURED_DEVICES`] lists at that release, for the M3 Max alone
-/// ([`NAMED_RELEASES`]). The M4, which reports the same `deviceID` under macOS 27, is not measured
-/// at 1.4.2: its 1.4.1 rows stand beyond their last there.
-const fn moltenvk_142<F>(fact: F) -> Measured<F> {
-    Measured {
-        fact,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: Some(APPLE_M4),
-        first: moltenvk(1, 4, 2),
-        last: moltenvk(1, 4, 2),
-    }
-}
-
-/// Every measured driver defect translation refuses by release (`Needs::DriverDefect`; the
-/// coordinator's ruling of 2026-10-06), and every measured answer a module records as a precision
-/// note: a defect is kept at a release newer than the last measured (the module docs' rule), and
-/// not assumed at an older one or of another driver.
+/// Every measured driver defect translation works around or refuses (`Needs::DriverDefect`), and
+/// every measured answer a module records as a precision note, at every release of its driver and
+/// never of another driver.
 /// - `BothBarycentricFormsRejected`: MoltenVK 1.4.1 (`driverVersion` 10401, SPIRV-Cross
 ///   `adec7acb`) refused `tail_fragment_barycentric` (`engine/stage_io_tail`) at pipeline
 ///   creation on an Apple M4. SPIRV-Cross throws in its MSL backend's interface
@@ -1014,159 +882,70 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
-    Measured {
-        fact: DriverWorkaround::MemoryWritingFragmentsRunPerSample,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
+    moltenvk_on_apple(DriverWorkaround::MemoryWritingFragmentsRunPerSample),
     Measured {
         fact: DriverWorkaround::InterpolationNeedsTheWholeQuad,
         driver: DriverId::MESA_RADV,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverWorkaround::MeshIndexComponentStoresMisplaced,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 0, 8),
     },
     Measured {
         fact: DriverWorkaround::CompositeInsertsWrittenInPlace,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverWorkaround::FunctionsInlinedAtEveryCall,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverWorkaround::LoadsForwardedIntoLoops,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverWorkaround::VertexGroupingNotApples,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         vendor: None,
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
-    Measured {
-        fact: DriverWorkaround::DontInlineKeepsCalls,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_3090),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverWorkaround::DontInlineKeepsCalls,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
+    nvidia_on(DriverWorkaround::DontInlineKeepsCalls, NVIDIA_RTX_3090),
+    nvidia_on(
+        DriverWorkaround::DontInlineKeepsCalls,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
 ];
 
-/// The defects of [`DEFECTS`] the driver `description` names has at its release, measured or
-/// newer.
+/// The defects translation works around on the driver `description` names, on its GPU.
 pub(crate) fn defects(description: &DeviceDescription) -> BTreeSet<DriverWorkaround> {
-    among(
-        DEFECTS,
-        description.driver_id,
-        (description.vendor_id, description.measured_gpu()),
-        description.driver_version,
-        Some(&description.device_name),
-    )
-    .into_keys()
-    .collect()
+    among(DEFECTS, description.driver_id, identity(description))
 }
 
-/// The deviations of the driver `description` names, on its GPU's vendor, at its release.
-pub(crate) fn deviations(description: &DeviceDescription) -> BTreeMap<DriverDeviation, Standing> {
-    among(
-        DEVIATIONS,
-        description.driver_id,
-        (description.vendor_id, description.measured_gpu()),
-        description.driver_version,
-        Some(&description.device_name),
-    )
+/// The deviations of the driver `description` names, on its GPU.
+pub(crate) fn deviations(description: &DeviceDescription) -> BTreeSet<DriverDeviation> {
+    among(DEVIATIONS, description.driver_id, identity(description))
 }
 
-/// The releases of an identity measured on one GPU of it alone, where its `deviceID` names more
-/// than one GPU: the driver, `vendorID`, `deviceID` and `driverVersion`, and the measured GPU's
-/// `deviceName`. A row of the identity's GPU that covers the release holds there for that GPU
-/// alone ([`among`]'s rows, [`MEASURED`]'s); another GPU of the identity at the release is no
-/// measured identity ([`DeviceDescription::measured_identity`]), and the rows of earlier releases
-/// stand beyond their last for it.
-///
-/// MoltenVK 1.4.2 on the Apple9 family under macOS 27 ([`APPLE_M4`]'s identity): measured on the
-/// Apple M3 Max (macOS 27.0.1) alone; the Apple M4, measured at 1.4.1, is not at 1.4.2.
-pub(crate) const NAMED_RELEASES: &[NamedRelease] = &[NamedRelease {
-    driver: DriverId::MOLTENVK,
-    vendor: APPLE_VENDOR_ID,
-    device: APPLE_M4,
-    release: moltenvk(1, 4, 2),
-    gpu: "Apple M3 Max",
-}];
-
-/// One release of an identity measured on one GPU of it alone ([`NAMED_RELEASES`]).
-pub(crate) struct NamedRelease {
-    pub(crate) driver: DriverId,
-    pub(crate) vendor: u32,
-    pub(crate) device: u32,
-    pub(crate) release: u32,
-    /// The measured GPU's `VkPhysicalDeviceProperties::deviceName`.
-    pub(crate) gpu: &'static str,
-}
-
-/// Whether a GPU named `name` of `driver`, `vendor` and `device` (its measured `deviceID`) at
-/// `version` is another GPU than the one its identity's release was measured on
-/// ([`NAMED_RELEASES`]).
-fn named_out(
-    driver: Option<DriverId>,
-    (vendor, device): (u32, Option<u32>),
-    version: u32,
-    name: &str,
-) -> bool {
-    NAMED_RELEASES.iter().any(|r| {
-        Some(r.driver) == driver
-            && r.vendor == vendor
-            && Some(r.device) == device
-            && r.release == version
-            && r.gpu != name
-    })
+/// The `vendorID` and the `deviceID` the tables name `description`'s GPU by.
+fn identity(description: &DeviceDescription) -> (u32, u32) {
+    (description.vendor_id, description.canonical_device_id())
 }
 
 /// A driver's measured answer where Vulkan leaves the result undefined, or its measured cost of
@@ -1291,9 +1070,8 @@ pub enum DriverFact {
     /// `runtime_lane::made_at_creation` (at 41d0f054f, 25 reports, every one at
     /// such a pipeline's creation). On a driver with it the runtime withholds exactly that message
     /// from the device's message sink inside that pipeline's creation, and counts it
-    /// (`WorkCounts::driver_diagnostics_withheld`); any other message, this one anywhere else, and
-    /// this one from an unmeasured release relay as before. MoltenVK's own code on every GPU, so
-    /// the row names no vendor; held on the release measured alone (the module docs).
+    /// (`WorkCounts::driver_diagnostics_withheld`); any other message, and this one anywhere else,
+    /// relay as before. MoltenVK's own code on every GPU, so the row names no vendor.
     DynamicRestartWarns,
     /// A driver diagnostic (the module docs): the driver reports a warning as it creates a
     /// graphics pipeline for each color attachment whose format lacks
@@ -1320,7 +1098,7 @@ pub enum DriverFact {
     /// a driver with it the runtime records each fill as transfers the driver compiles nothing
     /// for: `vkCmdUpdateBuffer` of the first words, then copies of the filled words onto the rest
     /// (`word_fill.rs`); elsewhere `vkCmdFillBuffer`. MoltenVK's own code on every GPU, so the row
-    /// names no vendor; held on the release measured alone.
+    /// names no vendor.
     FillCompiledPerCommandPool,
     /// A render pass's attachment stored `DONT_CARE` is stored as Metal's own `DontCare` on the
     /// same GPU, `MultisampleResolve` where it resolves in the subpass: MoltenVK hands the
@@ -1333,8 +1111,8 @@ pub enum DriverFact {
     /// and draws nothing before `MultisampleResolve` leaves the clear where Metal compresses the
     /// texture. Vulkan leaves the attachment's contents undefined. On a driver with it the runtime
     /// announces no `dont-care-store` for a pass recorded as one render pass instance in which it
-    /// records none of those (`Device::degrade_pass`). Held on the release measured alone (the
-    /// module docs): MoltenVK's code decides it. Measured on the M4 and the M3 Max.
+    /// records none of those (`Device::degrade_pass`). MoltenVK's code decides it. Measured on the
+    /// M4 and the M3 Max.
     DontCareStoreIsMetals,
     /// A cost fact (the module docs): the driver samples each `vkCmdWriteTimestamp` in a Metal
     /// blit pass of its own, which waits for the work before it and writes a byte of one buffer
@@ -1350,7 +1128,7 @@ pub enum DriverFact {
     /// us with them). On a driver with it the runtime answers command buffers' GPU times from the
     /// host's clock and writes no timestamps (`gpu_time.rs`, announced once as
     /// `gpu-times-from-host`); elsewhere it writes them unless told otherwise. MoltenVK's own code
-    /// on Apple's GPUs; held on the release measured alone.
+    /// on Apple's GPUs.
     TimestampsWaitForEveryQueue,
     /// The driver decodes each texel of a BC1 to BC3 texture (`BC1_RGBA`, `BC2_RGBA`,
     /// `BC3_RGBA`) to Metal's value, and each texel of their sRGB forms to Metal's code before
@@ -1422,7 +1200,7 @@ pub enum DriverFact {
     /// runs after its queue's earlier work. Vulkan orders no creation with queue work, and Metal
     /// makes a sparse texture without waiting for the GPU. On a driver with it the runtime
     /// announces `first-sparse-resource-wait` where it makes the device's first sparse texture. A
-    /// cost fact: held on the releases measured alone.
+    /// cost fact.
     FirstSparseResourceWaitsForQueues,
     /// The driver decodes each texel of a BC6H texture (`BC6H_RGBFloat`, `BC6H_RGBUfloat`) to
     /// Metal's value. Direct3D specifies BC6H's decode bit for bit, but Vulkan leaves a
@@ -1466,7 +1244,7 @@ pub enum DriverFact {
     /// the rounds' median), a pass that loads, draws and stores took 1.68 ms with the dispatches
     /// against 1.81 ms with the copies, one that clears 1.04 against 1.14 ms, and one drawn in a
     /// centred region of half the width and height 446 against 476 us. The driver's copy cost, so
-    /// the row names no GPU: it holds on each measured identity of ANV at the release. On a driver
+    /// the row names no GPU: it holds on every GPU of ANV. On a driver
     /// with it a shadowed texture's copy back is such a dispatch (`shadow_copy_back.rs` in the
     /// runtime), and so is a merge's copy of the shadow into its scratch before the commands
     /// (`shadow_merge.rs`), its shadow made `MUTABLE_FORMAT` with that view, through which the
@@ -1510,7 +1288,7 @@ pub enum DriverFact {
     /// and 2 rows the same CPU time and 21.9 us against 14.8 us; on the UHD 770 of RPL-S, 1080 rows
     /// 0.77-0.83 ms and 3.3-5.3 ms against 0.04-0.11 ms and 0.59-0.91 ms, and 2 rows the same CPU
     /// time and 8.8-14.2 us against 3.1-4.3 us. ANV's per-region cost, so its row names no GPU: it
-    /// holds on each measured identity of ANV at the release. NVIDIA's 615.71.09 on the RTX 5080
+    /// holds on every GPU of ANV. NVIDIA's 615.71.09 on the RTX 5080
     /// Laptop GPU, the GPU its row names (the same probe, two rounds each): 1080 rows took
     /// 0.19-0.21 ms of CPU and 2.03-2.05 ms of GPU time as regions against 0.12-0.13 ms and
     /// 0.42-0.43 ms as the dispatch, 16 rows 34-40 us of GPU time against 13 us, and 2 rows the
@@ -1593,9 +1371,8 @@ pub enum DriverFact {
     /// buffer committed after it while it ran, the later ones completing; an execution range past
     /// its buffer failed with `PageFault`, the next command buffer completing.
     ///
-    /// A defect fact, so MoltenVK takes it at every release and on every GPU
-    /// ([`DriverFact::assumed_where_unmeasured`]): the workaround, never the path a measurement
-    /// has not cleared. A driver without it relays nothing, and each of its batches takes a fence
+    /// A defect fact, so its row names MoltenVK on every GPU: the workaround, never the path a
+    /// measurement has not cleared. A driver without it relays nothing, and each of its batches takes a fence
     /// only where its command buffer ends at one (`command_buffer/fences.rs`).
     QueueFailuresReportedByMessenger,
     /// The driver answers a format's linear-tiling attachment features from memory it has not
@@ -1624,7 +1401,7 @@ pub enum DriverFact {
     /// wrote visible, and waits for no timeline the host saw complete; elsewhere it waits for
     /// those timelines instead, which saves that command buffer (about 12 us of an Iris Xe's GPU
     /// a batch) for about 1 us of CPU a wait (`command_buffer/submit.rs` in the runtime). Held on
-    /// the GPUs and release measured alone.
+    /// the GPUs measured alone.
     SemaphoreOperationsStallSubmits,
     /// A cost fact (the module docs): the driver keeps a single-sample depth image's
     /// hierarchical depth, with which its depth test rejects hidden fragments a block at a time,
@@ -1752,28 +1529,6 @@ pub enum DriverFact {
 }
 
 impl DriverFact {
-    /// Whether the fact is a defect the runtime works around (the module docs): the driver does
-    /// otherwise than Metal, so a device of the driver whose identity was not measured takes the
-    /// workaround, never the path a measurement has not cleared. Its depth and stencil images lie
-    /// apart from their memory or keep their GPU-optimized layout (MoltenVK), its compressed
-    /// images hide aliased writes (ANV), a depth rendered at custom positions reads at the
-    /// standard ones (NVIDIA's), its timestamp pools are Metal's scarce counter sample buffers
-    /// (MoltenVK), or its linear-tiling attachment features are read uninitialized (MoltenVK).
-    /// Every other fact is an answer fact (Metal's answer, a cost or a diagnostic), taken on a
-    /// measured identity alone.
-    pub const fn assumed_where_unmeasured(self) -> bool {
-        matches!(
-            self,
-            Self::DepthStencilImagesLieApart
-                | Self::DepthStencilImagesStayGpuOptimized
-                | Self::CompressedImagesHideAliasedWrites
-                | Self::PositionedDepthReadAtStandardPositions
-                | Self::TimestampPoolsAreCounterSampleBuffers
-                | Self::LinearTilingFeaturesUninitialized
-                | Self::QueueFailuresReportedByMessenger
-        )
-    }
-
     /// The linear-tiling format features a driver with this fact may report or not
     /// ([`DriverFact::LinearTilingFeaturesUninitialized`]: the color attachment and its blending,
     /// the blit destination and the depth/stencil attachment), which a description of its device
@@ -1836,8 +1591,8 @@ impl DriverFact {
 /// A message a driver reports through `VK_EXT_debug_utils` where Vulkan states nothing wrong, at
 /// `WARNING` severity as a `VALIDATION` message, as a driver diagnostic fact measures it (the
 /// module docs; [`DriverFact::pipeline_creation_diagnostics`]). The runtime withholds it from the
-/// device's message sink only inside the call the fact names, on a release measured with the
-/// fact, where it matches every field exactly; anywhere else it relays.
+/// device's message sink only inside the call the fact names, on a driver measured with the fact,
+/// where it matches every field exactly; anywhere else it relays.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DriverDiagnostic {
@@ -1951,7 +1706,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// first time a sparse resource is made; under `xe`, ANV binds sparse memory through VM_BIND,
 /// whose creation path makes a synchronous ioctl and waits for no queue (read, not measured).
 /// Vulkan tells the two apart by nothing but `sparseAddressSpaceSize`, so the row is ANV's on
-/// Intel's GPUs at the release measured.
+/// Intel's GPUs.
 ///
 /// `FragmentDepthStoresUnchanged`, measured by
 /// `runtime_lane::separate_samples::fragment_depth_stores_depth_values_unchanged` (signed zero,
@@ -2206,9 +1961,8 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// of its twelve kept cases the earlier one or the stored one, none other: at 66ffe6775, RADV, Mesa
 /// 26.2.4, on the Radeon 780M and ANV, Mesa 26.2.4, on the UHD 770 (RPL-S); at dd718a7905 with its
 /// row, ANV, Mesa 26.2.4, on the Iris Xe (RPL-P). Not listed: NVIDIA's 615.71.09, whose RTX 3080
-/// left a third answer; RADV, Mesa 26.0.8, on the RX 7900 XTX, clean at dd718a7905 but an
-/// unmeasured identity (`MEASURED_DEVICES`); and every GPU and release not measured, which store
-/// with `STORE`.
+/// left a third answer; RADV on the RX 7900 XTX, clean at dd718a7905 at Mesa 26.0.8 but not
+/// measured since; and every GPU not measured, which store with `STORE`.
 ///
 /// `PointerImportsFollowTheirAddress`: ANV, Mesa 26.2.4 on the Iris Xe of RPL-P under Linux 7.2.9's
 /// i915, measured with a probe outside the runtime (2026-10-17): a page of a `memfd` filled with
@@ -2226,8 +1980,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// the runtime (2026-10-22, `tests::pointer_residency` before its row): a no-copy buffer over two
 /// fresh anonymous private pages, read by a blit; fresh anonymous pages mapped over the address
 /// with `MAP_FIXED` and `Device::host_range_remapped` told, the next blit of the import kept all
-/// along read the new pages. Not listed: RADV, Mesa 26.0.8 on the RX 7900 XTX and the Radeon 780M
-/// under Linux 7.0.0, which answered the same, but are unmeasured identities (`MEASURED_DEVICES`).
+/// along read the new pages; Mesa 26.0.8 on both under Linux 7.0.0 answered the same.
 /// `tests::pointer_residency` in the runtime checks it on a device with it. Every other driver is
 /// unmeasured, and keeps its pointer imports.
 ///
@@ -2268,8 +2021,8 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// per sample or blitted, every sample there). It decides a notice, not an answer, so the M4 is
 /// not measured. Every other driver is unmeasured.
 ///
-/// MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 ([`moltenvk_142`]; 2026-10-21, the runtime
-/// lanes in release builds under `--cfg m2v_gpu`, each fact taken):
+/// MoltenVK 1.4.2 on the M3 Max under macOS 27.0.1 (2026-10-21, the runtime lanes in release
+/// builds under `--cfg m2v_gpu`, each fact taken):
 /// - Measured by the lane that measured its 1.4.1 row, which passed: `DepthImageKeepsDenormals`
 ///   and `DepthImageKeepsValuesOutsideUnitRange`
 ///   (`texture_blits::depth_images_keep_what_their_drivers_claim`, `depth_denormals`),
@@ -2303,803 +2056,376 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// - `Bc6hBlockDecodeIsMetals` and `Bc7BlockDecodeIsMetals`, by construction as at 1.4.1: 1.4.2's
 ///   `MVKPixelFormats.mm` hands every BC format to Metal as Metal's own, line for line 1.4.1's.
 ///
-/// Not extended to 1.4.2, so not taken there: `InterlockedPassSplitNoSlower`, a cost fact whose
-/// 1.4.1 timing needed a scratch build that keeps such a pass whole (its passes split there,
-/// announced, as on any unmeasured release); and `FillCompiledPerCommandPool`, whose wait our
-/// probe did not find: a command buffer of one `vkCmdFillBuffer`, the first in a fresh command
-/// pool, took 0.022 to 0.038 ms (median) in `vkQueueSubmit` beside one to eight threads making
-/// compute pipelines (91 and 496 made), as a `vkCmdUpdateBuffer` did, though
-/// `MVKCommandEncodingPool::getCmdFillBufferMTLComputePipelineState` is 1.4.1's (fills there take
-/// `vkCmdFillBuffer`).
+/// Not re-measured at 1.4.2, and taken there as at 1.4.1: `InterlockedPassSplitNoSlower`, a cost
+/// fact whose 1.4.1 timing needed a scratch build that keeps such a pass whole; and
+/// `FillCompiledPerCommandPool`, whose wait our probe did not find at 1.4.2: a command buffer of
+/// one `vkCmdFillBuffer`, the first in a fresh command pool, took 0.022 to 0.038 ms (median) in
+/// `vkQueueSubmit` beside one to eight threads making compute pipelines (91 and 496 made), as a
+/// `vkCmdUpdateBuffer` did, though `MVKCommandEncodingPool::getCmdFillBufferMTLComputePipelineState`
+/// is 1.4.1's. Its fills take the transfers either way, the same bytes.
 pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
     Measured {
         fact: DriverFact::RobustIndexFetchReadsZero,
         driver: DriverId::MESA_RADV,
         vendor: None,
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
-    Measured {
-        fact: DriverFact::RobustIndexFetchReadsZero,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_UHD_770_RPL_S),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::RobustIndexFetchReadsZero,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
+    mesa_on(
+        DriverFact::RobustIndexFetchReadsZero,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
+    ),
+    nvidia_on(
+        DriverFact::RobustIndexFetchReadsZero,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
     Measured {
         fact: DriverFact::DepthImageKeepsDenormals,
         driver: DriverId::NVIDIA_PROPRIETARY,
         vendor: None,
         device: None,
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
     },
     Measured {
         fact: DriverFact::DepthImageKeepsDenormals,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverFact::DepthImageKeepsDenormals,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverFact::DepthImageKeepsValuesOutsideUnitRange,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
-        fact: DriverFact::DepthTestKeepsDenormals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M4),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::DepthTestKeepsDenormals)
     },
     Measured {
-        fact: DriverFact::DepthTestComparesMagnitudes,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M4),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::DepthTestComparesMagnitudes)
     },
     Measured {
         fact: DriverFact::FirstSparseResourceWaitsForQueues,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         vendor: Some(INTEL_VENDOR_ID),
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverFact::FragmentDepthStoresUnchanged,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverFact::DepthStencilImagesLieApart,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
-    Measured {
-        fact: DriverFact::ColorResolveAverageIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
+    moltenvk_on_apple(DriverFact::ColorResolveAverageIsMetals),
     Measured {
         fact: DriverFact::CompressedImagesHideAliasedWrites,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         vendor: Some(INTEL_VENDOR_ID),
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverFact::HostTransferImagesKeepTheirBytes,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         vendor: Some(INTEL_VENDOR_ID),
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
     Measured {
         fact: DriverFact::DepthStencilImagesStayGpuOptimized,
         driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
+        vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverFact::FragmentDepthKeepsDepth16Codes,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
-    },
-    moltenvk_142(DriverFact::FragmentDepthKeepsDepth16Codes),
-    Measured {
-        fact: DriverFact::SampledFetchRecoversCodes,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
     Measured {
-        fact: DriverFact::SampledFetchRecoversCodes,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::SampledFetchRecoversCodes,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_UHD_770_RPL_S),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::SampledFetchRecoversCodes,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::SampledFetchRecoversCodes,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M4),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::FragmentDepthKeepsDepth16Codes)
+    },
+    mesa_on(
+        DriverFact::SampledFetchRecoversCodes,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::SampledFetchRecoversCodes,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::SampledFetchRecoversCodes,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
+    ),
+    nvidia_on(
+        DriverFact::SampledFetchRecoversCodes,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
+    Measured {
+        device: Some(APPLE_M4),
+        ..moltenvk_on_apple(DriverFact::SampledFetchRecoversCodes)
     },
     Measured {
-        fact: DriverFact::SampledFetchRecoversCodes,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M3_MAX),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::SampledFetchRecoversCodes)
     },
     Measured {
         fact: DriverFact::SampledFetchRecoversCodes,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
     },
     Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M3_MAX),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::InterlockedPassSplitNoSlower)
     },
     Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M4),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::InterlockedPassSplitNoSlower)
     },
-    Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_3090),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::InterlockedPassSplitNoSlower,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_UHD_770_RPL_S),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
+    mesa_on(
+        DriverFact::InterlockedPassSplitNoSlower,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    nvidia_on(
+        DriverFact::InterlockedPassSplitNoSlower,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
+    nvidia_on(DriverFact::InterlockedPassSplitNoSlower, NVIDIA_RTX_3090),
+    mesa_on(
+        DriverFact::InterlockedPassSplitNoSlower,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::InterlockedPassSplitNoSlower,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
+    ),
     Measured {
         fact: DriverFact::DynamicRestartWarns,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverFact::FillCompiledPerCommandPool,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
-        fact: DriverFact::DontCareStoreIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M4),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::DontCareStoreIsMetals)
     },
     Measured {
-        fact: DriverFact::DontCareStoreIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
         device: Some(APPLE_M3_MAX),
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
+        ..moltenvk_on_apple(DriverFact::DontCareStoreIsMetals)
     },
-    Measured {
-        fact: DriverFact::SemaphoreOperationsStallSubmits,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::SemaphoreOperationsStallSubmits,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_3090),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::TimestampsWaitForEveryQueue,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
+    nvidia_on(
+        DriverFact::SemaphoreOperationsStallSubmits,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
+    nvidia_on(DriverFact::SemaphoreOperationsStallSubmits, NVIDIA_RTX_3090),
+    moltenvk_on_apple(DriverFact::TimestampsWaitForEveryQueue),
     Measured {
         fact: DriverFact::TimestampPoolsAreCounterSampleBuffers,
         driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
+        vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverFact::QueueFailuresReportedByMessenger,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
     Measured {
         fact: DriverFact::LinearTilingFeaturesUninitialized,
         driver: DriverId::MOLTENVK,
         vendor: None,
         device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
     },
-    Measured {
-        fact: DriverFact::DontCareStoreIsOneOfMetals,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::DontCareStoreIsOneOfMetals,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_UHD_770_RPL_S),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::DontCareStoreIsOneOfMetals,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::ColorBlockDecodeIsMetals,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::ColorBlockDecodeIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
-    Measured {
-        fact: DriverFact::ChannelBlockDecodeIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
+    mesa_on(
+        DriverFact::DontCareStoreIsOneOfMetals,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::DontCareStoreIsOneOfMetals,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
+    ),
+    mesa_on(
+        DriverFact::DontCareStoreIsOneOfMetals,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::ColorBlockDecodeIsMetals,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    moltenvk_on_apple(DriverFact::ColorBlockDecodeIsMetals),
+    moltenvk_on_apple(DriverFact::ChannelBlockDecodeIsMetals),
     Measured {
         fact: DriverFact::PositionedDepthReadAtStandardPositions,
         driver: DriverId::NVIDIA_PROPRIETARY,
         vendor: Some(NVIDIA_VENDOR_ID),
         device: None,
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
     },
-    Measured {
-        fact: DriverFact::Bc6hBlockDecodeIsMetals,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_3090),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::Bc6hBlockDecodeIsMetals,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::Bc6hBlockDecodeIsMetals,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::Bc6hBlockDecodeIsMetals,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
+    nvidia_on(DriverFact::Bc6hBlockDecodeIsMetals, NVIDIA_RTX_3090),
+    nvidia_on(DriverFact::Bc6hBlockDecodeIsMetals, NVIDIA_RTX_5080_LAPTOP),
+    mesa_on(
+        DriverFact::Bc6hBlockDecodeIsMetals,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::Bc6hBlockDecodeIsMetals,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
     Measured {
         fact: DriverFact::Bc6hBlockDecodeIsMetals,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 0, 8),
     },
-    Measured {
-        fact: DriverFact::Bc6hBlockDecodeIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
-    Measured {
-        fact: DriverFact::Bc7BlockDecodeIsMetals,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_3090),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::Bc7BlockDecodeIsMetals,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
-    Measured {
-        fact: DriverFact::Bc7BlockDecodeIsMetals,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::Bc7BlockDecodeIsMetals,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::Bc7BlockDecodeIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
+    moltenvk_on_apple(DriverFact::Bc6hBlockDecodeIsMetals),
+    nvidia_on(DriverFact::Bc7BlockDecodeIsMetals, NVIDIA_RTX_3090),
+    nvidia_on(DriverFact::Bc7BlockDecodeIsMetals, NVIDIA_RTX_5080_LAPTOP),
+    mesa_on(
+        DriverFact::Bc7BlockDecodeIsMetals,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::Bc7BlockDecodeIsMetals,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    moltenvk_on_apple(DriverFact::Bc7BlockDecodeIsMetals),
     Measured {
         fact: DriverFact::ShadowCopyBackDispatchFaster,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         vendor: Some(INTEL_VENDOR_ID),
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
-    Measured {
-        fact: DriverFact::ShadowCopyInDispatchFaster,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_UHD_770_RPL_S),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
+    mesa_on(
+        DriverFact::ShadowCopyInDispatchFaster,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
+    ),
     Measured {
         fact: DriverFact::RowCopiesDispatchFaster,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,
         vendor: Some(INTEL_VENDOR_ID),
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
-    Measured {
-        fact: DriverFact::RowCopiesDispatchFaster,
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: Some(NVIDIA_VENDOR_ID),
-        device: Some(NVIDIA_RTX_5080_LAPTOP),
-        first: nvidia(615, 71, 9),
-        last: nvidia(615, 71, 9),
-    },
+    nvidia_on(DriverFact::RowCopiesDispatchFaster, NVIDIA_RTX_5080_LAPTOP),
     Measured {
         fact: DriverFact::SubmissionsWithoutSignalsMerge,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
     },
-    Measured {
-        fact: DriverFact::SubmissionsWithoutSignalsMerge,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::SubmissionsWithoutSignalsMerge,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RX_7900_XTX),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::SubmissionsWithoutSignalsMerge,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::SubmissionsWithoutSignalsMerge,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_UHD_770_RPL_S),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::SampledDepthKeepsHiZ,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::MultisampledDepthFasterOutOfGeneral,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::TileStoreIsMetals,
-        driver: DriverId::MOLTENVK,
-        vendor: Some(APPLE_VENDOR_ID),
-        device: None,
-        first: moltenvk(1, 4, 1),
-        last: moltenvk(1, 4, 1),
-    },
-    Measured {
-        fact: DriverFact::PointerImportsFollowTheirAddress,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::PointerImportsFollowTheirAddress,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RADEON_780M),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
-    Measured {
-        fact: DriverFact::PointerImportsFollowTheirAddress,
-        driver: DriverId::MESA_RADV,
-        vendor: Some(AMD_VENDOR_ID),
-        device: Some(AMD_RX_7900_XTX),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
-    },
+    mesa_on(
+        DriverFact::SubmissionsWithoutSignalsMerge,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::SubmissionsWithoutSignalsMerge,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
+    ),
+    mesa_on(
+        DriverFact::SubmissionsWithoutSignalsMerge,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::SubmissionsWithoutSignalsMerge,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
+    ),
+    mesa_on(
+        DriverFact::SampledDepthKeepsHiZ,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::MultisampledDepthFasterOutOfGeneral,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    moltenvk_on_apple(DriverFact::TileStoreIsMetals),
+    mesa_on(
+        DriverFact::PointerImportsFollowTheirAddress,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    mesa_on(
+        DriverFact::PointerImportsFollowTheirAddress,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RADEON_780M),
+    ),
+    mesa_on(
+        DriverFact::PointerImportsFollowTheirAddress,
+        DriverId::MESA_RADV,
+        (AMD_VENDOR_ID, AMD_RX_7900_XTX),
+    ),
     Measured {
         fact: DriverFact::PointerImportsFollowTheirAddress,
         driver: DriverId::MESA_LLVMPIPE,
         vendor: None,
         device: None,
-        first: mesa(26, 0, 8),
-        last: mesa(26, 2, 4),
+    },
+    mesa_on(
+        DriverFact::InterlockOrdersDraws,
+        DriverId::INTEL_OPEN_SOURCE_MESA,
+        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
+    ),
+    Measured {
+        device: Some(APPLE_M4),
+        ..moltenvk_on_apple(DriverFact::BlendlessColorAttachmentsWarn)
     },
     Measured {
-        fact: DriverFact::InterlockOrdersDraws,
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: Some(INTEL_VENDOR_ID),
-        device: Some(INTEL_IRIS_XE_RPL_P),
-        first: mesa(26, 2, 4),
-        last: mesa(26, 2, 4),
+        device: Some(APPLE_M4),
+        ..moltenvk_on_apple(DriverFact::ColorImagesLieAsMetalHeapTextures)
     },
-    moltenvk_142(DriverFact::DepthImageKeepsDenormals),
-    moltenvk_142(DriverFact::DepthImageKeepsValuesOutsideUnitRange),
-    moltenvk_142(DriverFact::DepthTestKeepsDenormals),
-    moltenvk_142(DriverFact::DepthTestComparesMagnitudes),
-    moltenvk_142(DriverFact::DepthStencilImagesLieApart),
-    moltenvk_142(DriverFact::ColorResolveAverageIsMetals),
-    moltenvk_142(DriverFact::DepthStencilImagesStayGpuOptimized),
-    moltenvk_142(DriverFact::SampledFetchRecoversCodes),
-    moltenvk_142(DriverFact::DynamicRestartWarns),
-    moltenvk_142(DriverFact::BlendlessColorAttachmentsWarn),
-    moltenvk_142(DriverFact::DontCareStoreIsMetals),
-    moltenvk_142(DriverFact::TimestampsWaitForEveryQueue),
-    moltenvk_142(DriverFact::TimestampPoolsAreCounterSampleBuffers),
-    moltenvk_142(DriverFact::LinearTilingFeaturesUninitialized),
-    moltenvk_142(DriverFact::ColorBlockDecodeIsMetals),
-    moltenvk_142(DriverFact::ChannelBlockDecodeIsMetals),
-    moltenvk_142(DriverFact::Bc6hBlockDecodeIsMetals),
-    moltenvk_142(DriverFact::Bc7BlockDecodeIsMetals),
-    moltenvk_142(DriverFact::TileStoreIsMetals),
-    moltenvk_142(DriverFact::ColorImagesLieAsMetalHeapTextures),
-    moltenvk_142(DriverFact::MultisampleColorImagesLieAsMetalHeapTextures),
+    Measured {
+        device: Some(APPLE_M4),
+        ..moltenvk_on_apple(DriverFact::MultisampleColorImagesLieAsMetalHeapTextures)
+    },
 ];
 
 /// Intel's `vendorID`.
 const INTEL_VENDOR_ID: u32 = 0x8086;
 
-/// Mesa's `vendorID` (`VK_VENDOR_ID_MESA`), which lavapipe reports, with `deviceID` 0.
-const MESA_VENDOR_ID: u32 = 0x10005;
-
-/// One device identity the runtime's driver facts were measured on (the module docs): a driver
-/// at one release on one GPU.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MeasuredDevice {
-    /// `VkPhysicalDeviceDriverProperties::driverID`.
-    pub(crate) driver: DriverId,
-    /// `VkPhysicalDeviceProperties::vendorID`.
-    pub(crate) vendor: u32,
-    /// `VkPhysicalDeviceProperties::deviceID`: the device class a measurement covers, which a
-    /// description of any `deviceID` of the same GPU is
-    /// ([`DeviceDescription::canonical_device_id`]).
-    pub(crate) device: u32,
-    /// `VkPhysicalDeviceProperties::driverVersion`.
-    pub(crate) release: u32,
-}
-
-/// Every device identity the runtime lanes measure the driver facts on: the C3 venues' devices
-/// (`validation/cutover/c3-venues.json`), the M3 Max under macOS 26.7 (the MoltenVK venue's device
-/// before its macOS 27 capture, which is the M4's identity), the RTX 3090 development venue, the
-/// RX 7900 XTX beside the 780M venue's GPU (RADV, Mesa 26.2.4, the same host), and lavapipe at
-/// Mesa 26.2.4 (the Linux hosts' own, beside the gate container's 26.0.8). A fact
-/// measured nowhere else is taken nowhere else. lavapipe's identity is Mesa's release alone: its
-/// LLVM and CPU are in no field of it.
-pub(crate) const MEASURED_DEVICES: &[MeasuredDevice] = &[
-    MeasuredDevice {
-        driver: DriverId::MOLTENVK,
-        vendor: APPLE_VENDOR_ID,
-        device: APPLE_M3_MAX,
-        release: moltenvk(1, 4, 1),
-    },
-    MeasuredDevice {
-        driver: DriverId::MOLTENVK,
-        vendor: APPLE_VENDOR_ID,
-        device: APPLE_M4,
-        release: moltenvk(1, 4, 1),
-    },
-    MeasuredDevice {
-        driver: DriverId::MOLTENVK,
-        vendor: APPLE_VENDOR_ID,
-        device: APPLE_M4,
-        release: moltenvk(1, 4, 2),
-    },
-    MeasuredDevice {
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: MESA_VENDOR_ID,
-        device: 0,
-        release: mesa(26, 0, 8),
-    },
-    MeasuredDevice {
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: MESA_VENDOR_ID,
-        device: 0,
-        release: mesa(26, 2, 4),
-    },
-    MeasuredDevice {
-        driver: DriverId::MESA_RADV,
-        vendor: AMD_VENDOR_ID,
-        device: AMD_RADEON_780M,
-        release: mesa(26, 2, 4),
-    },
-    MeasuredDevice {
-        driver: DriverId::MESA_RADV,
-        vendor: AMD_VENDOR_ID,
-        device: AMD_RX_7900_XTX,
-        release: mesa(26, 2, 4),
-    },
-    MeasuredDevice {
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: INTEL_VENDOR_ID,
-        device: INTEL_IRIS_XE_RPL_P,
-        release: mesa(26, 2, 4),
-    },
-    MeasuredDevice {
-        driver: DriverId::INTEL_OPEN_SOURCE_MESA,
-        vendor: INTEL_VENDOR_ID,
-        device: INTEL_UHD_770_RPL_S,
-        release: mesa(26, 2, 4),
-    },
-    MeasuredDevice {
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: NVIDIA_VENDOR_ID,
-        device: NVIDIA_RTX_3090,
-        release: nvidia(615, 71, 9),
-    },
-    MeasuredDevice {
-        driver: DriverId::NVIDIA_PROPRIETARY,
-        vendor: NVIDIA_VENDOR_ID,
-        device: NVIDIA_RTX_5080_LAPTOP,
-        release: nvidia(615, 71, 9),
-    },
-];
-
 impl DeviceDescription {
-    /// The runtime's driver facts ([`DriverFact`]) of the device this description names (the
-    /// module docs' rule): on a measured identity ([`DeviceDescription::measured_identity`]) those
-    /// its driver's rows name at its release, on its vendor and GPU; on any other identity only the
-    /// defects its driver is measured with on any release or GPU
-    /// ([`DriverFact::assumed_where_unmeasured`]). The runtime relies on an answer fact only where
-    /// the driver has it, and elsewhere takes the exact path that needs none.
+    /// The runtime's driver facts ([`DriverFact`]) of the device this description names: those
+    /// its driver's rows name, on its vendor and GPU, at any release.
     pub fn driver_facts(&self) -> BTreeSet<DriverFact> {
-        // A measured identity is no GPU a named release puts out (`NAMED_RELEASES`).
-        let measured = self.measured_identity();
-        let gpu = self.measured_gpu();
-        MEASURED
-            .iter()
-            .filter(|row| Some(row.driver) == self.driver_id)
-            .filter(|row| match measured {
-                true => {
-                    let release = match row.fact.assumed_where_unmeasured() {
-                        // A defect is kept at a release past the last measured, as the
-                        // deviations' table keeps one ([`among`], `Standing::Beyond`): the driver
-                        // goes on doing otherwise than Metal until a measurement clears it, and
-                        // the workaround is the exact path. Not below the first measured.
-                        true => self.driver_version >= row.first,
-                        // An answer (Metal's answer, a cost, a diagnostic) holds as measured
-                        // alone: the runtime takes the path that needs none elsewhere.
-                        false => (row.first..=row.last).contains(&self.driver_version),
-                    };
-                    release
-                        && row.vendor.is_none_or(|v| v == self.vendor_id)
-                        && row.device.is_none_or(|d| Some(d) == gpu)
-                }
-                false => row.fact.assumed_where_unmeasured(),
-            })
-            .map(|row| row.fact)
-            .collect()
-    }
-
-    /// Whether the device's identity (`driverID`, `vendorID`, `deviceID` and `driverVersion`) is
-    /// one the runtime's driver facts were measured on (`MEASURED_DEVICES`, the module docs), its
-    /// `deviceID` read as the GPU's measured one
-    /// ([`canonical_device_id`](DeviceDescription::canonical_device_id)). Another release of a
-    /// measured driver, another GPU of it, or another driver is not: the runtime takes no answer
-    /// fact there, assumes its driver's measured defects, and says so once in the informational
-    /// message `metal2vulkan-unmeasured-driver`. A description taken as unmeasured
-    /// ([`DeviceDescription::assumed_unmeasured`]) is none.
-    pub fn measured_identity(&self) -> bool {
-        let gpu = self.measured_gpu();
-        let identity = (self.vendor_id, gpu);
-        !named_out(
-            self.driver_id,
-            identity,
-            self.driver_version,
-            &self.device_name,
-        ) && MEASURED_DEVICES.iter().any(|m| {
-            Some(m.driver) == self.driver_id
-                && m.vendor == self.vendor_id
-                && Some(m.device) == gpu
-                && m.release == self.driver_version
-        })
+        among(MEASURED, self.driver_id, identity(self))
     }
 
     /// The formats the device lists as color attachments of optimal tiling without
@@ -3129,35 +2455,4 @@ impl DeviceDescription {
                 features.union(fact.unreliable_linear_tiling())
             })
     }
-
-    /// The answer facts the device's driver is measured to give on another release or GPU, which
-    /// the device does not take because its identity is not measured
-    /// ([`DeviceDescription::measured_identity`]): the runtime takes the exact path each needs
-    /// none of instead. Empty on a measured identity, and for a driver with no answer measured.
-    pub fn driver_facts_withheld(&self) -> BTreeSet<DriverFact> {
-        if self.measured_identity() {
-            return BTreeSet::new();
-        }
-        MEASURED
-            .iter()
-            .filter(|row| Some(row.driver) == self.driver_id)
-            .filter(|row| !row.fact.assumed_where_unmeasured())
-            .map(|row| row.fact)
-            .collect()
-    }
-}
-
-/// Mesa's `driverVersion` of a release: `VK_MAKE_API_VERSION(0, major, minor, patch)`.
-pub(crate) const fn mesa(major: u32, minor: u32, patch: u32) -> u32 {
-    (major << 22) | (minor << 12) | patch
-}
-
-/// NVIDIA's `driverVersion` of a release: its major, minor and patch from bits 22, 14 and 6.
-pub(crate) const fn nvidia(major: u32, minor: u32, patch: u32) -> u32 {
-    (major << 22) | (minor << 14) | (patch << 6)
-}
-
-/// MoltenVK's `driverVersion` of a release: `major * 10000 + minor * 100 + patch`.
-pub(crate) const fn moltenvk(major: u32, minor: u32, patch: u32) -> u32 {
-    major * 10000 + minor * 100 + patch
 }

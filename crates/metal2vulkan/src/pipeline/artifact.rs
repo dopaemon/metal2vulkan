@@ -1165,19 +1165,6 @@ pub enum PrecisionNote {
     ///
     /// Validation derives no tolerance and no explanation from it, as for `DeviceDenormals`.
     DeviceTexelDenormals,
-    /// The module is compiled for a device whose driver release is newer than the last one
-    /// measured with a deviation the profile takes (`ProfileFields::deviations_beyond`, which
-    /// names each with that release): where the specifications leave the answer to the driver,
-    /// the module relies on its answer being Metal's (a simdgroup's lockstep, Metal's own `float`
-    /// functions, its canonical NaN, its sampler, its cube-gradient route), as measured on the
-    /// earlier release. The lane that measured each runs at every master gate on the venues of
-    /// that driver, so a venue upgrade that changes one fails there; a release no venue runs is
-    /// taken on that measurement alone. Recorded by every module compiled for such a profile,
-    /// since the deviations shape `float` arithmetic, NaNs, sampling and simdgroups broadly.
-    ///
-    /// Validation derives no tolerance and no explanation from it, as for
-    /// `FunctionStorageAssumed`: a difference stays a mismatch for review.
-    BeyondMeasuredDeviation,
     /// The module places a texel offset on an axis that may repeat or mirror as Metal does in an
     /// access of an argument buffer's texture: on a device that does not sample through Metal's
     /// own sampler (one that does, `VkProperty::MetalSampler`, is Metal's texture unit itself), in

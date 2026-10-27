@@ -670,15 +670,20 @@ fn float_sums_record_their_precision() {
 /// A vertex function of simdgroup operations (`rvc_simd_vertex`: a sum, shuffles and a ballot;
 /// `rvc_simd_vertex_fill`: a fill with an explicit width) records
 /// `PrecisionNote::VertexSimdgroupGrouping` exactly where the vertex stage takes no required
-/// subgroup size and the driver is measured to group vertices otherwise than Apple's GPUs (ANV
-/// from Mesa 26.2.4: both profiles of the Intel venue); RADV, whose vertex stage cannot be pinned
+/// subgroup size and the driver is measured to group vertices otherwise than Apple's GPUs (ANV, on
+/// every GPU at every release: each committed ANV profile); RADV, whose vertex stage cannot be pinned
 /// either but groups as Apple's GPUs do, and NVIDIA, which pins it, do not, and a profile without
 /// subgroup operations in the vertex stage refuses the function. On ANV a kernel of simdgroup
 /// operations and a vertex function of none record no such note.
 #[test]
 fn vertex_simdgroup_functions_record_the_grouping_where_the_driver_regroups_vertices() {
     let note = PrecisionNote::VertexSimdgroupGrouping;
-    let anv = ["intel-irisxe-rplp-anv", "intel-uhd770-rpls-anv"];
+    let anv = [
+        "intel-arl-anv",
+        "intel-irisxe-anv",
+        "intel-irisxe-rplp-anv",
+        "intel-uhd770-rpls-anv",
+    ];
     for (stem, entry) in [
         ("rvc_simd_vertex", "simd_functions_in_a_vertex_function"),
         (
@@ -776,15 +781,15 @@ fn vertex_simdgroups_compile_where_the_driver_runs_them_unadvertised() {
         }
     }
     assert_eq!(
-        unadvertised, 8,
-        "the four functions on both MoltenVK captures"
+        unadvertised, 4,
+        "the four functions on the MoltenVK capture"
     );
 }
 
 /// `gsm2_vertex_quad_permutes`' quad broadcasts and shuffle-xors by a constant lane or mask in
 /// vertex functions are shuffles through the ballot of the live lanes on every committed profile,
 /// since a vertex quad may lack a lane past the draw's vertex count: each function compiles,
-/// declares no quad capability, and validates, on both MoltenVK captures too, whose vertex stage
+/// declares no quad capability, and validates, on the MoltenVK capture too, whose vertex stage
 /// runs unlisted without the quad class. A profile whose vertex stage has no subgroups refuses
 /// them.
 #[test]
@@ -824,13 +829,13 @@ fn vertex_quad_permutes_shuffle_through_the_live_lanes() {
             shuffled += usize::from(name.starts_with("moltenvk-"));
         }
     }
-    assert_eq!(shuffled, 6, "the three functions on both MoltenVK captures");
+    assert_eq!(shuffled, 3, "the three functions on the MoltenVK capture");
 }
 
 /// A fragment function of simdgroup operations (`fragment_discard_counts`: sums before and after a
 /// discard) records `PrecisionNote::FragmentSimdgroupGrouping` on every committed profile that
-/// compiles it and does not take `MetalFragmentSimdgroups`, and on the two MoltenVK profiles, which
-/// take it, records none. A fragment that reads only its quad lane (`simd_masks`' `quad_lane_f`)
+/// compiles it and does not take `MetalFragmentSimdgroups`, and on the MoltenVK profile, which
+/// takes it, records none. A fragment that reads only its quad lane (`simd_masks`' `quad_lane_f`)
 /// records none anywhere, and neither does a vertex function of simdgroup operations
 /// (`rvc_simd_vertex`).
 #[test]
@@ -1632,8 +1637,8 @@ fn fragment_group_operations_run_full_quads() {
 
 /// MoltenVK 1.4.2 drops `VK_KHR_shader_quad_control` (`shaderQuadControl`) on Apple's GPUs, where
 /// it still hands the fragment function to Metal, whose helpers take part in every simdgroup
-/// operation (`DriverDeviation::MetalFullQuads`). The committed `moltenvk-m3` description at
-/// 1.4.2 without the feature and its extension (the device as it now reports itself) compiles
+/// operation (`DriverDeviation::MetalFullQuads`). The committed `moltenvk-m3` description
+/// without the feature and its extension (the device as 1.4.2 reports itself) compiles
 /// each fragment function whose group operations observe other lanes: it declares no
 /// `RequireFullQuadsKHR` and no `QuadControlKHR`, requires `VkProperty::MetalFullQuads` and not
 /// the feature, still reads every lane through the ballot of the live lanes, and passes L3. The
@@ -1648,7 +1653,6 @@ fn a_device_that_runs_metal_s_helpers_runs_full_quads_without_quad_control() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("read the MoltenVK description");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.driver_version = crate::device::driver_facts::moltenvk(1, 4, 2);
     assert!(desc.features.remove(&VkFeature::ShaderQuadControl));
     assert!(desc.extensions.remove(&VkExtension::KhrShaderQuadControl));
     let device = |taken: bool| {

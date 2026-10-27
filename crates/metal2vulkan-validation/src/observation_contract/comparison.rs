@@ -247,9 +247,6 @@ impl UlpTable {
 /// - `FunctionStorageAssumed`: [`Allowance::Recorded`]. A vertex or fragment function's private
 ///   memory passes the floor of a device not measured, resting on no measurement; a difference is
 ///   a mismatch for review, never accepted or explained by the note.
-/// - `BeyondMeasuredDeviation`: [`Allowance::Recorded`]. Every module compiled for a driver release
-///   past its deviations' measurement records it; a difference is a mismatch for review, never
-///   accepted or explained by the note.
 /// - `ViewBaseTexelOffset`: [`Allowance::Recorded`]. Only a view whose first level lies above its
 ///   parent's base level reads otherwise than Metal, which no authored case binds: a difference is
 ///   a mismatch for review.
@@ -278,7 +275,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceNanEncoding
         | N::FunctionStorageAssumed
         | N::DeviceTexelDenormals
-        | N::BeyondMeasuredDeviation
         | N::ViewBaseTexelOffset => Allowance::Recorded,
         N::DeviceColorConversion => Allowance::Recorded,
         N::LinkedSamplerNumbering | N::ColorAttachmentGroups => Allowance::Recorded,

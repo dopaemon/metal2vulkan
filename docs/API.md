@@ -206,19 +206,15 @@ println!("  Metal properties: {:?}", device.metal_properties());
 
 Where Vulkan leaves an answer to the driver and a driver's answer is Metal's, the profile relies on
 it only where that driver was measured to give it, keyed on the description's driver identity
-(`driver_id`, `vendor_id`, `driver_version`, and `device_id` where one GPU differs from another;
-MoltenVK's `device_id` is the macOS release and the Apple GPU family, so the M3 Max and the M4 share
-one under macOS 27 and a macOS release not measured is another identity), never on a claim of the
-description itself. A GPU that reports more than one `device_id` is read by the one it was measured
-under (`DeviceDescription::canonical_device_id`): the Radeon 780M of Hawk Point (`0x1900`) as
-Phoenix's (`0x15bf`), at the releases measured there. A release measured on one GPU of a shared
-`device_id` alone names that GPU by its `device_name`: MoltenVK 1.4.2 under macOS 27 was measured
-on the M3 Max, so the M4 at 1.4.2 is no measured identity. These are `DriverDeviation`s (simdgroups
-that run in lockstep, Metal's own `float` functions, sampler and canonical NaNs, color writes,
-...), measured on MoltenVK 1.4.1 on Apple's M3 Max and M4 and on MoltenVK 1.4.2 on the M3 Max,
-with a few per-GPU facts measured elsewhere. A driver, GPU or release that was not measured takes
-the conservative, exact route. A newer MoltenVK release
-takes the measured facts and records `PrecisionNote::BeyondMeasuredDeviation`.
+(`driver_id`, `vendor_id`, and `device_id` where one GPU differs from another; MoltenVK's
+`device_id` is the macOS release and the Apple GPU family, so the M3 Max and the M4 share one under
+macOS 27), never on its `driver_version` and never on a claim of the description itself. A row holds
+at every release of its driver. A GPU that reports more than one `device_id` is read by the one it
+was measured under (`DeviceDescription::canonical_device_id`): the Radeon 780M of Hawk Point
+(`0x1900`) as Phoenix's (`0x15bf`). These are `DriverDeviation`s (simdgroups that run in lockstep,
+Metal's own `float` functions, sampler and canonical NaNs, color writes, ...), measured on MoltenVK
+on Apple's M3 Max and M4, with a few per-GPU facts measured elsewhere. A driver or GPU that was not
+measured takes the conservative route.
 
 Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 32-lane
 simdgroups (including lockstep races on threadgroup memory within a barrier interval), and the
@@ -2862,13 +2858,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-device-texel-denormals` (precision). `PrecisionNote::DeviceTexelDenormals`:
   A `float` sample or gather, a comparison's included, whose texels the device reads, on a device
   that does not sample through Metal's own sampler.
-- `metal2vulkan-degrade-beyond-measured-deviation` (precision).
-  `PrecisionNote::BeyondMeasuredDeviation`: The module is compiled for a device whose driver release
-  is newer than the last one measured with a deviation the profile takes
-  (`ProfileFields::deviations_beyond`, which names each with that release): where the specifications
-  leave the answer to the driver, the module relies on its answer being Metal's (a simdgroup's
-  lockstep, Metal's own `float` functions, its canonical NaN, its sampler, its cube-gradient route),
-  as measured on the earlier release.
 - `metal2vulkan-degrade-view-base-texel-offset` (precision). `PrecisionNote::ViewBaseTexelOffset`:
   The module places a texel offset on an axis that may repeat or mirror as Metal does in an access
   of an argument buffer's texture: on a device that does not sample through Metal's own sampler (one

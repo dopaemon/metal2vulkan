@@ -956,10 +956,7 @@ const METAL_CACHE_KEPT: &str = "metal2vulkan-driver-pipeline-cache-kept";
 /// [`creation_checked`] of `heard`, every message `device`'s making delivered to a sink that hears
 /// every message (not the lane's, which keeps notices and failures alone): its notices exactly
 /// its [`creation_kinds`], one each, and its other messages exactly the informational ones the
-/// device sends as it is made, each once and in this order: `metal2vulkan-unmeasured-driver`
-/// exactly where its identity is not measured, as the runtime reads it
-/// (`unmeasured_driver_message`, the fact the device's own message reads); then [`LAYERS_DROPPED`]
-/// where the loader could not provide the instance layers the device asked for, which the device
+/// device sends as it is made, each once and in this order: [`LAYERS_DROPPED`] where the loader could not provide the instance layers the device asked for, which the device
 /// alone can say (the instance's answer, not the loader's listing: a layer the loader lists and
 /// cannot load answers the same); then [`METAL_CACHE_KEPT`] exactly where its driver keeps its
 /// internal pipeline cache and that cache is Metal's own ([`metal_cache_kept`], read from the
@@ -983,7 +980,6 @@ pub(crate) fn creation_heard_checked(
     for message in &informed {
         messages.heard_informational(&message.id_name, &message.text);
     }
-    let unmeasured = metal2vulkan_runtime::unmeasured_driver_message(device.properties());
     let dropped = messages.layers_dropped_message();
     let cache_kept = metal_cache_kept(device);
     let mut expected: Vec<String> = Vec::new();
@@ -997,18 +993,6 @@ pub(crate) fn creation_heard_checked(
             }
             expected.push(first.text.clone());
             rest = after;
-        }
-    }
-    if let Some(message) = &unmeasured {
-        expected.push(message.text.clone());
-        match rest.split_first() {
-            Some((first, after))
-                if (first.severity, &first.id_name, &first.text)
-                    == (message.severity, &message.id_name, &message.text) =>
-            {
-                rest = after;
-            }
-            _ => rest = &[],
         }
     }
     if let Some(text) = &dropped {

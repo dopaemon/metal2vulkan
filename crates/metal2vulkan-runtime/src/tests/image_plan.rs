@@ -984,7 +984,7 @@ fn multisampled_depth_targets_take_custom_sample_positions() {
 /// driver is not measured to keep every `float` in: without `VK_EXT_depth_range_unrestricted` and
 /// the driver's fact that its depth images keep values outside `[0, 1]`, the Xe-LP ANV ones among
 /// them, or without its fact that they keep denormals, RADV's among them; and in its depth
-/// image, as `plan_image` plans it, elsewhere: NVIDIA's 615 and lavapipe, with the extension, and
+/// image, as `plan_image` plans it, elsewhere: NVIDIA's and lavapipe, with the extension, and
 /// MoltenVK without it. A render target (`Unknown` usage counts as one), a memoryless or
 /// multisampled texture and another depth format have no twin.
 #[test]
@@ -1086,18 +1086,17 @@ fn depth_twins_hold_the_texels_in_colour_where_a_depth_image_may_not() {
             }
         }
     }
-    // Lavapipe 26.2.3 (`lavapipe`) is no measured identity, so it takes the twin too.
-    for stem in [
-        "intel-irisxe-rplp-anv",
-        "amd-780m-radv",
-        "amd-rdna3-radv",
-        "lavapipe",
-    ] {
+    for stem in ["intel-irisxe-rplp-anv", "amd-780m-radv", "amd-rdna3-radv"] {
         assert!(twinned.iter().any(|n| n == stem), "{stem}: {twinned:?}");
     }
     // Drivers measured to keep every `float` in a depth image: NVIDIA's and lavapipe with the
-    // extension, MoltenVK without it.
-    for stem in ["nvidia-rtx5080-laptop", "gate-lavapipe", "moltenvk-m3"] {
+    // extension, at every release, MoltenVK without it.
+    for stem in [
+        "nvidia-rtx5080-laptop",
+        "gate-lavapipe",
+        "lavapipe",
+        "moltenvk-m3",
+    ] {
         assert!(!twinned.iter().any(|n| n == stem), "{stem}: {twinned:?}");
     }
 }

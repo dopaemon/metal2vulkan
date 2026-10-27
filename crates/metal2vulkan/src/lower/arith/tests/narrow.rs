@@ -2726,7 +2726,7 @@ fn half_arithmetic_on_the_device_follows_the_profile() {
         measured += usize::from(basis == Some(F16Basis::Measured));
         controlled += usize::from(basis == Some(F16Basis::Controlled));
     }
-    assert!(measured >= 2, "the MoltenVK captures take it, measured");
+    assert!(measured >= 1, "the MoltenVK capture takes it, measured");
     assert!(
         controlled >= 2,
         "the float-controls profiles take it, by the spec"

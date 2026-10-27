@@ -571,7 +571,6 @@ mod tests {
         let messages = Messages::default();
         messages.device_asked_layers(&[VALIDATION_LAYER.to_owned()]);
         for id_name in [
-            "metal2vulkan-unmeasured-driver",
             "metal2vulkan-driver-pipeline-cache-kept",
             "metal2vulkan-pipeline-creation",
             "",

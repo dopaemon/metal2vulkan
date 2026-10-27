@@ -3189,8 +3189,8 @@ fn packed_sixteen_bit_formats_sit_in_the_vulkan_word_of_their_bits() {
             Err(e) => panic!("{stem}: {e:?}"),
         }
     }
-    // The two MoltenVK profiles expose the pair, so the sweep is not vacuous in either direction.
-    assert!(held >= 2, "held on {held} committed profiles");
+    // The MoltenVK profile exposes the pair, so the sweep is not vacuous in either direction.
+    assert!(held >= 1, "held on {held} committed profiles");
     assert!(
         vk_format(
             PixelFormat::BGRA4Unorm,

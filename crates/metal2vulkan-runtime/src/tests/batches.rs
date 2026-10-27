@@ -305,9 +305,8 @@ fn only_drivers_measured_to_merge_their_submissions_group_their_batches() {
 /// (`DriverFact::QueueFailuresReportedByMessenger`); every other driver takes none, and its
 /// batches take a fence only where their command buffer ends at one.
 ///
-/// It is a **defect** fact, so a driver with a row takes it at every release and on every GPU
-/// (`DriverFact::assumed_where_unmeasured`): that is what makes the fact answer exactly as the
-/// driver's name did, and the check is that MoltenVK's profiles take it while every other
+/// Its row names MoltenVK on every GPU at every release: that is what makes the fact answer
+/// exactly as the driver's name did, and the check is that MoltenVK's profiles take it while every other
 /// committed profile -- RADV's, ANV's, NVIDIA's, lavapipe's and SwiftShader's -- does not,
 /// including at a release and on a GPU no lane measured.
 #[test]

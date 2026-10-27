@@ -352,7 +352,7 @@ fn a_multisampled_coverage_reader_off_apples_rasterizer_announces_the_split() {
         }
     }
     assert!(
-        apple >= 2 && other >= 6,
+        apple >= 1 && other >= 6,
         "{apple} on Apple's, {other} on others"
     );
 }
@@ -661,8 +661,8 @@ fn a_per_sample_driver_runs_the_natural_functions_as_written() {
     }
     assert_eq!(
         natural,
-        2 * NATURAL.len() * 2,
-        "the two MoltenVK profiles ran each as written"
+        NATURAL.len() * 2,
+        "the MoltenVK profile ran each as written"
     );
     assert!(looped >= 6 * NATURAL.len(), "{looped} pipelines looped");
 }

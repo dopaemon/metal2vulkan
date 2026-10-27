@@ -539,15 +539,6 @@ fn the_version_212_members_round_trip() {
     assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
 }
 
-/// The member format version 214 appends encodes and decodes as itself:
-/// `PrecisionNote::BeyondMeasuredDeviation`.
-#[test]
-fn the_version_214_members_round_trip() {
-    use crate::pipeline::artifact::PrecisionNote;
-    let note = PrecisionNote::BeyondMeasuredDeviation;
-    assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
-}
-
 /// The member format version 219 appends encodes and decodes as itself:
 /// `PrecisionNote::ViewBaseTexelOffset`.
 #[test]

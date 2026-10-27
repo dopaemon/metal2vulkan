@@ -1839,7 +1839,6 @@ impl Device {
             // Woken by the scheduler's thread for what a commit queued (`recorder`).
             (device.shared().scheduler).wake_recorder(Arc::clone(recorder));
         }
-        device.say_unmeasured_driver();
         // The verdicts of its check of textures over host pages, where a record holds them.
         device.recall_in_place_checks();
         device.degrade_argument_buffers_unread();

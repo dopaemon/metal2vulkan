@@ -2593,12 +2593,12 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
     // A device whose `InterpolateAtOffset` reads from the center: a driver other than
     // MoltenVK's.
     let centered_mvk = mvk_as(&|d| d.driver_id = None);
-    // MoltenVK 1.4.0, whose `InterpolateAtOffset` reads off the center and which is not measured to
-    // read center varyings at the pixel center itself: it refuses a per-sample function's center
-    // varying naming the property it lacks; every other case links or is refused as on the same
-    // device without the deviation.
-    let unmeasured_mvk =
-        mvk_as(&|d| d.driver_version = crate::device::driver_facts::moltenvk(1, 4, 0));
+    // MoltenVK on the Apple8 family under macOS 27 (`deviceID` 0x1B00_0208), whose
+    // `InterpolateAtOffset` reads off the center and which is not measured to read center
+    // varyings at the pixel center itself: it refuses a per-sample function's center varying
+    // naming the property it lacks; every other case links or is refused as on the same device
+    // without the deviation.
+    let unmeasured_mvk = mvk_as(&|d| d.device_id = 0x1B00_0208);
     let needs_centered = Error::Unsupported(Unsupported::needs(
         Feature::SampleRateShading,
         Capability::Property(VkProperty::InterpolateAtOffsetCentered),
@@ -2611,7 +2611,7 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
         .contains(&VkProperty::MetalCenterVaryings));
     for (stem, p, biased) in [
         ("moltenvk-m3", committed, false),
-        ("moltenvk-m3 at 1.4.0", unmeasured_mvk, true),
+        ("moltenvk-m3 as Apple8", unmeasured_mvk, true),
         ("moltenvk-m3 centered", centered_mvk, false),
         ("lavapipe", profile("lavapipe"), false),
     ] {

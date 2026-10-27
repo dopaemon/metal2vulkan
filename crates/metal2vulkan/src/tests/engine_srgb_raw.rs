@@ -1979,7 +1979,7 @@ fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
         });
         assert!(held, "{stem}: {:?}", p.stage.specialized_notes);
     }
-    assert_eq!(seen, 3);
+    assert_eq!(seen, 2);
 }
 
 /// Under the variant, a form the raw codes do not serve (a runtime sampler's sample) states

@@ -55,8 +55,7 @@ fn device(cache: &Path) -> Device {
 }
 
 /// The live device's queues keep their submissions in flight exactly where its driver has the
-/// fact, and its identity is printed either way: a release the lanes measured for other facts but
-/// not for this one takes no relay, and nothing else in the suite would say so.
+/// fact, and its identity is printed either way.
 #[test]
 fn the_live_device_relays_its_queue_failures_exactly_where_its_driver_has_the_fact() {
     let scratch = Scratch::new();
@@ -65,16 +64,13 @@ fn the_live_device_relays_its_queue_failures_exactly_where_its_driver_has_the_fa
     let description = &properties.description;
     let fact = DriverFact::QueueFailuresReportedByMessenger;
     let has = properties.driver_facts.contains(&fact);
-    let withheld = properties.driver_facts_withheld.contains(&fact);
     println!(
-        "RELAY-FACT {:?} {} ({:#x}/{:#x}, driver version {:#x}, measured identity {}): \
-         the fact {has}, withheld {withheld}",
+        "RELAY-FACT {:?} {} ({:#x}/{:#x}, driver version {:#x}): the fact {has}",
         description.driver_id,
         properties.name,
         properties.vendor_id,
         properties.device_id,
         description.driver_version,
-        description.measured_identity(),
     );
     let queues = device.shared().queues.len();
     let relays = (0..queues).any(|queue| device.shared().flights(queue).is_some());
@@ -88,13 +84,6 @@ fn the_live_device_relays_its_queue_failures_exactly_where_its_driver_has_the_fa
         relays || !has,
         "the device has the fact that earns the relay and relays nothing: its instance has no \
          messenger, or the relay was not installed"
-    );
-    // A defect this driver was measured to have at an earlier release and not re-measured at
-    // this one is withheld, never silently dropped: the runtime would take a path no
-    // measurement cleared (`driver_facts.rs`).
-    assert!(
-        has || withheld || description.driver_id.is_none(),
-        "the driver has neither the fact nor it withheld, so nothing says the relay is off"
     );
     drop(device);
 }

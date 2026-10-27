@@ -1438,7 +1438,6 @@ codec_enum! {
         QuadsCountedBeforeDiscard,
         DeviceDepthComparison,
         DeviceTexelDenormals,
-        BeyondMeasuredDeviation,
         ViewBaseTexelOffset,
         DeviceColorConversion,
         DeviceInterpolation,

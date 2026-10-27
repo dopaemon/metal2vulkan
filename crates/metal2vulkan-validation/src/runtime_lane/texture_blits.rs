@@ -1413,9 +1413,7 @@ const OUTSIDE: [f32; 5] = [-0.5, 2.0, 1000.0, -1000.0, 1.5];
 /// `get_bytes`. Each count kept is printed with the driver's `driverID` and `driverVersion`. A
 /// driver with a fact keeps every value of its kind, and every device keeps the values outside
 /// `[0, 1]` where it enabled `VK_EXT_depth_range_unrestricted`. The shader's reads and
-/// comparisons of such a texture are `depth_compares`' (Metal's answers there). A device whose
-/// identity is not measured announces nothing for it (its paths are exact; it sends the
-/// informational `metal2vulkan-unmeasured-driver`, no degrade notice).
+/// comparisons of such a texture are `depth_compares`' (Metal's answers there).
 #[test]
 fn depth_images_keep_what_their_drivers_claim() {
     let cache = ScratchCache::new().unwrap();

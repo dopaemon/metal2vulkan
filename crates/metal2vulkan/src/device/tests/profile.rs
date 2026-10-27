@@ -444,13 +444,25 @@ fn fingerprint_covers_every_policy_field() {
         seen.push(h);
     }
     // The 8-bit linear filter's policy changes the profile, and so the fingerprint, on a device
-    // measured within its bound (the RTX 5080 Laptop GPU's capture), through the property it
-    // decides; on lavapipe's capture, unmeasured, it changes nothing.
+    // measured within its bound (lavapipe's capture, the RTX 5080 Laptop GPU's), through the
+    // property it decides; on a GPU not measured (the RTX 50 desktop GPU's capture) it changes
+    // nothing.
     let accepting = DevicePolicy {
         unorm8_linear_filter: crate::device::Unorm8LinearFilterPolicy::DeviceWithinOneCode,
         ..base
     };
-    assert_eq!(fp(accepting), reference);
+    assert_ne!(fp(accepting), reference);
+    let unmeasured = profile("nvidia-rtx50-linux");
+    assert_eq!(
+        Device::new(unmeasured.clone(), base)
+            .unwrap()
+            .profile()
+            .fingerprint(),
+        Device::new(unmeasured, accepting)
+            .unwrap()
+            .profile()
+            .fingerprint(),
+    );
     let measured = profile("nvidia-rtx5080-laptop");
     assert_ne!(
         Device::new(measured.clone(), base)
@@ -856,22 +868,26 @@ fn moltenvk_on_apple_carries_the_early_tests_image_write_defect() {
     desc.vendor_id = 0x106B;
     desc.driver_id = Some(vk::DriverId::MESA_RADV);
     // Every rasterizer but Apple's hands a clipped primitive's fragments other coverage than
-    // Metal's pieces, and every tessellator but Apple's orders a patch's triangles its own way.
+    // Metal's pieces, and every tessellator but Apple's orders a patch's triangles its own way;
+    // RADV's own interpolation defect holds on any vendor.
     assert_eq!(
         workarounds(&desc),
-        [W::ClippedCoverageNotMetals, W::TessellatorNotMetals]
+        [
+            W::InterpolationNeedsTheWholeQuad,
+            W::ClippedCoverageNotMetals,
+            W::TessellatorNotMetals
+        ]
     );
 }
 
 /// `DriverWorkaround::BothBarycentricFormsRejected`,
 /// `DriverWorkaround::CompositeInsertsWrittenInPlace`, `DriverWorkaround::LoadsForwardedIntoLoops`,
 /// `DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls` and
-/// `DriverWorkaround::FunctionsInlinedAtEveryCall`, its SPIRV-Cross's, are keyed on MoltenVK's
-/// release by the measured table (`driver_facts::DEFECTS`): carried at 1.4.1, the release
-/// measured, and at a newer one (kept until a measurement says otherwise); not at an older
-/// release, which no measurement covers, nor by another driver at the same `driverVersion`.
+/// `DriverWorkaround::FunctionsInlinedAtEveryCall`, its SPIRV-Cross's, are keyed on MoltenVK by
+/// the measured table (`driver_facts::DEFECTS`): carried at every release, and not by another
+/// driver.
 #[test]
-fn moltenvk_carries_its_spirv_cross_defects_from_their_measured_release() {
+fn moltenvk_carries_its_spirv_cross_defects_at_every_release() {
     use crate::device::profile::DriverWorkaround;
     for defect in [
         DriverWorkaround::BothBarycentricFormsRejected,
@@ -891,13 +907,11 @@ fn moltenvk_carries_its_spirv_cross_defects_from_their_measured_release() {
         {
             let stem = "moltenvk-m3";
             let mut desc = profile(stem);
-            assert_eq!(desc.driver_version, 10401, "{stem}");
             assert!(carries(&desc), "{stem} {defect:?}");
-            desc.driver_version = 10500;
-            assert!(carries(&desc), "{stem} 1.5.0 {defect:?}");
-            desc.driver_version = 10400;
-            assert!(!carries(&desc), "{stem} 1.4.0 {defect:?}");
-            desc.driver_version = 10401;
+            for version in [10400, 10500] {
+                desc.driver_version = version;
+                assert!(carries(&desc), "{stem} {version} {defect:?}");
+            }
             desc.driver_id = Some(vk::DriverId::MESA_LLVMPIPE);
             assert!(!carries(&desc), "{stem} under lavapipe {defect:?}");
         }
@@ -909,12 +923,11 @@ fn moltenvk_carries_its_spirv_cross_defects_from_their_measured_release() {
     }
 }
 
-/// `DriverWorkaround::MemoryWritingFragmentsRunPerSample` is keyed on MoltenVK's release and
-/// Apple's vendor ID by the measured table (`driver_facts::DEFECTS`): carried at 1.4.1, the release
-/// measured, and at a newer one (kept until a measurement says otherwise); not at an older release,
-/// nor on another vendor's GPU, nor by another driver.
+/// `DriverWorkaround::MemoryWritingFragmentsRunPerSample` is keyed on MoltenVK and Apple's vendor
+/// ID by the measured table (`driver_facts::DEFECTS`): carried at every release, and not on another
+/// vendor's GPU, nor by another driver.
 #[test]
-fn moltenvk_on_apple_carries_the_per_sample_writer_defect_from_its_measured_release() {
+fn moltenvk_on_apple_carries_the_per_sample_writer_defect_at_every_release() {
     use crate::device::profile::DriverWorkaround;
     let defect = DriverWorkaround::MemoryWritingFragmentsRunPerSample;
     let carries = |desc: &DeviceDescription| {
@@ -928,13 +941,11 @@ fn moltenvk_on_apple_carries_the_per_sample_writer_defect_from_its_measured_rele
     {
         let stem = "moltenvk-m3";
         let mut desc = profile(stem);
-        assert_eq!(desc.driver_version, 10401, "{stem}");
         assert!(carries(&desc), "{stem}");
-        desc.driver_version = 10500;
-        assert!(carries(&desc), "{stem} 1.5.0");
-        desc.driver_version = 10400;
-        assert!(!carries(&desc), "{stem} 1.4.0");
-        desc.driver_version = 10401;
+        for version in [10400, 10500] {
+            desc.driver_version = version;
+            assert!(carries(&desc), "{stem} {version}");
+        }
         desc.vendor_id = 0x1002;
         assert!(!carries(&desc), "{stem} on another vendor");
         desc.vendor_id = 0x106B;
@@ -949,14 +960,11 @@ fn moltenvk_on_apple_carries_the_per_sample_writer_defect_from_its_measured_rele
     }
 }
 
-/// `DriverWorkaround::InterpolationNeedsTheWholeQuad` is keyed on RADV's release by the measured
-/// table (`driver_facts::DEFECTS`): carried from Mesa 26.0.8 through 26.2.4, the releases measured,
-/// and at a newer one (kept until a measurement says otherwise); not at an older release, which no
-/// measurement covers, nor by another driver at the same `driverVersion`, whatever the vendor ID
-/// (the row names none).
+/// `DriverWorkaround::InterpolationNeedsTheWholeQuad` is keyed on RADV by the measured table
+/// (`driver_facts::DEFECTS`): carried at every release, whatever the vendor ID (the row names
+/// none), and not by another driver.
 #[test]
-fn radv_carries_the_whole_quad_interpolation_defect_from_its_measured_release() {
-    use crate::device::driver_facts::mesa;
+fn radv_carries_the_whole_quad_interpolation_defect_at_every_release() {
     use crate::device::profile::DriverWorkaround;
     let defect = DriverWorkaround::InterpolationNeedsTheWholeQuad;
     let carries = |desc: &DeviceDescription| {
@@ -969,23 +977,16 @@ fn radv_carries_the_whole_quad_interpolation_defect_from_its_measured_release() 
     };
     let mut desc = profile("amd-780m-radv");
     assert_eq!(desc.driver_id, Some(vk::DriverId::MESA_RADV));
-    assert_eq!(desc.driver_version, mesa(26, 2, 4));
     assert!(carries(&desc));
-    desc.driver_version = mesa(26, 3, 0);
-    assert!(carries(&desc), "26.3.0");
-    desc.driver_version = mesa(26, 2, 3);
-    assert!(carries(&desc), "26.2.3");
-    desc.driver_version = mesa(26, 0, 7);
-    assert!(!carries(&desc), "26.0.7");
-    desc.driver_version = mesa(26, 2, 4);
+    desc.driver_version += 1;
+    assert!(carries(&desc), "at another release");
     desc.vendor_id = 0x8086;
     assert!(carries(&desc), "on another vendor's ID");
     desc.driver_id = Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
     assert!(!carries(&desc), "under ANV");
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let radv = desc.driver_id == Some(vk::DriverId::MESA_RADV)
-            && desc.driver_version >= mesa(26, 0, 8);
+        let radv = desc.driver_id == Some(vk::DriverId::MESA_RADV);
         assert_eq!(carries(&desc), radv, "{stem}");
     }
 }
@@ -1105,14 +1106,11 @@ fn lavapipe_carries_the_split_pixel_fragments_defect() {
     assert!(!workarounds(&desc).contains(&defect));
 }
 
-/// `DriverWorkaround::MeshIndexComponentStoresMisplaced` is keyed on lavapipe's release by the
-/// measured table (`driver_facts::DEFECTS`): carried at Mesa 26.0.8, the release measured (the
-/// Linux gate's), and at a newer one (kept until a measurement says otherwise); not at an older
-/// release, which no measurement covers, nor by another driver at the same `driverVersion`,
-/// whatever the vendor ID (the row names none).
+/// `DriverWorkaround::MeshIndexComponentStoresMisplaced` is keyed on lavapipe by the measured
+/// table (`driver_facts::DEFECTS`): carried at every release, whatever the vendor ID (the row
+/// names none), and not by another driver.
 #[test]
-fn lavapipe_carries_the_mesh_index_defect_from_its_measured_release() {
-    use crate::device::driver_facts::mesa;
+fn lavapipe_carries_the_mesh_index_defect_at_every_release() {
     use crate::device::profile::DriverWorkaround;
     let defect = DriverWorkaround::MeshIndexComponentStoresMisplaced;
     let carries = |desc: &DeviceDescription| {
@@ -1125,21 +1123,16 @@ fn lavapipe_carries_the_mesh_index_defect_from_its_measured_release() {
     };
     let mut desc = profile("gate-lavapipe-x86_64");
     assert_eq!(desc.driver_id, Some(vk::DriverId::MESA_LLVMPIPE));
-    assert_eq!(desc.driver_version, mesa(26, 0, 8));
     assert!(carries(&desc));
-    desc.driver_version = mesa(26, 2, 4);
-    assert!(carries(&desc), "26.2.4");
-    desc.driver_version = mesa(26, 0, 7);
-    assert!(!carries(&desc), "26.0.7");
-    desc.driver_version = mesa(26, 0, 8);
+    desc.driver_version += 1;
+    assert!(carries(&desc), "at another release");
     desc.vendor_id = 0x8086;
     assert!(carries(&desc), "on another vendor's ID");
     desc.driver_id = Some(vk::DriverId::MESA_RADV);
     assert!(!carries(&desc), "under RADV");
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let lavapipe = desc.driver_id == Some(vk::DriverId::MESA_LLVMPIPE)
-            && desc.driver_version >= mesa(26, 0, 8);
+        let lavapipe = desc.driver_id == Some(vk::DriverId::MESA_LLVMPIPE);
         assert_eq!(carries(&desc), lavapipe, "{stem}");
     }
 }
@@ -1327,14 +1320,10 @@ fn function_storage_is_the_measured_value_of_the_device() {
     assert_eq!(storage(desc), Assumed(16 * kib));
 }
 
-/// `DriverWorkaround::VertexGroupingNotApples` is keyed on ANV from the release measured with it
-/// (Mesa 26.2.4, the Intel venue's), for every GPU it runs: both committed profiles at that release
-/// carry it, a newer release keeps it, and an older release (the committed Arrow Lake and Iris Xe
-/// profiles' 26.2.3 and 26.2.2, which no one measured) or another driver at the same
-/// `driverVersion` does not.
+/// `DriverWorkaround::VertexGroupingNotApples` is keyed on ANV, for every GPU it runs at every
+/// release: every committed ANV profile carries it, and another driver does not.
 #[test]
-fn anv_carries_the_vertex_grouping_from_its_measured_release() {
-    use crate::device::driver_facts::mesa;
+fn anv_carries_the_vertex_grouping_at_every_release() {
     use crate::device::profile::DriverWorkaround;
     let fact = DriverWorkaround::VertexGroupingNotApples;
     let carries = |desc: &DeviceDescription| {
@@ -1347,36 +1336,29 @@ fn anv_carries_the_vertex_grouping_from_its_measured_release() {
     };
     let mut desc = profile("intel-irisxe-rplp-anv");
     assert_eq!(desc.driver_id, Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA));
-    assert_eq!(desc.driver_version, mesa(26, 2, 4));
     assert!(carries(&desc));
     desc.device_id = 0x56a0;
     assert!(carries(&desc), "on another Intel GPU");
-    desc.driver_version = mesa(26, 3, 0);
-    assert!(carries(&desc), "26.3.0");
-    desc.driver_version = mesa(26, 2, 3);
-    assert!(!carries(&desc), "26.2.3");
-    desc.driver_version = mesa(26, 2, 4);
+    desc.driver_version += 1;
+    assert!(carries(&desc), "at another release");
     desc.driver_id = Some(vk::DriverId::MESA_RADV);
     assert!(!carries(&desc), "under RADV");
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA)
-            && desc.driver_version >= mesa(26, 2, 4);
+        let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
         assert_eq!(carries(&desc), anv, "{stem}");
     }
     assert!(carries(&profile("intel-uhd770-rpls-anv")));
-    assert!(!carries(&profile("intel-arl-anv")));
-    assert!(!carries(&profile("intel-irisxe-anv")));
+    assert!(carries(&profile("intel-arl-anv")));
+    assert!(carries(&profile("intel-irisxe-anv")));
 }
 
-/// `DriverWorkaround::DontInlineKeepsCalls`, a cost fact, is keyed on the identities measured with
-/// it: NVIDIA's driver at 615.71.09 on the RTX 3090 and on the RTX 5080 Laptop GPU
-/// (`scripts/making-bench`). Another GPU of the vendor (the desktop RTX 50's committed profile,
-/// Pascal's), an older release, another vendor's ID, or another driver (NVK, Mesa's, MoltenVK)
-/// does not carry it.
+/// `DriverWorkaround::DontInlineKeepsCalls`, a cost fact, is keyed on the GPUs measured with it:
+/// NVIDIA's driver on the RTX 3090 and on the RTX 5080 Laptop GPU (`scripts/making-bench`), at
+/// every release. Another GPU of the vendor (the desktop RTX 50's committed profile, Pascal's),
+/// another vendor's ID, or another driver (NVK, Mesa's, MoltenVK) does not carry it.
 #[test]
 fn nvidia_keeps_dont_inline_calls_on_its_measured_gpu() {
-    use crate::device::driver_facts::nvidia;
     use crate::device::profile::DriverWorkaround;
     let fact = DriverWorkaround::DontInlineKeepsCalls;
     let carries = |desc: &DeviceDescription| {
@@ -1389,16 +1371,14 @@ fn nvidia_keeps_dont_inline_calls_on_its_measured_gpu() {
     };
     let mut desc = profile("nvidia-rtx5080-laptop");
     assert_eq!(desc.driver_id, Some(vk::DriverId::NVIDIA_PROPRIETARY));
-    assert_eq!(desc.driver_version, nvidia(615, 71, 9));
     assert!(
         carries(&desc),
         "on the RTX 5080 Laptop GPU, where it was measured"
     );
     desc.device_id = crate::device::driver_facts::NVIDIA_RTX_3090;
     assert!(carries(&desc), "on the RTX 3090, where it was measured");
-    desc.driver_version = nvidia(615, 71, 8);
-    assert!(!carries(&desc), "615.71.08");
-    desc.driver_version = nvidia(615, 71, 9);
+    desc.driver_version += 1 << 6;
+    assert!(carries(&desc), "at another release");
     desc.vendor_id = 0x1002;
     assert!(!carries(&desc), "on another vendor's ID");
     desc.vendor_id = 0x10de;

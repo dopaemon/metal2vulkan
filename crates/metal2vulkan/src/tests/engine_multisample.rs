@@ -243,12 +243,12 @@ fn centered_moltenvk() -> DeviceDescription {
     desc
 }
 
-/// `moltenvk-m3` at MoltenVK 1.4.0, a release none of MoltenVK's deviations is measured with:
-/// its `InterpolateAtOffset` reads off the center (the driver's), and it does not take
-/// `DriverDeviation::MetalCenterVaryings`.
+/// `moltenvk-m3` as the Apple8 family under macOS 27 (`deviceID` 0x1B00_0208), a GPU no row of
+/// MoltenVK's center varyings names: its `InterpolateAtOffset` reads off the center (the
+/// driver's), and it does not take `DriverDeviation::MetalCenterVaryings`.
 fn unmeasured_moltenvk() -> DeviceDescription {
     let mut desc = description("moltenvk-m3");
-    desc.driver_version = crate::device::driver_facts::moltenvk(1, 4, 0);
+    desc.device_id = 0x1B00_0208;
     desc
 }
 
@@ -633,8 +633,8 @@ fn the_interface_states_the_pixel_reads() {
     }
 }
 
-/// On `moltenvk-m3` at a release whose driver is not measured to read center varyings at the
-/// pixel center itself, a per-sample function's center varying has a pixel form only where both a
+/// On `moltenvk-m3` as a GPU whose driver is not measured to read center varyings at the pixel
+/// center itself, a per-sample function's center varying has a pixel form only where both a
 /// centered `InterpolateAtOffset` and the portability member allow it, and is refused naming what
 /// the device lacks of the two: as a device whose offset reads from the center the pipeline
 /// compiles, requires the member, and converts to MSL that Metal compiles; whatever the device, the
@@ -703,9 +703,9 @@ fn a_center_varying_at_sample_rate_needs_a_centered_offset_and_the_interpolation
 
 /// A MoltenVK device is biased by its driver alone, as `vulkaninfo --json` describes it on a
 /// MoltenVK host, so no translation for it emits `InterpolateAtOffset` 1/16 pixel off the center.
-/// At a release measured to read center varyings at the pixel center itself (MoltenVK 1.4.1) a
-/// per-sample center varying is read as it is; at an unmeasured one (1.4.0) it is refused naming
-/// the property. A pixel-rate one reads as it is at either.
+/// On a GPU measured to read center varyings at the pixel center itself (the M4's identity) a
+/// per-sample center varying is read as it is; on an unmeasured one (the Apple8 family) it is
+/// refused naming the property. A pixel-rate one reads as it is on either.
 #[test]
 fn a_moltenvk_device_is_biased_by_its_driver() {
     let Some(lib) = fixture() else { return };

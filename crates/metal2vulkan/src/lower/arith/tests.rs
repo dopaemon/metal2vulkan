@@ -4275,7 +4275,7 @@ fn the_minimum_and_maximum_family_follows_the_profile() {
         }
         taken += usize::from(moltenvk);
     }
-    assert!(taken >= 2, "the MoltenVK captures take it");
+    assert!(taken >= 1, "the MoltenVK capture takes it");
 }
 
 /// Where the library says the device's `NMin`, `NMax` and `NClamp` are Metal's

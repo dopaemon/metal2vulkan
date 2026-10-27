@@ -78,7 +78,6 @@ mod draw_source;
 mod driver_defects;
 mod driver_facts;
 #[doc(hidden)]
-pub use driver_facts::unmeasured_driver_message;
 mod dynamic_library;
 mod dynamic_state;
 mod enables;
