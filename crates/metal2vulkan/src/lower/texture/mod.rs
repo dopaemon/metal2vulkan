@@ -1517,8 +1517,7 @@ pub enum OneTexel {
 /// conversion is not measured takes that rounding of the device's `f32` texel, which Metal's
 /// conversion may not be. A slot's access notes it where its class names no measured family
 /// ([`unmeasured_class`]), the conversion's `OTHER` arm, and, where the access reads one texel, no
-/// packed field either: through a runtime sampler slot, where its word filters. Where the access
-/// converts the device's texel only under `arm`'s clauses, the note holds there alone.
+/// packed field either: through a runtime sampler slot, where its word filters.
 /// On a device that samples through Metal's own texture unit, an 8-bit sRGB format's class is
 /// Metal's too ([`unconverted_class`]); where that device also rounds to `half` as Metal does
 /// ([`half_families`]), every measured class's is, so the access notes it where the bound format's
@@ -1531,7 +1530,7 @@ pub(crate) fn half_texels(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     shape: ImageShape,
-    (one, arm): (OneTexel, Option<&[NoteClause]>),
+    one: OneTexel,
     device: bool,
     m: &mut Meter,
 ) -> Result<(), Error> {
@@ -1573,10 +1572,6 @@ pub(crate) fn half_texels(
                 OneTexel::Never | OneTexel::Heap(_) => unmeasured.to_vec(),
             }
         }
-    };
-    let when = match arm {
-        Some(arm) => both(&when, arm),
-        None => when,
     };
     cx.note_when(PrecisionNote::HalfTexelConversion, when, m)?;
     let slot = slot_of(cx, index)?.slot;
@@ -3013,14 +3008,7 @@ fn select_read_as(
     // An extended-range texel is decoded exactly to `f32`, which a `half` result rounds to
     // nearest even, as Metal answers. A read is one texel.
     if texel.conv == TexelConv::F16 && !exact && extended.is_none() {
-        half_texels(
-            cx,
-            image,
-            shape,
-            (OneTexel::Always, None),
-            device_texels(cx),
-            m,
-        )?;
+        half_texels(cx, image, shape, OneTexel::Always, device_texels(cx), m)?;
         half_texel_nans(cx, image, shape, m)?;
     }
     if texel.conv == TexelConv::F32 && !exact && extended.is_none() {

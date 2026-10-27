@@ -2205,7 +2205,7 @@ fn select_one(
             cx.families.access.heap_class = true;
             cx.families.texture.half_families = crate::lower::texture::half_families(cx);
         }
-        crate::lower::texture::half_texels(cx, image, shape, (one_texel, None), device, m)?
+        crate::lower::texture::half_texels(cx, image, shape, one_texel, device, m)?
     }
     // A `float` texel that may be one texel's is the device's conversion of its codes: not an sRGB
     // raw texel's (decoded exactly), a bicubic sample's, or an LOD query's; nor a depth
