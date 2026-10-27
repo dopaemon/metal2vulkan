@@ -1222,20 +1222,6 @@ pub enum DriverFact {
     /// measurement has not cleared. A driver without it relays nothing, and each of its batches takes a fence
     /// only where its command buffer ends at one (`command_buffer/fences.rs`).
     QueueFailuresReportedByMessenger,
-    /// The driver answers a format's linear-tiling attachment features from memory it has not
-    /// yet initialized, so they differ between instances of one process: MoltenVK 1.4.1 builds
-    /// its format table in `MVKPhysicalDevice`'s member initializers, where
-    /// `MVKPixelFormats::setFormatProperties` reads `renderLinearTextures`, before the
-    /// constructor's `initMetalFeatures()` sets it, and so keeps or drops `COLOR_ATTACHMENT`,
-    /// `COLOR_ATTACHMENT_BLEND`, `BLIT_DST` and `DEPTH_STENCIL_ATTACHMENT` in every format's
-    /// `linearTilingFeatures` (and with them its linear images' attachment usage) by that byte.
-    /// Vulkan holds a linear image's views and blits to the features its tiling reports, which
-    /// may be either answer, so a description of the device leaves those features out of every
-    /// format's linear tiling ([`DriverFact::unreliable_linear_tiling`],
-    /// `DeviceDescription::query`), and the runtime renders and blits into a texture over a buffer
-    /// as on a driver whose linear tiling lacks them. A defect fact: MoltenVK takes it at every
-    /// release and on every GPU.
-    LinearTilingFeaturesUninitialized,
     /// A cost fact (the module docs): about once in every thousand semaphore operations its
     /// queue submissions carry, waits and signals alike, the driver spends about 2 ms of the
     /// submitting thread's CPU inside one `vkQueueSubmit`, the same count in every run. Measured
@@ -1375,21 +1361,6 @@ pub enum DriverFact {
 }
 
 impl DriverFact {
-    /// The linear-tiling format features a driver with this fact may report or not
-    /// ([`DriverFact::LinearTilingFeaturesUninitialized`]: the color attachment and its blending,
-    /// the blit destination and the depth/stencil attachment), which a description of its device
-    /// leaves out of every format's linear tiling
-    /// ([`DeviceDescription::unreliable_linear_tiling`]). Empty for every other fact.
-    pub const fn unreliable_linear_tiling(self) -> FormatFeatureFlags2 {
-        match self {
-            Self::LinearTilingFeaturesUninitialized => FormatFeatureFlags2::COLOR_ATTACHMENT
-                .union(FormatFeatureFlags2::COLOR_ATTACHMENT_BLEND)
-                .union(FormatFeatureFlags2::BLIT_DST)
-                .union(FormatFeatureFlags2::DEPTH_STENCIL_ATTACHMENT),
-            _ => FormatFeatureFlags2::empty(),
-        }
-    }
-
     /// The diagnostics a driver with this fact reports as it creates a graphics pipeline that
     /// makes `dynamic_states` dynamic, of the input assembly topology `topology`, whose color
     /// attachments of the formats `blendless_colors` lack `COLOR_ATTACHMENT_BLEND` in their
@@ -1780,18 +1751,6 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// sample buffer of the pool's count (`MVKGPUCounterQueryPool::initMTLCounterSampleBuffer`). A
 /// defect fact: MoltenVK takes it at every release and on every GPU.
 ///
-/// `LinearTilingFeaturesUninitialized`, read in MoltenVK 1.4.1's source (`MVKDevice.h` declares
-/// `_pixelFormats` before `_metalFeatures`; `MVKPhysicalDevice`'s constructor initializes
-/// `_pixelFormats(this)`, whose constructor builds every format's properties through
-/// `MVKPixelFormats::setFormatProperties`, before its body calls `initMetalFeatures()`, which
-/// clears and then sets `renderLinearTextures`) and measured on the M3 Max (macOS 27.0.1,
-/// 2026-10-15): of 40 instances made one after another in one process, 38 reported
-/// `R8G8B8A8_UNORM`'s `linearTilingFeatures` as `0x8000dd83` (with `COLOR_ATTACHMENT`,
-/// `COLOR_ATTACHMENT_BLEND` and `BLIT_DST`) and 2 as `0x8000d403` (without them), and
-/// `vkGetPhysicalDeviceImageFormatProperties` of a linear `COLOR_ATTACHMENT` image succeeded in
-/// 38. MoltenVK's code on every GPU, so the row names no vendor; a defect fact, taken at every
-/// release.
-///
 /// `TileStoreIsMetals`, measured by
 /// `runtime_lane::snorm_tile_store::a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so` (a
 /// 4x4 target of each of the six signed normalized colour formats holding a channel's minimum code
@@ -1897,11 +1856,9 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///   dispatch, completed at 30.78 ms (median) in 40 of 40 rounds where both command buffers wrote
 ///   timestamps after their work, and at 0.28 ms (1 of 40 held) where neither did; argument
 ///   buffers on, as the runtime runs. `encodeTimestampStageCounterSamples` is 1.4.1's.
-/// - `TimestampPoolsAreCounterSampleBuffers` and `LinearTilingFeaturesUninitialized`, defect
-///   facts, read in 1.4.2's source as at 1.4.1:
+/// - `TimestampPoolsAreCounterSampleBuffers`, a defect fact, read in 1.4.2's source as at 1.4.1:
 ///   `MVKGPUCounterQueryPool::initMTLCounterSampleBuffer` makes each pool one counter sample
-///   buffer of its query count, and `MVKPhysicalDevice` still builds `_pixelFormats` (which reads
-///   `renderLinearTextures`) before `initMetalFeatures` sets it.
+///   buffer of its query count.
 /// - `Bc6hBlockDecodeIsMetals` and `Bc7BlockDecodeIsMetals`, by construction as at 1.4.1: 1.4.2's
 ///   `MVKPixelFormats.mm` hands every BC format to Metal as Metal's own, line for line 1.4.1's.
 ///
@@ -2094,12 +2051,6 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         vendor: None,
         device: None,
     },
-    Measured {
-        fact: DriverFact::LinearTilingFeaturesUninitialized,
-        driver: DriverId::MOLTENVK,
-        vendor: None,
-        device: None,
-    },
     mesa_on(
         DriverFact::DontCareStoreIsOneOfMetals,
         DriverId::MESA_RADV,
@@ -2278,18 +2229,5 @@ impl DeviceDescription {
             .filter(|(_, p)| p.optimal_tiling.contains(color) && !p.optimal_tiling.contains(blend))
             .map(|(&format, _)| format)
             .collect()
-    }
-
-    /// The linear-tiling format features the device's driver may report or not
-    /// ([`DriverFact::unreliable_linear_tiling`] of its [`DeviceDescription::driver_facts`]),
-    /// which the description's formats leave out: `DeviceDescription::query` drops them from every
-    /// format's `linear_tiling`, so two descriptions of one device read alike. Empty for a driver
-    /// that reports its features as they are.
-    pub fn unreliable_linear_tiling(&self) -> FormatFeatureFlags2 {
-        self.driver_facts()
-            .into_iter()
-            .fold(FormatFeatureFlags2::empty(), |features, fact| {
-                features.union(fact.unreliable_linear_tiling())
-            })
     }
 }

@@ -597,17 +597,7 @@ class FormatsSupplementTest(unittest.TestCase):
         legacy["linearTilingFeatures"].append("VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT")
         return capabilities, self.supplement()
 
-    def test_moltenvks_unreliable_linear_features_leave_the_capture(self):
-        capabilities, supplement = self.linear_attachment()
-        supplement["device"]["driver_id"] = 14
-        driver = {"driverID": "VK_DRIVER_ID_MOLTENVK", "driverInfo": "Mesa 26.2.4"}
-        regen.merge_formats(capabilities, self.CORE, driver, supplement, self.registry,
-                            self.SOURCE)
-        entry = capabilities["device"]["formats"]["VK_FORMAT_R8_UNORM"]
-        self.assertEqual(entry["VkFormatProperties"]["linearTilingFeatures"], [])
-        self.assertEqual(entry["VkFormatProperties3"]["linearTilingFeatures"], [])
-
-    def test_another_drivers_linear_attachment_feature_must_agree(self):
+    def test_a_linear_attachment_feature_must_agree(self):
         capabilities, supplement = self.linear_attachment()
         with self.assertRaises(SystemExit) as raised:
             self.merge(capabilities, supplement)

@@ -16,7 +16,7 @@ validation uses them for per-profile checks.
 | `amd-rdna2-apu-radv` | gpuinfo report 51886 | AMD Radeon 680M (RADV REMBRANDT) | Mesa 26.2.3 | 1.4.354 |
 | `intel-arl-anv` | gpuinfo report 52029 | Intel(R) Graphics (ARL), ANV | Mesa 26.2.3 | 1.4.354 |
 | `intel-irisxe-anv` | gpuinfo report 51836 | Intel(R) Iris(R) Xe Graphics (TGL GT2), ANV | Mesa 26.2.2 | 1.4.354 |
-| `moltenvk-m3` | local `vulkaninfo --json`, portability-subset profile, plus its `--capture-formats` supplement | Apple M3 Max, macOS 27.0.1 | MoltenVK 1.4.1 | 1.4.334 |
+| `moltenvk-m3` | local `vulkaninfo --json`, portability-subset profile, plus its `--capture-formats` supplement | Apple M3 Max, macOS 27.0.1 | MoltenVK 1.4.2 | 1.4.357 |
 | `lavapipe` | gpuinfo report 51983 | llvmpipe (LLVM 23.1.1, 256 bits) | Mesa 26.2.3 | 1.4.354 |
 | `swiftshader` | gpuinfo report 38278 | SwiftShader Device (Subzero), Linux | 5.0.0 | 1.3.0 |
 | `gate-lavapipe` | `vulkaninfo --json` capture in `scripts/linux-gate --icd lavapipe` (arm64 image), plus its supplement | llvmpipe (LLVM 21.1.8, 128 bits): the gate's own CPU device, so a run restricted to it under `VK_LAYER_KHRONOS_profiles` reports the device itself | Mesa 26.0.8 | 1.4.335 |

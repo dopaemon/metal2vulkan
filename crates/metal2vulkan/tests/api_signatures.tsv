@@ -7756,7 +7756,6 @@ method	metal2vulkan-runtime::DeviceProperties::supports_vertex_amplification_cou
 method	metal2vulkan-runtime::DrawPrimitiveType::from_raw	pub fn from_raw(raw: u64) -> Result<DrawPrimitiveType, Error>
 method	metal2vulkan-runtime::DrawPrimitiveType::raw	pub fn raw(self) -> u64
 method	metal2vulkan-runtime::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
-method	metal2vulkan-runtime::DriverFact::unreliable_linear_tiling	pub const fn unreliable_linear_tiling(self) -> FormatFeatureFlags2
 method	metal2vulkan-runtime::DynamicLibrary::device	pub fn device(&self) -> &Device
 method	metal2vulkan-runtime::DynamicLibrary::install_name	pub fn install_name(&self) -> &str
 method	metal2vulkan-runtime::DynamicLibrary::label	pub fn label(&self) -> Option<String>
@@ -8730,7 +8729,6 @@ method	metal2vulkan::device::DeviceDescription::new	pub fn new(api_version: ApiV
 method	metal2vulkan::device::DeviceDescription::query	pub unsafe fn query(instance: &ash::Instance, physical_device: avk::PhysicalDevice, instance_api_version: ApiVersion) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceDescription::recommended_enables	pub fn recommended_enables(&self, policy: &DevicePolicy) -> EnableSet
 method	metal2vulkan::device::DeviceDescription::required_enables	pub fn required_enables(&self, requirements: &Requirements) -> Result<EnableSet, Capability>
-method	metal2vulkan::device::DeviceDescription::unreliable_linear_tiling	pub fn unreliable_linear_tiling(&self) -> FormatFeatureFlags2
 method	metal2vulkan::device::DeviceDescription::with_enabled	pub fn with_enabled(mut self, enabled: &EnableSet) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DevicePolicy::exact_answers	pub const fn exact_answers(self) -> DevicePolicy
 method	metal2vulkan::device::DeviceProfile::addressed_needs	pub fn addressed_needs(&self) -> Vec<Capability>
@@ -8762,7 +8760,6 @@ method	metal2vulkan::device::DeviceProfile::union_requirements	pub fn union_requ
 method	metal2vulkan::device::DeviceProfile::vertex_entry_inputs	pub fn vertex_entry_inputs(&self, d: &EntryDescriptor<'_>, vertex: Option<&VertexDescriptor>, budget: &Budget) -> Result<LoweringInputs, Error>
 method	metal2vulkan::device::DeviceProfile::workarounds	pub fn workarounds(&self) -> &[DriverWorkaround]
 method	metal2vulkan::device::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
-method	metal2vulkan::device::DriverFact::unreliable_linear_tiling	pub const fn unreliable_linear_tiling(self) -> FormatFeatureFlags2
 method	metal2vulkan::device::EnableSet::new	pub fn new() -> EnableSet
 method	metal2vulkan::device::EnabledCaps::portability_withholds	pub fn portability_withholds(&self, feature: VkFeature) -> bool
 method	metal2vulkan::device::Exposure::exposed	pub fn exposed(self, api: ApiVersion, extensions: &BTreeSet<VkExtension>) -> bool
@@ -11131,7 +11128,6 @@ variant	metal2vulkan-runtime::DriverFact::FragmentDepthStoresUnchanged	FragmentD
 variant	metal2vulkan-runtime::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
 variant	metal2vulkan-runtime::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
 variant	metal2vulkan-runtime::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
-variant	metal2vulkan-runtime::DriverFact::LinearTilingFeaturesUninitialized	LinearTilingFeaturesUninitialized
 variant	metal2vulkan-runtime::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan-runtime::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
 variant	metal2vulkan-runtime::DriverFact::PointerImportsFollowTheirAddress	PointerImportsFollowTheirAddress
@@ -12376,7 +12372,6 @@ variant	metal2vulkan::device::DriverFact::FragmentDepthStoresUnchanged	FragmentD
 variant	metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
 variant	metal2vulkan::device::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
 variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
-variant	metal2vulkan::device::DriverFact::LinearTilingFeaturesUninitialized	LinearTilingFeaturesUninitialized
 variant	metal2vulkan::device::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan::device::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
 variant	metal2vulkan::device::DriverFact::PointerImportsFollowTheirAddress	PointerImportsFollowTheirAddress

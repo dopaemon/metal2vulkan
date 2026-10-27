@@ -162,11 +162,14 @@ fn fragment_quads(p: &DeviceProfile) -> bool {
 /// whole-quad exit where the profile has fragment quad operations, else demoted, else refused
 /// needing demote.
 ///
-/// Where the discard form allows it but the profile lacks `shaderQuadControl`, the simdgroup
-/// operation is refused needing it: it counts the helpers Metal runs, which only full quads give.
+/// Where the discard form allows it but the profile lacks `shaderQuadControl` and its driver does
+/// not run Metal's helpers (`DriverDeviation::MetalFullQuads`), the simdgroup operation is refused
+/// needing it: it counts the helpers Metal runs, which only full quads give.
 fn simd_after_discard(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) {
     let formed = fragment_quads(p) || p.fields().fragment.demote_to_helper;
-    if formed && !p.fields().subgroup.quad_control {
+    let full_quads = p.fields().subgroup.quad_control
+        || p.takes_driver_deviation(crate::error::DriverDeviation::MetalFullQuads);
+    if formed && !full_quads {
         assert_eq!(
             refusal(bc, entry, p),
             (

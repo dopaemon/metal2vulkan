@@ -217,11 +217,6 @@ recorded here.
   over no-copy pages (`surface_texture_costs::read_only_padded_costs`) took 3.2-5.3 ms with the
   textures made once and 3.4-7.1 ms with new ones each frame, where images over the rows took
   3.0-6.1 and 4.6-8.6 ms. An ordinary buffer's packed rows avoid it.
-- **On MoltenVK, a texture over a buffer that renders or that blits write keeps a shadow.** MoltenVK
-  1.4.1 and 1.4.2 report a format's linear-tiling attachment and blit-destination features from
-  uninitialized memory, so no MoltenVK description states them
-  (`DriverFact::LinearTilingFeaturesUninitialized`) and such a texture is a shadow
-  (`shadowed-texture`).
 - **A view of another format without `PixelFormatView` usage** is a shadow image copied at each use
   (`shadowed-texture-view`): about 50 to 95 µs a command buffer for a 64x64 texture. Making the
   texture with `PixelFormatView` usage avoids it. A view in other channels of its image's bits (an

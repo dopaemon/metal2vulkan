@@ -403,7 +403,6 @@ const COPY_IN: DriverFact = DriverFact::ShadowCopyInDispatchFaster;
 const ROWS: DriverFact = DriverFact::RowCopiesDispatchFaster;
 const MERGES: DriverFact = DriverFact::SubmissionsWithoutSignalsMerge;
 const MESSENGER: DriverFact = DriverFact::QueueFailuresReportedByMessenger;
-const LINEAR_UNINITIALIZED: DriverFact = DriverFact::LinearTilingFeaturesUninitialized;
 const STALL: DriverFact = DriverFact::SemaphoreOperationsStallSubmits;
 const SAMPLED_HIZ: DriverFact = DriverFact::SampledDepthKeepsHiZ;
 const MSAA_DEPTH: DriverFact = DriverFact::MultisampledDepthFasterOutOfGeneral;
@@ -545,7 +544,6 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 BC7,
                 SCARCE_POOLS,
                 MESSENGER,
-                LINEAR_UNINITIALIZED,
                 TILE_STORE,
                 HEAP_COLORS,
                 HEAP_MULTISAMPLE_COLORS,
@@ -787,47 +785,4 @@ fn moltenvk_warns_of_each_color_attachment_it_cannot_blend() {
         desc.driver_version = version;
         assert!(desc.driver_facts().contains(&BLENDLESS), "{version}");
     }
-}
-
-/// A description leaves out of every format's linear tiling the features its driver reports from
-/// memory it has not initialized: on MoltenVK, at every release, the color attachment, its
-/// blending, the blit destination and the depth/stencil attachment
-/// (`DriverFact::LinearTilingFeaturesUninitialized`); on every other driver nothing. Every
-/// committed profile's formats hold none of them.
-#[test]
-fn moltenvks_linear_attachment_features_are_left_out() {
-    use crate::vk::FormatFeatureFlags2 as F;
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
-    let attachments =
-        F::COLOR_ATTACHMENT | F::COLOR_ATTACHMENT_BLEND | F::BLIT_DST | F::DEPTH_STENCIL_ATTACHMENT;
-    let mut moltenvk = 0;
-    for path in std::fs::read_dir(&dir).expect("validation/profiles is readable") {
-        let path = path.expect("directory entry").path();
-        if path.extension().is_none_or(|x| x != "json") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).expect("profile is readable");
-        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
-        let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
-        let unreliable = desc.unreliable_linear_tiling();
-        if desc.driver_id == Some(DriverId::MOLTENVK) {
-            moltenvk += 1;
-            assert_eq!(unreliable, attachments, "{stem}");
-            desc.driver_version += 1;
-            assert_eq!(
-                desc.unreliable_linear_tiling(),
-                attachments,
-                "{stem} at another release"
-            );
-        } else {
-            assert!(unreliable.is_empty(), "{stem}");
-        }
-        for (format, p) in &desc.formats.formats {
-            assert!(
-                p.linear_tiling.intersection(unreliable).is_empty(),
-                "{stem} {format:?}"
-            );
-        }
-    }
-    assert!(moltenvk >= 1, "the MoltenVK profile is read");
 }

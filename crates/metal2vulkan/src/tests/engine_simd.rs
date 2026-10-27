@@ -1564,18 +1564,21 @@ fn vertex_lane_reads_take_lanes_past_the_draw_as_zero() {
 /// A fragment function whose group operations read, combine, or count other lanes declares
 /// `RequireFullQuadsKHR` on every committed profile with `shaderQuadControl`, needs that feature,
 /// and reads every lane by a shuffle through the ballot of the live lanes (no quad instruction: a
-/// quad may lack a lane); a profile without it whose stage has the classes refuses the function,
-/// needing the feature. A fragment that only reads its quad lane (`simd_masks`' `quad_lane_f`)
-/// declares no such mode and needs no such feature anywhere.
+/// quad may lack a lane); a profile without it whose driver runs Metal's helpers
+/// (`DriverDeviation::MetalFullQuads`, `moltenvk-m3`) compiles it without the mode, requiring
+/// `VkProperty::MetalFullQuads`; any other profile without it whose stage has the classes refuses
+/// the function, needing the feature. A fragment that only reads its quad lane (`simd_masks`'
+/// `quad_lane_f`) declares no such mode and needs no such feature anywhere.
 #[test]
 fn fragment_group_operations_run_full_quads() {
     use crate::error::{Capability, Unsupported};
     let (Some(quads), Some(masks)) = (assemble("gsm2_quad_ops"), assemble("simd_masks")) else {
         return;
     };
-    let (mut full, mut refused) = (0, 0);
+    let (mut full, mut metals, mut refused) = (0, 0, 0);
     for (name, p) in committed_profiles().expect("profiles") {
         let control = p.fields().subgroup.quad_control;
+        let metal_helpers = p.takes_driver_deviation(crate::error::DriverDeviation::MetalFullQuads);
         for entry in [
             "fragment_quad_fills",
             "fragment_quad_fills_and_rotations",
@@ -1583,6 +1586,19 @@ fn fragment_group_operations_run_full_quads() {
             "fragment_quad_scans",
         ] {
             match compile(&quads, entry, &p) {
+                Ok(a) if !control && metal_helpers => {
+                    assert!(
+                        a.requirements
+                            .properties
+                            .contains(&VkProperty::MetalFullQuads)
+                            && !a
+                                .requirements
+                                .features
+                                .contains(&VkFeature::ShaderQuadControl),
+                        "{entry} on {name}"
+                    );
+                    metals += 1;
+                }
                 Ok(a) => {
                     assert!(control, "{entry} on {name}");
                     assert!(
@@ -1629,6 +1645,7 @@ fn fragment_group_operations_run_full_quads() {
         }
     }
     assert!(full >= 4 * 10, "{full} fragment functions with full quads");
+    assert_eq!(metals, 4, "fragment functions with Metal's full quads");
     assert!(
         refused > 0,
         "no profile refused a fragment function for quad control"
@@ -1637,8 +1654,8 @@ fn fragment_group_operations_run_full_quads() {
 
 /// MoltenVK 1.4.2 drops `VK_KHR_shader_quad_control` (`shaderQuadControl`) on Apple's GPUs, where
 /// it still hands the fragment function to Metal, whose helpers take part in every simdgroup
-/// operation (`DriverDeviation::MetalFullQuads`). The committed `moltenvk-m3` description
-/// without the feature and its extension (the device as 1.4.2 reports itself) compiles
+/// operation (`DriverDeviation::MetalFullQuads`). The committed `moltenvk-m3` description, a
+/// capture of 1.4.2 that states neither the feature nor its extension, compiles
 /// each fragment function whose group operations observe other lanes: it declares no
 /// `RequireFullQuadsKHR` and no `QuadControlKHR`, requires `VkProperty::MetalFullQuads` and not
 /// the feature, still reads every lane through the ballot of the live lanes, and passes L3. The
@@ -1652,9 +1669,9 @@ fn a_device_that_runs_metal_s_helpers_runs_full_quads_without_quad_control() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("read the MoltenVK description");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    assert!(desc.features.remove(&VkFeature::ShaderQuadControl));
-    assert!(desc.extensions.remove(&VkExtension::KhrShaderQuadControl));
+    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    assert!(!desc.features.contains(&VkFeature::ShaderQuadControl));
+    assert!(!desc.extensions.contains(&VkExtension::KhrShaderQuadControl));
     let device = |taken: bool| {
         Device::with_deviation(
             desc.clone(),

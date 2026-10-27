@@ -368,14 +368,14 @@ SOURCES = [
     {
         "name": "moltenvk-m3",
         "kind": "vulkaninfo",
-        "sha256": "707f2c9936db17af75fbe55986a091a7f0e2e93fb61affa880d98c996c93933b",
-        "profile": "VP_VULKANINFO_Apple_M3_Max_0_2_2209_portability_subset",
+        "sha256": "7e5c9fee5dc7d9fec91af17d782176781f2f02726394774de8e97e004105b9ed",
+        "profile": "VP_VULKANINFO_Apple_M3_Max_0_2_2210_portability_subset",
         "command": "vulkaninfo --json",
-        "host": ("Apple M3 Max, macOS 27.0.1 (26A434), Homebrew molten-vk 1.4.1, "
-                 "vulkan-tools 1.4.350.1"),
+        "host": ("Apple M3 Max, macOS 27.0.1 (26A434), Homebrew molten-vk 1.4.2, "
+                 "vulkan-tools 1.4.363.0"),
         "formats": {
             "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-            "sha256": "07b6f2e730ee77d047380f694fdcb1177455f4df34bc41726fd3e59497892e48",
+            "sha256": "5c51e94668daac9f1310de8bac90bdc2b2b22a053efd8c0508277b93eac0bdc4",
         },
     },
     {
@@ -1418,18 +1418,6 @@ def conform_capture(capabilities, registry):
 
 FORMAT_MEMBERS = ("linearTilingFeatures", "optimalTilingFeatures", "bufferFeatures")
 
-# The linear-tiling features a driver reports from memory it has not initialized, which the
-# product's description leaves out (`DriverFact::LinearTilingFeaturesUninitialized`,
-# `DeviceDescription::unreliable_linear_tiling`), and so the capture's linear tiling here: MoltenVK
-# builds its format table before it sets `renderLinearTextures`, so one instance reports a format's
-# linear attachment features and another does not. Its supplement leaves them out already.
-UNRELIABLE_LINEAR_FEATURES = {
-    "VK_DRIVER_ID_MOLTENVK": ("VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT",
-                              "VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT",
-                              "VK_FORMAT_FEATURE_BLIT_DST_BIT",
-                              "VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT"),
-}
-
 
 def enum_value(registry, type_name, name):
     """The value `type_name`'s enumerant `name` has in the pinned registry."""
@@ -1457,8 +1445,7 @@ def merge_formats(capabilities, core, driver, supplement, registry, source):
     API version, device type), each stated format is in the supplement with the capture's low 32
     bits and its color attachment sample counts, those counts belong to a format whose optimal
     tiling has `COLOR_ATTACHMENT`, and every format the supplement reports with a feature is one
-    the capture states. The capture's linear tiling first loses the features its driver reports
-    unreliably (`UNRELIABLE_LINEAR_FEATURES`), as the supplement's and the product's do."""
+    the capture states."""
     formats = source["formats"]
     device = supplement.get("device") or {}
     expected = {
@@ -1494,10 +1481,6 @@ def merge_formats(capabilities, core, driver, supplement, registry, source):
                                  "which the capture states")
             masks = reported[name]
             legacy = entry.get("VkFormatProperties") or {}
-            unreliable = UNRELIABLE_LINEAR_FEATURES.get(driver["driverID"], ())
-            if unreliable and "linearTilingFeatures" in legacy:
-                legacy["linearTilingFeatures"] = [bit for bit in legacy["linearTilingFeatures"]
-                                                  if bit not in unreliable]
             for member in FORMAT_MEMBERS:
                 low = flag_bits(registry, "VkFormatFeatureFlags", legacy.get(member, []))
                 if masks[member] & legacy_bits != low:

@@ -301,7 +301,7 @@ pub(crate) fn committed_descriptions() -> Result<&'static [(String, DeviceDescri
         .map_err(String::clone)
 }
 
-/// The committed MoltenVK captures, MoltenVK 1.4.1 on the Apple M3 Max under macOS 27.0.1: a test
+/// The committed MoltenVK captures, MoltenVK 1.4.2 on the Apple M3 Max under macOS 27.0.1: a test
 /// that singles out MoltenVK's answers among the committed profiles expects them of each.
 pub const MOLTENVK_CAPTURES: [&str; 1] = ["moltenvk-m3"];
 

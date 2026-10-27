@@ -16,8 +16,8 @@
             "vendor_id": 4203,
             "device_id": 452985353,
             "driver_id": 14,
-            "driver_version": 10401,
-            "driver_info": "1.4.1"
+            "driver_version": 10402,
+            "driver_info": "1.4.2"
           },
           "metal_environment_id": "apple-m3-max-macos27.0.1"
         }

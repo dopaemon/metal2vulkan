@@ -67,7 +67,7 @@ tiling has `COLOR_ATTACHMENT`:
 vulkaninfo --json
 corpus-vulkan --capture-formats formats.json --device-type gpu
 python3 scripts/regen-device-profiles/regen_device_profiles.py --only moltenvk-m3 \
-    --capture moltenvk-m3=VP_VULKANINFO_Apple_M3_Max_0_2_2209.json \
+    --capture moltenvk-m3=VP_VULKANINFO_Apple_M3_Max_0_2_2210.json \
     --formats moltenvk-m3=formats.json
 ```
 
