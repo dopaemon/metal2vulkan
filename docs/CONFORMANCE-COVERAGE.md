@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 841 |
+| ledger rows (a case whose gap is recorded) | 842 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3043,4 +3043,5 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `blit-generated-mipmaps` | `generateMipmapsForTexture:` of an 8x8 `RGBA8Unorm` texture of four levels is the device's own filter: its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`)… |
 
