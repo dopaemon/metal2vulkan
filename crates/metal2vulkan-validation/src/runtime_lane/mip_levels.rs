@@ -1,6 +1,8 @@
 //! A device test of the level a sample with an explicit level or a kernel's bias reads against
-//! Metal's measured rule (`lower::sampler::level`) on the device the cfg selects, under the
-//! validation layer.
+//! Metal's measured rule on the device the cfg selects, under the validation layer: Metal's own
+//! sampler through MoltenVK (`VkProperty::MetalSampler`), which must answer it exactly; elsewhere
+//! the device's own level selection, which the stages record (`PrecisionNote::DeviceSampling`) and
+//! the lane counts against the rule (`LEVEL-DIFFERS` lines) without failing.
 //!
 //! Metal rounds the level `x` to `half` (a NaN reads 0), clamps it into the sampler's level clamp
 //! and the texture's levels, and with `L = floor(x)` and `q = floor(64 (x - L)) / 64` reads level
@@ -14,9 +16,9 @@
 //! `level(x)`. A 2D texture whose base level holds `i + 16 j` at texel `(i, j)` (level `L >= 1`
 //! holding `1000 L`) shows whether the samplers minifying nearest and magnifying linearly
 //! magnified: there the linear filter reads about 120 at texel position (5.3, 7.7), where the
-//! nearest reads 117. A linear filter's own sum is the device's (`FloatSampleFilter`): its sample
-//! may sit [`FILTERED`] from the level and weight (lavapipe's cube filter at a 2x2 face reads
-//! `3.0000002` for a level holding 3), which no level error comes near (a weight's step is 1/64).
+//! nearest reads 117. A linear filter's own sum is the sampler's: its sample may sit [`FILTERED`]
+//! from the level and weight (lavapipe's cube filter at a 2x2 face reads `3.0000002` for a level
+//! holding 3), which no level error comes near (a weight's step is 1/64).
 //!
 //! The sampler clamping the level into `[0.3, 2.7]` under a linear mip filter is not checked: its
 //! `lod_min_clamp` lies off the 1/64 grid, so the device's `minLod` raises Metal's level and the
@@ -26,6 +28,8 @@
 //! `L + 1/2` in steps of `1/4096`, every `1/1024` from 1 to 2, the `half` ties around `L + k/64`
 //! with their `f32` neighbours, and past the last level, the infinities and a NaN.
 
+use super::degrade_notices::counts;
+use super::pixel_samplers::metal_sampler;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -36,8 +40,8 @@ use metal2vulkan::metal::{PixelFormat, TextureType};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ComputePipelineState, Device, PipelineOptions, Region, ResourceOptions, Size, Texture,
-    TextureDescriptor,
+    ComputePipelineState, Degradation, Device, PipelineOptions, Region, ResourceOptions, Size,
+    Texture, TextureDescriptor,
 };
 
 /// The base level's side, and the levels below it with it.
@@ -281,10 +285,12 @@ fn check(kernel: &str, x: f32, names: &[&str], got: &[f32], want: &[f32], wrong:
     }
 }
 
-/// Every sample with an explicit level, or a kernel's bias, reads Metal's levels with Metal's
-/// weights: through nearest and linear filters under nearest and linear mip filters of 2D, 3D,
-/// cube, and 2D-array textures, through a nearest mip filter clamping the level, and where a
-/// sampler minifies nearest and magnifies linearly.
+/// On a device that samples through Metal's own sampler, every sample with an explicit level, or a
+/// kernel's bias, reads Metal's levels with Metal's weights: through nearest and linear filters
+/// under nearest and linear mip filters of 2D, 3D, cube, and 2D-array textures, through a nearest
+/// mip filter clamping the level, and where a sampler minifies nearest and magnifies linearly.
+/// Elsewhere the levels are the device's: the stages announce `device-sampling`, and the samples
+/// that differ from Metal's rule are printed.
 #[test]
 fn explicit_levels_read_metals_levels() {
     let cache = ScratchCache::new().unwrap();
@@ -376,12 +382,25 @@ fn explicit_levels_read_metals_levels() {
             );
         }
         eprintln!("{name}: {} of the samples differ", wrong.len());
-        assert!(
-            wrong.is_empty(),
-            "{name}: {} samples differ:\n{}",
-            wrong.len(),
-            wrong.join("\n")
+        let own = !metal_sampler(&device);
+        let announced = counts(&messages.take_notices());
+        assert_eq!(
+            announced.contains_key(&Degradation::DeviceSampling),
+            own,
+            "{name}: device-sampling exactly where the device's sampler is not Metal's"
         );
+        if own {
+            for w in wrong.iter().take(60) {
+                eprintln!("LEVEL-DIFFERS {name}: {w}");
+            }
+        } else {
+            assert!(
+                wrong.is_empty(),
+                "{name}: {} samples differ:\n{}",
+                wrong.len(),
+                wrong.join("\n")
+            );
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }

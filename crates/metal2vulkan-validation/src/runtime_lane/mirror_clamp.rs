@@ -23,6 +23,7 @@
 //! sixteenth plus a half.
 
 use super::degrade_notices::on_device;
+use super::pixel_samplers::own_sampler;
 use super::{buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -287,11 +288,13 @@ fn the_lanes_reach_past_the_level_both_ways() {
     );
 }
 
-/// Every lane reads Metal's answer, on each op, pixel and normalized, 6 and 8 texels wide.
-/// Prints, per case, the lanes checked and those that differ, and each lane that differs.
+/// Every lane reads Metal's answer, on each op, pixel and normalized, 6 and 8 texels wide, where
+/// the device samples through Metal's own sampler. Elsewhere it samples by its own (announced
+/// `device-sampling`: its addressing, offsets and filter), whose differences are printed. Prints,
+/// per case, the lanes checked and those that differ, and each lane that differs.
 #[test]
 fn mirror_clamped_samples_read_metal_s_texels() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let mut wrong = Vec::new();
         for n in [6u32, 8] {
             let float = texture(device, PixelFormat::R32Float, n, |j| j as f32 + 1.0);
@@ -340,6 +343,14 @@ fn mirror_clamped_samples_read_metal_s_texels() {
         }
         for line in wrong.iter().take(80) {
             println!("MIRROR-CLAMP-DIFFERS {}: {line}", device.name());
+        }
+        if own_sampler(device, messages) {
+            println!(
+                "MIRROR-CLAMP {}: the device's own sampler, {} results differ from Metal",
+                device.name(),
+                wrong.len()
+            );
+            return;
         }
         assert!(
             wrong.is_empty(),

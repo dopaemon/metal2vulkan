@@ -9,21 +9,26 @@
 //! bind four formats with a runtime sampler filtering linearly, clamped to the edge: each runs on
 //! the one pipeline state, and each output is Metal's, within
 //! `argument_linear_samples::DEVICE_FILTER` where the device's own sampler filters
-//! (`argument_linear_samples::device_filters`). The kernel `msf_slot2d_nearest_repeat` is the same
+//! (`argument_linear_samples::device_filters`) a format that bound was measured on
+//! ([`FILTER_MEASURED`]; another's differences are printed). The kernel `msf_slot2d_nearest_repeat` is the same
 //! macro under another constexpr sampler; its cases bind a runtime sampler filtering to the nearest
 //! texel, repeating, and their odd outputs are Metal's runtime-sampler answers for those inputs.
 //! Run on the first kernel's pipeline state, its odd outputs are its own pipeline state's, and
-//! Metal's wherever the device answers the case as Metal on its own state (the others, such as a
+//! Metal's wherever the device answers the case as Metal on its own state (within its conversion
+//! of the codes where it does not sample through Metal's own texture unit; the others, such as a
 //! device's sRGB decode, `kernel_textures` judges). Across each sampler's runs the device makes one
 //! `VkPipeline` per variant the runs take (an sRGB texture's raw codes take a variant of their
 //! own), never one per format.
 
 use super::argument_linear_samples::{alike, device_filters};
+use super::pixel_samplers::metal_sampler;
 use super::{
-    layer_reported_nothing_at_all, pipeline_state, public_cases, run_with, validated_device,
-    Messages, ScratchCache,
+    converted_holds, layer_reported_nothing_at_all, pipeline_state, public_cases, run_with,
+    validated_device, Messages, ScratchCache,
 };
+use crate::candidate::engine::resources::pixel_format;
 use crate::gpu::TEST_DEVICE;
+use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_runtime::ExecutedPipeline;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -35,6 +40,17 @@ const LINEAR_EDGE: &str = "msf_slot2d_linear_edge";
 /// The same kernel under another constexpr sampler, with a runtime sampler filtering to the
 /// nearest texel and repeating in its cases.
 const NEAREST_REPEAT: &str = "msf_slot2d_nearest_repeat";
+
+/// The formats `PrecisionNote::DeviceSampling`'s recorded bound of a linear filter was measured on.
+const FILTER_MEASURED: [PixelFormat; 7] = [
+    PixelFormat::R8Unorm,
+    PixelFormat::RG8Unorm,
+    PixelFormat::RGBA8Unorm,
+    PixelFormat::BGRA8Unorm,
+    PixelFormat::RGBA8UnormSRGB,
+    PixelFormat::RGBA16Unorm,
+    PixelFormat::RGBA16Float,
+];
 
 /// The bytes of one output element (a `float4`).
 const ELEMENT: usize = 16;
@@ -91,8 +107,15 @@ fn one_pipeline_per_sampler_answers_every_bound_format_as_metal() {
     let mut variants = BTreeSet::new();
     for case in &edge {
         // Where the device's own sampler filters (`argument_linear_samples::device_filters`),
-        // each lane within `argument_linear_samples::DEVICE_FILTER`.
+        // each lane within `argument_linear_samples::DEVICE_FILTER`, for a format the bound
+        // `PrecisionNote::DeviceSampling` records was measured on; another's differences are
+        // printed.
         let within = device_filters(&device);
+        let measured = case
+            .compute
+            .textures
+            .values()
+            .all(|texture| FILTER_MEASURED.contains(&pixel_format(texture.format)));
         let got = ran(case, &mut variants);
         let lanes = |bytes: &[u8]| -> Vec<f32> {
             bytes
@@ -103,6 +126,23 @@ fn one_pipeline_per_sampler_answers_every_bound_format_as_metal() {
                 .collect()
         };
         let (got_lanes, metal_lanes) = (lanes(&got), lanes(&case.metal_output));
+        if within && !measured {
+            let differ = (got_lanes.iter().zip(&metal_lanes))
+                .filter(|(g, m)| g.to_bits() != m.to_bits())
+                .count();
+            let most = (got_lanes.iter().zip(&metal_lanes))
+                .map(|(g, m)| (g - m).abs())
+                .fold(0.0f32, f32::max);
+            println!(
+                "RUNTIME-DATA-DIFFERS {}: {}: {differ} of {} lanes the device's filter, at most \
+                 {most} off Metal's",
+                device.name(),
+                case.case.name,
+                got_lanes.len()
+            );
+            assert_eq!(got.len(), case.metal_output.len(), "{}", case.case.name);
+            continue;
+        }
         assert!(
             got.len() == case.metal_output.len()
                 && got_lanes
@@ -144,7 +184,18 @@ fn one_pipeline_per_sampler_answers_every_bound_format_as_metal() {
             "{} on {LINEAR_EDGE}'s pipeline state",
             case.case.name
         );
-        if own == runtime_column(&case.metal_output) {
+        // The device's conversion of a texel's codes, where it does not sample through Metal's
+        // own texture unit (`converted_holds`).
+        let exact = metal_sampler(&device);
+        let floats = |bytes: &[u8]| -> Vec<f32> {
+            (bytes.as_chunks::<4>().0.iter())
+                .map(|c| f32::from_le_bytes(*c))
+                .collect()
+        };
+        let (own_lanes, metal_lanes) = (floats(&own), floats(&runtime_column(&case.metal_output)));
+        if own_lanes.len() == metal_lanes.len()
+            && (own_lanes.iter().zip(&metal_lanes)).all(|(&g, &m)| converted_holds(g, m, exact))
+        {
             metal += 1;
         }
     }

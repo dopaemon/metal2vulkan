@@ -22,8 +22,9 @@
 //! held. An 8-bit normalized read is compared bit for bit with its code `c` as Metal reads it,
 //! `c / 255` correctly rounded (no channel may sit an ulp from it).
 
-use super::degrade_notices::on_device;
-use super::{buffer_with, read_buffer, WAIT};
+use super::degrade_notices::{counts, on_device};
+use super::pixel_samplers::metal_sampler;
+use super::{buffer_with, converted_holds, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
@@ -31,8 +32,8 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Region,
-    ResourceOptions, Size, Texture, TextureDescriptor,
+    Buffer, CommandBufferStatus, ComputePipelineState, Degradation, Device, PipelineOptions,
+    Region, ResourceOptions, Size, Texture, TextureDescriptor,
 };
 
 /// A format the probe measured.
@@ -270,9 +271,14 @@ fn words(buffer: &Buffer) -> [u32; 4] {
 
 /// Each case's reads return the texel swizzled, through an `access::read` binding (a sampled
 /// view, which takes the swizzle) and a `read_write` one (a storage view the function swizzles).
+/// An 8-bit normalized channel's code `c` reads `c / 255` correctly rounded where the device samples
+/// through Metal's own texture unit; elsewhere the device's conversion of it, announced
+/// `device-texel-conversion`, within its bound (`converted_holds`).
 #[test]
 fn reads_of_a_swizzled_texture_are_swizzled() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
+        let exact = metal_sampler(device);
+        let mut normalized = false;
         for (format, name, made) in cases() {
             let what = format!("{format:?} {name} made {made}");
             let (texture, bound) = textures(device, format, name, made);
@@ -287,14 +293,24 @@ fn reads_of_a_swizzled_texture_are_swizzled() {
                 let out = buffer_with(device, &[0xab; 16]).unwrap();
                 dispatch(device, kernel, &bound, &[(0, &out)], 1);
                 let got = words(&out);
-                let want = match format {
+                match format {
                     // An 8-bit normalized channel's code `c` reads `c / 255`, correctly rounded.
-                    Format::Rgba8 | Format::Rg8 => want.map(|c| (c as f32 / 255.0).to_bits()),
-                    _ => want,
-                };
-                assert_eq!(got, want, "{what} {kernel}");
+                    Format::Rgba8 | Format::Rg8 => {
+                        normalized = true;
+                        let want = want.map(|c| c as f32 / 255.0);
+                        let holds =
+                            (0..4).all(|c| converted_holds(f32::from_bits(got[c]), want[c], exact));
+                        assert!(holds, "{what} {kernel}: {got:08x?}, Metal's {want:?}");
+                    }
+                    _ => assert_eq!(got, want, "{what} {kernel}"),
+                }
             }
         }
+        let announced = counts(&messages.take_notices());
+        assert!(
+            exact || !normalized || announced.contains_key(&Degradation::DeviceTexelConversion),
+            "{announced:?}"
+        );
     });
 }
 

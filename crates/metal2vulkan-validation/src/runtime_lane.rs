@@ -1648,6 +1648,49 @@ fn shared_kinds(device: &Device) -> BTreeSet<Degradation> {
     degrade_notices::forced(&[(Degradation::SharedInSystemMemory, shared)])
 }
 
+/// Whether `got`, a `float` channel a module converted from a texel's codes, holds as Metal's
+/// `want`: bit for bit where `exact` (the device samples through Metal's own texture unit,
+/// `pixel_samplers::metal_sampler`), else within one `f32` unit in the last place, the bound
+/// `PrecisionNote::DeviceTexelConversion` records of an 8- or 16-bit normalized code (lavapipe
+/// multiplies by the reciprocal); there a NaN holds any NaN (the note's half-float and
+/// small-float NaN, the device's encoding).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn converted_holds(got: f32, want: f32, exact: bool) -> bool {
+    if got.to_bits() == want.to_bits() {
+        return true;
+    }
+    if exact {
+        return false;
+    }
+    let same_sign = got.is_sign_negative() == want.is_sign_negative();
+    (got.is_nan() && want.is_nan())
+        || (same_sign
+            && got.is_finite()
+            && want.is_finite()
+            && got.to_bits().abs_diff(want.to_bits()) <= 1)
+}
+
+/// Whether `got` holds as Metal's `half` result `want` (a value on the `half` grid, widened) under
+/// `PrecisionNote::NativeHalfConversion`'s recorded bound: within one unit in the last place of
+/// the `half`, the device rounding otherwise or not at all, so that a value Metal takes to an
+/// infinity may stay finite from 65504 up; a NaN holds any NaN.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn half_within(got: f32, want: f32) -> bool {
+    if got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan()) {
+        return true;
+    }
+    if want.is_infinite() {
+        let same_sign = got.is_sign_negative() == want.is_sign_negative();
+        return same_sign && got.abs() >= 65504.0;
+    }
+    // A half's unit in the last place at `want`: 2^-24 among the denormals.
+    let exponent = match want.abs() {
+        w if w < 2f32.powi(-14) => -24,
+        w => w.log2().floor() as i32 - 10,
+    };
+    want.is_finite() && (got - want).abs() <= 2f32.powi(exponent)
+}
+
 /// The function of `case`'s entry, made with its constant values, from a library of its AIR.
 fn library_function(device: &Device, case: &PublicCase) -> Result<Function, String> {
     device

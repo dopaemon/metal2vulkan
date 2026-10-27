@@ -28,7 +28,9 @@
 //! printed whole, on one `XR-TWO-PLANES-DIFFERS` line.
 
 use super::degrade_notices::{counts, on_device};
-use super::{buffer_with, read_buffer};
+use super::extended_range_targets::{half_bits, half_value};
+use super::pixel_samplers::metal_sampler;
+use super::{buffer_with, converted_holds, half_within, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -1939,12 +1941,18 @@ fn two_plane_surface_textures_keep_their_texels_in_the_surface_s_planes() {
 
 /// A consumer's two plane views over one buffer, plane 0 in `BGR10_XR` (or its sRGB twin) and
 /// plane 1 in `ARGB8Unorm`, read Metal's values and leave Metal's bytes in the buffer after
-/// kernel writes, in both geometries.
+/// kernel writes, in both geometries. Where the device does not sample through Metal's own
+/// texture unit, a read of plane 1 is the device's conversion of its codes (announced
+/// `device-texel-conversion`): one that differs from Metal's holds where each value within the
+/// conversion's bound of a code's Metal value, replaced by it, gives Metal's output
+/// ([`as_metal_codes`]), counted.
 #[test]
 fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let queue = device.new_command_queue().unwrap();
         let kernels = Kernels::new(device);
+        let exact = metal_sampler(device);
+        let mut converted = Vec::new();
         let mut wrong = Vec::new();
         let steps = [
             (halves(GRID, |n, c| 32 * n + 16384 * c + 7 * c), true),
@@ -2000,6 +2008,15 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
                     }
                 }
                 for (tag, bytes) in outputs {
+                    let plane_1_read = tag.contains("P1");
+                    if !exact
+                        && plane_1_read
+                        && digest(&bytes) != metal(&tag)
+                        && digest(&as_metal_codes(&bytes, tag.ends_with('H'))) == metal(&tag)
+                    {
+                        converted.push(format!("{plane0:?} G{g}{tag}"));
+                        continue;
+                    }
                     check(
                         &mut wrong,
                         format!("{plane0:?} G{g}{tag}"),
@@ -2009,8 +2026,56 @@ fn plane_views_over_a_buffer_read_and_write_as_metal_does() {
                 }
             }
         }
+        println!(
+            "XR-TWO-PLANES {}: {} plane 1 reads the device's conversion of Metal's codes: {converted:?}",
+            device.name(),
+            converted.len()
+        );
+        if !converted.is_empty() {
+            let notices = counts(&messages.take_notices());
+            assert!(
+                notices.contains_key(&Degradation::DeviceTexelConversion),
+                "{notices:?}"
+            );
+        }
         report(device, &wrong);
     });
+}
+
+/// `bytes`, a read of an 8-bit normalized view (`half4`s where `half`, else `float4`s), with each
+/// value in `[0, 1]` that lies within the device's conversion's bound of a code `c`'s Metal value
+/// (`converted_holds` of `c / 255`, and `half_within` of its `half`) replaced by that value: what
+/// Metal's read gives where the device read Metal's codes. Other bytes (the fill of threads past
+/// the view, a value off every code) stay.
+fn as_metal_codes(bytes: &[u8], half: bool) -> Vec<u8> {
+    match half {
+        true => bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|h| {
+                let v = half_value(u16::from_le_bytes(*h));
+                let metal = half_bits((v * 255.0).round() / 255.0);
+                match (0.0..=1.0).contains(&v) && half_within(v, half_value(metal)) {
+                    true => metal.to_le_bytes(),
+                    false => *h,
+                }
+            })
+            .collect(),
+        false => bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|f| {
+                let v = f32::from_le_bytes(*f);
+                let metal = (v * 255.0).round() / 255.0;
+                match (0.0..=1.0).contains(&v) && converted_holds(v, metal, false) {
+                    true => metal.to_le_bytes(),
+                    false => *f,
+                }
+            })
+            .collect(),
+    }
 }
 
 /// Each two-plane format makes what Metal makes and refuses what Metal stops (one case per

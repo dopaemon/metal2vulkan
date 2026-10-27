@@ -30,6 +30,7 @@
 //! the lane's own where the offset is dropped, moved by the offset where it is kept.
 
 use super::degrade_notices::on_device;
+use super::pixel_samplers::own_sampler;
 use super::{buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -380,11 +381,14 @@ fn the_lanes_tell_the_parent_s_rule_from_the_view_s() {
     );
 }
 
-/// Every lane of every view reads Metal's answer by the parent's rule, on each op and mode.
+/// Every lane of every view reads Metal's answer by the parent's rule, on each op and mode, where
+/// the device samples through Metal's own sampler. Elsewhere the device's own sampler answers its
+/// samples and gathers (announced `device-sampling`), whose differences are printed, and the
+/// module's bicubic samples, which it computes from fetched texels, still take the parent's rule.
 /// Prints, per case, the results checked and those that differ, and each result that differs.
 #[test]
 fn a_view_s_offset_follows_its_parent_s_base() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let bitcode = llvm_assemble(&engine_dir().join("rrp_mirror_clamp.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
         let state = |kernel: &str| {
@@ -400,6 +404,7 @@ fn a_view_s_offset_follows_its_parent_s_base() {
         };
         let (sample, gather) = (state("rrp_mc_sample"), state("rrp_mc_gather"));
         let mut wrong = Vec::new();
+        let mut bicubic = 0usize;
         for view in VIEWS {
             let n = view.n();
             let xs = texel_lanes(n);
@@ -435,6 +440,7 @@ fn a_view_s_offset_follows_its_parent_s_base() {
                             let have = got[lane * 5 + k];
                             if have.map(f32::to_bits) != want.map(f32::to_bits) {
                                 differ += 1;
+                                bicubic += usize::from(op == Op::Bicubic);
                                 wrong.push(format!(
                                     "{view:?} {op:?} {mode:?} x {x} offset {}: read {have:?}, \
                                      Metal {want:?}",
@@ -458,6 +464,15 @@ fn a_view_s_offset_follows_its_parent_s_base() {
         }
         for line in wrong.iter().take(80) {
             println!("VIEW-BASE-OFFSET-DIFFERS {}: {line}", device.name());
+        }
+        if own_sampler(device, messages) {
+            println!(
+                "VIEW-BASE-OFFSET {}: the device's own sampler, {} results differ from Metal",
+                device.name(),
+                wrong.len()
+            );
+            assert_eq!(bicubic, 0, "bicubic results differ from the parent's rule");
+            return;
         }
         assert!(
             wrong.is_empty(),

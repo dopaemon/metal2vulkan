@@ -116,12 +116,14 @@
 //! - **A BGRA-order target** (`bgra.rs`): a `BGRA8Unorm` target (and `RGBA8Unorm` beside it)
 //!   whose channels take every byte, halved by `fetch_ordered` one to three times in a pass,
 //!   single-sampled and at 4x, under a mask of every channel and of red and alpha, beside an
-//!   unwritten `RGBA16Float` color 1: Metal's bytes (the M3 probe of `bgra.rs`). In the pixel
+//!   unwritten `RGBA16Float` color 1: Metal's bytes (the M3 probe of `bgra.rs`), but within one
+//!   code where the pipeline records `device-color-conversion` ([`device_rounded`]). In the pixel
 //!   interlock on a device that reads `B8G8R8A8_UNORM` without a format in neither direction
 //!   (ANV), the attachment is read and written through its `R8G8B8A8_UNORM` view.
 //! - **An sRGB target** (`srgb.rs`): a `BGRA8Unorm_sRGB` target whose channels take every byte,
 //!   halved by `fetch_ordered` one to three times in a pass, with and without a depth and stencil
-//!   attachment that passes or fails half the draws' fragments: Metal's bytes.
+//!   attachment that passes or fails half the draws' fragments: Metal's bytes, but within one code
+//!   where the pipeline records `device-color-conversion` ([`device_rounded`]).
 //!   In the pixel interlock the attachment is read and written through its `R32_UINT` view, in a
 //!   scratch image made mutable to it.
 //! - **A memory-writing function beside depth** (`beside_depth.rs`): `fetch_coherent` counts each
@@ -254,6 +256,32 @@ fn scratched(messages: &Messages) -> bool {
         .any(|notice| notice.degradation == Degradation::FetchThroughScratch);
     messages.restore_notices(notices);
     scratch
+}
+
+/// A texel or sample that differs from Metal's: its index, its bytes and Metal's.
+type Differing = (usize, [u8; 4], [u8; 4]);
+
+/// The texels of `wrong` that differ from Metal's beyond the device's
+/// conversion where the pipeline that stored them records `PrecisionNote::DeviceColorConversion`
+/// (`device`): near a tie between two codes the device may store the other one, so a texel whose
+/// every channel lies within one code of Metal's holds there. With the count of the channels that
+/// hold so.
+fn device_rounded(wrong: Vec<Differing>, device: bool) -> (Vec<Differing>, usize) {
+    if !device {
+        return (wrong, 0);
+    }
+    let mut rounded = 0;
+    let beyond = wrong
+        .into_iter()
+        .filter(|(_, read, want)| {
+            let near = read.iter().zip(want).all(|(r, w)| r.abs_diff(*w) <= 1);
+            if near {
+                rounded += read.iter().zip(want).filter(|(r, w)| r != w).count();
+            }
+            !near
+        })
+        .collect();
+    (beyond, rounded)
 }
 
 /// The kind a resolve of a 4x attachment of `pf` that a pass fetched announces on `lane`'s

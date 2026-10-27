@@ -13,7 +13,9 @@
 //! - [`cross_class_storage_and_buffer_reads_are_the_native_words`]: an `access::read_write`
 //!   read and a texture buffer read of each format of [`FORMATS`] through each type of another
 //!   class give the native slot's words (a `short` or `ushort` result of a float format the
-//!   native `half` read's bits).
+//!   native `half` read's bits), but a `half` NaN lane, whose bits are the device's where either
+//!   stage records `native-half-conversion`, `native-nan-encoding` or `device-nan-encoding`
+//!   (counted apart).
 //! - [`integer_writes_store_metals_saturated_words`]: a write of `float`, `half`, `int`, `uint`,
 //!   `short` and `ushort` texels to each integer format of [`FORMATS`], through an
 //!   `access::write` slot and a texture buffer, stores Metal's words: each lane's bits (a 16-bit
@@ -22,17 +24,21 @@
 //! - [`integer_writes_into_float_formats_store_the_bits_as_floats`]: an `int` or `uint` write to
 //!   a float format stores what a `float` write of those bits stores, rounded to nearest even
 //!   onto a half-float channel; a `short` or `ushort` write what a `half` write of those bits
-//!   stores.
+//!   stores; a NaN channel's bits the device's (counted apart), where the device announced
+//!   `native-half-conversion`, `native-nan-encoding` or `device-nan-encoding` (the pipeline it
+//!   specialized to the bound format records the write's note, which the stage compiled without
+//!   that format does not).
 //! - [`cross_class_queries_are_the_textures_size`]: a slot of another class that the function
 //!   only queries answers the texture's width and height.
 
 use super::degrade_notices::on_device;
+use super::driver_deviations::{half_nan, stage_notes};
 use super::extended_range_targets::{half_bits, half_value};
 use super::{buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::format::sampled_type;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, SampledType, StageSource};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, SampledType, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, Degradation, Device, PipelineOptions, Region,
@@ -439,6 +445,71 @@ fn expected(native: [u32; 4], ty: Ty) -> [u32; 4] {
     }
 }
 
+/// The NaN notes a stage may record: the device's `half` conversion and widening
+/// (`PrecisionNote::NativeHalfConversion`, which may quiet a signalling NaN), a NaN result's bits
+/// (`PrecisionNote::NativeNanEncoding`) and a texel's stored or decoded NaN
+/// (`PrecisionNote::DeviceNanEncoding`).
+const NAN_NOTES: [PrecisionNote; 3] = [
+    PrecisionNote::NativeHalfConversion,
+    PrecisionNote::NativeNanEncoding,
+    PrecisionNote::DeviceNanEncoding,
+];
+
+/// Whether the stage of kernel `k` doing `kind` with `ty` texels leaves a NaN's bits to the
+/// device: it records one of [`NAN_NOTES`].
+fn leaves_nan_bits(device: &Device, kind: Kind, ty: Ty) -> bool {
+    let bitcode = llvm_assemble_text(&kernel(kind, ty)).unwrap();
+    let notes = stage_notes(device, &bitcode, "k");
+    NAN_NOTES.iter().any(|n| notes.contains(n))
+}
+
+/// Whether `got`'s words answer `want`'s for a `ty` result: the same words, but where `nan_bits`
+/// a 16-bit result's lane (the low and high halves of its first two words) that is a `half` NaN
+/// in both may hold other bits.
+fn read_holds(got: &[u32; 4], want: &[u32; 4], ty: Ty, nan_bits: bool) -> bool {
+    if got == want {
+        return true;
+    }
+    if !(nan_bits && ty.narrow()) || got[2..] != want[2..] {
+        return false;
+    }
+    got[..2].iter().zip(&want[..2]).all(|(&g, &w)| {
+        [0, 16].into_iter().all(|shift| {
+            let (g, w) = ((g >> shift) as u16, (w >> shift) as u16);
+            g == w || (half_nan(g) && half_nan(w))
+        })
+    })
+}
+
+/// Whether the stored texel `got` answers `want` in a float format whose channels are `half`s
+/// (`halves`) or `float`s: the same bytes, but a channel that is a NaN in both may hold other
+/// bits (the device's, which the test requires an announced NaN note for).
+fn stored_holds(got: &[u8], want: &[u8], halves: bool) -> bool {
+    if got == want {
+        return true;
+    }
+    match halves {
+        true => got
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(want.as_chunks::<2>().0)
+            .all(|(g, w)| {
+                let (g, w) = (u16::from_le_bytes(*g), u16::from_le_bytes(*w));
+                g == w || (half_nan(g) && half_nan(w))
+            }),
+        false => got
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(want.as_chunks::<4>().0)
+            .all(|(g, w)| {
+                let (g, w) = (f32::from_le_bytes(*g), f32::from_le_bytes(*w));
+                g.to_bits() == w.to_bits() || (g.is_nan() && w.is_nan())
+            }),
+    }
+}
+
 /// The kinds of `cross-class-texture-neutral` and its kin the device announced since the last
 /// take.
 fn neutral_announced(messages: &Messages) -> BTreeSet<Degradation> {
@@ -458,7 +529,9 @@ fn neutral_announced(messages: &Messages) -> BTreeSet<Degradation> {
 fn cross_class_storage_and_buffer_reads_are_the_native_words() {
     on_device(|device, messages| {
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
+        let mut nan_bits: BTreeMap<(Kind, Ty), bool> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped, mut nonzero) = (0usize, 0usize, 0usize, 0usize);
+        let mut nans = 0usize;
         let _ = messages.take_notices();
         for &(format, bytes, _) in &FORMATS {
             let class = sampled_type(format).expect("a format of a class");
@@ -500,9 +573,18 @@ fn cross_class_storage_and_buffer_reads_are_the_native_words() {
                         true => native,
                         false => expected(native, t),
                     };
+                    let mut leaves = |t: Ty| {
+                        *nan_bits
+                            .entry((kind, t))
+                            .or_insert_with(|| leaves_nan_bits(device, kind, t))
+                    };
+                    let bits = leaves(ty) || leaves(ty.native(class));
+                    let unlike = (0..got.len()).filter(|&i| got[i] != expected(want[i], ty));
+                    nans += unlike.count();
                     let wrong: Vec<usize> = (0..got.len())
-                        .filter(|&i| got[i] != expected(want[i], ty))
+                        .filter(|&i| !read_holds(&got[i], &expected(want[i], ty), ty, bits))
                         .collect();
+                    nans -= wrong.len();
                     if let Some(&i) = wrong.first() {
                         differ += wrong.len();
                         println!(
@@ -521,7 +603,8 @@ fn cross_class_storage_and_buffer_reads_are_the_native_words() {
         let neutral = neutral_announced(messages);
         println!(
             "CROSS-CLASS storage reads {}: {checked} texels checked, {differ} differ, \
-             {nonzero} nonzero, {skipped} skipped, announced {neutral:?}",
+             {nans} hold NaN halves of the device's bits, {nonzero} nonzero, {skipped} skipped, \
+             announced {neutral:?}",
             device.name()
         );
         assert!(checked > 0 && nonzero > 0);
@@ -694,6 +777,7 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
         use PixelFormat as P;
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped) = (0usize, 0usize, 0usize);
+        let mut nans = 0usize;
         let _ = messages.take_notices();
         for &(format, bytes, _) in &FORMATS {
             if sampled_type(format) != Some(SampledType::Float) {
@@ -760,15 +844,15 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
                         continue;
                     };
                     checked += n as usize;
+                    let texel = |t: u64| (t * bytes) as usize..((t + 1) * bytes) as usize;
+                    nans += (0..n).filter(|&t| got[texel(t)] != want[texel(t)]).count();
                     let wrong: Vec<u64> = (0..n)
-                        .filter(|t| {
-                            let r = (t * bytes) as usize..((t + 1) * bytes) as usize;
-                            got[r.clone()] != want[r]
-                        })
+                        .filter(|&t| !stored_holds(&got[texel(t)], &want[texel(t)], halves))
                         .collect();
+                    nans -= wrong.len();
                     if let Some(&t) = wrong.first() {
                         differ += wrong.len();
-                        let r = (t * bytes) as usize..((t + 1) * bytes) as usize;
+                        let r = texel(t);
                         println!(
                             "CROSS-CLASS-WRITE-DIFFERS {}: {kind:?} {ty:?} into {format:?}: {} of \
                              {n} texels, first {t}: lanes {:08x?} stored {:02x?}, the {native:?} \
@@ -783,15 +867,28 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
                 }
             }
         }
-        let neutral = neutral_announced(messages);
+        let announced: BTreeSet<Degradation> = messages
+            .take_notices()
+            .iter()
+            .filter_map(|m| m.degradation.as_ref())
+            .map(|n| n.degradation)
+            .collect();
         println!(
             "CROSS-CLASS float-format writes {}: {checked} texels checked, {differ} differ, \
-             {skipped} skipped, announced {neutral:?}",
+             {nans} hold NaNs of the device's bits, {skipped} skipped, announced {announced:?}",
             device.name()
         );
         assert!(checked > 0);
         assert_eq!(differ, 0, "integer writes into float formats differ");
-        assert!(neutral.is_empty(), "an exact write bound the neutral");
+        assert!(
+            !announced.contains(&Degradation::CrossClassTextureNeutral),
+            "an exact write bound the neutral"
+        );
+        let nan_kinds = NAN_NOTES.map(Degradation::from_precision_note);
+        assert!(
+            nans == 0 || nan_kinds.iter().any(|k| announced.contains(k)),
+            "{nans} texels hold the device's NaN, announced {announced:?}"
+        );
     });
 }
 

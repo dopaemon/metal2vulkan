@@ -32,7 +32,9 @@
 //!   below its row, where the AGX driver asserts and the call moves nothing.
 //! - Where the device has no format for it, its reads go through a decoded twin of its codes,
 //!   announced `carried-decoded-twin` once: every format's texels read exactly as Metal's
-//!   (`metal2vulkan::bind::PvrtcDecode`, matched against an Apple M3 Max by its own tests), and so
+//!   (`metal2vulkan::bind::PvrtcDecode`, matched against an Apple M3 Max by its own tests; where
+//!   the device does not sample through Metal's own texture unit, within its conversion of the
+//!   codes, announced `device-texel-conversion`: `converted_holds`), and so
 //!   do its view's as the format's other colour space, after a CPU copy, a row-linear blit and a
 //!   copy from another texture, each decoded into the twin (a blit's by a GPU decode pass, a CPU
 //!   copy's by one or on the CPU, counted in `WorkCounts`; [`pvrtc_texels_read_as_metal_s`]).
@@ -46,9 +48,11 @@ use super::case_making_kinds;
 use super::degrade_notices::{assert_made_once, counts, shared_in_system_memory};
 use super::host_memory::Mapping;
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
+use super::pixel_samplers::metal_sampler;
 use super::{
-    bound_buffers, encode_case, layer_reported_nothing_at_all, pipeline_state, public_case,
-    read_buffer, validated_device, CaseResources, Messages, PublicCase, ScratchCache, WAIT,
+    bound_buffers, converted_holds, encode_case, layer_reported_nothing_at_all, pipeline_state,
+    public_case, read_buffer, validated_device, CaseResources, Messages, PublicCase, ScratchCache,
+    WAIT,
 };
 use crate::candidate::engine::ComputeOutput;
 use crate::gpu::TEST_DEVICE;
@@ -1126,6 +1130,7 @@ fn pvrtc_texels_read_as_metal_s() {
     super::degrade_notices::on_device(|device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
+        let exact = metal_sampler(device);
         let queue = device.new_command_queue().unwrap();
         let lane = Lane {
             device: device.clone(),
@@ -1159,7 +1164,7 @@ fn pvrtc_texels_read_as_metal_s() {
                     for (t, got) in got.iter().enumerate() {
                         for (c, &got) in got.iter().enumerate() {
                             let want = as_read.metal_value(c, codes[4 * t + c]);
-                            if got.to_bits() != want.to_bits() && wrong.len() < 24 {
+                            if !converted_holds(got, want, exact) && wrong.len() < 24 {
                                 wrong.push(format!(
                                     "{pf:?} {what} read as {through:?}, texel {t} channel {c}: \
                                      {got} against Metal's {want}"
@@ -1223,6 +1228,11 @@ fn pvrtc_texels_read_as_metal_s() {
             ),
             (usize::from(twinned), 0),
             "on {name}"
+        );
+        assert_eq!(
+            announced(Degradation::DeviceTexelConversion),
+            usize::from(!exact),
+            "the device's conversion of the codes, on {name}"
         );
     });
 }

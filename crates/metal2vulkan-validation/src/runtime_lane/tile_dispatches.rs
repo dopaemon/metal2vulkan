@@ -23,7 +23,7 @@
 //!   of a color more than the state's, run as the state of the pass's colors runs, the color the
 //!   function does not reach untouched, as plain Metal runs them.
 
-use super::degrade_notices::assert_once;
+use super::degrade_notices::{assert_once, made_tile_kinds};
 use super::kernel_textures::census;
 use super::shared_kinds;
 use super::tile_states::{descriptor, on_device};
@@ -353,12 +353,14 @@ fn a_tile_dispatch_sees_a_clear_and_an_earlier_dispatch() {
 }
 
 /// Two passes of two dispatches each on one device: the dispatches' scratch images are announced
-/// once, and the passes' split once, its reason naming the dispatches.
+/// once, and the passes' split once, its reason naming the dispatches; beside them, what the tile
+/// state's stage records ([`made_tile_kinds`]).
 #[test]
 fn a_tile_dispatch_announces_its_scratch_and_split_once() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    // Beside the test's kinds, what its `Shared` buffer forces on the device.
+    // Beside the test's kinds, what its `Shared` buffer forces on the device and its tile state's
+    // making announces.
     let mut kinds = vec![
         Degradation::TileDispatchScratch,
         Degradation::RenderPassSplit,
@@ -367,6 +369,10 @@ fn a_tile_dispatch_announces_its_scratch_and_split_once() {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         kinds.extend(shared_kinds(&device));
         let state = tile_state(&device);
+        kinds.extend(made_tile_kinds(
+            &device,
+            &descriptor(&device, "k10ts_tile_grid", &FORMATS),
+        ));
         let targets = FORMATS.map(|format| attachment(&device, format, |_, _| 0));
         let out = device
             .new_buffer(RECORDS, ResourceOptions::shared())

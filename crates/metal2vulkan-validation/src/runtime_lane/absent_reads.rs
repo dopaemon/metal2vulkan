@@ -6,7 +6,9 @@
 //! nonzero; `rfs_absent_read` writes `(i, 0.5, 0.25, 1)`, or texel `(i, 0)` of `source`;
 //! `rfs_absent_sampler` writes texel `(i, 0)` of the present `tex`, or a sample of it through the
 //! removed sampler `smp`. Metal gives each such read no value. Making the three pipeline states
-//! announces [`Degradation::AbsentArgumentRead`] once; a command buffer whose flag is 0 completes
+//! announces [`Degradation::AbsentArgumentRead`] once, beside what their stages record
+//! (`degrade_notices::made_compute_kinds`: off Metal's sampler, the device's conversion of the
+//! texel `rfs_absent_read` and `rfs_absent_sampler` read); a command buffer whose flag is 0 completes
 //! with Metal's answer (its authored cases' Metal rows), and one whose flag is 1 runs the read,
 //! which takes zero (Metal's answer under its debug layer), and completes too, its execution
 //! report stating the read (it failed before). The kernel marks the command buffer's status by the
@@ -15,7 +17,7 @@
 //! device without `shaderInt64`, and the device restricted to `vk12-floor` (where the profiles
 //! layer is installed) run the same kernels.
 
-use super::degrade_notices::{assert_once, counts, on_device, on_device_with};
+use super::degrade_notices::{assert_once, counts, made_compute_kinds, on_device, on_device_with};
 use super::shared_kinds;
 use super::Messages;
 use super::{buffer_with, read_buffer};
@@ -44,6 +46,7 @@ type Ran = (
     Vec<u32>,
     Reach,
 );
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 /// The kind making the states takes.
@@ -64,8 +67,9 @@ enum Reach {
     Binding,
 }
 
-/// The state of `name` in the fixture with `has_source` false.
-fn state(device: &Device, name: &str) -> ComputePipelineState {
+/// The state of `name` in the fixture with `has_source` false, and the kinds its making announces
+/// by its stage ([`made_compute_kinds`]).
+fn state(device: &Device, name: &str) -> (ComputePipelineState, BTreeSet<Degradation>) {
     let bitcode = llvm_assemble(&engine_dir().join("rfs_absent_reads.ll")).unwrap();
     let library = device.new_library_with_air(&bitcode).unwrap();
     let constants = FunctionConstantValues::defaults()
@@ -73,12 +77,16 @@ fn state(device: &Device, name: &str) -> ComputePipelineState {
     let function = library
         .new_function_with_name_constant_values(name, &constants)
         .unwrap();
-    device
+    let state = device
         .new_compute_pipeline_state(
             &ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor())),
             &PipelineOptions::default(),
         )
-        .unwrap_or_else(|error| panic!("{name} on {}: {error}", device.name()))
+        .unwrap_or_else(|error| panic!("{name} on {}: {error}", device.name()));
+    (
+        state,
+        made_compute_kinds(device, function.function_descriptor()),
+    )
 }
 
 /// `tex`: 4x1 `RGBA32Float`, texel `i` = `(i + 1) * (1, 2, 3, 4)`.
@@ -184,9 +192,11 @@ fn run(device: &Device, state: &ComputePipelineState, flag: u32, tex: Option<&Te
 /// announced before.
 fn reads_zero_and_completes(device: &Device, messages: &Messages, reach: Reach) {
     let names = ["rfs_absent_query", "rfs_absent_read", "rfs_absent_sampler"];
-    let states: Vec<_> = names.iter().map(|name| state(device, name)).collect();
+    let (states, made): (Vec<_>, Vec<_>) = names.iter().map(|name| state(device, name)).unzip();
+    let mut kinds = ABSENT_READS.to_vec();
+    kinds.extend(made.into_iter().flatten());
     let mut notices = messages.take_notices();
-    assert_once(&notices, &ABSENT_READS);
+    assert_once(&notices, &kinds);
     let tex = texture(device);
     let as_words = |floats: &[f32]| floats.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
     let query: Vec<u32> = (0..THREADS as u32).map(|i| 7 + i).collect();
@@ -226,7 +236,6 @@ fn reads_zero_and_completes(device: &Device, messages: &Messages, reach: Reach) 
     }
     notices.extend(messages.take_notices());
     println!("ANNOUNCED {}: {:?}", device.name(), counts(&notices));
-    let mut kinds = ABSENT_READS.to_vec();
     kinds.extend(shared_kinds(device));
     assert_once(&notices, &kinds);
 }

@@ -17,9 +17,11 @@
 //! - `ob1_texel_buffer` writes the red channel of the `uint` texel of its slot-0 texture buffer
 //!   at the index each thread is given, past the texture buffer for half of them.
 
+use super::degrade_notices::counts;
+use super::pixel_samplers::metal_sampler;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    buffer_with, converted_holds, layer_reported_nothing_at_all, read_buffer, validated_device,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -29,8 +31,8 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, ComputePipelineState, Device, PipelineOptions, ResourceOptions, Size, Texture,
-    TextureDescriptor,
+    Buffer, ComputePipelineState, Degradation, Device, PipelineOptions, ResourceOptions, Size,
+    Texture, TextureDescriptor,
 };
 
 /// The texels of each source texture buffer.
@@ -168,8 +170,10 @@ impl Source {
         index: usize,
         swizzle: TextureSwizzleChannels,
         got: [u32; 4],
+        exact: bool,
     ) -> bool {
-        got == twice(self.read(index, swizzle))
+        let want = twice(self.read(index, swizzle));
+        (0..4).all(|c| converted_holds(f32::from_bits(got[c]), f32::from_bits(want[c]), exact))
     }
 
     /// The source as a read-only texture buffer made with `swizzle`, over a new buffer, with
@@ -268,7 +272,9 @@ fn twice(texel: [u32; 4]) -> [u32; 4] {
 /// sources through each swizzle at every index of the grid, and the unsigned sources' red
 /// channel through a swizzle that takes it from each source (`Zero`, `One`, and each channel) at
 /// indices in and past the texture buffer. Every channel is exact, a converted 8-bit normalized
-/// one's too. Prints the reads checked.
+/// one's too, where the device samples through Metal's own texture unit; elsewhere a converted
+/// one is the device's conversion of its code, announced `device-texel-conversion`, within its
+/// bound (`converted_holds`). Prints the reads checked.
 #[test]
 fn swizzled_texture_buffers_read_metals_swizzled_texels() {
     let cache = ScratchCache::new().unwrap();
@@ -276,15 +282,22 @@ fn swizzled_texture_buffers_read_metals_swizzled_texels() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
+        let exact = metal_sampler(&device);
         let mut wrong = Vec::new();
         let mut checked = 0usize;
         let floats = pipeline(&device, "texture_ops", "texel_buffers");
+        let announced = counts(&messages.take_notices());
+        assert_eq!(
+            announced.contains_key(&Degradation::DeviceTexelConversion),
+            !exact,
+            "the float reads' conversion of the codes: {announced:?}"
+        );
         for source in float_sources() {
             for (label, swizzle) in swizzles() {
                 let texture = source.texture(&device, swizzle, TextureUsage::empty());
                 let got = doubled(&device, &floats, &texture);
                 for (index, &got) in got.iter().enumerate() {
-                    if !source.doubled_matches(index, swizzle, got) {
+                    if !source.doubled_matches(index, swizzle, got, exact) {
                         wrong.push(format!(
                             "{:?} {label} at {index}: {got:08x?}, want {:08x?}",
                             source.pixel_format,
@@ -383,7 +396,7 @@ fn a_swizzled_view_of_a_texture_buffer_reads_its_own_swizzle() {
                 let got = doubled(&device, &floats, &view);
                 for (index, &got) in got.iter().enumerate() {
                     assert!(
-                        source.doubled_matches(index, swizzle, got),
+                        source.doubled_matches(index, swizzle, got, metal_sampler(&device)),
                         "{parent_label} viewed {label} at {index}: {got:08x?}, want {:08x?}",
                         twice(source.read(index, swizzle))
                     );

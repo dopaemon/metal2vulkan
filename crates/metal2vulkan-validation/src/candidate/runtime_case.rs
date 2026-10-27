@@ -629,15 +629,16 @@ pub fn executor_layer_settings() -> Vec<LayerSetting> {
 
 /// The options of a device validation makes through the runtime: the validation layer reporting
 /// to `messages`, its shader cache in `cache`, and the loader [`loader`] finds. Its policy takes
-/// Metal's answer wherever the policy offers the device's instead (`DevicePolicy::exact_answers`):
-/// it computes Metal's maths exactly, rounds `half` results as Metal does, and answers Metal's NaN,
-/// minimum and maximum and rounding order. Validation compares Metal's answers, which the device's
-/// sampler and the device's forms answer only within their recorded bounds
-/// (`PrecisionNote::DeviceSampling`, `DeviceTexelConversion`; `NativeTranscendentals`,
-/// `NativeDivision`, `NativeFma`; `NativeHalfConversion`, `NativeHalfQuantize`;
-/// `NativeNanEncoding`, `NativeMinMax`; `NativeDot`, `NativeMix`). The lane of the device's forms
-/// sets them back one at a time (`runtime_lane::native_maths`). Its devices keep execution records
-/// (`DeviceOptions::record_executions`), which the executor and the lanes read.
+/// Metal's answer wherever the policy offers the device's instead (`DevicePolicy::exact_answers`:
+/// the runtime's heap compression, completion, batch order, render lowering and host-page
+/// textures), which changes no translation. The device's sampler and its arithmetic, rounding and
+/// conversions answer Metal's only within their recorded bounds (`PrecisionNote::DeviceSampling`,
+/// `DeviceTexelConversion`; `NativeTranscendentals`, `NativeDivision`, `NativeFma`;
+/// `NativeHalfConversion`, `NativeHalfQuantize`; `NativeNanEncoding`, `NativeMinMax`;
+/// `NativeDot`, `NativeMix`), which validation compares against Metal's answers by those notes;
+/// the lane of the device's maths checks the bounds themselves (`runtime_lane::native_maths`). Its
+/// devices keep execution records (`DeviceOptions::record_executions`), which the executor and the
+/// lanes read.
 pub fn validated_options(messages: &Messages, cache: &Path) -> DeviceOptions {
     let mut options = DeviceOptions::default();
     options.policy = options.policy.exact_answers();

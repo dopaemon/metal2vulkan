@@ -10,13 +10,14 @@
 //! and `INT_MIN`; an infinity `(x, 0)` and `INT_MAX`; a NaN `(x, 0)` and `INT_MIN`; anything else
 //! `((u & 0x807fffff) | 0x3f000000, E - 126)` and `E - 127`.
 
+use super::driver_deviations::{half_nan, stage_notes};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, PrecisionNote, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
     CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size,
@@ -119,17 +120,39 @@ fn words(x: u32, answer: fn(u32) -> (u32, i32, i32), quarter: u32) -> [u32; 8] {
 
 /// The fixture's kernel `name` on `device`.
 fn pipeline(device: &Device, name: &str) -> ComputePipelineState {
-    let ll =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/kernel_frexp_ilogb.ll");
-    let library = device
-        .new_library_with_air(&llvm_assemble(&ll).unwrap())
-        .unwrap();
+    let library = device.new_library_with_air(&fixture()).unwrap();
     let function = library.new_function_with_name(name).unwrap();
     let descriptor =
         ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
     device
         .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
         .unwrap()
+}
+
+/// The owned fixture's bitcode.
+fn fixture() -> Vec<u8> {
+    let ll =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/kernel_frexp_ilogb.ll");
+    llvm_assemble(&ll).unwrap()
+}
+
+/// Whether kernel `name`'s stage leaves a NaN's bits to the device on `device`: it records
+/// `PrecisionNote::NativeHalfConversion` (the device's conversion, which may quiet a signalling
+/// NaN) or `PrecisionNote::NativeNanEncoding`.
+fn leaves_nan_bits(device: &Device, name: &str) -> bool {
+    let notes = stage_notes(device, &fixture(), name);
+    notes.contains(&PrecisionNote::NativeHalfConversion)
+        || notes.contains(&PrecisionNote::NativeNanEncoding)
+}
+
+/// Whether the word `got` answers Metal's `want`: the same, or where `nan_bits` a NaN in both
+/// (of `half` bits in the low half where `half`, else of `float` bits).
+fn word_holds(got: u32, want: u32, half: bool, nan_bits: bool) -> bool {
+    let nan = |w: u32| match half {
+        true => w >> 16 == 0 && half_nan(w as u16),
+        false => f32::from_bits(w).is_nan(),
+    };
+    got == want || (nan_bits && nan(got) && nan(want))
 }
 
 /// The words kernel `name` writes for `inputs`, one thread each.
@@ -161,7 +184,8 @@ fn dispatched(device: &Device, name: &str, inputs: &[u32]) -> Vec<u32> {
         .collect()
 }
 
-/// Each input's eight words are Metal's on every device, for `float` and `half`.
+/// Each input's eight words are Metal's on every device, for `float` and `half`, but a NaN
+/// fraction's bits, the device's where the kernel's stage leaves them to it ([`leaves_nan_bits`]).
 #[test]
 fn frexp_and_ilogb_answer_as_metals_routines() {
     let messages = Messages::default();
@@ -184,11 +208,14 @@ fn frexp_and_ilogb_answer_as_metals_routines() {
             ),
         ] {
             let read = dispatched(&device, kernel, inputs);
+            let half = kernel == "frexp_ilogb_half";
+            let nan_bits = leaves_nan_bits(&device, kernel);
             for (i, &x) in inputs.iter().enumerate() {
-                assert_eq!(
-                    read[8 * i..8 * i + 8],
-                    words(x, answer, quarter),
-                    "{kernel} of {x:#010x} on {name}"
+                let (got, want) = (&read[8 * i..8 * i + 8], words(x, answer, quarter));
+                let held = (got.iter().zip(&want)).all(|(&g, &w)| word_holds(g, w, half, nan_bits));
+                assert!(
+                    held,
+                    "{kernel} of {x:#010x} on {name}: {got:?}, Metal's {want:?}"
                 );
             }
             eprintln!(

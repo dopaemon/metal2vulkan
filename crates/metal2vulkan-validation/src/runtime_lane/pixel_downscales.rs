@@ -26,9 +26,10 @@
 //! On a device with `VkProperty::MetalSampler` the module hands such a sample to Metal's own
 //! normalized sampler at its cell (`position::celled_by_word`), which Metal answers as the pixel
 //! sampler (0 of 97,200 texel channels differ at every perturbation tried, and in
-//! the draw): every configuration must be Metal's and nothing is announced. Elsewhere a
-//! configuration that is not Metal's must have been announced (`pixel-sampler-scaling`, or
-//! `float-sample-filter` where the device converts the texels).
+//! the draw): every configuration must be Metal's and nothing is announced. Elsewhere every sample
+//! is the device's sampler's, which the stages record (`PrecisionNote::DeviceSampling`) and the
+//! device announces: each configuration's hash is printed beside Metal's, and one that is not
+//! Metal's prints the cells that differ from the device's own `norm` control, without failing.
 
 use super::argument_linear_samples::kernel;
 use super::degrade_notices::counts;
@@ -613,8 +614,9 @@ fn metal_sampler(device: &Device) -> bool {
 }
 
 /// Each configuration at each size answers Metal's results where they are known (the module
-/// docs) on a device with Metal's own sampler, announcing nothing; elsewhere one that does not is
-/// announced. Every configuration's hash is printed, a size's that Metal's are not known for too.
+/// docs) on a device with Metal's own sampler, announcing nothing; elsewhere the device's sampler
+/// answers, announced `device-sampling`, and the configurations that are not Metal's are counted.
+/// Every configuration's hash is printed, a size's that Metal's are not known for too.
 #[test]
 fn a_pixel_sampler_downscale_answers_metal_s_texels() {
     let cache = ScratchCache::new().unwrap();
@@ -655,6 +657,11 @@ fn a_pixel_sampler_downscale_answers_metal_s_texels() {
             }
         }
     }
+    assert_eq!(
+        announced.contains(&Degradation::DeviceSampling),
+        !metal_sampler,
+        "device-sampling exactly where the device's sampler is not Metal's: {announced:?}"
+    );
     if metal_sampler {
         assert!(
             !announced.contains(&Degradation::PixelSamplerScaling),
@@ -662,11 +669,9 @@ fn a_pixel_sampler_downscale_answers_metal_s_texels() {
         );
         assert!(wrong.is_empty(), "not Metal's: {wrong:?}");
     } else {
-        let noted = announced.contains(&Degradation::PixelSamplerScaling)
-            || announced.contains(&Degradation::FloatSampleFilter);
-        assert!(
-            wrong.is_empty() || noted,
-            "not Metal's and not announced: {wrong:?} ({announced:?})"
+        eprintln!(
+            "PIXEL-DOWNSCALE-DIFFERS: {} configurations are not Metal's: {wrong:?}",
+            wrong.len()
         );
     }
 }

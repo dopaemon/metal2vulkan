@@ -16,7 +16,7 @@
 //! compared with the depth Metal stored there.
 
 use super::degrade_notices::{
-    assert_once, counts, made_render_kinds, shared_in_system_memory, POSITIONED,
+    assert_once, counts, made_compute_kinds, made_render_kinds, shared_in_system_memory, POSITIONED,
 };
 use super::presenting::{image_info, made_image, shared_among};
 use super::{
@@ -24,7 +24,7 @@ use super::{
     ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
-use crate::candidate::runtime_samples::encode;
+use crate::candidate::runtime_samples::{self, encode};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::{DriverFact, VkExtension, VkProperty};
@@ -702,6 +702,14 @@ impl Depths {
         kinds
     }
 
+    /// The kinds the making of the readback kernel `name` announces (`runtime_samples::encode`,
+    /// [`made_compute_kinds`]): off Metal's sampler, a depth read's texel conversion.
+    fn read_made(&self, name: &str) -> BTreeSet<Degradation> {
+        let library = runtime_samples::library(&self.device).unwrap();
+        let function = library.new_function_with_name(name).unwrap();
+        made_compute_kinds(&self.device, function.function_descriptor())
+    }
+
     fn new(device: Device) -> Depths {
         let bitcode = llvm_assemble(&engine_dir().join("cfb_sample_depth.ll")).unwrap();
         let library = device.new_library_with_air(&bitcode).unwrap();
@@ -1177,8 +1185,9 @@ fn a_callers_image_takes_the_positions_through_a_stand_in() {
     pass.positions = positions_of(&P4);
     pass.depth = Some(depth.clone());
     lane.run(&pass, |_| Ok(())).unwrap();
-    // The drawing passes' pipelines' makings (the sites).
+    // The drawing passes' pipelines' makings (the sites), and the depth readback's.
     let mut first = lane.made(&pass);
+    first.extend(lane.read_made("rt6_read_depth"));
     let name = format!("a caller's dz_custom4_x on {device}");
     assert_depths(&lane.depths(&depth, 4), &metal, 1e-6, &name);
 

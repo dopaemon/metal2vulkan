@@ -242,6 +242,7 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::MeshPipelineDescriptor;
 use metal2vulkan::pipeline::PipelineLayout;
 use metal2vulkan::pipeline::StageModule;
+use metal2vulkan::pipeline::TileRenderPipelineDescriptor;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, Reconvergence};
 use metal2vulkan::pipeline::{PrecisionNote, SlotRef, SpecKey};
 use metal2vulkan::pipeline::{RenderPipelineDescriptor, Stage, StageSource};
@@ -1189,9 +1190,12 @@ fn run_kinds(device: &Device, case: &PublicCase) -> (BTreeSet<Degradation>, BTre
 
 /// Runs of kernels whose texture notes their bound formats decide ([`SPECIALIZED`]), each run
 /// twice, announce once each exactly the precision kinds their stages keep under the
-/// specialization their runs bind, and no other precision kind: the `half` conversion their stages
-/// specialize (`HalfTexelConversion`, kept for a format of no measured family) is exact under an
-/// 8-bit unorm texture and under the packed formats, so neither run announces it.
+/// specialization their runs bind, and no other precision kind; each stage specializes a note.
+/// Where the device samples through Metal's own sampler (`VkProperty::MetalSampler`), the `half`
+/// conversion their stages specialize (`HalfTexelConversion`, kept for a format of no measured
+/// family) is exact under an 8-bit unorm texture and under the packed formats, so neither run
+/// announces it. Elsewhere every slot's `half` texel is the device's rounding of its own `float`
+/// texel, which the stage records whatever is bound.
 #[test]
 fn runs_announce_the_notes_their_specialization_keeps_once() {
     on_device(|device, messages| {
@@ -1219,9 +1223,11 @@ fn runs_announce_the_notes_their_specialization_keeps_once() {
         assert_eq!(announced, expected, "{counts:?}");
         assert!(counts.values().all(|&n| n == 1), "{counts:?}");
         let conversion = Degradation::from_precision_note(PrecisionNote::HalfTexelConversion);
+        let metal = super::pixel_samplers::metal_sampler(device);
         for (kinds, specialized) in &held {
-            assert!(specialized.contains(&conversion), "{specialized:?}");
-            assert!(!kinds.contains(&conversion), "{kinds:?}");
+            assert!(!specialized.is_empty(), "no specialized note: {kinds:?}");
+            assert_eq!(specialized.contains(&conversion), metal, "{specialized:?}");
+            assert_eq!(kinds.contains(&conversion), !metal, "{kinds:?}");
         }
     });
 }
@@ -1845,6 +1851,21 @@ pub(super) fn made_compute_kinds(
     let compiled = device
         .compile_device()
         .compile_compute_pipeline(&descriptor, &Budget::standard())
+        .unwrap();
+    let mut kinds = making_kinds([&compiled.stage]);
+    kinds.extend(layout_kinds(device, &compiled.layout));
+    kinds
+}
+
+/// [`making_kinds`] of a tile render pipeline state of `descriptor` on `device`, as its compile
+/// layer compiles it (`compile_tile_pipeline`), and its layout's ([`layout_kinds`]).
+pub(super) fn made_tile_kinds(
+    device: &Device,
+    descriptor: &TileRenderPipelineDescriptor,
+) -> BTreeSet<Degradation> {
+    let compiled = device
+        .compile_device()
+        .compile_tile_pipeline(descriptor, &Budget::standard())
         .unwrap();
     let mut kinds = making_kinds([&compiled.stage]);
     kinds.extend(layout_kinds(device, &compiled.layout));

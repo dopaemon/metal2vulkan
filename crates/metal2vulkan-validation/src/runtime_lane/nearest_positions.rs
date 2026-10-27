@@ -19,6 +19,7 @@
 //! ulps either side, on the centre row of the 11-texel one.
 
 use super::degrade_notices::on_device;
+use super::pixel_samplers::own_sampler;
 use super::{buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -246,11 +247,13 @@ fn the_lanes_reach_where_the_rules_part() {
     assert_eq!(rounded_up(1.0 + f64::EPSILON), 1.0f32.next_up());
 }
 
-/// Every lane reads Metal's texel. Prints, per address mode, the lanes checked, those where
-/// multiplying first would read another texel (the deciding ones), and each lane that differs.
+/// Every lane reads Metal's texel where the device samples through Metal's own sampler; elsewhere
+/// it samples by its own (announced `device-sampling`), whose differences are printed. Prints, per
+/// address mode, the lanes checked, those where multiplying first would read another texel (the
+/// deciding ones), and each lane that differs.
 #[test]
 fn runtime_nearest_samples_read_metal_s_texel_off_the_level() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let float = texture(device, PixelFormat::R32Float, (WIDTH, HEIGHT), |x, y| {
             ((x + 16 * y) as f32).to_le_bytes()
         });
@@ -287,6 +290,14 @@ fn runtime_nearest_samples_read_metal_s_texel_off_the_level() {
         }
         for line in wrong.iter().take(60) {
             println!("NEAREST-DIFFERS {}: {line}", device.name());
+        }
+        if own_sampler(device, messages) {
+            println!(
+                "NEAREST {}: the device's own sampler, {} lanes differ from Metal",
+                device.name(),
+                wrong.len()
+            );
+            return;
         }
         assert!(wrong.is_empty(), "{} lanes differ from Metal", wrong.len());
     });

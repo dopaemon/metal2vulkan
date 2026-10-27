@@ -14,7 +14,9 @@
 //! - A kernel that only writes the texture completes and leaves it as it was, as plain Metal's
 //!   `write()` does (its validation stops the binding).
 //! - A kernel reads and samples Metal's texels (`metal2vulkan::bind::ChromaDecode`, matched
-//!   against an Apple M3 Max's reads by its own tests) through the texture's decoded twin,
+//!   against an Apple M3 Max's reads by its own tests; where the device does not sample through
+//!   Metal's own texture unit, within its conversion of the codes, announced
+//!   `device-texel-conversion`: `converted_holds`) through the texture's decoded twin,
 //!   announced `carried-decoded-twin` once and `decoded-texel-precision` never: a new texture's
 //!   opaque black, then after a CPU copy of the whole texture and of part of two rows, a blit
 //!   from a buffer of the whole texture and of part of a row, and a copy from another texture,
@@ -26,7 +28,8 @@
 
 use super::astc_textures::{read_whole, reader};
 use super::degrade_notices::{counts, on_device};
-use super::{buffer_with, read_buffer, WAIT};
+use super::pixel_samplers::metal_sampler;
+use super::{buffer_with, converted_holds, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::ChromaDecode;
 use metal2vulkan::error::Feature;
@@ -517,6 +520,7 @@ fn four_two_two_texels_read_as_metal_s() {
     on_device(|device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
+        let exact = metal_sampler(device);
         let usage = TextureUsage::SHADER_READ;
         let decodes = |device: &Device| {
             let counts = device.work_counts();
@@ -530,7 +534,7 @@ fn four_two_two_texels_read_as_metal_s() {
                 let want = metal_texels(pf, bytes);
                 for (at, (got, want)) in got.iter().zip(&want).enumerate() {
                     for c in 0..4 {
-                        if got[c].to_bits() != want[c].to_bits() && wrong.len() < 24 {
+                        if !converted_holds(got[c], want[c], exact) && wrong.len() < 24 {
                             wrong.push(format!(
                                 "{pf:?} {what}, texel {at} channel {c}: {} against Metal's {}",
                                 got[c], want[c]
@@ -619,6 +623,11 @@ fn four_two_two_texels_read_as_metal_s() {
             ),
             (1, 0),
             "on {name}"
+        );
+        assert_eq!(
+            announced(Degradation::DeviceTexelConversion),
+            usize::from(!exact),
+            "the device's conversion of the codes, on {name}"
         );
     });
 }

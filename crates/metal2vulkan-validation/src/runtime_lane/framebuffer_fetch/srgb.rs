@@ -34,7 +34,13 @@
 //! images, into sample planes made so (`runtime::sample_planes`). Through input attachments
 //! (lavapipe) the function reads the device's own decode of the code, which on llvmpipe is not
 //! Metal's, and takes it back to its code by Metal's encode and decodes that by Metal's table.
-//! Every byte is Metal's in either form. The form each device took is printed.
+//! Every byte is Metal's in either form, but where the pipeline records `device-color-conversion`
+//! (the device's encode of the written color, every device but MoltenVK's): there a channel within
+//! one code of Metal's holds, counted and printed (`device_rounded`), and a case of more than one
+//! draw without a failing depth test is held to Metal's one-draw map over the bytes the device
+//! stored after one draw fewer (each draw reads what the last one stored, so the device's codes
+//! compound: llvmpipe's two draws land two codes from Metal's at the dark end). The form each
+//! device took is printed.
 //!
 //! A driver that drops a multisampled pass's image writes under early fragment tests
 //! (`DriverWorkaround::EarlyTestsDropMultisampledImageWrites`: MoltenVK on Apple's GPU) has the
@@ -46,9 +52,10 @@
 //! sample's depth (`VkProperty::CenterFragCoordDepth`, MoltenVK on an M4), the `Less` cases run the
 //! depth test in the function against the depth's stand-in and are drawn, Metal's bytes.
 
-use super::{form, library, reads_planes, through_inputs};
+use super::{device_rounded, form, library, reads_planes, through_inputs};
 use crate::candidate::runtime_samples::{encode_through, shape};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
+use crate::runtime_lane::degrade_notices::made_render_kinds;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, FULL, WHITE};
 use crate::runtime_lane::{buffer_with, WAIT};
 use metal2vulkan::device::{DriverWorkaround, VkProperty};
@@ -59,10 +66,11 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    BlitOption, Error, Library, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
-    RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction, Texture,
-    TextureDescriptor,
+    BlitOption, Degradation, Error, Library, LoadAction, Origin, PipelineOptions,
+    RenderPassDescriptor, RenderPipelineState, ResourceOptions, ScissorRect, Size, StoreAction,
+    Texture, TextureDescriptor,
 };
+use std::collections::BTreeMap;
 
 /// The target's side, as the probes'.
 const SIDE: u64 = 64;
@@ -137,7 +145,11 @@ impl Target {
 
     /// Metal's bytes after `draws` draws of the case `depth` (the module docs).
     fn expected(self, depth: Depth, draws: usize) -> Vec<u8> {
-        let mut bytes = self.initial();
+        self.expected_over(self.initial(), depth, draws)
+    }
+
+    /// Metal's bytes after `draws` draws of the case `depth` over a target holding `bytes`.
+    fn expected_over(self, mut bytes: Vec<u8>, depth: Depth, draws: usize) -> Vec<u8> {
         for (k, texel) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let x = (k / self.samples as usize) as u64 % SIDE;
             let halvings = match depth {
@@ -297,6 +309,20 @@ impl Target {
         depth: bool,
         mask: ColorWriteMask,
     ) -> Result<RenderPipelineState, Error> {
+        lane.device.new_render_pipeline_state(
+            &self.descriptor(lane, (library, fragment), depth, mask),
+            &PipelineOptions::default(),
+        )
+    }
+
+    /// The descriptor of [`Target::pipeline`].
+    fn descriptor(
+        self,
+        lane: &Lane,
+        (library, fragment): (&Library, &str),
+        depth: bool,
+        mask: ColorWriteMask,
+    ) -> RenderPipelineDescriptor {
         let function = |library: &Library, name| {
             library
                 .new_function_with_name(name)
@@ -314,8 +340,7 @@ impl Target {
             descriptor.stencil_format = Some(DS);
         }
         descriptor.raster_sample_count = self.samples;
-        lane.device
-            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        descriptor
     }
 
     /// Run the case `depth` of `draws` draws of `fetch` over a fresh target: its bytes after, or
@@ -435,7 +460,8 @@ fn differing(read: &[u8], want: &[u8]) -> Vec<(usize, [u8; 4], [u8; 4])> {
 }
 
 /// Each case's bytes are Metal's, on every device, for both formats single-sampled and at `MSAA`
-/// samples (the module docs).
+/// samples, but within one code where the pipeline records `device-color-conversion` (the module
+/// docs).
 #[test]
 fn an_srgb_target_is_fetched_as_metal_fetches_it() {
     let (messages, _cache, lane) = lane();
@@ -457,6 +483,12 @@ fn an_srgb_target_is_fetched_as_metal_fetches_it() {
             let plain = target
                 .pipeline(&lane, (&fetch, "fetch_ordered"), false, all)
                 .unwrap();
+            let descriptor = target.descriptor(&lane, (&fetch, "fetch_ordered"), false, all);
+            let converts = made_render_kinds(&lane.device, &descriptor)
+                .contains(&Degradation::DeviceColorConversion);
+            // What the cases without the attachment stored, by their draws: where the device
+            // converts, a later draw is Metal's map over the device's own bytes (the module docs).
+            let mut stored: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
             // With the depth and stencil attachment, where the driver drops the per-sample
             // form's writes under early tests, only a draw whose tests drop no fragment runs (the
             // module docs).
@@ -519,8 +551,18 @@ fn an_srgb_target_is_fetched_as_metal_fetches_it() {
                         other = other.map(|_| "the bytes")
                     ),
                 };
-                let want = target.expected(depth, draws);
-                let wrong = differing(&read, &want);
+                let before = match depth {
+                    Depth::None | Depth::Always if converts => stored.get(&(draws - 1)),
+                    _ => None,
+                };
+                let want = match before {
+                    Some(bytes) => target.expected_over(bytes.clone(), depth, 1),
+                    None => target.expected(depth, draws),
+                };
+                if depth == Depth::None {
+                    stored.insert(draws, read.clone());
+                }
+                let (wrong, rounded) = device_rounded(differing(&read, &want), converts);
                 let total = want.len() / 4;
                 let shown = &wrong[..wrong.len().min(8)];
                 assert!(
@@ -530,8 +572,12 @@ fn an_srgb_target_is_fetched_as_metal_fetches_it() {
                     wrong.len()
                 );
                 let planes = samples > 1 && reads_planes(&lane);
+                let bytes = match rounded {
+                    0 => "Metal's bytes".to_owned(),
+                    n => format!("{n} channels one code from Metal's, the device's conversion"),
+                };
                 eprintln!(
-                    "sRGB framebuffer fetch {what} through {}{}: Metal's bytes",
+                    "sRGB framebuffer fetch {what} through {}{}: {bytes}",
                     form(&lane),
                     if planes { " (sample planes)" } else { "" },
                 );

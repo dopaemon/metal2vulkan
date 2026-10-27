@@ -16,25 +16,31 @@
 //! reads its border color, here opaque white, as clamp to the border does, and a constexpr one
 //! transparent black.
 //!
-//! Each configuration here runs the same grid through the runtime: the hash of its results must
-//! be Metal's, and each pixel configuration's results must equal the device's own `norm` control's
-//! cell by cell, which names the cells that differ. On a device with `VkProperty::MetalSampler`
-//! none announces `pixel-sampler-scaling`, and an argument buffer's pixel sampler announces
-//! `argument-pixel-sampler-scaling` only on a device without it, at the first dispatch while a
-//! pixel state with a linear filter lives
+//! Each configuration here runs the same grid through the runtime. On a device with
+//! `VkProperty::MetalSampler` (MoltenVK) the hash of its results must be Metal's, and none
+//! announces `pixel-sampler-scaling`. Elsewhere every sample is the device's sampler's, which the
+//! stages record (`PrecisionNote::DeviceSampling`) and the device announces: the lane prints each
+//! configuration that is not Metal's (`PIXEL-SAMPLER-DIFFERS` lines) and the cells where a pixel
+//! configuration differs from the device's own `norm` control, without failing. The kernel samples
+//! without a comparison, so an argument buffer's pixel sampler reads the device sampler's texels
+//! (a nearest word's flagged fetch, a linear word's footprint cell) and records no
+//! `ArgumentPixelSamplerScaling` on any device; the note waits for a dispatch of a stage that
+//! records it, a comparison's, while a pixel state that may scale lives
 //! ([`the_argument_buffer_note_waits_for_a_filtering_pixel_state`]).
 
 use super::argument_linear_samples::kernel;
 use super::degrade_notices::counts;
-use super::depth_compares::{pipeline_of, run_held, Held, Through};
+use super::depth_compares::{self, argument_kernel, pipeline_of, run_held, Held, Through};
+use super::driver_deviations::stage_notes;
 use super::extended_range_targets::half_bits;
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{
-    PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter,
+    CompareFunction, PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter,
 };
+use metal2vulkan::pipeline::PrecisionNote;
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
     ComputePipelineState, Degradation, Device, Region, SamplerState, SamplerStateOptions, Texture,
@@ -434,8 +440,6 @@ struct Kernels {
 struct Outcome {
     /// The configuration's name (the module docs).
     name: String,
-    /// Its source: `slot`, `arg`, `norm` or `const`.
-    source: &'static str,
     /// Whether its results hash as Metal's.
     metal: bool,
     /// Its hash, and its first cells that differ from the device's `norm` control (none for the
@@ -552,7 +556,6 @@ fn compare(device: &Device) -> Vec<Outcome> {
                     }
                     outcomes.push(Outcome {
                         name,
-                        source,
                         metal,
                         differs: cells_wrong,
                     });
@@ -563,65 +566,66 @@ fn compare(device: &Device) -> Vec<Outcome> {
     outcomes
 }
 
-/// Every configuration answers Metal's results (the module docs), but where the device announced
-/// `float-sample-filter` (no `VkProperty::MetalSampler`): there an argument buffer's texture
-/// sampled with a `float` result keeps the device's conversion of its texels (an `RGBA8Unorm`
-/// code `k` read as other than `k / 255` rounded once, lavapipe), so a `norm` configuration may
-/// differ from Metal's, and an `arg` one only as its `norm` control does, cell by cell: its pixel
-/// coordinates still read Metal's texels.
+/// On a device with Metal's own sampler every configuration answers Metal's results (the module
+/// docs) and none announces a pixel sampler's note. Elsewhere the samples are the device's
+/// sampler's: the device announces `device-sampling`, and each configuration that is not Metal's is
+/// printed with the cells where it differs from the device's own `norm` control. No device
+/// announces `argument-pixel-sampler-scaling`: the kernel samples without a comparison.
 #[test]
 fn pixel_samplers_answer_metal_s_texels() {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
-    let (outcomes, metal_sampler) = {
+    let (outcomes, metal_sampler, name) = {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         eprintln!("pixel samplers on {}", device.name());
-        (compare(&device), metal_sampler(&device))
+        (
+            compare(&device),
+            metal_sampler(&device),
+            device.name().to_owned(),
+        )
     };
     layer_reported_nothing_at_all(&messages);
     let announced: BTreeSet<Degradation> = counts(&messages.take_notices()).into_keys().collect();
     eprintln!("announced: {announced:?}");
-    let converted = announced.contains(&Degradation::FloatSampleFilter);
-    // A device with Metal's own sampler reads each configuration's texels exactly; elsewhere a
-    // pixel sample no snap reaches divides by the size (`OpFDiv`, Vulkan's bound) and filters on
-    // the device, which keeps the note.
+    assert!(
+        !announced.contains(&Degradation::ArgumentPixelSamplerScaling),
+        "{name}: an argument buffer's pixel note of a sample without a comparison"
+    );
+    assert_eq!(
+        announced.contains(&Degradation::DeviceSampling),
+        !metal_sampler,
+        "{name}: device-sampling exactly where the device's sampler is not Metal's"
+    );
     if metal_sampler {
         assert!(!announced.contains(&Degradation::PixelSamplerScaling));
     }
-    assert_eq!(
-        announced.contains(&Degradation::ArgumentPixelSamplerScaling),
-        !metal_sampler,
-        "the argument buffer's pixel note where the device lacks Metal's sampler"
-    );
     assert_eq!(outcomes.len(), METAL.len());
-    let mut allowed = Vec::new();
-    let mut wrong = BTreeMap::new();
-    for o in outcomes {
-        if o.metal {
-            continue;
+    let wrong: BTreeMap<String, Vec<String>> = outcomes
+        .into_iter()
+        .filter(|o| !o.metal)
+        .map(|o| (o.name, o.differs))
+        .collect();
+    eprintln!(
+        "{name}: {} of {} configurations are not Metal's",
+        wrong.len(),
+        METAL.len()
+    );
+    if !metal_sampler {
+        for (configuration, differs) in &wrong {
+            eprintln!("PIXEL-SAMPLER-DIFFERS {name}: {configuration}: {differs:?}");
         }
-        let pixel_exact = match o.source {
-            "norm" => true,
-            "arg" => o.differs.len() == 1,
-            _ => false,
-        };
-        if converted && pixel_exact {
-            allowed.push(o.name);
-        } else {
-            wrong.insert(o.name, o.differs);
-        }
+        return;
     }
-    eprintln!("the device's conversion under float-sample-filter: {allowed:?}");
     assert!(
         wrong.is_empty(),
-        "{} of {} configurations are not Metal's: {wrong:#?}",
+        "{name}: {} of {} configurations are not Metal's: {wrong:#?}",
         wrong.len(),
         METAL.len()
     );
 }
 
 /// Whether `device` samples through Metal's own sampler (`VkProperty::MetalSampler`).
-fn metal_sampler(device: &Device) -> bool {
+pub(super) fn metal_sampler(device: &Device) -> bool {
     device
         .compile_device()
         .profile()
@@ -630,11 +634,27 @@ fn metal_sampler(device: &Device) -> bool {
         .contains(&VkProperty::MetalSampler)
 }
 
-/// `argument-pixel-sampler-scaling` fires at a dispatch, never at a state's making: an argument
-/// buffer's linear sample, dispatched while the device holds a normalized linear state and a
-/// nearest pixel state, announces nothing; making a pixel state of linear filters announces
-/// nothing; the next dispatch, through the normalized state still, announces it on a device without
-/// `VkProperty::MetalSampler`, where the kernel records the note, and nowhere else.
+/// Whether `device` samples by its own sampler, not Metal's (`VkProperty::MetalSampler`), checking
+/// that the device announced `device-sampling` among `messages`' notices exactly then.
+pub(super) fn own_sampler(device: &Device, messages: &Messages) -> bool {
+    let own = !metal_sampler(device);
+    let announced = counts(&messages.take_notices());
+    assert_eq!(
+        announced.contains_key(&Degradation::DeviceSampling),
+        own,
+        "{}: device-sampling exactly where the device's sampler is not Metal's",
+        device.name()
+    );
+    own
+}
+
+/// `argument-pixel-sampler-scaling` fires at a dispatch, never at a state's making. An argument
+/// buffer's comparison through the sampler it holds beside a `Depth32Float` texture
+/// (`depth_compares::argument_kernel`), whose stage records the note on every device (a comparison
+/// may filter, which the specialized module cannot read), dispatched while the device holds a
+/// normalized comparing state and a nearest pixel state, announces nothing; making a pixel state
+/// of linear filters announces nothing; the next dispatch, through the normalized state still,
+/// announces it once.
 #[test]
 fn the_argument_buffer_note_waits_for_a_filtering_pixel_state() {
     let cache = ScratchCache::new().unwrap();
@@ -642,23 +662,53 @@ fn the_argument_buffer_note_waits_for_a_filtering_pixel_state() {
     let kind = Degradation::ArgumentPixelSamplerScaling;
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        let argument = pipeline_of(
-            &device,
-            &llvm_assemble_text(&kernel(true, Through::Argument, false, false)).unwrap(),
-            "k",
+        let text = argument_kernel(Through::Argument, false, ("true", "0.0"));
+        let bitcode = llvm_assemble_text(&text).unwrap();
+        assert!(
+            stage_notes(&device, &bitcode, "k")
+                .contains(&PrecisionNote::ArgumentPixelSamplerScaling),
+            "an argument buffer's comparison records the note"
         );
-        let texture = texture(&device, PixelFormat::RGBA8Unorm);
-        let jobs: Vec<[f32; 4]> = grid()
+        let argument = pipeline_of(&device, &bitcode, "k");
+        let side = u64::from(depth_compares::SIDE);
+        let texture = device
+            .new_texture(&TextureDescriptor::texture_2d(
+                PixelFormat::Depth32Float,
+                side,
+                side,
+                false,
+            ))
+            .unwrap();
+        let texels: Vec<u8> = depth_compares::VALUES
             .iter()
-            .take(64)
-            .map(|&[x, y]| [x / W as f32, y / H as f32, 0.0, 0.0])
+            .flat_map(|v| v.to_le_bytes())
             .collect();
-        let normalized = sampler(
-            &device,
-            SamplerMinMagFilter::Linear,
-            SamplerAddressMode::ClampToEdge,
+        texture
+            .replace_region(Region::new_2d(0, 0, side, side), 0, 0, &texels, 4 * side, 0)
+            .unwrap();
+        // Each texel's centre against a reference of 0.5.
+        let jobs: Vec<[f32; 4]> = (0..side * side)
+            .map(|i| {
+                let at = |k: u64| (k as f32 + 0.5) / side as f32;
+                [at(i % side), at(i / side), 0.5, 0.0]
+            })
+            .collect();
+        let state = |filter, normalized, compare| {
+            let mut d = SamplerDescriptor::new();
+            d.min_filter = filter;
+            d.mag_filter = filter;
+            d.normalized_coordinates = normalized;
+            d.compare_function = compare;
+            let mut options = SamplerStateOptions::default();
+            options.support_argument_buffers = true;
+            device.new_sampler_state_with_options(&d, options).unwrap()
+        };
+        let normalized = state(
+            SamplerMinMagFilter::Nearest,
             true,
+            CompareFunction::LessEqual,
         );
+        let nearest = state(SamplerMinMagFilter::Nearest, false, CompareFunction::Never);
         let dispatch = |state: &SamplerState| {
             run_held(
                 &device,
@@ -668,32 +718,17 @@ fn the_argument_buffer_note_waits_for_a_filtering_pixel_state() {
                 1,
             );
         };
-        let nearest = sampler(
-            &device,
-            SamplerMinMagFilter::Nearest,
-            SamplerAddressMode::ClampToEdge,
-            false,
-        );
         dispatch(&normalized);
         dispatch(&nearest);
         let before = counts(&messages.take_notices());
         assert!(!before.contains_key(&kind), "{before:?}");
-        let linear = sampler(
-            &device,
-            SamplerMinMagFilter::Linear,
-            SamplerAddressMode::ClampToEdge,
-            false,
-        );
+        let linear = state(SamplerMinMagFilter::Linear, false, CompareFunction::Never);
         let made = counts(&messages.take_notices());
         assert!(!made.contains_key(&kind), "{made:?}");
         dispatch(&normalized);
         let after = counts(&messages.take_notices());
-        assert_eq!(
-            after.get(&kind).copied(),
-            (!metal_sampler(&device)).then_some(1),
-            "{after:?}"
-        );
-        drop(linear);
+        assert_eq!(after.get(&kind).copied(), Some(1), "{after:?}");
+        drop((nearest, linear));
     }
     layer_reported_nothing_at_all(&messages);
 }

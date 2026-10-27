@@ -15,7 +15,7 @@
 //! lacks (2 is optional in Vulkan: lavapipe offers 1 and 4), refused as `Unsupported` with
 //! `Feature::RasterSampleCount`, is skipped with a printed line, and the other counts are checked.
 
-use super::degrade_notices::{assert_once, forced, shared_in_system_memory};
+use super::degrade_notices::{assert_once, forced, made_render_kinds, shared_in_system_memory};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
@@ -31,6 +31,8 @@ use metal2vulkan_runtime::{
     PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction, Texture,
     TextureDescriptor,
 };
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 /// The kinds this lane's resolves announce, for `degrade_notices`' census: the crate-owned
 /// resolve after the pass, which no device's average replaces for an extended-range attachment.
@@ -251,6 +253,8 @@ struct Lane {
     device: Device,
     queue: CommandQueue,
     library: Library,
+    /// The kinds the makings of the draws' pipeline states announce ([`made_render_kinds`]).
+    made: RefCell<BTreeSet<Degradation>>,
 }
 
 impl Lane {
@@ -261,6 +265,7 @@ impl Lane {
             queue: device.new_command_queue().unwrap(),
             library: device.new_library_with_air(&bitcode).unwrap(),
             device,
+            made: RefCell::default(),
         }
     }
 
@@ -304,6 +309,9 @@ impl Lane {
             }
             Err(e) => panic!("{pf:?} at {samples}: {e}"),
         };
+        self.made
+            .borrow_mut()
+            .extend(made_render_kinds(&self.device, &d));
         let target = self.texture(pf, samples);
         let resolved = (samples > 1).then(|| self.texture(pf, 1));
         let bytes: Vec<u8> = colors
@@ -366,7 +374,8 @@ impl Lane {
 
 /// Each form's resolve of the probe's samples: a linear form's colors Metal's codes, the rest
 /// within one code of Metal's; and of samples drawn alike, the code a single-sampled target of
-/// the same draw stores. The near-equivalent is announced once, as is the extra pass.
+/// the same draw stores. The near-equivalent is announced once, as is the extra pass, beside what
+/// the draws' stages record.
 #[test]
 fn extended_range_resolves_are_metals_or_within_a_code() {
     let messages = Messages::default();
@@ -420,9 +429,10 @@ fn extended_range_resolves_are_metals_or_within_a_code() {
         wrong.len(),
         wrong.join("\n")
     );
-    // The `Shared` textures and buffers the draws read and write announce their memory on a
-    // device without unified memory.
+    // Beside what the draws' pipeline states' makings announce, the `Shared` textures and buffers
+    // the draws read and write announce their memory on a device without unified memory.
     let mut kinds = XR_RESOLVE.to_vec();
+    kinds.extend(lane.made.borrow().iter().copied());
     kinds.extend(forced(&[(
         Degradation::SharedInSystemMemory,
         shared_in_system_memory(&lane.device),

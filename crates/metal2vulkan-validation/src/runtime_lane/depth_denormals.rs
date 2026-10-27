@@ -21,8 +21,9 @@
 //!   against a positive one and fails against a negative one.
 //!
 //! Each prints a `DEPTH-DENORMAL` line. Checked: the two controls, the smallest normal and 0.5,
-//! read and pass as given on every device; a draw's denormal stores zero on every device, as
-//! Metal's; where the driver has `DriverFact::DepthImageKeepsDenormals` the clear's, the CPU's and
+//! read and pass as given on every device; a draw's denormal stores zero, as Metal's, but where
+//! the drawing stage leaves a `float` denormal to the device (`device-denormals`), which may keep
+//! it; where the driver has `DriverFact::DepthImageKeepsDenormals` the clear's, the CPU's and
 //! the blit's read back as given; where it has `DriverFact::DepthTestKeepsDenormals` too, each one
 //! read back as given tests as Metal's; and `depth-denormals` is announced exactly where the
 //! driver lacks either fact.
@@ -592,10 +593,12 @@ fn depth_images_hold_denormals_as_their_drivers_claim() {
             (Degradation::DepthDenormals, !(keeps && tests)),
         ]);
         let lane = Lane::new(device);
-        first.extend(made_render_kinds(
-            &lane.device,
-            &white_descriptor(&lane.library),
-        ));
+        let drawn_kinds = made_render_kinds(&lane.device, &white_descriptor(&lane.library));
+        // Where the drawing stage leaves a `float` denormal to the device (`device-denormals`),
+        // a draw at a denormal depth stores the device's: zero, as Metal's rasterizer stores, or
+        // the denormal kept.
+        let device_denormals = drawn_kinds.contains(&Degradation::DeviceDenormals);
+        first.extend(drawn_kinds);
         for route in ROUTES {
             for bits in CONTROLS.into_iter().chain(DENORMALS) {
                 let control = CONTROLS.contains(&bits);
@@ -635,9 +638,14 @@ fn depth_images_hold_denormals_as_their_drivers_claim() {
                     assert_eq!(passed, 16, "{at}: tested");
                     continue;
                 }
-                // A draw at a denormal depth stores zero, as Metal's rasterizer does.
+                // A draw at a denormal depth stores zero, as Metal's rasterizer does, where the
+                // stage does not leave the denormal to the device.
                 if matches!(route, Route::Draw) {
-                    assert!(read.iter().all(|&w| w == 0), "{at}: read {read:08x?}");
+                    let kept = device_denormals && read.iter().all(|&w| w == bits);
+                    assert!(
+                        kept || read.iter().all(|&w| w == 0),
+                        "{at}: read {read:08x?}"
+                    );
                     continue;
                 }
                 if keeps {

@@ -26,12 +26,16 @@
 //!
 //! A packed texture's read of a texel inside it, nearest sample inside it and gather of a footprint
 //! inside it are compared with Metal's answer, each channel's code `c / (2^b - 1)` correctly
-//! rounded, unswizzled and swizzled; its linear sample and its accesses past the edges with the
-//! unswizzled texture's on the same device (Metal's filter, emulated, and its border), swizzled. A
-//! difference of the unswizzled texture from Metal's answer is printed on a
-//! `PACKED-SWIZZLE-DIFFERS` line too (its swizzle `rgba`).
+//! rounded, unswizzled and swizzled, where the device samples through Metal's own texture unit;
+//! elsewhere, where the device converts the codes itself (`device-texel-conversion`), with the
+//! unswizzled texture's on the device, swizzled, the unswizzled one's differences from Metal's
+//! counted and held to the note's bound. Its linear sample and its accesses past the edges are
+//! compared with the unswizzled texture's on the same device, swizzled. A difference of the
+//! unswizzled texture from Metal's answer is printed on a `PACKED-SWIZZLE-DIFFERS` line too (its
+//! swizzle `rgba`).
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{counts, on_device};
+use super::pixel_samplers::metal_sampler;
 use super::{buffer_with, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -43,9 +47,9 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    Buffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder, ComputePipelineState, Device,
-    Error, PipelineOptions, Region, ResourceOptions, SamplerState, Size, Texture,
-    TextureDescriptor, TextureSwizzleChannels,
+    Buffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder, ComputePipelineState,
+    Degradation, Device, Error, PipelineOptions, Region, ResourceOptions, SamplerState, Size,
+    Texture, TextureDescriptor, TextureSwizzleChannels,
 };
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -400,8 +404,10 @@ fn swizzled_extended_textures_read_their_texels_swizzled() {
 
 /// Each swizzled read, sample and gather of each packed normalized texture is Metal's answer
 /// swizzled (the unswizzled texture's, for a linear sample and past the edges), as Metal's are,
-/// and the unswizzled texture's is Metal's. A dispatch the device refuses, typed, is printed and
-/// counted apart.
+/// and the unswizzled texture's is Metal's. Where the device does not sample through Metal's own
+/// texture unit, the reference is the unswizzled texture's on the device, whose differences from
+/// Metal's are counted, announced (`device-texel-conversion`) and within its bound. A dispatch the
+/// device refuses, typed, is printed and counted apart.
 #[test]
 fn swizzled_packed_textures_read_their_texels_swizzled() {
     swizzled_reads(&PACKED, "PACKED-SWIZZLE", metal_packed);
@@ -412,7 +418,8 @@ fn swizzled_packed_textures_read_their_texels_swizzled() {
 /// it has one, which the unswizzled texture's results must equal too, else the unswizzled
 /// texture's.
 fn swizzled_reads(formats: &[(PixelFormat, u64)], label: &str, metal: MetalRule) {
-    on_device(|device, _| {
+    on_device(|device, messages| {
+        let exact = metal_sampler(device);
         let reads: Vec<u8> = reads()
             .iter()
             .flatten()
@@ -441,6 +448,9 @@ fn swizzled_reads(formats: &[(PixelFormat, u64)], label: &str, metal: MetalRule)
         };
         let ops = ["rf", "sn", "sl", "g0", "g1", "g2", "g3"];
         let (mut checked, mut differ, mut refused) = (0usize, 0usize, 0usize);
+        // The unswizzled results the device's own conversion answers apart from Metal's, and the
+        // largest difference of a channel.
+        let (mut native, mut most) = (0usize, 0.0f32);
         for &(format, bytes) in formats {
             let data = texels(format.as_raw(), bytes);
             let mut plain: BTreeMap<&str, Vec<[u32; 4]>> = BTreeMap::new();
@@ -485,11 +495,38 @@ fn swizzled_reads(formats: &[(PixelFormat, u64)], label: &str, metal: MetalRule)
                         },
                     };
                     if name == "rgba" {
-                        // The reference: Metal's answer where `metal` has one, else the
-                        // unswizzled texture's on this device.
-                        let reference = (0..got.len())
-                            .map(|i| metal(format, &data, op, i).unwrap_or(got[i]))
-                            .collect();
+                        // The reference: Metal's answer where `metal` has one and the device
+                        // samples through Metal's own texture unit, else the unswizzled
+                        // texture's on this device. Where the device converts the codes itself
+                        // (`device-texel-conversion`), the unswizzled answer's differences from
+                        // Metal's are counted apart.
+                        let mut reference = Vec::with_capacity(got.len());
+                        let mut own = 0usize;
+                        for (i, &g) in got.iter().enumerate() {
+                            match metal(format, &data, op, i) {
+                                Some(want) if exact => reference.push(want),
+                                Some(want) => {
+                                    if g != want {
+                                        own += 1;
+                                        let off = (0..4).map(|c| {
+                                            (f32::from_bits(g[c]) - f32::from_bits(want[c])).abs()
+                                        });
+                                        most = off.fold(most, f32::max);
+                                    }
+                                    reference.push(g);
+                                }
+                                None => reference.push(g),
+                            }
+                        }
+                        if own > 0 {
+                            native += own;
+                            println!(
+                                "{label}-DIFFERS {}: {format:?} rgba {op}: {own} of {} results \
+                                 the device's conversion of the codes",
+                                device.name(),
+                                got.len()
+                            );
+                        }
                         plain.insert(op, reference);
                     }
                     if !plain.contains_key(op) {
@@ -520,10 +557,21 @@ fn swizzled_reads(formats: &[(PixelFormat, u64)], label: &str, metal: MetalRule)
             }
         }
         println!(
-            "{label} {}: {checked} results checked, {differ} differ, {refused} refused",
+            "{label} {}: {checked} results checked, {differ} differ, {refused} refused; \
+             {native} unswizzled results the device's conversion of the codes, at most {most} \
+             off Metal's",
             device.name()
         );
         assert!(checked > 0);
         assert_eq!(differ, 0, "swizzled results differ from Metal's rule");
+        if native > 0 {
+            let announced = counts(&messages.take_notices());
+            assert!(
+                announced.contains_key(&Degradation::DeviceTexelConversion),
+                "{announced:?}"
+            );
+            // `DeviceTexelConversion`'s bound of a packed format's channel: 0.18 of a 5-bit code.
+            assert!(most <= 0.18 / 31.0, "{most} off Metal's");
+        }
     });
 }

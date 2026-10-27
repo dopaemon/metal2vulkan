@@ -28,10 +28,12 @@
 //! is converted by its handle's class: each reads the byte as alpha and writes a texel's alpha as
 //! Metal's does (the same probe's texture buffers, swizzled ones among them, and argument buffers).
 
-use super::degrade_notices::resolve_kind;
+use super::degrade_notices::{made_render_kinds, resolve_kind};
+use super::driver_deviations::stage_notes;
+use super::pixel_samplers::metal_sampler;
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
-    ScratchCache, WAIT,
+    buffer_with, converted_holds, half_within, layer_reported_nothing_at_all, read_buffer,
+    validated_device_with, Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -44,7 +46,8 @@ use metal2vulkan::metal::{
     TextureSwizzle, TextureType, TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, PrecisionNote, RenderPipelineDescriptor,
+    StageSource,
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
@@ -535,13 +538,25 @@ impl Lane {
         samples: u32,
         coverage: bool,
     ) -> Result<metal2vulkan_runtime::RenderPipelineState, Error> {
+        let d = self.descriptor((vertex, fragment), color, samples, coverage);
+        self.device
+            .new_render_pipeline_state(&d, &PipelineOptions::default())
+    }
+
+    /// The descriptor of [`Lane::pipeline`]'s state.
+    fn descriptor(
+        &self,
+        (vertex, fragment): (&str, &str),
+        color: ColorAttachmentDescriptor,
+        samples: u32,
+        coverage: bool,
+    ) -> RenderPipelineDescriptor {
         let mut d = RenderPipelineDescriptor::new(self.function(vertex));
         d.fragment = Some(self.function(fragment));
         d.color_attachments[0] = Some(color);
         d.raster_sample_count = samples;
         d.alpha_to_coverage = coverage;
-        self.device
-            .new_render_pipeline_state(&d, &PipelineOptions::default())
+        d
     }
 
     /// A pass into `target` (resolved into `resolve`), loaded or cleared to `clear`, drawing
@@ -967,7 +982,8 @@ fn a8_without_a8_unorm_renders_masks_clears_and_blends_as_metal() {
 /// edge too, and as Metal's away from it (229 below it, 0 above), where every texel's samples
 /// agree: on the device without `A8_UNORM` (its `R8_UNORM` image's resolve), and with its own
 /// where it has the format, which the device's average resolves as it does `R8Unorm` (probe `a8`:
-/// an `A8Unorm` resolve is `RGBA8Unorm`'s alpha).
+/// an `A8Unorm` resolve is `RGBA8Unorm`'s alpha). Where the fill's stage records
+/// `device-color-conversion`, a texel below it may hold the code above Metal's, counted.
 #[test]
 fn a8_resolves_as_r8_unorm() {
     let messages = Messages::default();
@@ -1018,6 +1034,18 @@ fn a8_resolve_leg(lane: &Lane, what: &str) {
     let a8 = resolved(PixelFormat::A8Unorm);
     let r8 = resolved(PixelFormat::R8Unorm);
     assert_eq!(a8, r8, "{what}: A8Unorm's resolve against R8Unorm's");
+    // Where the fill's stage leaves its color's conversion to the device
+    // (`device-color-conversion`: the `f32` product rounded with ties to even, where Metal rounds
+    // the exact one), 0.9 may store a code above Metal's 229.
+    let descriptor = lane.descriptor(
+        ("a8r_half_vertex", "a8r_fill"),
+        ColorAttachmentDescriptor::new(PixelFormat::A8Unorm),
+        4,
+        false,
+    );
+    let converts =
+        made_render_kinds(&lane.device, &descriptor).contains(&Degradation::DeviceColorConversion);
+    let mut device_codes = 0usize;
     for y in 0..SIDE as usize {
         for x in 0..SIDE as usize {
             let want = match x.cmp(&y) {
@@ -1025,14 +1053,18 @@ fn a8_resolve_leg(lane: &Lane, what: &str) {
                 std::cmp::Ordering::Greater => 0,
                 std::cmp::Ordering::Equal => continue,
             };
-            assert_eq!(
-                a8[y * SIDE as usize + x],
-                want,
-                "{what}: texel ({x}, {y}): {a8:?}"
-            );
+            let got = a8[y * SIDE as usize + x];
+            if converts && got != want && got.abs_diff(want) == 1 {
+                device_codes += 1;
+                continue;
+            }
+            assert_eq!(got, want, "{what}: texel ({x}, {y}): {a8:?}");
         }
     }
-    println!("A8-RESOLVE {what}: as R8Unorm's ({kind:?})");
+    println!(
+        "A8-RESOLVE {what}: as R8Unorm's ({kind:?}), {device_codes} texels a code from Metal's \
+         (the device's color conversion: {converts})"
+    );
 }
 
 /// The fetches of the probe (`a8`'s uses): a read of the byte 153 through `[[color(0)]]`, every
@@ -1274,6 +1306,9 @@ fn buffer_bytes() -> Vec<u8> {
 /// a `read_write` read of 152 is (0, 0, 0, 0.596078455) and its write of (0.1, 0.3, 0.5, 0.7)
 /// stores 178. Metal's validation refuses a swizzle with `ShaderWrite`), through the bytes'
 /// `R8_UNORM` view on the device without `A8_UNORM`, and through its own where it has the format.
+/// A read is within the device's conversion of the byte where it does not sample through Metal's
+/// own texture unit (`converted_holds`), and a `half` read within a `half` unit in the last place
+/// where its stage records the device's rounding (`half_within`, `native-half-conversion`).
 #[test]
 fn a8_texture_buffer_reads_and_writes_alpha_as_metal() {
     use TextureSwizzle::{Alpha as A, Green as G, One as O, Red as R, Zero as Z};
@@ -1319,6 +1354,13 @@ fn a8_texture_buffer_reads_and_writes_alpha_as_metal() {
                 [a, a, 0.0, 0.0],
             ),
         ];
+        // Where the device does not sample through Metal's own texture unit a `float` read is its
+        // conversion of the byte; where the `half` read's stage records the device's rounding, it
+        // is within a `half` unit in the last place of Metal's.
+        let exact = metal_sampler(&lane.device);
+        let fixture = llvm_assemble(&engine_dir().join("a8r_buffers.ll")).unwrap();
+        let native_half = stage_notes(&lane.device, &fixture, "a8r_buffer_read_half")
+            .contains(&PrecisionNote::NativeHalfConversion);
         for (kernel, swizzle, want) in reads {
             let (t, _bytes) =
                 lane.texture_buffer(TextureUsage::SHADER_READ, swizzle, &buffer_bytes());
@@ -1328,7 +1370,14 @@ fn a8_texture_buffer_reads_and_writes_alpha_as_metal() {
                     0 => want,
                     _ => want.map(|c| if c == 1.0 { 1.0 } else { 0.0 }),
                 };
-                assert_eq!(*v, want, "{name} {form}: {kernel} {swizzle:?} at texel {i}");
+                let holds = (0..4).all(|c| match kernel {
+                    "a8r_buffer_read_half" if native_half => half_within(v[c], want[c]),
+                    _ => converted_holds(v[c], want[c], exact),
+                });
+                assert!(
+                    holds,
+                    "{name} {form}: {kernel} {swizzle:?} at texel {i}: {v:?}, Metal's {want:?}"
+                );
             }
         }
         let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;

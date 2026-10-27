@@ -23,6 +23,12 @@
 //! A `ushort` result is read too: an integer format's words' low 16 bits, a float format's `half`
 //! result's bits.
 //!
+//! A `half` result's lane whose bits are a NaN is the device's where the stage leaves a `half`
+//! NaN's bits to it: where the module rounds through the device's conversion
+//! (`PrecisionNote::NativeHalfConversion`, whose widening may quiet a signalling NaN, as lavapipe's
+//! does) or widens under the float controls (`NativeNanEncoding`). Such a lane is any NaN, counted
+//! apart (`CROSS-CLASS-NAN` lines); every other lane stays the native slot's.
+//!
 //! A slot whose access has no exact answer (a `uint` read of a depth texture here) binds the
 //! declared type's neutral, and the device announces `cross-class-texture-neutral` once
 //! ([`CROSS_CLASS`]).
@@ -47,6 +53,7 @@
 //! and an M3).
 
 use super::degrade_notices::on_device;
+use super::driver_deviations::half_nan;
 use super::{buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
 use crate::candidate::engine::variants::compile_compute_for_shape;
@@ -378,8 +385,13 @@ fn pipeline_of(device: &Device, text: &str) -> ComputePipelineState {
 }
 
 /// The variant key the device's compile layer settles a bind of a `format` texture at kernel
-/// `text`'s slot 0 on (its plan's own key, which the variant's plan names again).
-fn settled_key(device: &Device, text: &str, format: PixelFormat) -> VariantKey {
+/// `text`'s slot 0 on (its plan's own key, which the variant's plan names again), and the precision
+/// notes of that variant's stage.
+fn settled_key(
+    device: &Device,
+    text: &str,
+    format: PixelFormat,
+) -> (VariantKey, BTreeSet<PrecisionNote>) {
     let compile = device.compile_device();
     let bitcode = llvm_assemble_text(text).unwrap();
     let library = Library::from_air(&bitcode).unwrap();
@@ -403,9 +415,37 @@ fn settled_key(device: &Device, text: &str, format: PixelFormat) -> VariantKey {
     let mut state = BindState::default();
     state.stages.insert(Stage::Kernel, table);
     let budget = Budget::standard();
-    compile_compute_for_shape(compile, &function, &state.shape(), None, None, &budget)
-        .unwrap_or_else(|e| panic!("{format:?}: {e:?}"))
-        .1
+    let (pipeline, key) =
+        compile_compute_for_shape(compile, &function, &state.shape(), None, None, &budget)
+            .unwrap_or_else(|e| panic!("{format:?}: {e:?}"));
+    (key, pipeline.stage.precision_notes.into_iter().collect())
+}
+
+/// Whether a stage whose notes are `notes` leaves a `half` NaN's bits to the device: it rounds
+/// through the device's conversion and may widen a `half` by it (`PrecisionNote::NativeHalfConversion`),
+/// or widens one under the float controls (`NativeNanEncoding`).
+fn leaves_half_nan_bits(notes: &BTreeSet<PrecisionNote>) -> bool {
+    notes.contains(&PrecisionNote::NativeHalfConversion)
+        || notes.contains(&PrecisionNote::NativeNanEncoding)
+}
+
+/// Whether the words `got` of a `ty` result answer the `want` the native slot's result gives:
+/// the same words, but where `nan_bits` (the stage leaves a `half` NaN's bits to the device,
+/// [`leaves_half_nan_bits`]) a `half` result's lane (the low and high halves of its first two
+/// words) that is a NaN in both may hold other bits.
+fn holds(got: &[u32], want: &[u32], ty: Ty, nan_bits: bool) -> bool {
+    if got == want {
+        return true;
+    }
+    if !(nan_bits && ty == Ty::Half) || got[2..] != want[2..] {
+        return false;
+    }
+    got[..2].iter().zip(&want[..2]).all(|(&g, &w)| {
+        [0, 16].into_iter().all(|shift| {
+            let (g, w) = ((g >> shift) as u16, (w >> shift) as u16);
+            g == w || (half_nan(g) && half_nan(w))
+        })
+    })
 }
 
 /// An 8 x 4 texture of `format` (texels of `bytes` bytes), one level, the probe's bytes.
@@ -525,6 +565,8 @@ struct Tally {
     checked: usize,
     /// Lanes not the native slot's.
     differ: usize,
+    /// Lanes the native slot's but a `half` NaN's bits, which the stage leaves to the device.
+    nans: usize,
     /// The (op, declared type, class) whose settled variant was checked.
     variants: BTreeSet<(Op, Ty, SampledType)>,
 }
@@ -539,6 +581,7 @@ fn compare(
 ) -> Tally {
     let mut tally = Tally::default();
     let mut pipelines: BTreeMap<(Op, Ty), ComputePipelineState> = BTreeMap::new();
+    let mut nan_bits: BTreeMap<(Op, Ty, SampledType), bool> = BTreeMap::new();
     let _ = messages.take_notices();
     for &(format, bytes) in &FORMATS {
         let class = sampled_type(format).expect("a format of a class");
@@ -563,7 +606,8 @@ fn compare(
                 });
                 let cross = state(ty);
                 if tally.variants.insert((op, ty, class)) {
-                    let key = settled_key(device, &kernel(op, ty), format);
+                    let (key, notes) = settled_key(device, &kernel(op, ty), format);
+                    nan_bits.insert((op, ty, class), leaves_half_nan_bits(&notes));
                     println!(
                         "CROSS-CLASS-VARIANT {}: {op:?} {ty:?} over {format:?}: cross_class {:?}",
                         device.name(),
@@ -582,9 +626,23 @@ fn compare(
                     true => native,
                     false => expected(native, ty),
                 };
+                let device_nans = nan_bits[&(op, ty, class)];
                 let wrong: Vec<usize> = (0..lanes.len())
-                    .filter(|&i| got[i] != expected(want[i], ty))
+                    .filter(|&i| !holds(&got[i], &expected(want[i], ty), ty, device_nans))
                     .collect();
+                let nans = (0..lanes.len())
+                    .filter(|&i| got[i] != expected(want[i], ty))
+                    .count()
+                    - wrong.len();
+                if nans > 0 {
+                    tally.nans += nans;
+                    println!(
+                        "CROSS-CLASS-NAN {}: {op:?} {ty:?} over {format:?}: {nans} of {} lanes \
+                         hold a half NaN of the device's bits",
+                        device.name(),
+                        lanes.len()
+                    );
+                }
                 if let Some(&i) = wrong.first() {
                     tally.differ += wrong.len();
                     println!(
@@ -619,10 +677,12 @@ fn compare(
 /// Print and check `tally` of test `what`.
 fn report(device: &Device, what: &str, tally: &Tally) {
     println!(
-        "CROSS-CLASS {what} {}: {} lanes checked, {} differ, {} variants settled",
+        "CROSS-CLASS {what} {}: {} lanes checked, {} differ, {} more hold a half NaN of the \
+         device's bits, {} variants settled",
         device.name(),
         tally.checked,
         tally.differ,
+        tally.nans,
         tally.variants.len()
     );
     assert!(tally.checked > 0);
@@ -869,6 +929,7 @@ fn argument_buffer_cross_class_reads_are_the_native_words() {
         let mut notes: BTreeMap<Ty, BTreeSet<PrecisionNote>> = BTreeMap::new();
         let mut kinds: BTreeSet<Degradation> = BTreeSet::new();
         let (mut checked, mut differ, mut announced, mut words) = (0usize, 0, 0, 0);
+        let mut nans = 0;
         let _ = messages.take_notices();
         for (format, bytes) in held_formats() {
             let class = sampled_type(format).expect("a format of a class");
@@ -899,9 +960,14 @@ fn argument_buffer_cross_class_reads_are_the_native_words() {
                     let e = expected(want[i], ty);
                     [e[0], e[1], e[2], e[3], W, H]
                 };
+                let device_nans = leaves_half_nan_bits(noted);
                 let wrong: Vec<usize> = (0..lanes.len())
-                    .filter(|&i| got[i][..6] != answer(i))
+                    .filter(|&i| !holds(&got[i][..6], &answer(i), ty, device_nans))
                     .collect();
+                nans += (0..lanes.len())
+                    .filter(|&i| got[i][..6] != answer(i))
+                    .count()
+                    - wrong.len();
                 words += (0..lanes.len()).filter(|&i| got[i][..4] != [0; 4]).count();
                 if let Some(&i) = wrong.first() {
                     let mark = match decodes {
@@ -929,7 +995,8 @@ fn argument_buffer_cross_class_reads_are_the_native_words() {
         }
         println!(
             "CROSS-CLASS argument-buffer reads {}: {checked} lanes checked, {differ} differ, \
-             {announced} announced, {words} lanes of nonzero words, announced {kinds:?}",
+             {announced} announced, {nans} hold a half NaN of the device's bits, {words} lanes of \
+             nonzero words, announced {kinds:?}",
             device.name()
         );
         assert!(checked > 0);

@@ -24,16 +24,20 @@
 //! format. Whether the target's own image took the view (its free `STORAGE`, then fetched in place)
 //! or the pass rendered it into a scratch made mutable to it (`fetch-through-scratch`), and at 4x
 //! into sample planes made so, is printed. Through input attachments (lavapipe) the device reads
-//! the attachment itself. Every byte is Metal's in each form.
+//! the attachment itself. Every byte is Metal's in each form, but where the pipeline records
+//! `device-color-conversion` (the device's conversion of the written color, every device but
+//! MoltenVK's): there a channel within one code of Metal's holds, counted and printed
+//! (`device_rounded`).
 //!
 //! A single-sampled target is filled by a blit and read back by one. A multisampled one is filled
 //! sample by sample by `rt6_samples`' fill (each code drawn as `c / 255`, which the write stores as
 //! `c`) and read back sample by sample through its `RGBA8Uint` view
 //! (`candidate::runtime_samples`); the fill is checked to store the bytes drawn.
 
-use super::{form, library, reads_planes, scratched, through_inputs};
+use super::{device_rounded, form, library, reads_planes, scratched, through_inputs};
 use crate::candidate::runtime_samples::{encode_through, shape};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
+use crate::runtime_lane::degrade_notices::made_render_kinds;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, FULL};
 use crate::runtime_lane::{buffer_with, WAIT};
 use metal2vulkan::metal::{ColorWriteMask, PixelFormat, PrimitiveType, TextureType, TextureUsage};
@@ -43,7 +47,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::vk::Format;
 use metal2vulkan::Budget;
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
+    BlitOption, ClearColor, Degradation, LoadAction, Origin, PipelineOptions, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions, Size, StoreAction, Texture, TextureDescriptor,
 };
 
@@ -317,7 +321,8 @@ fn differing(read: &[u8], want: &[u8]) -> Vec<(usize, [u8; 4], [u8; 4])> {
 }
 
 /// Every case's bytes are Metal's, on every device, for `BGRA8Unorm` and `RGBA8Unorm`,
-/// single-sampled and at `MSAA` samples, under both masks; color 1 keeps its clear. On a device
+/// single-sampled and at `MSAA` samples, under both masks, but within one code where the
+/// pipeline records `device-color-conversion` (the module docs); color 1 keeps its clear. On a device
 /// that fetches through the pixel interlock without reading `B8G8R8A8_UNORM` without a format
 /// (ANV), the `BGRA8Unorm` pipeline's storage view is `R8G8B8A8_UNORM` (the module docs).
 #[test]
@@ -344,6 +349,8 @@ fn a_bgra_target_is_fetched_as_metal_fetches_it() {
                     );
                 }
                 let descriptor = target.descriptor(&lane, &fetch);
+                let converts = made_render_kinds(&lane.device, &descriptor)
+                    .contains(&Degradation::DeviceColorConversion);
                 // The view the pipeline binds the fetched attachment through, in the interlock.
                 let view = match inputs {
                     true => None,
@@ -378,7 +385,7 @@ fn a_bgra_target_is_fetched_as_metal_fetches_it() {
                     // is fetched in place from the first pass.
                     let switched = lane.device.work_counts().storage_forms_taken - before;
                     let want = target.expected(draws);
-                    let wrong = differing(&read, &want);
+                    let (wrong, rounded) = device_rounded(differing(&read, &want), converts);
                     let total = want.len() / 4;
                     let shown = &wrong[..wrong.len().min(8)];
                     assert!(
@@ -403,8 +410,12 @@ fn a_bgra_target_is_fetched_as_metal_fetches_it() {
                         (false, ..) if planes => " (sample planes)",
                         (false, ..) => "",
                     };
+                    let bytes = match rounded {
+                        0 => "Metal's bytes".to_owned(),
+                        n => format!("{n} channels one code from Metal's, the device's conversion"),
+                    };
                     eprintln!(
-                        "BGRA framebuffer fetch {what} through {}{}{place}: Metal's bytes",
+                        "BGRA framebuffer fetch {what} through {}{}{place}: {bytes}",
                         form(&lane),
                         view.map_or(String::new(), |v| format!(", viewed in {v:?}")),
                     );

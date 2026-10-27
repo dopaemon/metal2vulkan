@@ -31,8 +31,10 @@ use super::argument_linear_samples::{self, LINEAR_EDGE};
 use super::blits::SYSTEM_MEMORY;
 use super::degrade_notices::{assert_once, counts, on_device};
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
+use super::driver_deviations::stage_notes;
 use super::host_memory::{self, host_page, Mapping};
-use super::{buffer_with, read_buffer};
+use super::pixel_samplers::{metal_sampler, own_sampler};
+use super::{buffer_with, converted_holds, half_within, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{
     ycbcr_read, ycbcr_texel, ycbcr_write, SamplerDescriptor, YCbCrCodes, YCbCrMatrix, YCbCrOutput,
@@ -47,7 +49,8 @@ use metal2vulkan::metal::{
     TextureUsage,
 };
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, PrecisionNote, RenderPipelineDescriptor,
+    StageSource,
 };
 use metal2vulkan_devtools::llvm_assemble_text;
 use metal2vulkan_runtime::{
@@ -58,6 +61,7 @@ use metal2vulkan_runtime::{
     SurfaceYCbCrMatrix, Texture, TextureDescriptor, TextureProblem,
 };
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(60);
@@ -448,13 +452,19 @@ struct Kernels {
     /// `read_texels` and `sample_between` of slice 0 of a 2D array.
     read_array: ComputePipelineState,
     sample_array: ComputePipelineState,
+    /// Whether the device samples through Metal's own texture unit (`VkProperty::MetalSampler`):
+    /// a read's `float` texel of a format's codes is then Metal's conversion, elsewhere the
+    /// device's (`device-texel-conversion`, [`converted_holds`]).
+    exact: bool,
+    /// Whether `read_half`'s stage rounds a `half` by the device's conversion
+    /// (`PrecisionNote::NativeHalfConversion`), not as Metal does.
+    native_half: bool,
 }
 
 impl Kernels {
     fn new(device: &Device) -> Kernels {
-        let library = device
-            .new_library_with_air(&llvm_assemble_text(KERNELS).unwrap())
-            .unwrap();
+        let bitcode = llvm_assemble_text(KERNELS).unwrap();
+        let library = device.new_library_with_air(&bitcode).unwrap();
         let state = |name: &str| {
             let function = library.new_function_with_name(name).unwrap();
             device
@@ -481,6 +491,9 @@ impl Kernels {
             write_masked: [state("write_masked"), state("write_masked_half")],
             read_array: state("read_array"),
             sample_array: state("sample_array_between"),
+            exact: metal_sampler(device),
+            native_half: stage_notes(device, &bitcode, "read_half")
+                .contains(&PrecisionNote::NativeHalfConversion),
         }
     }
 }
@@ -882,9 +895,10 @@ fn half_of_step(k: u16) -> u16 {
     ((lead + 4) << 10) | significand
 }
 
-/// A linear sample is Metal's filter of the exact texels, unannounced: at each texel's centre it
-/// is the texel, and between texels Metal's step, on every device (the planes read in place on a
-/// device whose memory is the host's, the emulation of Metal's filter elsewhere).
+/// A linear sample of the exact texels: at each texel's centre it is the texel, and between texels
+/// Metal's step where the planes are read in place (a device whose memory is the host's), and
+/// elsewhere the filter of the kept image ([`Between`]), announced as [`assert_filter_notices`]
+/// states.
 #[test]
 fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
     on_device(|device, messages| {
@@ -892,56 +906,48 @@ fn a_linear_sample_of_a_ycbcr_texture_is_metals() {
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let bytes = surface_bytes(9);
         let surface = buffer_with(device, &bytes).unwrap();
+        let before = made_in_place(device);
         let texture = ycbcr_texture(
             &surface,
             Some(facts(VIDEO, None)),
             TextureUsage::SHADER_READ,
         )
         .unwrap();
+        let in_place = made_in_place(device) > before;
         let read = grid(&texels_of(device, &kernels.read, &texture, None));
         let sampled = grid(&texels_of(device, &kernels.sample, &texture, Some(&linear)));
         assert_eq!(
             sampled, read,
             "a linear sample at a texel's centre is the texel"
         );
-        let between = grid(&texels_of(
-            device,
-            &kernels.between,
-            &texture,
-            Some(&linear),
-        ));
-        for (i, got) in (0u64..).zip(&between) {
-            let at = (i % W, i / W);
-            let want: [u16; 3] = std::array::from_fn(|c| metal_step(&read, at, BETWEEN, c) as u16);
-            assert_eq!(*got, want, "texel {at:?}");
-        }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        let between = texels_of(device, &kernels.between, &texture, Some(&linear));
+        let mut steps = Between::new(device);
+        steps.texels(&between, &read, (2048, in_place), "YCBCR8_420_2P");
+        steps.finish(device, &counts(&messages.take_notices()), "YCBCR8_420_2P");
     });
 }
 
 /// A linear sample between the texels through a constexpr sampler and through a runtime sampler
 /// slot of each mip filter, each with a `float` and a `half` result, is Metal's step (every value
-/// on the grid `2048` is a `half`), and announces no filter notice: the path the consumer
-/// measured off the grid, whose slot the texture's alpha-one swizzle had left on the device's
-/// filter, and a runtime sampler's mip filter, which Metal's sample of the texture's one level does
-/// not read.
+/// on the grid `2048` is a `half`) where the planes are read in place, and announces no filter
+/// notice there: the path the consumer measured off the grid, whose slot the texture's alpha-one
+/// swizzle had left on the device's filter, and a runtime sampler's mip filter, which Metal's
+/// sample of the texture's one level does not read. Elsewhere it is the filter of the kept image
+/// ([`Between`]), announced as [`assert_filter_notices`] states.
 #[test]
 fn a_linear_sample_is_metals_through_each_sampler_and_result() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
         let surface = buffer_with(device, &surface_bytes(9)).unwrap();
+        let before = made_in_place(device);
         let texture = ycbcr_texture(
             &surface,
             Some(facts(VIDEO, None)),
             TextureUsage::SHADER_READ,
         )
         .unwrap();
+        let in_place = made_in_place(device) > before;
+        let mut steps = Between::new(device);
         let read = grid(&texels_of(device, &kernels.read, &texture, None));
         let at = |p: u64, f: u32, n: u64| (p as f32 + 0.5 + f as f32 / 256.0) / n as f32;
         let jobs: Vec<[f32; 4]> = (0..W * H)
@@ -961,27 +967,19 @@ fn a_linear_sample_is_metals_through_each_sampler_and_result() {
                 let held = (&texture, Held::Slot, runtime.map(|(_, s)| s));
                 let got = run_held(device, held, &state, &jobs, 1);
                 let mip = runtime.map(|(mip, _)| mip);
+                steps.sampled(in_place);
                 for (i, texel) in (0..W * H).zip(got.as_chunks::<4>().0.iter()) {
                     let at = (i % W, i / W);
-                    let want: [f32; 4] = std::array::from_fn(|c| match c {
-                        3 => 1.0,
-                        c => metal_step(&read, at, BETWEEN, c) as f32 / 2048.0,
-                    });
-                    assert_eq!(
-                        *texel, want,
-                        "texel {at:?} through {through:?} {mip:?}, half {half}"
-                    );
+                    let what = format!("texel {at:?} through {through:?} {mip:?}, half {half}");
+                    assert_eq!(texel[3], 1.0, "{what}");
+                    for (c, &value) in texel.iter().enumerate().take(3) {
+                        let want = metal_step(&read, at, BETWEEN, c) as f32 / 2048.0;
+                        steps.check((value, want), (2048, half, in_place), &what);
+                    }
                 }
             }
         }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::HalfSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        steps.finish(device, &counts(&messages.take_notices()), "each sampler");
     });
 }
 
@@ -1190,20 +1188,24 @@ fn drawn_with(
 
 /// A fragment function's linear sample between the texels, through a runtime sampler slot of
 /// each mip filter and through a constexpr sampler, each with a `float` and a `half` result, is
-/// Metal's step, and announces no filter notice: the fragment twin of
-/// `a_linear_sample_is_metals_through_each_sampler_and_result`. The pixel `(x, y)`'s centre
-/// plus `(0.40625, 0.21875)` is the kernel's `(x, y) + (0.90625, 0.71875)`.
+/// Metal's step where the planes are read in place, and announces no filter notice there: the
+/// fragment twin of `a_linear_sample_is_metals_through_each_sampler_and_result`, the filter of
+/// the kept image elsewhere ([`Between`]). The pixel `(x, y)`'s centre plus
+/// `(0.40625, 0.21875)` is the kernel's `(x, y) + (0.90625, 0.71875)`.
 #[test]
 fn a_fragments_linear_sample_is_metals_through_each_sampler_and_result() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
         let surface = buffer_with(device, &surface_bytes(9)).unwrap();
+        let before = made_in_place(device);
         let texture = ycbcr_texture(
             &surface,
             Some(facts(VIDEO, None)),
             TextureUsage::SHADER_READ,
         )
         .unwrap();
+        let in_place = made_in_place(device) > before;
+        let mut steps = Between::new(device);
         let read = grid(&texels_of(device, &kernels.read, &texture, None));
         let library = device
             .new_library_with_air(&llvm_assemble_text(&fragments()).unwrap())
@@ -1222,23 +1224,19 @@ fn a_fragments_linear_sample_is_metals_through_each_sampler_and_result() {
                 runtime.map(|(_, s)| s),
             );
             let mip = runtime.map(|(mip, _)| mip);
+            let half = fragment.ends_with("half");
+            steps.sampled(in_place);
             for (i, texel) in (0..W * H).zip(&got) {
                 let at = (i % W, i / W);
-                let want: [f32; 4] = std::array::from_fn(|c| match c {
-                    3 => 1.0,
-                    c => metal_step(&read, at, BETWEEN, c) as f32 / 2048.0,
-                });
-                assert_eq!(*texel, want, "pixel {at:?} of {fragment} {mip:?}");
+                let what = format!("pixel {at:?} of {fragment} {mip:?}");
+                assert_eq!(texel[3], 1.0, "{what}");
+                for (c, &value) in texel.iter().enumerate().take(3) {
+                    let want = metal_step(&read, at, BETWEEN, c) as f32 / 2048.0;
+                    steps.check((value, want), (2048, half, in_place), &what);
+                }
             }
         }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::HalfSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        steps.finish(device, &counts(&messages.take_notices()), "a fragment");
     });
 }
 
@@ -1248,6 +1246,129 @@ fn a_fragments_linear_sample_is_metals_through_each_sampler_and_result() {
 /// NVIDIA and 0.125 on RADV, ANV and lavapipe; through Metal's own sampler one step of the grid
 /// `1/2048`, 0.125 (`ycbcr-filter-not-exact`).
 const DEVICE_FILTER_BOUND: f32 = 0.5;
+
+/// The two-plane YCbCr textures `device` made with their planes read in place
+/// (`WorkCounts::ycbcr_textures_in_place`, `ycbcr_in_place.rs`).
+fn made_in_place(device: &Device) -> u64 {
+    device.work_counts().ycbcr_textures_in_place
+}
+
+/// Linear samples between a converted two-plane YCbCr texture's texels against Metal's step
+/// ([`metal_step`]): Metal's exactly where the texture's planes are read in place
+/// (`ycbcr_in_place.rs`), whose function filters the codes as Metal does. A texture that keeps its
+/// image is sampled by the filter of its converted texels: through Metal's own sampler
+/// (`VkProperty::MetalSampler`) within one step of the grid, a `half` result within one `half` unit
+/// in the last place (`ycbcr-filter-not-exact`); on any other device by its own filter, within
+/// [`DEVICE_FILTER_BOUND`] (`device-sampling`). The values off Metal's step are counted, with the
+/// largest distance in codes of `1/255`.
+struct Between {
+    metal: bool,
+    /// Samples of textures that keep their image.
+    kept: usize,
+    checked: usize,
+    differ: usize,
+    most: f32,
+}
+
+impl Between {
+    fn new(device: &Device) -> Between {
+        Between {
+            metal: metal_sampler(device),
+            kept: 0,
+            checked: 0,
+            differ: 0,
+            most: 0.0,
+        }
+    }
+
+    /// Note a sample of a texture whose planes are read in place where `in_place`.
+    fn sampled(&mut self, in_place: bool) {
+        self.kept += usize::from(!in_place);
+    }
+
+    /// Check channel value `got` against Metal's step `want` on the grid `grid`, of a sample with
+    /// a `half` result where `half`, of a texture whose planes are read in place where `in_place`.
+    fn check(
+        &mut self,
+        (got, want): (f32, f32),
+        (grid, half, in_place): (u32, bool, bool),
+        what: &str,
+    ) {
+        self.checked += 1;
+        if got.to_bits() == want.to_bits() {
+            return;
+        }
+        assert!(
+            !in_place,
+            "{what}: {got}, Metal's step {want}, its planes read in place"
+        );
+        self.differ += 1;
+        let codes = (got - want).abs() * 255.0;
+        self.most = self.most.max(codes);
+        let holds = match (self.metal, half) {
+            (true, true) => half_within(got, want),
+            (true, false) => (got - want).abs() * grid as f32 <= 1.0,
+            (false, _) => codes <= DEVICE_FILTER_BOUND,
+        };
+        assert!(holds, "{what}: {got}, Metal's step {want} ({codes} codes)");
+    }
+
+    /// Check the `float4` texels `got` (alpha 1) of a sample at [`BETWEEN`] against Metal's step of
+    /// the texels `read` on the grid `grid`, of a texture whose planes are read in place where
+    /// `in_place`.
+    fn texels(&mut self, got: &[u8], read: &[[u16; 3]], (grid, in_place): (u32, bool), case: &str) {
+        self.sampled(in_place);
+        for (i, t) in (0u64..).zip(got.as_chunks::<16>().0) {
+            let at = (i % W, i / W);
+            let c = |i: usize| f32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
+            assert_eq!(c(3), 1.0, "{case}: between, texel {at:?}'s alpha");
+            for ch in 0..3 {
+                let want = metal_step(read, at, BETWEEN, ch) as f32 / grid as f32;
+                let what = format!("{case}: between, texel {at:?}");
+                self.check((c(ch), want), (grid, false, in_place), &what);
+            }
+        }
+    }
+
+    /// Print the values off Metal's step, and check the run's notices `announced`
+    /// ([`assert_filter_notices`]).
+    fn finish(&self, device: &Device, announced: &BTreeMap<Degradation, usize>, case: &str) {
+        if self.differ > 0 {
+            println!(
+                "YCBCR-BETWEEN-DIFFERS {} {case}: {} of {} values the filter of the kept image, at \
+                 most {} codes off Metal's step",
+                device.name(),
+                self.differ,
+                self.checked,
+                self.most
+            );
+        }
+        assert_filter_notices(device, announced, self.kept > 0);
+    }
+}
+
+/// The filter notices `announced` of a run on `device` whose samples of converted two-plane
+/// YCbCr textures read a texture that keeps its image where `kept`: `ycbcr-filter-not-exact` once
+/// where one did on a device that samples through Metal's own sampler (a runtime sampler's slot
+/// bound to such a texture records its filter note whatever the sampler's word,
+/// `lower::sampler::linear`), none elsewhere; no generic filter notice; `device-sampling` on
+/// every device that samples natively, and only there.
+fn assert_filter_notices(device: &Device, announced: &BTreeMap<Degradation, usize>, kept: bool) {
+    let metal = metal_sampler(device);
+    for kind in [
+        Degradation::FloatSampleFilter,
+        Degradation::HalfSampleFilter,
+    ] {
+        assert_eq!(announced.get(&kind), None, "{announced:?}");
+    }
+    let ycbcr = announced.get(&Degradation::YCbCrFilterNotExact);
+    assert_eq!(ycbcr, (metal && kept).then_some(&1), "{announced:?}");
+    assert_eq!(
+        announced.contains_key(&Degradation::DeviceSampling),
+        !metal,
+        "{announced:?}"
+    );
+}
 
 /// A fragment function's linear sample of a `YCBCR8_420_2P` texture through a runtime sampler,
 /// with a `float` and a `half` result, takes the pipeline a draw binding any other texture takes: the draw binding it makes no pipeline after the one that bound an
@@ -1370,11 +1491,10 @@ pub(super) const YCBCR_FILTERS: [Degradation; 1] = [Degradation::YCbCrFilterNotE
 /// (`TexelFormat::swizzled`): the sample takes the device's filter, Metal's own of the converted
 /// texels, the class measured by no family keeping the device's sample, bit for bit an `RGBA16Float` texture's of the same texels under the same swizzle, and
 /// announces [`YCBCR_FILTERS`] once, naming the slot and the format, in place of the generic filter
-/// notes, which it does not announce. Elsewhere the class is a swizzled packed one
-/// (`TexelFormat::packed_exact`): the slot's view takes no swizzle, the emulation filters the
-/// unswizzled texels exactly and the function swizzles the result, so the sample is Metal's step of
-/// each channel the swizzle reads (Metal's swizzle permutes the texel it filters), announced by
-/// nothing.
+/// notes, which it does not announce. Elsewhere the sample is the device's own filter of the
+/// converted texels (announced `device-sampling`), whose differences from Metal's step of each
+/// channel the swizzle reads (Metal's swizzle permutes the texel it filters) are printed, and no
+/// YCbCr filter notice is announced.
 #[test]
 fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
     on_device(|device, messages| {
@@ -1452,12 +1572,11 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
             }
             println!(
                 "YCBCR-SWIZZLED {}: {compared} values compared with Metal's step swizzled, {} \
-                 differ {:?}",
+                 differ, the device's filter {:?}",
                 device.name(),
                 differ.len(),
                 &differ[..differ.len().min(16)]
             );
-            assert!(differ.is_empty(), "Metal's step, swizzled: {differ:?}");
         }
         let notices = messages.take_notices();
         let counts = counts(&notices);
@@ -1469,6 +1588,10 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
         }
         if !metal {
             assert_eq!(counts.get(&YCBCR_FILTERS[0]), None, "{counts:?}");
+            assert!(
+                counts.contains_key(&Degradation::DeviceSampling),
+                "{counts:?}"
+            );
             return;
         }
         assert_eq!(counts.get(&YCBCR_FILTERS[0]), Some(&1), "{counts:?}");
@@ -1488,11 +1611,13 @@ fn a_ycbcr_sample_the_exact_filter_does_not_reach_is_announced() {
 /// naming the slot and the format, and no generic filter notice; through a constexpr sampler an
 /// anisotropic one, one with a linear mip filter and one whose filters differ announce the
 /// generic `float-sample-filter` once (the constexpr note holds whatever the slot holds, so it
-/// names no format). Each case runs on a device of its own. On a device that reads the planes in
-/// place (`ycbcr_in_place.rs`) the constexpr linear mip filter is read there, Metal's filter of the
-/// texture's one level whatever the mip filter, as a runtime sampler's is everywhere: Metal's step,
-/// with no YCbCr filter notice (the function's generic note, of its sample of any other texture,
-/// stays where the device emulates Metal's sampler).
+/// names no format). Those notes are of a device that samples through Metal's own sampler
+/// (`VkProperty::MetalSampler`); elsewhere every case is the device's own filter, announced
+/// `device-sampling` once and none of those. Each case runs on a device of its own. On a device
+/// that reads the planes in place (`ycbcr_in_place.rs`) the constexpr linear mip filter is read
+/// there, Metal's filter of the texture's one level whatever the mip filter, as a runtime sampler's
+/// is everywhere: Metal's step, with no YCbCr filter notice (the function's generic note, of its
+/// sample of any other texture, stays where the device emulates Metal's sampler).
 #[test]
 fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
     let anisotropic = |d: &mut SamplerDescriptor| d.max_anisotropy = 16;
@@ -1566,6 +1691,17 @@ fn a_ycbcr_sample_through_an_unmeasured_filter_is_announced() {
                         c => metal_step(&model, at, BETWEEN, c) as f32 / 2048.0,
                     });
                     assert_eq!(*texel, want, "{case}: texel {at:?}");
+                }
+                return;
+            }
+            if !metal_sampler(device) {
+                assert_eq!(counts.get(&Degradation::DeviceSampling), Some(&1), "{case}");
+                for kind in [
+                    YCBCR_FILTERS[0],
+                    Degradation::FloatSampleFilter,
+                    Degradation::HalfSampleFilter,
+                ] {
+                    assert_eq!(counts.get(&kind), None, "{case}");
                 }
                 return;
             }
@@ -2551,9 +2687,10 @@ fn ten_bit_texture(
 }
 
 /// The codes of each channel of `texels` (`float4`s), each checked to be `code / max` correctly
-/// rounded, alpha checked to be 1: an `RGB10_420_2P` (`max` 1023) or `RGB8_420_2P` (255) read's
-/// red Cr, green Y, blue Cb.
-fn code_grid(texels: &[u8], max: u16) -> Vec<[u16; 3]> {
+/// rounded (where the device converts the codes itself, within its conversion's bound:
+/// `Kernels::exact`), alpha checked to be 1: an `RGB10_420_2P` (`max` 1023) or `RGB8_420_2P`
+/// (255) read's red Cr, green Y, blue Cb.
+fn code_grid(kernels: &Kernels, texels: &[u8], max: u16) -> Vec<[u16; 3]> {
     let max = f32::from(max);
     texels
         .as_chunks::<16>()
@@ -2565,7 +2702,11 @@ fn code_grid(texels: &[u8], max: u16) -> Vec<[u16; 3]> {
             std::array::from_fn(|i| {
                 let code = (c(i) * max).round();
                 assert!((0.0..=max).contains(&code), "{} off the codes", c(i));
-                assert_eq!(c(i), code / max, "{} not code / {max}", c(i));
+                assert!(
+                    converted_holds(c(i), code / max, kernels.exact),
+                    "{} not code / {max}",
+                    c(i)
+                );
                 code as u16
             })
         })
@@ -2575,13 +2716,15 @@ fn code_grid(texels: &[u8], max: u16) -> Vec<[u16; 3]> {
 /// `YCBCR10_420_2P` and `RGB10_420_2P` textures over 10-bit surfaces read what Metal reads
 /// (`ycbcr_read` states it): `read()` and a linear sample at each texel's centre, over `x420`,
 /// `xf20`, `x422` and `xf44` surfaces without a matrix, with BT.709 and with BT.2020; and
-/// `YCBCR10_420_2P`'s linear sample between the texels is Metal's step on the
-/// grid `2048`, as `YCBCR8_420_2P`'s. No filter notice.
+/// `YCBCR10_420_2P`'s linear sample between the texels is Metal's step on the grid `2048`, as
+/// `YCBCR8_420_2P`'s, where its planes are read in place, the filter of the kept image elsewhere
+/// ([`Between`]). The filter notices are [`assert_filter_notices`]'s.
 #[test]
 fn ten_bit_textures_read_what_metal_reads() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
+        let mut steps = Between::new(device);
         let mut seed = 20;
         for pf in [PixelFormat::YCBCR104202P, PixelFormat::RGB104202P] {
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
@@ -2599,11 +2742,13 @@ fn ten_bit_textures_read_what_metal_reads() {
                     seed += 1;
                     let bytes = ten_bit_bytes(seed);
                     let surface = buffer_with(device, &bytes).unwrap();
+                    let before = made_in_place(device);
                     let texture = ten_bit_texture(&surface, pf, (ostype, 0), matrix).unwrap();
+                    let in_place = made_in_place(device) > before;
                     let want = ten_bit_modelled(&bytes, codes, (range, modelled));
                     let case = format!("{pf:?} over {ostype:?}, {matrix:?}");
                     let of = |texels: &[u8]| match codes.output {
-                        YCbCrOutput::Codes => code_grid(texels, 1023),
+                        YCbCrOutput::Codes => code_grid(&kernels, texels, 1023),
                         _ => grid(texels),
                     };
                     let read = of(&texels_of(device, &kernels.read, &texture, None));
@@ -2612,23 +2757,12 @@ fn ten_bit_textures_read_what_metal_reads() {
                     assert_eq!(of(&sampled), want, "{case}: a linear sample at the centres");
                     if codes.output == YCbCrOutput::Converted {
                         let between = texels_of(device, &kernels.between, &texture, Some(&linear));
-                        for (i, got) in (0u64..).zip(grid(&between)) {
-                            let at = (i % W, i / W);
-                            let step: [u16; 3] =
-                                std::array::from_fn(|c| metal_step(&read, at, BETWEEN, c) as u16);
-                            assert_eq!(got, step, "{case}: between, texel {at:?}");
-                        }
+                        steps.texels(&between, &read, (2048, in_place), &case);
                     }
                 }
             }
         }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        steps.finish(device, &counts(&messages.take_notices()), "10-bit textures");
     });
 }
 
@@ -2721,18 +2855,17 @@ fn read_anywhere(
     out
 }
 
-/// The `float4`s `texels` against `want`'s codes over `max` exactly, each texel's red, green and
+/// The `float4`s `texels` against `want`'s codes over `max` exactly (where the device converts
+/// the codes itself, within its conversion's bound: `Kernels::exact`), each texel's red, green and
 /// blue `want`'s channels in that order, alpha 1.
-fn assert_codes_read(texels: &[u8], want: &[[u16; 3]], max: u16, case: &str) {
+fn assert_codes_read(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], max: u16, case: &str) {
     for (i, (t, w)) in texels.as_chunks::<16>().0.iter().zip(want).enumerate() {
         let c = |i: usize| f32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
         let got = [c(0), c(1), c(2), c(3)];
         let want = [w[0], w[1], w[2]].map(|v| f32::from(v) / f32::from(max));
-        assert_eq!(
-            got,
-            [want[0], want[1], want[2], 1.0],
-            "{case}: texel {i} ({w:?})"
-        );
+        let want = [want[0], want[1], want[2], 1.0];
+        let held = (0..4).all(|c| converted_holds(got[c], want[c], kernels.exact));
+        assert!(held, "{case}: texel {i} ({w:?}): {got:?}, Metal's {want:?}");
     }
 }
 
@@ -2868,6 +3001,7 @@ fn textures_over_any_surface_read_what_metal_reads() {
             };
             let max = (1u16 << read.bits) - 1;
             assert_codes_read(
+                &kernels,
                 &texels_of(device, &kernels.read, &made, None),
                 &want,
                 max,
@@ -2955,12 +3089,39 @@ fn half_away(step: u16) -> f32 {
 
 /// The `float4`s `texels` widened from `half`s, against Metal's `half` read of the steps
 /// `want`: each channel [`half_away`] of its step, alpha 1.
-fn assert_half_reads(texels: &[u8], want: &[[u16; 3]], case: &str) {
+fn assert_half_reads(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], case: &str) {
+    assert_half_steps(kernels, texels, want, 8192, case);
+}
+
+/// A `half` read's `float4`s `texels` against `want`'s steps of `1 / grid`, alpha 1: each step's
+/// `half`, rounded with ties away from zero on the grid `8192` ([`half_away`]) and exact on the
+/// grid `2048`. Where the read's stage rounds by the device's conversion (`Kernels::native_half`,
+/// `PrecisionNote::NativeHalfConversion`: rounded otherwise or not at all) the channels that differ
+/// are counted and printed, with the largest difference.
+fn assert_half_steps(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], grid: u32, case: &str) {
+    let metal = |w: u16| match grid {
+        8192 => half_away(w),
+        _ => f32::from(w) / grid as f32,
+    };
+    let (mut differ, mut most) = (0usize, 0.0f32);
     for (i, (t, w)) in texels.as_chunks::<16>().0.iter().zip(want).enumerate() {
         let c = |i: usize| f32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
         assert_eq!(c(3), 1.0, "{case}: texel {i}'s alpha");
         let got: [f32; 3] = std::array::from_fn(c);
-        assert_eq!(got, w.map(half_away), "{case}: texel {i} ({w:?})");
+        let want = w.map(metal);
+        if !kernels.native_half {
+            assert_eq!(got, want, "{case}: texel {i} ({w:?})");
+            continue;
+        }
+        for (g, m) in got.iter().zip(&want) {
+            if g.to_bits() != m.to_bits() {
+                differ += 1;
+                most = most.max((g - m).abs());
+            }
+        }
+    }
+    if differ > 0 {
+        println!("YCBCR-HALF-DIFFERS {case}: {differ} channels the device's rounding, at most {most} off");
     }
 }
 
@@ -2968,14 +3129,16 @@ fn assert_half_reads(texels: &[u8], want: &[[u16; 3]], case: &str) {
 /// `YCBCR8_420_2P_sRGB` over `420v` and `420f`, and `YCBCR10_420_2P_sRGB` over `x420`, `xf20`,
 /// `x422` and `xf44`, without a matrix, with BT.709 and with BT.2020. Each texel's `float` `read()`
 /// and a linear sample at its centre are its step of `1/8192`; a `half` read and a `half` nearest
-/// sample that step rounded with ties away from zero; and a linear sample between the texels
-/// Metal's step on the grid `8192`. No filter notice.
+/// sample that step rounded with ties away from zero; and a linear sample between the texels the
+/// filter of the kept image, whose planes no function reads in place ([`Between`], Metal's step
+/// on the grid `8192` where read in place). The filter notices are [`assert_filter_notices`]'s.
 #[test]
 fn srgb_twins_read_what_metal_reads() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
+        let mut steps = Between::new(device);
         let mut seed = 70;
         let surfaces: [(PixelFormat, &[u8; 4], YCbCrRange); 6] = [
             (PixelFormat::YCBCR84202PSRGB, b"420v", YCbCrRange::Video),
@@ -2994,6 +3157,7 @@ fn srgb_twins_read_what_metal_reads() {
                 (Some(SurfaceYCbCrMatrix::Itu2020), YCbCrMatrix::Bt2020),
             ] {
                 seed += 1;
+                let before = made_in_place(device);
                 let (want, texture) = if codes.bits == 8 {
                     let bytes = surface_bytes(seed);
                     let surface = buffer_with(device, &bytes).unwrap();
@@ -3010,6 +3174,7 @@ fn srgb_twins_read_what_metal_reads() {
                         made.unwrap(),
                     )
                 };
+                let in_place = made_in_place(device) > before;
                 let case = format!("{pf:?} over {ostype:?}, {matrix:?}");
                 let read = grid_of(&texels_of(device, &kernels.read, &texture, None), 8192);
                 assert_eq!(read, want, "{case}: read()");
@@ -3020,25 +3185,19 @@ fn srgb_twins_read_what_metal_reads() {
                     "{case}: a linear sample at the centres"
                 );
                 let half = texels_of(device, &kernels.read_half, &texture, None);
-                assert_half_reads(&half, &want, &format!("{case}: a half read()"));
+                assert_half_reads(&kernels, &half, &want, &format!("{case}: a half read()"));
                 let half = texels_of(device, &kernels.sample_half, &texture, Some(&nearest));
-                assert_half_reads(&half, &want, &format!("{case}: a half nearest sample"));
+                assert_half_reads(
+                    &kernels,
+                    &half,
+                    &want,
+                    &format!("{case}: a half nearest sample"),
+                );
                 let between = texels_of(device, &kernels.between, &texture, Some(&linear));
-                for (i, got) in (0u64..).zip(grid_of(&between, 8192)) {
-                    let at = (i % W, i / W);
-                    let step: [u16; 3] =
-                        std::array::from_fn(|c| metal_step(&read, at, BETWEEN, c) as u16);
-                    assert_eq!(got, step, "{case}: between, texel {at:?}");
-                }
+                steps.texels(&between, &read, (8192, in_place), &case);
             }
         }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        steps.finish(device, &counts(&messages.take_notices()), "sRGB twins");
     });
 }
 
@@ -3151,11 +3310,15 @@ fn float4_bytes(v: [f32; 4]) -> Vec<u8> {
 /// clamp-to-zero and clamp-to-border-color (transparent black, opaque black, opaque white) the
 /// converted formats and their sRGB twins read the border outside, its alpha 1, and `RGB10_420_2P`
 /// and `RGB8_420_2P` (the M4), read as codes, its texel clamped to the texture again, under every
-/// border color. The packed formats read as their unpacked twins.
+/// border color. The packed formats read as their unpacked twins. Where the device samples by its
+/// own sampler (announced `device-sampling`), a linear sample is its filter of those texels: its
+/// differences are counted and printed.
 #[test]
 fn ycbcr_samples_outside_read_metals_modes() {
-    on_device(|device, _| {
+    on_device(|device, messages| {
         let kernels = Kernels::new(device);
+        let own = own_sampler(device, messages);
+        let mut filtered = 0usize;
         let usage = TextureUsage::SHADER_READ;
         let eight = buffer_with(device, &surface_bytes(91)).unwrap();
         let ten = buffer_with(device, &ten_bit_bytes(92)).unwrap();
@@ -3260,6 +3423,10 @@ fn ycbcr_samples_outside_read_metals_modes() {
                         };
                         texel(addressed(at, W, mode), addressed(row, H, mode))
                     };
+                    if own && *filter == SamplerMinMagFilter::Linear && point != &want[..] {
+                        filtered += 1;
+                        continue;
+                    }
                     assert_eq!(
                         point,
                         &want[..],
@@ -3268,6 +3435,10 @@ fn ycbcr_samples_outside_read_metals_modes() {
                 }
             }
         }
+        println!(
+            "YCBCR-OUTSIDE {}: {filtered} linear samples the device's filter",
+            device.name()
+        );
     });
 }
 
@@ -3495,11 +3666,19 @@ fn eight_bit_codes_read_what_metal_reads() {
             // The codes, which no range or matrix changes.
             let want = modelled_as(&bytes, codes, (YCbCrRange::Video, YCbCrMatrix::Bt601));
             let case = format!("over {:?}, {matrix:?}", ostype.to_be_bytes());
-            let read = code_grid(&texels_of(device, &kernels.read, &texture, None), 255);
+            let read = code_grid(
+                &kernels,
+                &texels_of(device, &kernels.read, &texture, None),
+                255,
+            );
             assert_eq!(read, want, "{case}: read()");
             for (filter, state) in [("nearest", &nearest), ("linear", &linear)] {
                 let sampled = texels_of(device, &kernels.sample, &texture, Some(state));
-                assert_eq!(code_grid(&sampled, 255), want, "{case}: a {filter} sample");
+                assert_eq!(
+                    code_grid(&kernels, &sampled, 255),
+                    want,
+                    "{case}: a {filter} sample"
+                );
             }
         }
         let notices = counts(&messages.take_notices());
@@ -3654,14 +3833,16 @@ fn family_texture(
 /// twins over `422v`, `422f`, `444v`, `444f`, `x422`, `xf22`, `x444` and `xf44`, without a matrix,
 /// with BT.709, with BT.2020 and with SMPTE 240M (read as BT.709): `read()`, a nearest and a linear
 /// sample at each texel's centre, and a `half` read (the twins' steps rounded with ties away from
-/// zero). No filter notice. A format over a surface whose chroma plane holds its own reads its
-/// pairs at the surface's rows, and over one whose plane is smaller the same, past the plane.
+/// zero). The filter notices are [`assert_filter_notices`]'s: no function reads these planes in
+/// place. A format over a surface whose chroma plane holds its own reads its pairs at the
+/// surface's rows, and over one whose plane is smaller the same, past the plane.
 #[test]
 fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
     on_device(|device, messages| {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
+        let mut steps = Between::new(device);
         let mut seed = 120;
         for (pf, ostypes) in [
             (PixelFormat::YCBCR84222P, ["422v", "422f"]),
@@ -3691,7 +3872,9 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                     seed += 1;
                     let bytes = family_bytes(seed, codes);
                     let surface = buffer_with(device, &bytes).unwrap();
+                    let before = made_in_place(device);
                     let texture = family_texture(&surface, pf, ostype, matrix).unwrap();
+                    steps.sampled(made_in_place(device) > before);
                     let want = family_modelled(&bytes, codes, (range, modelled));
                     let case = format!("{pf:?} over {ostype}, {matrix:?}");
                     let of = |texels: &[u8]| grid_of(texels, grid);
@@ -3702,22 +3885,17 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                         assert_eq!(of(&sampled), want, "{case}: a {filter} sample");
                     }
                     let half = texels_of(device, &kernels.read_half, &texture, None);
-                    match codes.output {
-                        YCbCrOutput::Srgb => {
-                            assert_half_reads(&half, &want, &format!("{case}: a half read()"))
-                        }
-                        _ => assert_eq!(of(&half), want, "{case}: a half read()"),
-                    }
+                    assert_half_steps(
+                        &kernels,
+                        &half,
+                        &want,
+                        grid,
+                        &format!("{case}: a half read()"),
+                    );
                 }
             }
         }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        steps.finish(device, &counts(&messages.take_notices()), "4:2:2 and 4:4:4");
         // Over a surface whose chroma plane holds the format's (for 4:2:2 over
         // 4:4:4): the format's pairs, at the surface's rows.
         for (seed, (pf, ostype, range)) in (160..).zip([
@@ -3897,7 +4075,8 @@ fn is_half_tie(step: u16) -> bool {
 /// with BT.2020, `YCBCR10_420_2P_sRGB` over `x420`, the 4:2:2 and 4:4:4 twins, the packed 4:2:0 and
 /// 4:4:4 twins, and `YCBCR8_420_2P`, at every texel corner under clamp-to-edge, clamp-to-zero and
 /// clamp-to-border-color: each lane the `float` gather's step of `1/8192` rounded so, ties among
-/// them.
+/// them. Where the stage rounds a `half` by the device's conversion (`Kernels::native_half`) the
+/// lanes that differ are counted and printed.
 #[test]
 fn ycbcr_half_gathers_round_ties_away() {
     on_device(|device, _| {
@@ -3949,7 +4128,7 @@ fn ycbcr_half_gathers_round_ties_away() {
             let texture = family_texture(&surface, pf, ostype, None).unwrap();
             textures.push((pf, ostype.into(), texture));
         }
-        let mut ties = 0;
+        let (mut ties, mut rounded) = (0, 0usize);
         for (pf, over, texture) in &textures {
             for (mode, state) in &samplers {
                 for (channel, [float, half]) in ["red", "blue"].iter().zip(&kernels.gathers) {
@@ -3969,13 +4148,20 @@ fn ycbcr_half_gathers_round_ties_away() {
                             "{case}: {f}"
                         );
                         let step = step as u16;
-                        assert_eq!(h, half_away(step), "{case}: step {step}");
+                        if !kernels.native_half {
+                            assert_eq!(h, half_away(step), "{case}: step {step}");
+                        } else if h != half_away(step) {
+                            rounded += 1;
+                        }
                         ties += usize::from(is_half_tie(step));
                     }
                 }
             }
         }
         assert!(ties > 0, "no lane lay halfway between two halves");
+        if rounded > 0 {
+            println!("YCBCR-HALF-DIFFERS gathers: {rounded} half lanes the device's rounding");
+        }
     });
 }
 
@@ -4017,11 +4203,19 @@ fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
                     let want =
                         family_modelled(&bytes, codes, (YCbCrRange::Video, YCbCrMatrix::Bt601));
                     let case = format!("{pf:?} over {ostype}, {matrix:?}");
-                    let read = code_grid(&texels_of(device, &kernels.read, &texture, None), max);
+                    let read = code_grid(
+                        &kernels,
+                        &texels_of(device, &kernels.read, &texture, None),
+                        max,
+                    );
                     assert_eq!(read, want, "{case}: read()");
                     for (filter, state) in [("nearest", &nearest), ("linear", &linear)] {
                         let sampled = texels_of(device, &kernels.sample, &texture, Some(state));
-                        assert_eq!(code_grid(&sampled, max), want, "{case}: a {filter} sample");
+                        assert_eq!(
+                            code_grid(&kernels, &sampled, max),
+                            want,
+                            "{case}: a {filter} sample"
+                        );
                     }
                 }
             }
@@ -4047,7 +4241,11 @@ fn four_two_two_and_four_four_four_codes_read_what_metal_reads() {
             let texture = family_texture(&surface, pf, ostype, None)
                 .unwrap_or_else(|e| panic!("{pf:?} over {ostype}: {e:?}"));
             let max = (1u16 << codes.bits) - 1;
-            let read = code_grid(&texels_of(device, &kernels.read, &texture, None), max);
+            let read = code_grid(
+                &kernels,
+                &texels_of(device, &kernels.read, &texture, None),
+                max,
+            );
             let want = family_modelled(&bytes, codes, (YCbCrRange::Video, YCbCrMatrix::Bt601));
             assert_eq!(read, want, "{pf:?} over {ostype}");
         }
@@ -4156,20 +4354,21 @@ fn ycbcr_textures_over_plane_1_read_its_codes_as_luma() {
                     };
                     let of = |texels: &[u8]| match grid {
                         Some(d) => grid_of(texels, d),
-                        None => code_grid(texels, (1u16 << codes.bits) - 1),
+                        None => code_grid(&kernels, texels, (1u16 << codes.bits) - 1),
                     };
                     let read = texels_of(device, &kernels.read, &texture, None);
                     assert_eq!(of(&read), want, "{case}: read()");
                     let sampled = texels_of(device, &kernels.sample, &texture, Some(&nearest));
                     assert_eq!(of(&sampled), want, "{case}: a nearest sample");
-                    if grid.is_some() {
+                    if let Some(d) = grid {
                         let half = texels_of(device, &kernels.read_half, &texture, None);
-                        match codes.output {
-                            YCbCrOutput::Srgb => {
-                                assert_half_reads(&half, &want, &format!("{case}: a half read()"))
-                            }
-                            _ => assert_eq!(of(&half), want, "{case}: a half read()"),
-                        }
+                        assert_half_steps(
+                            &kernels,
+                            &half,
+                            &want,
+                            d,
+                            &format!("{case}: a half read()"),
+                        );
                     }
                     let mut luma = vec![0u8; row * H as usize];
                     texture
@@ -4209,7 +4408,9 @@ const PACKED: [(PixelFormat, [&str; 2]); 6] = [
 /// twins over `p420`, `pf20`, `p422`, `pf22`, `p444` and `pf44`, three codes a 32-bit word, without
 /// a matrix, with BT.709 and with BT.2020: `read()`, a nearest and a linear sample at each texel's
 /// centre, a `half` read (the twins' steps rounded with ties away from zero), and a linear sample
-/// between texels Metal's step (every case of the six formats). No filter notice. A 4:2:0 format
+/// between texels the filter of the kept image, whose planes no function reads in place
+/// ([`Between`]; every case of the six formats). The filter notices are
+/// [`assert_filter_notices`]'s. A 4:2:0 format
 /// over a packed 4:4:4 surface reads its pairs at the surface's rows; a format over a surface whose
 /// plane is smaller, a packed one over an unpacked surface and an unpacked one over a packed
 /// surface read their own codes at the surface's rows by its range, and one over plane 1 of a
@@ -4220,6 +4421,7 @@ fn packed_textures_read_what_metal_reads() {
         let kernels = Kernels::new(device);
         let nearest = sampler(device, SamplerMinMagFilter::Nearest);
         let linear = sampler(device, SamplerMinMagFilter::Linear);
+        let mut steps = Between::new(device);
         let mut seed = 300;
         for (pf, ostypes) in PACKED {
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
@@ -4240,7 +4442,9 @@ fn packed_textures_read_what_metal_reads() {
                     seed += 1;
                     let bytes = family_bytes(seed, codes);
                     let surface = buffer_with(device, &bytes).unwrap();
+                    let before = made_in_place(device);
                     let texture = family_texture(&surface, pf, ostype, matrix).unwrap();
+                    let in_place = made_in_place(device) > before;
                     let want = family_modelled(&bytes, codes, (range, modelled));
                     let case = format!("{pf:?} over {ostype}, {matrix:?}");
                     let of = |texels: &[u8]| grid_of(texels, grid);
@@ -4251,29 +4455,19 @@ fn packed_textures_read_what_metal_reads() {
                         assert_eq!(of(&sampled), want, "{case}: a {filter} sample");
                     }
                     let half = texels_of(device, &kernels.read_half, &texture, None);
-                    match codes.output {
-                        YCbCrOutput::Srgb => {
-                            assert_half_reads(&half, &want, &format!("{case}: a half read()"))
-                        }
-                        _ => assert_eq!(of(&half), want, "{case}: a half read()"),
-                    }
+                    assert_half_steps(
+                        &kernels,
+                        &half,
+                        &want,
+                        grid,
+                        &format!("{case}: a half read()"),
+                    );
                     let between = texels_of(device, &kernels.between, &texture, Some(&linear));
-                    for (i, got) in (0u64..).zip(of(&between)) {
-                        let at = (i % W, i / W);
-                        let step: [u16; 3] =
-                            std::array::from_fn(|c| metal_step(&read, at, BETWEEN, c) as u16);
-                        assert_eq!(got, step, "{case}: a linear sample between, texel {at:?}");
-                    }
+                    steps.texels(&between, &read, (grid, in_place), &case);
                 }
             }
         }
-        let notices = counts(&messages.take_notices());
-        for kind in [
-            Degradation::FloatSampleFilter,
-            Degradation::YCbCrFilterNotExact,
-        ] {
-            assert_eq!(notices.get(&kind), None, "{notices:?}");
-        }
+        steps.finish(device, &counts(&messages.take_notices()), "packed textures");
         // Over a surface whose chroma plane holds the format's (4:2:0 over 4:2:2
         // and 4:4:4, 4:2:2 over 4:4:4): the format's pairs, at the surface's rows.
         for (seed, (pf, ostype, range)) in (340..).zip([
@@ -4463,7 +4657,11 @@ fn retyped_views_read_their_luma_codes() {
                 })
                 .collect();
             let read = texels_of(device, &kernels.read_array, &view, None);
-            assert_eq!(grid_of(&read, max), want, "{pf:?}'s view");
+            assert_eq!(
+                code_grid(&kernels, &read, max as u16),
+                want,
+                "{pf:?}'s view"
+            );
             // The swizzle (blue, red, one, green) over that read.
             let swizzled = array(&base, Some(swizzle)).unwrap();
             let mapped: Vec<[f32; 4]> = (floats(&read).iter())

@@ -7,7 +7,9 @@
 //! `carried-decoded-twin` once and, for an 11-bit format, `decoded-texel-precision` once. Every
 //! format's texels read as Metal's after every kind of write ([`etc_texels_read_as_metal_s`]): an
 //! 8-bit format's exactly (an sRGB form's colour through Metal's table, read from the twin's
-//! codes), an 11-bit format's within half a 16-bit step; a new texture's zero blocks, then blocks a CPU copy wrote,
+//! codes; where the device does not sample through Metal's own texture unit, within its
+//! conversion of the codes, announced `device-texel-conversion`: `converted_holds`), an 11-bit
+//! format's within half a 16-bit step; a new texture's zero blocks, then blocks a CPU copy wrote,
 //! a blit from a buffer, a fill of one block and a copy from another texture, each read by a
 //! command buffer after the write's, each decoded into the twin (a blit's by a GPU decode pass, a
 //! CPU copy's by one or on the CPU, counted in `WorkCounts`), and an 8-bit format's view as its
@@ -18,6 +20,7 @@
 
 use super::astc_textures::{blit, download, read_whole, reader, texture, upload};
 use super::degrade_notices::{counts, on_device};
+use super::{converted_holds, pixel_samplers::metal_sampler};
 use metal2vulkan::bind::{EtcDecode, EtcTexels, PvrtcDecode};
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::format::{srgb_raw_twin, vk_format, FormatEmulation};
@@ -169,7 +172,7 @@ fn etc_texels_read_as_metal_s() {
                 for (t, (got, want)) in got.iter().zip(&want).enumerate() {
                     for c in 0..4 {
                         let fits = match exact {
-                            true => got[c].to_bits() == want[c].to_bits(),
+                            true => converted_holds(got[c], want[c], metal_sampler(device)),
                             false => (got[c] - want[c]).abs() <= compact_bound(pf),
                         };
                         if !fits && wrong.len() < 24 {
@@ -250,6 +253,11 @@ fn etc_texels_read_as_metal_s() {
             ),
             (usize::from(twinned), usize::from(eleven)),
             "on {name}"
+        );
+        assert_eq!(
+            announced(Degradation::DeviceTexelConversion),
+            usize::from(!metal_sampler(device)),
+            "the device's conversion of the codes, on {name}"
         );
     });
 }

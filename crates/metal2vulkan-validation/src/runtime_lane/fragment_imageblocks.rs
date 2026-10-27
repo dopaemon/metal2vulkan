@@ -21,7 +21,7 @@
 //!   first, and a draw beside a tile dispatch whose tile function's explicit imageblock is of
 //!   another size (in either order), are `NotImplemented`.
 
-use super::degrade_notices::assert_once;
+use super::degrade_notices::{assert_once, made_render_kinds, made_tile_kinds};
 use super::shared_kinds;
 use super::tile_states::descriptor as tile_descriptor;
 use super::{
@@ -82,6 +82,16 @@ impl Fixture {
 
     /// [`Fixture::state`]'s state, made with `supportIndirectCommandBuffers` where `indirect`.
     fn state_for(&self, fragment: &str, indirect: bool) -> RenderPipelineState {
+        self.device
+            .new_render_pipeline_state(
+                &self.descriptor(fragment, indirect),
+                &PipelineOptions::default(),
+            )
+            .unwrap()
+    }
+
+    /// The descriptor of [`Fixture::state_for`]'s state.
+    fn descriptor(&self, fragment: &str, indirect: bool) -> RenderPipelineDescriptor {
         let function = |name: &str| {
             let function = self.views.new_function_with_name(name).unwrap();
             StageSource::Function(function.function_descriptor())
@@ -92,9 +102,7 @@ impl Fixture {
             *slot = Some(ColorAttachmentDescriptor::new(format));
         }
         descriptor.support_indirect_command_buffers = indirect;
-        self.device
-            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-            .unwrap()
+        descriptor
     }
 
     /// The tile state of the owned tile function `stem` over the pass's attachments, or why the
@@ -212,12 +220,13 @@ fn scale(device: &Device) -> Buffer {
 /// `imageblock_resolve` (`color * depth * 2` into attachment 0's red). Every pixel's red is
 /// `1.5 (x + 0.5)` times its depth, `y + 2.5` at an even pixel and 2 at an odd one, exact in
 /// `half`; the dispatch's transforms of attachments 1 and 2 stay. Two such passes announce the
-/// storage, the split and the dispatch's scratch once each.
+/// storage, the split and the dispatch's scratch once each, beside what the states' stages record.
 #[test]
 fn a_pass_keeps_its_imageblock_across_draws_and_a_split() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
-    // Beside the test's kinds, what its `Shared` buffers force on the device.
+    // Beside the test's kinds, what its `Shared` buffers force on the device and its states'
+    // makings announce.
     let mut kinds = vec![
         Degradation::FragmentImageblockStorage,
         Degradation::RenderPassSplit,
@@ -227,6 +236,20 @@ fn a_pass_keeps_its_imageblock_across_draws_and_a_split() {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         kinds.extend(shared_kinds(&device));
         let fixture = Fixture::new(&device);
+        for fragment in [
+            "imageblock_clear_odd",
+            "imageblock_accumulate",
+            "imageblock_resolve",
+        ] {
+            kinds.extend(made_render_kinds(
+                &device,
+                &fixture.descriptor(fragment, false),
+            ));
+        }
+        kinds.extend(made_tile_kinds(
+            &device,
+            &tile_descriptor(&device, "k10ts_tile_grid", &FORMATS),
+        ));
         let clear = fixture.state("imageblock_clear_odd");
         let accumulate = fixture.state("imageblock_accumulate");
         let resolve = fixture.state("imageblock_resolve");

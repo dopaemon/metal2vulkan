@@ -11,7 +11,13 @@
 //! the runtime, each on a device of its own opened once the other's is gone. The case passes only
 //! when the runtime's bytes are the fresh candidate's, word for word, so the runtime adds no
 //! difference of its own; the candidate's executor ABI is printed with the counts. Committed
-//! candidate observations are not the evidence: a row may be an older executor's.
+//! candidate observations are not the evidence: a row may be an older executor's. Where the
+//! candidate executor holds no form of the case on this device (`not_supported`: an image of a
+//! format the device cannot make, such as lavapipe's `R8_SRGB`, which the runtime holds in its
+//! UNORM twin), the runtime's differences from Metal are the device's answers under the precision
+//! notes its executed stages record (`device-texel-conversion`, `device-sampling`,
+//! `native-half-conversion` and their kin): the case passes only where those stages record one,
+//! its differing words counted and printed with the notes.
 //!
 //! A device whose pipeline creation compile needs storage textures' formats makes such states
 //! under stand-ins (`runtime::pipeline`'s creation): their query answers are held to the compile
@@ -34,11 +40,13 @@ use metal2vulkan::library::Library;
 use metal2vulkan::metal::{
     SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter,
 };
-use metal2vulkan::pipeline::FunctionDescriptor;
+use metal2vulkan::pipeline::{FunctionDescriptor, PrecisionNote};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan::Budget;
-use metal2vulkan_runtime::{Buffer, CommandBufferStatus, ComputeCommandEncoder, Device, Error};
-use std::collections::BTreeMap;
+use metal2vulkan_runtime::{
+    Buffer, CommandBufferStatus, ComputeCommandEncoder, Device, Error, ExecutedPipeline,
+};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A case whose texture is sampled through a sampler (three 2D textures, one sampler, nearest
 /// filtering, clamped to the edge, one level).
@@ -94,6 +102,22 @@ pub(super) fn fresh_candidate(
     Ok((device, run.output, run.status))
 }
 
+/// The precision notes the stages `run` executed record, specialized ones included.
+fn executed_notes(run: &super::RuntimeRun) -> BTreeSet<PrecisionNote> {
+    let mut notes = BTreeSet::new();
+    for execution in &run.executions {
+        let stages = match execution.pipeline() {
+            ExecutedPipeline::Compute(p) => std::slice::from_ref(&p.stage),
+            ExecutedPipeline::Render(p) => &p.stages[..],
+        };
+        for stage in stages {
+            notes.extend(stage.precision_notes.iter().copied());
+            notes.extend(stage.specialized_notes.iter().map(|s| s.note));
+        }
+    }
+    notes
+}
+
 /// Every committed public kernel case that binds a texture, a texture array or a sampler passes
 /// the [`census`], in `TEXTURE_SHARDS` tests (`in_shard`), so nextest runs the pieces in parallel.
 fn kernels_with_textures_and_samplers_match_metal(shard: usize) {
@@ -133,9 +157,10 @@ census_shards!(
 );
 
 /// Each of `cases` runs through the runtime with a clean execution report and Metal's output, or
-/// the output of the candidate executor run afresh on the case (the module's note), or is
-/// refused honestly (`refusal`); the validation layer reports nothing, leaks included. The counts
-/// are printed as `label`'s census line.
+/// the output of the candidate executor run afresh on the case, or, where that executor holds no
+/// form of the case on this device, an output of Metal's length under the precision notes its
+/// executed stages record (the module's note), or is refused honestly (`refusal`); the validation
+/// layer reports nothing, leaks included. The counts are printed as `label`'s census line.
 pub(super) fn census(label: &str, cases: &[NamedCase]) {
     let messages = Messages::default();
     let (mut matched, mut differing, mut refused, mut failed) =
@@ -159,7 +184,10 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
                     failed.push(format!("{name}: the execution report is {:?}", run.report))
                 }
                 Ok((case, run)) if run.output == case.metal_output => matched += 1,
-                Ok((case, _)) => differing.push((name, case)),
+                Ok((case, run)) => {
+                    let notes = executed_notes(&run);
+                    differing.push((name, case, run.output, notes))
+                }
                 Err(why) if refusal(&why) => refused.push(format!("{name}: {why}")),
                 Err(why) => failed.push(format!("{name}: {why}")),
             }
@@ -174,10 +202,29 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
     let leaked = messages.take();
     // Where the runtime is not Metal: the candidate afresh, then the runtime on a device of its
     // own.
-    let mut as_candidate = Vec::new();
-    for (name, case) in differing {
+    let (mut as_candidate, mut native) = (Vec::new(), Vec::new());
+    for (name, case, output, notes) in differing {
         let (candidate_device, candidate, candidate_report) = match fresh_candidate(case) {
             Ok(run) => run,
+            // The candidate executor holds no form of the case on this device: the runtime's
+            // differences are the device's answers under the notes its stages record.
+            Err(why)
+                if why.starts_with("not_supported")
+                    && !notes.is_empty()
+                    && output.len() == case.metal_output.len() =>
+            {
+                let words = output
+                    .chunks(4)
+                    .zip(case.metal_output.chunks(4))
+                    .filter(|(r, m)| r != m)
+                    .count();
+                native.push(format!(
+                    "{name}: {words} of {} words differ from Metal's under {notes:?}; the \
+                     candidate holds no form of it here: {why}",
+                    output.len().div_ceil(4)
+                ));
+                continue;
+            }
             Err(why) => {
                 failed.push(format!("{name}: the fresh candidate gave no output: {why}"));
                 continue;
@@ -215,14 +262,18 @@ pub(super) fn census(label: &str, cases: &[NamedCase]) {
     }
     eprintln!(
         "{label} on {device_name}: {matched} match Metal, {} match the fresh candidate \
-         ({ENGINE_EXECUTOR_ABI}), {} refused, {} failed, of {}",
+         ({ENGINE_EXECUTOR_ABI}), {} the device's under their notes, {} refused, {} failed, of {}",
         as_candidate.len(),
+        native.len(),
         refused.len(),
         failed.len(),
         cases.len()
     );
     for line in &as_candidate {
         eprintln!("as the candidate: {line}");
+    }
+    for line in &native {
+        eprintln!("the device's: {line}");
     }
     for why in &refused {
         eprintln!("refused: {why}");

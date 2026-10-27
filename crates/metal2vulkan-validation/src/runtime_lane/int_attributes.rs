@@ -11,18 +11,23 @@
 //!   probe's tables): per vertex, 8 points, which fixed-function input fetches in the format's
 //!   `USCALED` or `SSCALED` form where the device can (the executed pipeline's vertex input says
 //!   which; printed), and with the constant step, 8 draws of one point bound at each record, which
-//!   the shader pulls and converts. Each row's `float4` is compared bit for bit.
+//!   the shader pulls and converts. Each row's `float4` is compared bit for bit, but a `half`
+//!   one's where the stage rounds by the device's conversion (`native-half-conversion`, announced):
+//!   within its bound (`half_within`), counted.
 //! - `label_vertex` and `label_fragment`, a text label pipeline's shape (eight attributes, a
 //!   `UShort2` among them read as `float2`; nine varyings of mixed interpolation), into a 4x4
 //!   `BGRA8Unorm_sRGB` target blended source-over beside a `Depth32Float_Stencil8` attachment:
 //!   every pixel is `(255, 0, 255, 255)` in memory order, the fragment's checks of each varying
-//!   against Metal's values passed. Metal draws the same pixels.
+//!   against Metal's values passed. Metal draws the same pixels. Where the pipeline's stages round
+//!   a `half` by the device's conversion (`native-half-conversion`), the red channel's check of
+//!   the `half` varying of 4099 (Metal's 4100) may fail: red is then 0, the other checks hold.
 //! - A 32-bit integer format read into a float attribute refuses the pipeline,
 //!   `InvalidDescriptor(VertexAttribute)`, where Metal refuses it too.
 
+use super::degrade_notices::{counts, made_render_kinds};
 use super::{
-    buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
-    ScratchCache, WAIT,
+    buffer_with, half_within, layer_reported_nothing_at_all, read_buffer, validated_device,
+    Messages, ScratchCache, WAIT,
 };
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
@@ -37,8 +42,8 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ClearColor, CommandBufferStatus, CommandQueue, Device, Error, ExecutedPipeline, Library,
-    LoadAction, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState,
+    ClearColor, CommandBufferStatus, CommandQueue, Degradation, Device, Error, ExecutedPipeline,
+    Library, LoadAction, PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState,
     ResourceOptions, StoreAction, TextureDescriptor,
 };
 
@@ -250,6 +255,7 @@ fn integer_formats_read_into_float_attributes_take_metal_s_values() {
         let queue = device.new_command_queue().unwrap();
         let records = buffer_with(&device, &records()).unwrap();
         let mut wrong = Vec::new();
+        let mut native = 0usize;
         let mut fixed = 0;
         for (i, &(format, ..)) in FORMATS.iter().enumerate() {
             let own = metal2vulkan::metal::vertex::vk_vertex_format(format).unwrap();
@@ -280,6 +286,12 @@ fn integer_formats_read_into_float_attributes_take_metal_s_values() {
                     }
                     for (r, got) in rows.iter().enumerate() {
                         let want = metal_row(i, r, half);
+                        let within = (0..4)
+                            .all(|c| half_within(f32::from_bits(got[c]), f32::from_bits(want[c])));
+                        if *got != want && half && within {
+                            native += 1;
+                            continue;
+                        }
                         if *got != want {
                             wrong.push(format!(
                                 "{function} {format:?} {step:?} row {r}: got {got:08x?}, Metal {want:08x?}"
@@ -293,12 +305,20 @@ fn integer_formats_read_into_float_attributes_take_metal_s_values() {
             println!("INT-ATTR-DIFFERS {}: {line}", device.name());
         }
         println!(
-            "INT-ATTR {}: {} rows checked, {} differ; per vertex fixed function in {fixed} of 32 pipelines",
+            "INT-ATTR {}: {} rows checked, {} differ, {native} half rows the device's rounding; per \
+             vertex fixed function in {fixed} of 32 pipelines",
             device.name(),
             FORMATS.len() * 2 * 2 * ROWS,
             wrong.len()
         );
         assert!(wrong.is_empty(), "{} rows differ", wrong.len());
+        if native > 0 {
+            let announced = counts(&messages.take_notices());
+            assert!(
+                announced.contains_key(&Degradation::NativeHalfConversion),
+                "{announced:?}"
+            );
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }
@@ -389,6 +409,8 @@ fn the_label_pipeline_draws_metal_s_pixels() {
         let pipeline = device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
             .unwrap();
+        let native_half =
+            made_render_kinds(&device, &descriptor).contains(&Degradation::NativeHalfConversion);
         // The records: a corner per vertex of the strip; the rest alike in each.
         let mut records = Vec::new();
         for (x, y) in [(-2.0f32, -2.0f32), (2.0, -2.0), (-2.0, 2.0), (2.0, 2.0)] {
@@ -504,12 +526,15 @@ fn the_label_pipeline_draws_metal_s_pixels() {
         target
             .get_bytes(&mut pixels, 16, 0, Region::new_2d(0, 0, 4, 4), 0, 0)
             .unwrap();
-        println!("INT-ATTR {}: label pixels {pixels:?}", device.name());
-        assert_eq!(
-            pixels,
-            [255u8, 0, 255, 255].repeat(16),
-            "the label's pixels"
+        println!(
+            "INT-ATTR {}: label pixels {pixels:?} (the device's half rounding: {native_half})",
+            device.name()
         );
+        let held = pixels.as_chunks::<4>().0.iter().all(|p| match native_half {
+            true => matches!(p, [255, 0, 0 | 255, 255]),
+            false => *p == [255, 0, 255, 255],
+        });
+        assert!(held, "the label's pixels: {pixels:?}");
     }
     layer_reported_nothing_at_all(&messages);
 }

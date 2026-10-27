@@ -1,11 +1,11 @@
 //! The device's forms of Metal's maths, through the runtime, on the device the cfg selects, under
-//! the validation layer. Every other lane takes Metal's answers where a switch keeps them
-//! (`candidate::runtime_case::validated_options` sets `DevicePolicy::exact_answers`); this one
-//! starts from those options. The maths functions, divisions and fused multiply-adds
-//! (`PrecisionNote::NativeTranscendentals`, `NativeDivision`, `NativeFma`) and `dot`, `mix` and
-//! `fast::sqrt` (`NativeDot`, `NativeMix`, and `NativeTranscendentals` for `fast::sqrt`) are the
-//! device's on every device whose functions are not Metal's own, and the NaN and minimum and
-//! maximum (`NativeNanEncoding`, `NativeMinMax`) on every device not measured to answer Metal's.
+//! the validation layer (`candidate::runtime_case::validated_options`, whose policy changes no
+//! translation: the device's forms are the only ones). The maths functions, divisions and fused
+//! multiply-adds (`PrecisionNote::NativeTranscendentals`, `NativeDivision`, `NativeFma`) and
+//! `dot`, `mix` and `fast::sqrt` (`NativeDot`, `NativeMix`, and `NativeTranscendentals` for
+//! `fast::sqrt`) are the device's on every device whose functions are not Metal's own, and the NaN
+//! and minimum and maximum (`NativeNanEncoding`, `NativeMinMax`) on every device not measured to
+//! answer Metal's.
 //! The stage records exactly the kinds of the forms it takes (where the device's answer is not
 //! Metal's own), the pipeline state announces the kinds its stage records, and every thread's
 //! answers stay within the bounds the kinds record.
@@ -391,8 +391,8 @@ fn answers_under(device: &Device, messages: &Messages, bitcode: &[u8]) {
         .collect();
     assert_eq!(announced, expected, "{name}: the announced native kinds");
     if metals {
-        // The device's functions are Metal's own (MoltenVK): no native maths to bound; the exact
-        // lanes check its answers against Metal's.
+        // The device's functions are Metal's own (MoltenVK): no native maths to bound;
+        // `driver_deviations` checks its answers against Metal's.
         return;
     }
 

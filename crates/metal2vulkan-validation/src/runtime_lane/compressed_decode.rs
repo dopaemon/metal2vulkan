@@ -15,7 +15,9 @@
 //! Per format, [`ROUNDS`] 16 x 16 textures of random blocks are read whole by the format scout's
 //! `scout_read_f` (a signed format's first block with an endpoint of -128, whose interpolated
 //! texels the model clamps to -1 after the sum, an inference this lane's Metal venues check).
-//! Every texel reads as Metal's: on a device whose driver has a format's fact ([`Kind::fact`]:
+//! Every texel reads as Metal's (where the device does not sample through Metal's own texture
+//! unit, within its conversion of the codes, announced `device-texel-conversion`: one `f32` unit
+//! in the last place, [`reads_as`]): on a device whose driver has a format's fact ([`Kind::fact`]:
 //! BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`, BC4 and BC5
 //! `DriverFact::ChannelBlockDecodeIsMetals`) through its own decode, elsewhere through the
 //! texture's decoded twin, announced `decoded-block-twin` once ([`BLOCK_DECODES`]);
@@ -44,8 +46,9 @@ use super::degrade_notices::{counts, on_device};
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
 use super::host_memory::{recording, Mapping, Seen};
 use super::no_copy_heaps::{no_copy_heap, shared, HEAP};
+use super::pixel_samplers::metal_sampler;
 use super::rebinds::rebind_heap;
-use super::{buffer_with, read_buffer, WAIT};
+use super::{buffer_with, converted_holds, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -357,6 +360,7 @@ fn bc1_to_bc5_texels_read_as_metal_s() {
             .iter()
             .any(|(_, kind, _)| !facts.contains(&kind.fact()));
         let state = reader(device);
+        let exact = metal_sampler(device);
         let mut wrong = Vec::new();
         for (f, (pf, kind, srgb)) in FORMATS.into_iter().enumerate() {
             let (mut differ, mut most) = (0, 0.0f32);
@@ -371,7 +375,7 @@ fn bc1_to_bc5_texels_read_as_metal_s() {
                 for (t, got) in texels.iter().enumerate() {
                     let want = metal_texel(kind, srgb, &blocks, t % 16, t / 16);
                     for c in 0..4 {
-                        if got[c].to_bits() != want[c].to_bits() {
+                        if !converted_holds(got[c], want[c], exact) {
                             differ += 1;
                             most = most.max((got[c] - want[c]).abs());
                             if wrong.len() < 24 {
@@ -395,6 +399,11 @@ fn bc1_to_bc5_texels_read_as_metal_s() {
         assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
         let counts = counts(&messages.take_notices());
         let announced = |kind| counts.get(&kind).copied().unwrap_or(0);
+        assert_eq!(
+            announced(Degradation::DeviceTexelConversion),
+            usize::from(!exact),
+            "the device's conversion of the codes, on {name}"
+        );
         assert_eq!(announced(BLOCK_DECODES[0]), 0, "on {name}");
         assert_eq!(
             announced(BLOCK_DECODES[1]),
@@ -728,28 +737,38 @@ fn texels_of(device: &Device, state: &ComputePipelineState, texture: &Texture) -
         .collect()
 }
 
-/// The texels of `got` (16 x 16) whose bits differ from Metal's decode of `blocks` (four
-/// across) of `kind`, `srgb` its color sRGB.
-fn differing(got: &[[f32; 4]], kind: Kind, srgb: bool, blocks: &[u8]) -> usize {
+/// Whether `got` reads as Metal's decoded texel `want` on `device`: each channel bit for bit where
+/// it samples through Metal's own texture unit, else within the device's conversion of the codes
+/// (`converted_holds`, `PrecisionNote::DeviceTexelConversion`).
+fn reads_as(device: &Device, got: &[f32; 4], want: &[f32; 4]) -> bool {
+    let exact = metal_sampler(device);
+    (0..4).all(|c| converted_holds(got[c], want[c], exact))
+}
+
+/// The texels of `got` (16 x 16) on `device` that do not read as Metal's decode of `blocks` (four
+/// across) of `kind`, `srgb` its color sRGB ([`reads_as`]).
+fn differing(device: &Device, got: &[[f32; 4]], kind: Kind, srgb: bool, blocks: &[u8]) -> usize {
     got.iter()
         .enumerate()
         .filter(|(t, texel)| {
-            let want = metal_texel(kind, srgb, blocks, t % 16, t / 16);
-            (0..4).any(|c| texel[c].to_bits() != want[c].to_bits())
+            !reads_as(
+                device,
+                texel,
+                &metal_texel(kind, srgb, blocks, t % 16, t / 16),
+            )
         })
         .count()
 }
 
-/// How many of `got`'s texels (16 x 16) are neither Metal's decode of the blocks `old` nor of
-/// `new` at their place, as a read racing a write that lands while it runs may read either.
-fn neither(got: &[[f32; 4]], kind: Kind, old: &[u8], new: &[u8]) -> usize {
+/// How many of `got`'s texels (16 x 16) on `device` read as neither Metal's decode of the blocks
+/// `old` nor of `new` at their place ([`reads_as`]), as a read racing a write that lands while it
+/// runs may read either.
+fn neither(device: &Device, got: &[[f32; 4]], kind: Kind, old: &[u8], new: &[u8]) -> usize {
     got.iter()
         .enumerate()
         .filter(|(t, texel)| {
-            let bits =
-                |blocks: &[u8]| metal_texel(kind, false, blocks, t % 16, t / 16).map(f32::to_bits);
-            let got = texel.map(f32::to_bits);
-            got != bits(old) && got != bits(new)
+            let metal = |blocks: &[u8]| metal_texel(kind, false, blocks, t % 16, t / 16);
+            !reads_as(device, texel, &metal(old)) && !reads_as(device, texel, &metal(new))
         })
         .count()
 }
@@ -823,7 +842,7 @@ fn decoded_twins_follow_every_write() {
         let mut wrong = Vec::new();
         let mut check =
             |what: String, got: Vec<[f32; 4]>, kind: Kind, srgb: bool, blocks: &[u8]| {
-                let n = differing(&got, kind, srgb, blocks);
+                let n = differing(device, &got, kind, srgb, blocks);
                 if n > 0 {
                     wrong.push(format!("{what}: {n} of 256 texels off Metal's"));
                 }
@@ -994,7 +1013,7 @@ fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
         let zero_reads = |stage: &str, wrong: &mut Vec<String>| {
             for (texture, pf, kind, srgb) in &placed {
                 let got = texels_of(device, &state, texture);
-                let n = differing(&got, *kind, *srgb, &zeros);
+                let n = differing(device, &got, *kind, *srgb, &zeros);
                 if n != 0 {
                     wrong.push(format!(
                         "{pf:?} {stage}: {n} texels off zero blocks' decode"
@@ -1012,7 +1031,13 @@ fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
         let followed = placed
             .iter()
             .filter(|(texture, _, kind, srgb)| {
-                differing(&texels_of(device, &state, texture), *kind, *srgb, &zeros) != 0
+                differing(
+                    device,
+                    &texels_of(device, &state, texture),
+                    *kind,
+                    *srgb,
+                    &zeros,
+                ) != 0
             })
             .count();
         // The consumer's detach: fresh pages, zeros.
@@ -1286,18 +1311,18 @@ fn writes_behind_work_in_flight_read_as_metal_s() {
                     (false, _) => held += 1,
                 }
                 let n = match behind {
-                    Behind::Event => differing(&got, kind, false, &new),
-                    Behind::Busy => neither(&got, kind, &old, &new),
+                    Behind::Event => differing(device, &got, kind, false, &new),
+                    Behind::Busy => neither(device, &got, kind, &old, &new),
                 };
                 if n > 0 {
-                    let stale = differing(&got, kind, false, &old);
+                    let stale = differing(device, &got, kind, false, &old);
                     wrong.push(format!(
                         "{pf:?} {behind:?}: {n} of 256 texels off Metal's decode of the new \
                          blocks ({} of the old)",
                         256 - stale
                     ));
                 }
-                let n = differing(&texels(&later_out), kind, false, &new);
+                let n = differing(device, &texels(&later_out), kind, false, &new);
                 if n > 0 {
                     wrong.push(format!(
                         "{pf:?} {behind:?}: the later reader: {n} of 256 texels off Metal's \
@@ -1383,7 +1408,7 @@ fn host_written_twins_take_no_gpu_decode() {
                     })
                 })
                 .collect();
-            let off = differing(&got, kind, false, &blocks);
+            let off = differing(device, &got, kind, false, &blocks);
             assert_eq!(
                 off, 0,
                 "{pf:?} on {name}: {off} of 256 texels off Metal's decode"

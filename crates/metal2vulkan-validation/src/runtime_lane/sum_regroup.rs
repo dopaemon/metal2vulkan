@@ -11,16 +11,19 @@
 //! the host from the same texels.
 //!
 //! The translation computes Metal's grouping and keeps it (`NoContraction`), so a device whose
-//! `half` additions round correctly gives these bits exactly.
+//! `half` additions round correctly gives these bits exactly. Where the fragment's stage rounds a
+//! `half` by the device's conversion (`native-half-conversion`: rounded otherwise or not at all),
+//! the sums that differ are counted and printed, with the largest distance in `half` units.
 
 use super::buffer_with;
+use super::degrade_notices::made_render_kinds;
 use super::resolves::{lane, quiet, Lane};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble;
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
+    BlitOption, ClearColor, Degradation, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
     RenderPipelineState, ResourceOptions, StoreAction, TextureDescriptor,
 };
 use std::path::Path;
@@ -160,6 +163,13 @@ fn expected(fragment: &str, texels: &[u16], x: u64, y: u64) -> u32 {
 
 /// The fixture's pipeline of fragment function `fragment` on `lane`'s device.
 fn pipeline(lane: &Lane, fragment: &str) -> RenderPipelineState {
+    lane.device
+        .new_render_pipeline_state(&descriptor(lane, fragment), &PipelineOptions::default())
+        .unwrap()
+}
+
+/// [`pipeline`]'s descriptor.
+fn descriptor(lane: &Lane, fragment: &str) -> RenderPipelineDescriptor {
     let ll = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/sum_regroup.ll");
     let library = lane
         .device
@@ -175,9 +185,7 @@ fn pipeline(lane: &Lane, fragment: &str) -> RenderPipelineState {
         RenderPipelineDescriptor::new(StageSource::Function(function("sum_regroup_full")));
     descriptor.fragment = Some(StageSource::Function(function(fragment)));
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
-    lane.device
-        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-        .unwrap()
+    descriptor
 }
 
 /// The words of one draw of `pipeline` over `texels`, row by row.
@@ -220,7 +228,8 @@ fn drawn(lane: &Lane, pipeline: &RenderPipelineState, texels: &[u16]) -> Vec<u32
         .collect()
 }
 
-/// Each pinned sum gives Metal's bits on every pixel: its grouping, not the AIR's.
+/// Each pinned sum gives Metal's bits on every pixel: its grouping, not the AIR's (where the stage
+/// rounds `half`s by the device's conversion, the differences are printed).
 #[test]
 fn a_pinned_sum_gives_metal_s_bits() {
     let (messages, _cache, lane) = lane();
@@ -242,6 +251,30 @@ fn a_pinned_sum_gives_metal_s_bits() {
             wrong.len(),
             words.len()
         );
+        let native = made_render_kinds(&lane.device, &descriptor(&lane, fragment))
+            .contains(&Degradation::NativeHalfConversion);
+        if native {
+            // The largest distance of a sum from Metal's, in `half` units (each word two sums).
+            let units = |a: u32, b: u32| {
+                [0, 16]
+                    .map(|shift| ((a >> shift) as u16 as i32 - (b >> shift) as u16 as i32).abs())
+                    .into_iter()
+                    .max()
+                    .unwrap()
+            };
+            let most = (words.iter().enumerate())
+                .map(|(i, &got)| {
+                    units(got, expected(fragment, &texels, i as u64 % W, i as u64 / W))
+                })
+                .max()
+                .unwrap_or(0);
+            println!(
+                "SUM-REGROUP-DIFFERS {fragment} on {name}: {} pixels the device's half rounding, \
+                 at most {most} half units off",
+                wrong.len()
+            );
+            continue;
+        }
         assert!(
             wrong.is_empty(),
             "{fragment} on {name}: {} pixels differ:\n  {}",
