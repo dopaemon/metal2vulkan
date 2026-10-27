@@ -1300,8 +1300,8 @@ pub enum Feature {
     TextureView,
     /// A texture swizzle whose Metal behavior is not measured.
     TextureSwizzle,
-    /// `generateMipmapsForTexture:` where the device's filter is not shown to give Metal's
-    /// answer.
+    /// `generateMipmapsForTexture:` that cannot run on the device: a format neither the device's
+    /// blits filter nor the compute filter computes, or limits the filter's chain does not fit.
     MipmapGeneration,
     /// A buffer over the caller's host memory without a copy (`newBufferWithBytesNoCopy:`): it
     /// needs `VK_EXT_external_memory_host`, a memory type the pointer and the buffer both allow,

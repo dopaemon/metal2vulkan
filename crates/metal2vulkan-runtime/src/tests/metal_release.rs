@@ -2,13 +2,12 @@
 //! the descriptor check and the alignment queries answer by them.
 
 use super::capabilities::{committed_descriptions, created};
-use crate::metal_release::{DEPTH_STENCIL_RESOURCE_ID, MACOS_RELEASE, MIPMAP_RULE};
+use crate::metal_release::{DEPTH_STENCIL_RESOURCE_ID, MACOS_RELEASE};
 use crate::pixel_format_info::describes;
 use crate::texture::heap::no_texture_alignment;
 use crate::texture_descriptor::{Creator, Refused, TextureDescriptor, TextureProblem};
 use crate::texture_descriptor::{TextureRules, APPLE_SAMPLE_COUNTS};
 use crate::{BufferTextureProblem, Error, Invalid, Problem, ResourceId};
-use metal2vulkan::bind::MipmapRule;
 use metal2vulkan::metal::PixelFormat as P;
 use metal2vulkan::metal::{TextureType, TextureUsage};
 
@@ -93,13 +92,11 @@ fn the_release_describes_what_it_measured() {
     }
 }
 
-/// The release makes mipmaps by its filter at every level (`bind::MipmapRule::Filter`), answers a
-/// depth/stencil state's `gpuResourceID` below Apple10 0 (our probe on an M3 Max, plain Metal),
-/// and answers the heap query of a texture of a format of which Metal makes none alone, with no
-/// planes, 128 for every type but a texture buffer's 16.
+/// The release answers a depth/stencil state's `gpuResourceID` below Apple10 0 (our probe on an
+/// M3 Max, plain Metal), and answers the heap query of a texture of a format of which Metal makes
+/// none alone, with no planes, 128 for every type but a texture buffer's 16.
 #[test]
-fn the_release_s_mipmaps_resource_ids_and_nil_alignments() {
-    assert_eq!(MIPMAP_RULE, MipmapRule::Filter);
+fn the_release_s_resource_ids_and_nil_alignments() {
     assert_eq!(DEPTH_STENCIL_RESOURCE_ID, ResourceId(0));
     use TextureType as T;
     let types = [

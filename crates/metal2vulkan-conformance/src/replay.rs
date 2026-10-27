@@ -383,8 +383,9 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// - **texel, vertex and colour conversions**: `device-texel-conversion`,
 ///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
 ///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
-/// - **sampling and filtering**: `device-sampling`, `device-sample-level`, and Metal's own sampler
-///   filtering a two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`,
+/// - **sampling and filtering**: `device-sampling`, `device-sample-level`, the device's filter of a
+///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
+///   two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`,
 ///   `ycbcr-filter-not-exact`);
 /// - **resolves**: `device-rounded-resolve`.
 ///
@@ -429,6 +430,7 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::DeviceColorConversion,
         D::DeviceSampling,
         D::DeviceSampleLevel,
+        D::DeviceFilteredMipmaps,
         D::HalfSampleFilter,
         D::FloatSampleFilter,
         D::YCbCrFilterNotExact,

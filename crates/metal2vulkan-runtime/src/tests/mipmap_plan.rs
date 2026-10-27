@@ -1,15 +1,17 @@
-//! `generateMipmapsForTexture:`: Metal's rules as probes 2 and 3 measured them, and the blit chain.
+//! `generateMipmapsForTexture:`: Metal's rules as probes 2 and 3 measured them, the blit chain, and
+//! the compute filter where the device's blits cannot filter a format.
 
 use super::super::image_plan::plan_image;
 use super::super::mipmap_plan::{
-    picks, plan_mipmaps, plan_picks, MipBlit, MipmapPlan, MipmapProblem, MipmapRefusal, PickPlan,
+    format_problem, not_implemented, picks, plan_mipmaps, plan_picks, MipBlit, MipmapPlan,
+    MipmapProblem, MipmapRefusal, PickPlan,
 };
 use super::super::texture_descriptor::TextureDescriptor;
 use super::super::view_plan::{check_view, ViewRecord, ViewRequest};
 use super::image_plan::{committed, facts};
 use super::texture_descriptor::APPLE;
-use metal2vulkan::device::FormatUsage;
-use metal2vulkan::error::{Capability, Feature, Needs};
+use metal2vulkan::bind::MipmapFilterChain;
+use metal2vulkan::error::{Feature, Needs};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::FormatFeatureFlags2;
 use std::collections::HashSet;
@@ -34,6 +36,7 @@ fn blits(plan: MipmapPlan) -> Vec<MipBlit> {
     match plan {
         MipmapPlan::Blits(blits) => blits,
         MipmapPlan::Picks(picks) => panic!("picks where blits were planned: {picks:?}"),
+        MipmapPlan::Filter => panic!("the compute filter where blits were planned"),
     }
 }
 
@@ -117,27 +120,97 @@ fn metals_rules_stop_compressed_and_unfilterable_formats() {
     }
 }
 
-/// No blit gives an extended-range texture's mipmaps (its image holds raw codes): the plan refuses
-/// them `NotImplemented(MipmapGeneration)`, not as a format Metal stops (the encoder computes them
-/// with Metal's filter where it can), and leaves a texture of one level as it is, as for every
-/// format.
+/// No blit gives an extended-range texture's mipmaps (its image holds raw codes): they take the
+/// compute filter, not a refusal and not as a format Metal stops, and a texture of one level is
+/// left as it is, as for every format.
 #[test]
-fn extended_range_mipmaps_take_no_blit() {
+fn extended_range_mipmaps_take_the_compute_filter() {
     use PixelFormat as P;
     for pf in [P::BGR10XR, P::BGR10XRSRGB, P::BGRA10XR, P::BGRA10XRSRGB] {
         // Floats held raw in an integer image: not an integer format Metal picks.
         assert!(!picks(pf), "{pf:?}");
-        match plan(mipped(pf, TextureType::Type2D, [8, 8, 1], 1), "lavapipe").1 {
-            Err(MipmapRefusal::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::MipmapGeneration, "{pf:?}");
-                assert_eq!(u.needs, Needs::NotImplemented, "{pf:?}");
-            }
-            other => panic!("{pf:?}: {other:?}"),
+        for (ty, extent) in [
+            (TextureType::Type2D, [8, 8, 1]),
+            (TextureType::Cube, [8, 8, 1]),
+            (TextureType::Type3D, [8, 8, 2]),
+        ] {
+            let d = mipped(pf, ty, extent, 1);
+            assert_eq!(
+                planned(d, "lavapipe").1,
+                Ok(MipmapPlan::Filter),
+                "{pf:?} {ty:?}"
+            );
         }
         let mut one = mipped(pf, TextureType::Type2D, [8, 8, 1], 1);
         one.mipmap_level_count = 1;
         let none = plan(one, "lavapipe").1.unwrap();
         assert!(none.is_empty(), "{pf:?}: one level");
+    }
+}
+
+/// Every format Metal filters, on every committed profile, takes the device's blit chain where
+/// its blits filter the image's format and the compute filter where they do not: no refusal for
+/// how the answer would differ from Metal's. Some profile's blits cannot filter a format the
+/// filter computes (lavapipe's `RGB9E5Float`, which takes no blits into it, and `vk12-floor`'s
+/// 32-bit floats, which it does not filter linearly), and those take the filter.
+#[test]
+fn every_filtered_format_takes_the_blit_chain_or_the_compute_filter() {
+    let blit_filters = |features: FormatFeatureFlags2| {
+        features.contains(
+            FormatFeatureFlags2::SAMPLED_IMAGE_FILTER_LINEAR
+                | FormatFeatureFlags2::BLIT_SRC
+                | FormatFeatureFlags2::BLIT_DST,
+        )
+    };
+    let mut filtered = HashSet::new();
+    let mut blitted = 0;
+    for (name, d, device) in committed() {
+        let facts = facts(&d, &device);
+        for &pf in PixelFormat::ALL {
+            if picks(pf) || not_implemented(pf) || format_problem(pf).is_some() {
+                continue;
+            }
+            let Some(texel) = MipmapFilterChain::texel_bytes(pf) else {
+                continue;
+            };
+            let desc = mipped(pf, TextureType::Type2D, [8, 8, 1], 1);
+            let Ok(layout) = desc.check(APPLE) else {
+                continue;
+            };
+            let Ok(image) = plan_image(&layout, desc.usage, false, &facts) else {
+                continue;
+            };
+            let record = ViewRecord::of_texture(&layout, desc.usage, desc.swizzle);
+            let raw = metal2vulkan::metal::format::ExtendedRange::of(pf).is_some()
+                || super::super::image_plan::holds_srgb_twin(&image);
+            let blits = !raw && blit_filters(facts.optimal(image.format));
+            assert_eq!(
+                image.format.block().map(|b| b.size),
+                Some(texel),
+                "{name} {pf:?}: an image of the texel's bytes"
+            );
+            match plan_mipmaps(&record, &image, &facts) {
+                Ok(MipmapPlan::Blits(chain)) if blits => {
+                    assert_eq!(chain.len(), 3, "{name} {pf:?}");
+                    blitted += 1;
+                }
+                Ok(MipmapPlan::Filter) if !blits => {
+                    filtered.insert((name.clone(), pf));
+                }
+                other => panic!("{name} {pf:?}: {other:?} (blits filter it: {blits})"),
+            }
+        }
+    }
+    assert!(blitted > 0);
+    for expected in [
+        ("lavapipe", PixelFormat::RGB9E5Float),
+        ("vk12-floor", PixelFormat::RGBA32Float),
+        ("lavapipe", PixelFormat::BGRA10XR),
+    ] {
+        assert!(
+            filtered.contains(&(expected.0.to_owned(), expected.1)),
+            "{expected:?} takes the compute filter: {filtered:?}"
+        );
     }
 }
 
@@ -210,48 +283,11 @@ fn a_views_chain_is_its_own_levels_and_slices() {
     );
 }
 
-#[test]
-fn a_format_without_linear_filtering_is_refused_naming_it() {
-    let mut refused = 0;
-    for (name, d, device) in committed() {
-        let facts = facts(&d, &device);
-        let desc = mipped(PixelFormat::RGBA32Float, TextureType::Type2D, [4, 4, 1], 1);
-        let layout = desc.check(APPLE).unwrap();
-        let Ok(image) = plan_image(&layout, desc.usage, false, &facts) else {
-            continue;
-        };
-        let record = ViewRecord::of_texture(&layout, desc.usage, desc.swizzle);
-        let filters = facts
-            .optimal(image.format)
-            .contains(FormatFeatureFlags2::SAMPLED_IMAGE_FILTER_LINEAR);
-        match plan_mipmaps(&record, &image, &facts) {
-            Err(MipmapRefusal::Unsupported(u)) if !filters => {
-                refused += 1;
-                assert_eq!(u.feature, Feature::MipmapGeneration, "{name}");
-                assert_eq!(
-                    u.needs,
-                    Needs::AnyOf(vec![vec![Capability::Format {
-                        format: image.format,
-                        usage: FormatUsage::SampledImageFilterLinear,
-                    }]]),
-                    "{name}"
-                );
-            }
-            Ok(_) | Err(MipmapRefusal::Unsupported(_)) => assert!(filters, "{name}"),
-            Err(other) => panic!("{name}: {other:?}"),
-        }
-    }
-    assert!(
-        refused > 0,
-        "some committed profile lacks float32 filtering"
-    );
-}
-
-/// An 8-bit sRGB texture a device holds as its UNORM twin (`image_plan::holds_srgb_twin`) is
-/// refused, needing the sRGB format's linear filter, which a blit of the twin's codes is not. At
+/// An 8-bit sRGB texture a device holds as its UNORM twin (`image_plan::holds_srgb_twin`) takes
+/// the compute filter, which decodes its codes, not the twin's blit, which would average them. At
 /// least one committed profile holds one (lavapipe's `R8Unorm_sRGB`).
 #[test]
-fn an_srgb_texture_held_as_its_unorm_twin_takes_no_blit() {
+fn an_srgb_texture_held_as_its_unorm_twin_takes_the_compute_filter() {
     use super::super::image_plan::holds_srgb_twin;
     let mut held = 0;
     for (name, d, device) in committed() {
@@ -273,26 +309,48 @@ fn an_srgb_texture_held_as_its_unorm_twin_takes_no_blit() {
                 continue;
             }
             held += 1;
-            match plan_mipmaps(&record, &image, &facts) {
-                Err(MipmapRefusal::Unsupported(u)) => {
-                    assert_eq!(u.feature, Feature::MipmapGeneration, "{name} {pf:?}");
-                    assert_eq!(
-                        u.needs,
-                        Needs::AnyOf(vec![vec![Capability::Format {
-                            format: metal2vulkan::metal::format::direct_format(pf).unwrap(),
-                            usage: FormatUsage::SampledImageFilterLinear,
-                        }]]),
-                        "{name} {pf:?}"
-                    );
-                }
-                other => panic!("{name} {pf:?}: {other:?}"),
-            }
+            assert_eq!(
+                plan_mipmaps(&record, &image, &facts),
+                Ok(MipmapPlan::Filter),
+                "{name} {pf:?}"
+            );
         }
     }
     assert!(
         held > 0,
         "no committed profile holds an sRGB texture as its twin"
     );
+}
+
+/// A view of another format than its texture's takes neither the image's blits nor its bytes
+/// filtered as the image's format: refused, `NotImplemented(MipmapGeneration)`.
+#[test]
+fn a_view_of_another_format_is_not_implemented() {
+    let (_, d, device) = committed()
+        .into_iter()
+        .find(|(n, ..)| n == "lavapipe")
+        .unwrap();
+    let facts = facts(&d, &device);
+    let desc = TextureDescriptor {
+        usage: TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW,
+        ..mipped(PixelFormat::RGBA8Unorm, TextureType::Type2D, [8, 8, 1], 1)
+    };
+    let layout = desc.check(APPLE).unwrap();
+    let image = plan_image(&layout, desc.usage, false, &facts).unwrap();
+    let whole = ViewRecord::of_texture(&layout, desc.usage, desc.swizzle);
+    let view = check_view(
+        &whole,
+        &ViewRequest::of_format(&whole, PixelFormat::RGBA8UnormSRGB),
+        device.profile(),
+    )
+    .unwrap();
+    match plan_mipmaps(&view, &image, &facts) {
+        Err(MipmapRefusal::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::MipmapGeneration);
+            assert_eq!(u.needs, Needs::NotImplemented);
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Level `level`'s texel `at` (of the view's levels) as the first level's texel Metal's rule

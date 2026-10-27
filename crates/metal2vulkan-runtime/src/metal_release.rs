@@ -14,7 +14,6 @@
 
 use crate::resource_ids::ResourceId;
 use crate::texture::heap_tiled::{BlockFamily, BlockPlacement};
-use metal2vulkan::bind::MipmapRule;
 
 /// The macOS release whose Metal every device answers as, as macOS names it (the module docs).
 /// No Metal counterpart: Metal answers as the release it runs on.
@@ -43,12 +42,6 @@ pub(crate) const fn heap_blocks(family: BlockFamily) -> BlockPlacement {
 /// Apple M4 alike): every type but a texture buffer 128, private and shared storage, `ShaderRead`
 /// and `ShaderWrite` usage.
 pub(crate) const NO_TEXTURE_STACK_ALIGNMENT: u64 = 128;
-
-/// How the release's `generateMipmapsForTexture:` makes each level of a chain after the first on
-/// its Apple GPU (`MipmapFilterChain::plan`'s rule), which every device's mipmaps answer
-/// (`mipmap_filter.rs`): every level the filter of the level above (`bind::mipmap_filter`'s "By
-/// release").
-pub(crate) const MIPMAP_RULE: MipmapRule = MipmapRule::Filter;
 
 /// What the release's plain Metal answers for a depth/stencil state's `gpuResourceID` on a device
 /// that does not claim Apple10 (`depth_stencil.rs`): 0. Our probe on the M3 Max (plain Metal): 0

@@ -696,7 +696,6 @@ surface! {
         struct MipmapFilterKernel O;
         struct MipmapFilterLevel N;
         struct MipmapFilterModule N;
-        enum MipmapRule N;
         fn plane_copy_module;
         struct PlaneCopyModule N;
         struct PlaneRows N;

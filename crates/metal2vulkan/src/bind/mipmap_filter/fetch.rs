@@ -9,15 +9,17 @@
 //! format, the bits. Vulkan states no precision for the first two, so a fetch recovers a texel's
 //! codes only where the device is measured to return values its recovery reads back as every
 //! code (the runtime's driver fact); the integer formats' bits are exact by construction.
+//! Recovering the codes keeps one decode of a texel's bytes, the scratch buffer's, for every
+//! level.
 //!
 //! **The recovery.** A unorm code is `RoundEven(v (2^b - 1))`; a snorm code `RoundEven(v (2^(b-1)
 //! - 1))` as `b` two's-complement bits (the code `-2^(b-1)` reads as `-(2^(b-1) - 1)`, both -1.0,
-//! which the filter reads alike: the module docs); a half's bits the `float`'s converted exactly
+//! which the filter reads alike); a half's bits the `float`'s converted exactly
 //! (each half is a `float`; a NaN keeps its top ten mantissa bits, set to a quiet NaN's); an
 //! integer component its bits. Each lands at its bit offset in the texel's little-endian bytes,
 //! as [`components`] places it.
 
-use super::layout::{Layout, Rule};
+use super::layout::{Layout, Rule, Texel};
 use crate::vk::Format;
 
 /// How a fetched component's code is recovered (the module docs).
@@ -104,17 +106,21 @@ pub(super) fn integer(components: &[Option<Component>; 4]) -> bool {
         .all(|c| c.recover == Recover::Bits)
 }
 
-/// Whether a fetch of `components` recovers the bytes of a texel of `layout`: each field the
-/// filter reads lies in one component of its kind (a normalized field in a unorm or snorm
-/// component of its sign and exactly its bits, a half in a half, an extended-range code in an
-/// integer component), and no component lies past the texel.
+/// Whether a fetch of `components` recovers the bytes of a texel of `layout`: each field a
+/// channel reads lies in one component of its kind (a normalized field in a unorm or snorm
+/// component of its sign and exactly its bits, an 8-bit sRGB code in its UNORM twin's, a half in a
+/// half, an extended-range code in an integer component), and no component lies past the texel.
+/// `RGB9E5Float`'s word is never fetched.
 pub(super) fn fits(layout: &Layout, components: &[Option<Component>; 4]) -> bool {
     let texel_bits = 8 * layout.bytes;
     let inside = components
         .iter()
         .flatten()
         .all(|c| c.offset + c.bits <= texel_bits);
-    let covered = layout.fields.iter().all(|field| {
+    let Texel::Fields(fields) = layout.texel else {
+        return false;
+    };
+    let covered = fields.iter().filter(|f| f.channel()).all(|field| {
         let exact = |c: &Component| c.offset == field.offset && c.bits == field.width;
         let within = |c: &Component| {
             c.offset <= field.offset && field.offset + field.width <= c.offset + c.bits
@@ -123,19 +129,18 @@ pub(super) fn fits(layout: &Layout, components: &[Option<Component>; 4]) -> bool
             .iter()
             .flatten()
             .any(|c| match (field.rule, c.recover) {
-                (Rule::Constant(_), _) => true,
+                (Rule::Unorm | Rule::Srgb8, Recover::Unorm) | (Rule::Snorm, Recover::Snorm) => {
+                    exact(c)
+                }
                 (
-                    Rule::Grid { signed: false, .. }
-                    | Rule::Srgb8
-                    | Rule::Fixed16 { signed: false },
-                    Recover::Unorm,
-                )
-                | (
-                    Rule::Grid { signed: true, .. } | Rule::Fixed16 { signed: true },
-                    Recover::Snorm,
-                )
-                | (Rule::Float16, Recover::Half) => exact(c),
-                (Rule::XrColour | Rule::XrAlpha | Rule::XrSrgb, Recover::Bits) => within(c),
+                    Rule::Float {
+                        exponent: 5,
+                        mantissa: 10,
+                        signed: true,
+                    },
+                    Recover::Half,
+                ) => exact(c),
+                (Rule::Extended { .. } | Rule::ExtendedSrgb, Recover::Bits) => within(c),
                 _ => false,
             })
     });

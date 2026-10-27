@@ -1,4 +1,4 @@
-//! The scratch buffer `generate_mipmaps` computes Metal's filter in (`mipmap_filter.rs`): kept by
+//! The scratch buffer `generate_mipmaps`' compute filter runs in (`mipmap_filter.rs`): kept by
 //! the device between calls and grown to the largest chain, so that a call makes no buffer, and
 //! clears none, once the device holds one large enough.
 //!
@@ -15,8 +15,8 @@
 //!   releases its spare as it is destroyed.
 //! - **Not cleared.** The chain's command writes every byte it reads before reading it (the first
 //!   level copied in, every later level filled with zeros where its texels are narrower than a
-//!   word and else written whole by its dispatch, each level's words uploaded, the values a
-//!   level keeps written by its own dispatch), so a block's earlier bytes are never read.
+//!   word and else written whole by its dispatch, each level's words uploaded), so a block's
+//!   earlier bytes are never read.
 
 use super::device::{lock, DeviceShared};
 use super::error::{vulkan, Error};

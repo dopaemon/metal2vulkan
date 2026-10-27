@@ -584,9 +584,9 @@ mod mesh_draws;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod mip_levels;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod mipmap_costs;
+mod mipmap_chains;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod mipmaps_exact;
+mod mipmap_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod mirror_clamp;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

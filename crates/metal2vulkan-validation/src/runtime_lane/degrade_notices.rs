@@ -10,7 +10,7 @@
 //! `absent_reads`, in
 //! `indirect_host_steps`, in `indirect_dispatches`, in `index_fetches`, in `texture_blits`, in
 //! `sparse_textures`, in `buffer_texture_blits`, in `amplified_draws`, in `color_writes`, in
-//! `binary_archives`, in `view_reinterpretation`, in `mipmaps_exact`, in `clear_reach`, in
+//! `binary_archives`, in `view_reinterpretation`, in `clear_reach`, in
 //! `resolves`, in `mesh_draws`, in `provoking`, in `provoking_mesh`, in `visibility`, in
 //! `pass_start_reads`, in `unorm_depth_bias`, in `pvrtc_textures`, in `heaps`, in `rate_maps`, in
 //! `rebind_reach`, in `predication` or in `blits` takes, each test checking that
@@ -29,8 +29,8 @@
 //! indirect command buffers' commands naming a released state ([`RELEASED_STATES`]) and their host
 //! steps ([`HOST_STEPS`]), indirect dispatches' host reads ([`INDIRECT_DISPATCHES`]), indexed draws
 //! past their index buffer ([`INDEX_FETCHES`]), uploads into depth images ([`UPLOADS`]), a
-//! MoltenVK whose argument-buffer state is unread ([`ARGUMENT_BUFFERS`]), mipmaps within Metal's
-//! spread ([`MIPMAPS`]), a heap's depth or stencil texture laid apart from the heap ([`APART`]),
+//! MoltenVK whose argument-buffer state is unread ([`ARGUMENT_BUFFERS`]), mipmaps of the device's
+//! filter ([`MIPMAPS`]), a heap's depth or stencil texture laid apart from the heap ([`APART`]),
 //! a multisample depth or stencil texture without GPU-optimized contents that stays optimized
 //! ([`OPTIMIZED`]),
 //! a heap's colour texture on a driver whose compressed images hide aliased writes ([`ALIASES`]),
@@ -42,8 +42,7 @@
 //! whose fragment rounds its color writes in `color_writes` ([`COLOR_WRITES`]), render pipeline
 //! states whose stages an archive holds from two adds in `binary_archives` ([`ARCHIVES`]),
 //! texture views of another component layout shadowed in `view_reinterpretation`
-//! ([`VIEW_SHADOWS`]), mipmaps at a rounding the chain does not fit in `mipmaps_exact`
-//! ([`TIE_MIPMAPS`]), executions of an indirect command buffer from one command
+//! ([`VIEW_SHADOWS`]), executions of an indirect command buffer from one command
 //! with two lengths in `visibility` ([`REPEATED_STARTS`]), resources made with Metal's private
 //! option bit here ([`PRIVATE_OPTION`]), indexed indirect draws of bytes a draw wrote with no
 //! barrier in `indirect_draws` ([`UNORDERED_DRAWS`]), pipeline states whose functions read an
@@ -188,7 +187,6 @@ use super::kept_buffer_bytes::KEPT_BYTES;
 use super::linear_attachments::{CHOSEN_COPIES, LINEAR_COPIES};
 use super::memoryless::MEMORYLESS_TEXEL_BUFFERS;
 use super::mesh_draws::EMULATED_MESH;
-use super::mipmaps_exact::TIE_MIPMAPS;
 use super::no_copy_heaps::HEAP;
 use super::pass_start_reads::{FRAGMENTS_BEFORE_GEOMETRY, IN_PLACE_VERTEX_READS};
 use super::patches::EMULATED_TESSELLATION;
@@ -548,7 +546,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &RESET_UNENCODED,
         &HEAP_LAYOUTS,
         &SHADER_DEPTH,
-        &TIE_MIPMAPS,
         &MEMMOVES,
         &FRESH_PATTERNS,
         &UNMODELLED_SIZES,

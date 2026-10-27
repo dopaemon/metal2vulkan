@@ -1,4 +1,4 @@
-//! `generateMipmapsForTexture:` as a chain of Vulkan blits.
+//! `generateMipmapsForTexture:`: which way the runtime makes a texture's mipmaps.
 //!
 //! Metal's rules (API validation, measured on an Apple M3 Max and M4): the texture has more than
 //! one level; its format is color-renderable (no compressed, depth or stencil format) and
@@ -9,15 +9,14 @@
 //! validation stops, by picking texels ([`plan_picks`]), and so does the runtime.
 //!
 //! Metal computes each level from the one above it by bilinear filtering at the scaled texel
-//! centers, which is the Vulkan blit's linear filter, and its bytes are not the same on every
-//! Apple GPU: an M3 Max and an M4 differ by at most one unit in the last place per component,
-//! except where a box averages a format's largest and smallest values (`mipmap.rs`). A device's
-//! blit chain gives Metal's answer only within that spread, which the runtime checks per pixel
-//! format on the device before it records one (`mipmap.rs`). The formats Metal's filter is
-//! computed for take no blit where the device runs its kernel (`mipmap_filter.rs`).
+//! centres, as a Vulkan blit's linear filter does. The device's blit chain is the answer for every
+//! format its blits filter ([`MipmapPlan::Blits`]); the runtime's compute filter is the answer for
+//! the others ([`MipmapPlan::Filter`], `mipmap_filter.rs`). Neither is Apple's datapath, whose
+//! answers also differ between Apple's GPUs: both are announced as `device-filtered-mipmaps`.
 
 use super::image_plan::{holds_srgb_twin, ImageFacts, ImagePlan};
 use super::view_plan::ViewRecord;
+use metal2vulkan::bind::MipmapFilterChain;
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::format::{
@@ -63,9 +62,12 @@ pub(super) struct MipBlit {
 /// A texture's mipmaps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum MipmapPlan {
-    /// The blit chain of a filterable format: each level from the one above it (none where Metal
-    /// leaves the texture as it is).
+    /// The device's blit chain of a format its blits filter: each level the linear blit of the one
+    /// above it (none where Metal leaves the texture as it is).
     Blits(Vec<MipBlit>),
+    /// The runtime's compute filter (`mipmap_filter.rs`) of a format the device's blits cannot
+    /// filter ([`blit_lack`]) and the filter computes, in an image it copies to and from.
+    Filter,
     /// The texel picks of an integer format.
     Picks(PickPlan),
 }
@@ -205,15 +207,13 @@ pub(super) fn plan_picks(record: &ViewRecord, texel_bytes: u32) -> Option<PickPl
     })
 }
 
-/// Whether no blit gives `generate_mipmaps` of `pf`: an extended-range format, whose image holds
-/// the raw codes a shader decodes. The runtime computes its mipmaps with Metal's filter
-/// (`mipmap_filter.rs`; Metal's API validation takes the call) or refuses them
-/// (`NotImplemented(MipmapGeneration)`). Also a YCbCr format (`metal::format::ycbcr`), whose
-/// texture Metal makes only over a surface's planes, of one level, which [`leaves_as_is`]; Metal's
-/// answer for more levels is not measured. And, until their levels' X fields are rewritten as Metal
-/// stores them, the RGBX formats (`metal::format::x_channel`).
+/// Whether the runtime makes no mipmaps of `pf` (`NotImplemented(MipmapGeneration)`): a YCbCr
+/// format (`metal::format::ycbcr`), whose texture Metal makes only over a surface's planes, of one
+/// level, which [`leaves_as_is`]; Metal's answer for more levels is not measured. And, until their
+/// levels' X fields are rewritten as Metal stores them, the RGBX formats
+/// (`metal::format::x_channel`).
 pub(super) fn not_implemented(pf: PixelFormat) -> bool {
-    ExtendedRange::of(pf).is_some() || ycbcr(pf) || x_channel(pf)
+    ycbcr(pf) || x_channel(pf)
 }
 
 /// Whether Metal's plain `generateMipmapsForTexture:` leaves a texture presenting `record` as it
@@ -228,10 +228,10 @@ pub(super) fn leaves_as_is(record: &ViewRecord) -> bool {
 /// The runtime's refusal of mipmaps of `pf` whatever the texture: a format that is not
 /// color-renderable (depth and stencil formats among them, which the runtime leaves as they are,
 /// [`leaves_as_is`]). None for a format [`not_implemented`] refuses, whose rules are not
-/// measured. (An integer format, which Metal's API validation also stops, is picked:
-/// [`picks`].)
+/// measured, and for an extended-range format, which Metal filters. (An integer format, which
+/// Metal's API validation also stops, is picked: [`picks`].)
 pub(super) fn format_problem(pf: PixelFormat) -> Option<MipmapProblem> {
-    if not_implemented(pf) {
+    if not_implemented(pf) || ExtendedRange::of(pf).is_some() {
         return None;
     }
     let block = direct_format(pf).and_then(|f| f.block());
@@ -241,19 +241,72 @@ pub(super) fn format_problem(pf: PixelFormat) -> Option<MipmapProblem> {
     (!color).then_some(MipmapProblem::NotColorRenderable)
 }
 
+/// Why the device's blits cannot filter mipmaps of a texture presenting `record` whose image is
+/// `image` with `features` (the image format's optimal-tiling features), as the refusal where the
+/// compute filter cannot take them either: an extended-range format, whose image holds the raw
+/// codes a shader decodes (`NotImplemented`); an 8-bit sRGB texture held as its UNORM twin
+/// (`image_plan::holds_srgb_twin`), whose blit would average the codes (needing the sRGB format's
+/// `SampledImageFilterLinear`); the image format's lack of linear filtering (needing its
+/// `SampledImageFilterLinear`); or of blits or transfers (`NotImplemented`). `None` where they
+/// filter it.
+fn blit_lack(
+    record: &ViewRecord,
+    image: &ImagePlan,
+    features: FormatFeatureFlags2,
+) -> Option<MipmapRefusal> {
+    let pf = record.pixel_format;
+    let filter_linear = |format| {
+        MipmapRefusal::Unsupported(Unsupported::needs(
+            Feature::MipmapGeneration,
+            Capability::Format {
+                format,
+                usage: FormatUsage::SampledImageFilterLinear,
+            },
+        ))
+    };
+    let gap =
+        || MipmapRefusal::Unsupported(Unsupported::not_implemented(Feature::MipmapGeneration));
+    if ExtendedRange::of(pf).is_some() {
+        return Some(gap());
+    }
+    if holds_srgb_twin(image) && srgb_raw_twin(pf).is_some() {
+        return Some(direct_format(pf).map_or_else(gap, filter_linear));
+    }
+    if !features.contains(FormatFeatureFlags2::SAMPLED_IMAGE_FILTER_LINEAR) {
+        return Some(filter_linear(image.format));
+    }
+    let blits = FormatFeatureFlags2::BLIT_SRC | FormatFeatureFlags2::BLIT_DST;
+    let transfers = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
+    (!features.contains(blits) || !image.usage.contains(transfers)).then(gap)
+}
+
+/// Whether the compute filter (`mipmap_filter.rs`) can make the mipmaps of a texture whose image is
+/// `image` with `features`: a format the filter computes, held in an image of its texels' bytes
+/// that takes transfers (the filter copies the levels to and from its scratch).
+fn filter_fits(pf: PixelFormat, image: &ImagePlan, features: FormatFeatureFlags2) -> bool {
+    let copies = FormatFeatureFlags2::TRANSFER_SRC | FormatFeatureFlags2::TRANSFER_DST;
+    let transfers = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
+    let texel = image
+        .format
+        .block()
+        .filter(|b| b.texels == 1)
+        .map(|b| b.size);
+    MipmapFilterChain::texel_bytes(pf).is_some_and(|bytes| texel == Some(bytes))
+        && features.contains(copies)
+        && image.usage.contains(transfers)
+}
+
 /// The mipmaps of a texture presenting `record` whose image is `image`, on a device with
 /// `facts`: no blit for a texture Metal leaves as it is ([`leaves_as_is`]), the texel picks of an
-/// integer format ([`plan_picks`]), else the blit chain.
+/// integer format ([`plan_picks`]), the device's blit chain where its blits filter the format,
+/// else the compute filter ([`MipmapPlan::Filter`]).
 ///
-/// Refusals: an extended-range format, which no blit filters (`NotImplemented(MipmapGeneration)`,
-/// [`not_implemented`]; the caller computes it with Metal's filter where it can); the runtime's (`MipmapProblem`); an 8-bit sRGB texture held as its UNORM
-/// twin (`image_plan::holds_srgb_twin`), whose blit would average the codes
-/// (`Unsupported{MipmapGeneration}` needing the sRGB format's `SampledImageFilterLinear`); the
-/// image format's lack of linear filtering (`Unsupported{MipmapGeneration}` needing the format's
-/// `SampledImageFilterLinear`), or of blits or transfers (`NotImplemented(MipmapGeneration)`: a
-/// compute path would not need them); and, for picks, the image's lack of transfers or a texel
-/// block of more than one texel or of other bytes than the view's, or sizes past Vulkan's copy
-/// fields (`NotImplemented(MipmapGeneration)`).
+/// Refusals: a format the runtime makes no mipmaps of (`NotImplemented(MipmapGeneration)`,
+/// [`not_implemented`]); the runtime's (`MipmapProblem`); a view of another format than its
+/// image's (`NotImplemented(MipmapGeneration)`; for picks, one of other bytes); a format neither
+/// the device's blits filter nor the compute filter takes ([`blit_lack`]'s refusal); and, for
+/// picks, the image's lack of transfers or a texel block of more than one texel, or sizes past
+/// Vulkan's copy fields (`NotImplemented(MipmapGeneration)`).
 pub(super) fn plan_mipmaps(
     record: &ViewRecord,
     image: &ImagePlan,
@@ -272,18 +325,6 @@ pub(super) fn plan_mipmaps(
     }
     let gap =
         || MipmapRefusal::Unsupported(Unsupported::not_implemented(Feature::MipmapGeneration));
-    // An sRGB texture held as its UNORM twin: a blit would average the codes, which Metal's filter
-    // does not; it needs the sRGB format's own filter.
-    if holds_srgb_twin(image) && srgb_raw_twin(record.pixel_format).is_some() {
-        let format = direct_format(record.pixel_format).ok_or_else(gap)?;
-        return Err(MipmapRefusal::Unsupported(Unsupported::needs(
-            Feature::MipmapGeneration,
-            Capability::Format {
-                format,
-                usage: FormatUsage::SampledImageFilterLinear,
-            },
-        )));
-    }
     let transfers = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
     let features = facts.optimal(image.format);
     if picks(record.pixel_format) {
@@ -304,19 +345,17 @@ pub(super) fn plan_mipmaps(
             .map(MipmapPlan::Picks)
             .ok_or_else(gap);
     }
-    if !features.contains(FormatFeatureFlags2::SAMPLED_IMAGE_FILTER_LINEAR) {
-        return Err(MipmapRefusal::Unsupported(Unsupported::needs(
-            Feature::MipmapGeneration,
-            Capability::Format {
-                format: image.format,
-                usage: FormatUsage::SampledImageFilterLinear,
-            },
-        )));
-    }
-    if !features.contains(FormatFeatureFlags2::BLIT_SRC | FormatFeatureFlags2::BLIT_DST)
-        || !image.usage.contains(transfers)
-    {
+    // A view of another format than its image's: the image's blits and bytes are of its own
+    // format, not the view's.
+    if record.pixel_format != image.pixel_format {
         return Err(gap());
+    }
+    if let Some(lack) = blit_lack(record, image, features) {
+        return if filter_fits(record.pixel_format, image, features) {
+            Ok(MipmapPlan::Filter)
+        } else {
+            Err(lack)
+        };
     }
     let extent = |level: u32| {
         let mut e = record

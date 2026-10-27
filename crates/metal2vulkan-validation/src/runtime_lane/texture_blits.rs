@@ -3,7 +3,7 @@
 //! ones that go through a scratch buffer) and between textures, Metal's refusals, 32-bit float
 //! depth outside `[0, 1]` uploaded as Metal holds it with the form each device stores it in
 //! printed, what each driver's depth images keep of the `float`s Metal's hold, against its driver
-//! facts, and `generate_mipmaps` with each format's verdict printed.
+//! facts, and `generate_mipmaps` with each format's way printed.
 
 use super::degrade_notices::signs_depth_tests;
 use super::degrade_notices::{assert_made_once, assert_once, forced, loses_depth_denormals};
@@ -11,14 +11,14 @@ use super::degrade_notices::{decodes_blocks_its_way, shared_in_system_memory};
 use super::degrade_notices::{twins_blocks, twins_carried};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::bind::{MipmapFilterChain, MipmapRule};
+use metal2vulkan::bind::MipmapFilterChain;
 use metal2vulkan::device::VkExtension;
 use metal2vulkan::error::Feature;
 use metal2vulkan::metal::format::{is_depth_stencil, x_channel};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CopyProblem, CpuCacheMode, Degradation,
-    Device, DriverFact, Error, HazardTrackingMode, Invalid, MipmapVerdict, Origin, Problem, Region,
+    Device, DriverFact, Error, HazardTrackingMode, Invalid, Origin, Problem, Region,
     ResourceOptions, Size, StorageMode, Texture, TextureDescriptor,
 };
 use std::collections::BTreeSet;
@@ -1143,47 +1143,14 @@ fn mipmaps_leave_single_levels_and_depth_as_they_are() {
     layer_reported_nothing_at_all(&messages);
 }
 
-/// The kind [`mipmaps_of_every_format_run_or_are_refused_typed`] takes where a device's blit
-/// chain of some format ran, and expects absent where none did.
-pub(super) const MIPMAPS: [Degradation; 1] = [Degradation::MipmapsWithinSpread];
-
-/// Whether the runtime computes the mipmaps of a `pf` texture of `extent` and `levels` as
-/// Metal's filter, never by the device's blits (`runtime::mipmap_filter`): a format the filter
-/// computes, on a device with `shaderInt64` (every venue's), the chain far within any device's
-/// limits at these sizes.
-fn filtered(pf: PixelFormat, extent: [u64; 3], levels: u64, volume: bool) -> bool {
-    filter_chain(pf, extent, levels, volume).is_some()
-}
-
-/// The chain [`filtered`] plans, every level the filter's (`MipmapRule::Filter`): where a level
-/// may be one unit from Metal's near a tie (`mipmap-tie-rounding`), which its run announces.
-fn filter_chain(
-    pf: PixelFormat,
-    extent: [u64; 3],
-    levels: u64,
-    volume: bool,
-) -> Option<MipmapFilterChain> {
-    let groups = [65535, 65535];
-    let extent = extent.map(|e| e as u32);
-    // Whether Metal compresses the texture changes no chain's making.
-    MipmapFilterChain::plan(
-        pf,
-        extent,
-        1,
-        levels as u32,
-        volume,
-        false,
-        MipmapRule::Filter,
-        256,
-        1 << 27,
-        groups,
-        None,
-    )
-}
+/// The kind `generate_mipmaps` takes where a filtered format's chain ran, the device's blits or
+/// the compute filter: in [`mipmaps_of_every_format_run_or_are_refused_typed`] and
+/// `mipmap_chains`.
+pub(super) const MIPMAPS: [Degradation; 1] = [Degradation::DeviceFilteredMipmaps];
 
 /// Whether plain Metal mipmaps `pf` by picking texels, which the runtime copies exactly on every
 /// device: a color format a shader reads as integers, which an extended-range format is not
-/// (`mipmaps_exact::integer_mipmaps_pick_the_texels_plain_metal_picks`).
+/// (`mipmap_chains::integer_mipmaps_pick_the_texels_plain_metal_picks`).
 fn picked(pf: PixelFormat) -> bool {
     use metal2vulkan::pipeline::SampledType;
     !is_depth_stencil(pf)
@@ -1455,21 +1422,13 @@ fn depth_images_keep_what_their_drivers_claim() {
     layer_reported_nothing_at_all(&messages);
 }
 
-fn verdict(v: MipmapVerdict) -> &'static str {
-    match v {
-        MipmapVerdict::NotChecked => "not checked",
-        MipmapVerdict::AcceptedWithinSpread => "accepted within Metal's spread (near-equivalent)",
-        MipmapVerdict::Refused => "refused",
-        _ => "unknown",
-    }
-}
-
 /// `generate_mipmaps` of every pixel format in 2D (levels that halve exactly and levels that do
-/// not) and 3D: refused as Metal refuses it, refused typed where the device's chain is not within
-/// Metal's measured spread, else run, a near-equivalent announced once ([`MIPMAPS`]) and printed
-/// as one, never as Metal's answer; each format's verdict printed. Every format Metal's filter is
-/// computed for runs exactly instead, on every device (`mipmaps_exact`; its blit chain is never
-/// checked), and so do the integer formats' picks: never refused, and no near-equivalent.
+/// not) and 3D: refused as Metal refuses it, left as it is for a depth or stencil texture, an
+/// integer format's texels picked, and every other format's levels made by the device's blit
+/// chain or, where its blits cannot filter the format, by the compute filter, as the work counts
+/// say; each format's way printed. A filtered chain announces `device-filtered-mipmaps` once
+/// ([`MIPMAPS`]). Refused `NotImplemented(MipmapGeneration)` only for a format the compute filter
+/// does not compute (the RGBX formats among them), never for one it does.
 #[test]
 fn mipmaps_of_every_format_run_or_are_refused_typed() {
     let cache = ScratchCache::new().unwrap();
@@ -1479,9 +1438,9 @@ fn mipmaps_of_every_format_run_or_are_refused_typed() {
         // What the device announced before its first mipmaps.
         messages.take_notices();
         let queue = device.new_command_queue().unwrap();
-        let (mut ran, mut exact, mut metal, mut gaps) = (0, 0, 0, 0);
+        let (mut blitted, mut filtered, mut picks, mut metal, mut gaps) = (0, 0, 0, 0, 0);
         let mut lines = Vec::new();
-        // The kinds the textures' makings and the computed chains announce.
+        // The kinds the textures' makings announce.
         let mut first = BTreeSet::new();
         for &pf in PixelFormat::ALL {
             let mut outcome = Vec::new();
@@ -1514,29 +1473,29 @@ fn mipmaps_of_every_format_run_or_are_refused_typed() {
                 ]));
                 let command_buffer = queue.command_buffer().unwrap();
                 let mut blit = command_buffer.blit_command_encoder().unwrap();
-                let volume = ty == TextureType::Type3D;
-                // An RGBX format's chain is not yet held (Metal stores X = green in its levels,
-                // zeros for `RGBX8Snorm`'s): refused `NotImplemented(MipmapGeneration)`, below.
-                let computed =
-                    !x_channel(pf) && (filtered(pf, extent, levels, volume) || picked(pf));
-                match blit.generate_mipmaps(&t) {
+                let before = device.work_counts();
+                let result = blit.generate_mipmaps(&t);
+                let after = device.work_counts();
+                let blits = after.image_blits_recorded - before.image_blits_recorded;
+                let filter = after.mipmaps_filtered - before.mipmaps_filtered;
+                match result {
                     // Plain Metal leaves a depth or stencil texture as it is.
                     Ok(()) if is_depth_stencil(pf) => outcome.push("left as it is"),
-                    Ok(()) if computed => {
-                        exact += 1;
-                        if let Some(chain) = filter_chain(pf, extent, levels, volume) {
-                            first.extend(forced(&[(
-                                Degradation::MipmapTieRounding,
-                                chain.near_ties,
-                            )]));
-                        }
-                        outcome.push("exact");
+                    Ok(()) if picked(pf) => {
+                        assert_eq!((blits, filter), (0, 0), "{pf:?} {ty:?}: picks");
+                        picks += 1;
+                        outcome.push("picked");
+                    }
+                    Ok(()) if filter == 1 => {
+                        assert_eq!(blits, 0, "{pf:?} {ty:?}: the filter alone");
+                        filtered += 1;
+                        outcome.push("compute filter");
                     }
                     Ok(()) => {
-                        ran += 1;
-                        outcome.push("ran");
+                        assert_eq!(blits, levels - 1, "{pf:?} {ty:?}: a blit a level");
+                        blitted += 1;
+                        outcome.push("blits");
                     }
-                    Err(e) if computed => panic!("{pf:?} {ty:?}: an exact chain refused: {e}"),
                     Err(Error::Invalid(Invalid {
                         problem: Problem::Mipmap(_),
                         ..
@@ -1546,6 +1505,10 @@ fn mipmaps_of_every_format_run_or_are_refused_typed() {
                     }
                     Err(Error::Unsupported(u)) => {
                         assert_eq!(u.feature, Feature::MipmapGeneration, "{pf:?}: {u:?}");
+                        assert!(
+                            x_channel(pf) || MipmapFilterChain::texel_bytes(pf).is_none(),
+                            "{pf:?} {ty:?}: refused where the compute filter computes it: {u:?}"
+                        );
                         gaps += 1;
                         outcome.push("refused");
                     }
@@ -1554,43 +1517,38 @@ fn mipmaps_of_every_format_run_or_are_refused_typed() {
                 blit.end_encoding().unwrap();
                 run(&command_buffer);
             }
-            let v = device.mipmap_generation(pf);
-            // A refusal may come before the check (a format without linear filtering).
-            match (outcome.contains(&"ran"), outcome.contains(&"refused")) {
-                (true, false) => assert_eq!(v, MipmapVerdict::AcceptedWithinSpread, "{pf:?}"),
-                (true, true) => assert_ne!(v, MipmapVerdict::NotChecked, "{pf:?}"),
-                _ => {}
-            }
             if outcome
                 .iter()
                 .any(|o| !matches!(*o, "Metal refuses" | "no texture" | "left as it is"))
             {
                 lines.push(format!(
-                    "  {}: 2D 8x8 {}, 2D 7x5 {}, 3D 4x4x4 {}, verdict {}",
+                    "  {}: 2D 8x8 {}, 2D 7x5 {}, 3D 4x4x4 {}",
                     pf.name(),
                     outcome[0],
                     outcome[1],
                     outcome[2],
-                    verdict(v)
                 ));
             }
         }
         eprintln!(
-            "mipmaps on {}: {exact} exact (Metal's, its filter computed or its texels picked), \
-             {ran} ran (near-equivalent, within Metal's spread, not Metal's), {metal} refused as \
-             Metal refuses them, {gaps} refused by the device's check or features",
+            "mipmaps on {}: {blitted} by the device's blits, {filtered} by the compute filter \
+             (both the device's filter, not Apple's: a near-equivalent), {picks} picked (plain \
+             Metal's texels), {metal} refused as Metal refuses them, {gaps} refused (not \
+             implemented)",
             device.name()
         );
         for line in lines {
             eprintln!("{line}");
         }
         assert!(metal > 0);
-        first.extend(forced(&[(Degradation::MipmapsWithinSpread, ran > 0)]));
+        assert!(blitted > 0);
+        let ran = blitted + filtered > 0;
+        first.extend(forced(&[(Degradation::DeviceFilteredMipmaps, ran)]));
         let announced = assert_made_once(&messages, &[], &first);
         for kind in MIPMAPS {
             assert_eq!(
                 announced.contains_key(&kind),
-                ran > 0,
+                ran,
                 "{kind:?} exactly where a chain ran: {announced:?}"
             );
         }

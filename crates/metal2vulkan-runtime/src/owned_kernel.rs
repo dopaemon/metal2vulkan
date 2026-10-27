@@ -8,7 +8,8 @@
 //!   push range, and the compute pipeline. The device keeps them
 //!   ([`OwnedKernels`]) and destroys them with itself; a command buffer holds its device, so a
 //!   kernel outlives every command that records it. The mipmap filter is one kernel per
-//!   `MipmapFilterKernel` a chain dispatches (a format's few steps; bounded by the formats), and
+//!   `MipmapFilterKernel` a chain dispatches (a format's 2D and 3D steps, fetching or not;
+//!   bounded by the formats), and
 //!   the index rewrite one per `RewriteProgram` and `RewritePhase` (closed enums of a few).
 //! - **Descriptor sets** ([`OwnedSets`]): one set per dispatch of a command, each written with the
 //!   command's image views and buffer ranges, from a fitted arena of their own
@@ -106,9 +107,8 @@ pub(super) enum OwnedModule {
     /// image.
     ShadowCopyIn(ShadowTexelView),
     /// `bind::mipmap_filter_module` of one kernel: a level of a mipmap chain from the level
-    /// above it, as Metal's filter computes it (`mipmap_filter.rs`); a kernel that fetches the
-    /// first level binds its sampled view first. Needs `shaderInt64`: a device without it fails
-    /// to build it with `Unsupported`.
+    /// above it, by the compute filter of a format the device's blits cannot filter
+    /// (`mipmap_filter.rs`); a kernel that fetches the first level binds its sampled view first.
     MipmapFilter(MipmapFilterKernel),
     /// `bind::mesh_scan_module`: a scanned emulated mesh draw's mesh threadgroups, records and
     /// draw (`render/mesh.rs`).
@@ -360,7 +360,7 @@ impl OwnedModule {
                 let module =
                     metal2vulkan::bind::mipmap_filter_module(device.compile_device(), kernel)
                         .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 5 - u32::from(kernel.fetches()), 0))
+                Ok((module.spirv.to_vec(), 3 - u32::from(kernel.fetches()), 0))
             }
             OwnedModule::MeshScan => {
                 let module = metal2vulkan::bind::mesh_scan_module(device.compile_device())

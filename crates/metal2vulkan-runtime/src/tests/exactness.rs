@@ -64,10 +64,10 @@ fn the_kinds_metal_answers_otherwise_are_named() {
     ] {
         assert!(one_of_metals.contains(&kind), "{kind:?}");
     }
-    // The device's blit chain lies within a unit of an M3 Max's or an M4's levels, at neither's
-    // exactly: a near-equivalent, not one of Metal's answers.
+    // The device's filtered mipmaps are at no Apple GPU's levels exactly: a near-equivalent, not
+    // one of Metal's answers.
     assert_eq!(
-        D::MipmapsWithinSpread.exactness(),
+        D::DeviceFilteredMipmaps.exactness(),
         Exactness::NearEquivalent
     );
     // A state's identifier with indirect command buffer support, or a buffer's after an encoder,

@@ -734,8 +734,8 @@ const USAGE_FEATURES: [(ImageUsageFlags, FormatFeatureFlags2); 6] = [
 ];
 
 /// The features of an image's tiling a texture of several mip levels relies on beyond its
-/// usages': `generate_mipmaps` blits each level from the one above, linearly filtered
-/// (`mipmap_plan.rs`).
+/// usages': `generate_mipmaps` blits each level from the one above, linearly filtered, where the
+/// format has them (`mipmap_plan.rs`; the compute filter elsewhere).
 const MIPMAP_FEATURES: FormatFeatureFlags2 = FormatFeatureFlags2::BLIT_SRC
     .union(FormatFeatureFlags2::BLIT_DST)
     .union(FormatFeatureFlags2::SAMPLED_IMAGE_FILTER_LINEAR);

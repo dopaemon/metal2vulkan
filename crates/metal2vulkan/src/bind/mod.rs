@@ -64,9 +64,9 @@
 //! the [`PlanesCopy`] view of its texel size. A multisampled depth or stencil aspect moves
 //! between images without colour copies through the draws of [`depth_stencil_copy_modules`] and
 //! the kernel of [`stencil_split_module`], and resolves where the device's resolve modes do not
-//! state Metal's filter through the draws of [`depth_stencil_resolve_modules`]. The mipmaps of the
-//! colour formats Metal's filter computes are its answer through the [`MipmapFilterChain`]
-//! dispatches of [`mipmap_filter_module`]. Compute commands
+//! state Metal's filter through the draws of [`depth_stencil_resolve_modules`]. The mipmaps of a
+//! format the device's blits cannot filter are a bilinear filter in `float` through the
+//! [`MipmapFilterChain`] dispatches of [`mipmap_filter_module`]. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
 //! addresses: the [`replay_preprocess`] of an execution ([`ReplayExecution`]) over registered
 //! [`ReplayVariant`]s, recorded with [`replay_preprocess_module`], writes each command's arguments
@@ -252,7 +252,7 @@ pub use mesh_arguments::{
 pub use mesh_scan::{mesh_object_arguments_module, mesh_scan_module, MeshScanModule};
 pub use mipmap_filter::{
     mipmap_filter_module, MipmapFilterChain, MipmapFilterKernel, MipmapFilterLevel,
-    MipmapFilterModule, MipmapRule,
+    MipmapFilterModule,
 };
 pub use neutral::NeutralResource;
 pub use plan::resources::sampler_desc;

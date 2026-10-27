@@ -218,8 +218,6 @@ assoc-const	metal2vulkan::bind::MeshScanModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::MeshScanModule::STATUS_BINDING	pub const STATUS_BINDING: u32
 assoc-const	metal2vulkan::bind::MeshScanModule::WORK_BINDING	pub const WORK_BINDING: u32
 assoc-const	metal2vulkan::bind::MipmapFilterModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::KEPT_IN_BINDING	pub const KEPT_IN_BINDING: u32
-assoc-const	metal2vulkan::bind::MipmapFilterModule::KEPT_OUT_BINDING	pub const KEPT_OUT_BINDING: u32
 assoc-const	metal2vulkan::bind::MipmapFilterModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::MipmapFilterModule::PARAMS_BINDING	pub const PARAMS_BINDING: u32
 assoc-const	metal2vulkan::bind::MipmapFilterModule::SET	pub const SET: u32
@@ -715,8 +713,6 @@ assoc-const-value	metal2vulkan::bind::MeshScanModule::SET	0
 assoc-const-value	metal2vulkan::bind::MeshScanModule::STATUS_BINDING	1
 assoc-const-value	metal2vulkan::bind::MeshScanModule::WORK_BINDING	0
 assoc-const-value	metal2vulkan::bind::MipmapFilterModule::DESTINATION_BINDING	1
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::KEPT_IN_BINDING	3
-assoc-const-value	metal2vulkan::bind::MipmapFilterModule::KEPT_OUT_BINDING	4
 assoc-const-value	metal2vulkan::bind::MipmapFilterModule::LOCAL_SIZE	kernel::LOCAL_SIZE
 assoc-const-value	metal2vulkan::bind::MipmapFilterModule::PARAMS_BINDING	2
 assoc-const-value	metal2vulkan::bind::MipmapFilterModule::SET	0
@@ -1318,7 +1314,6 @@ enum	metal2vulkan-runtime::MappedSampling	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan-runtime::MemoryKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum MemoryKind
 enum	metal2vulkan-runtime::MessageSeverity	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum MessageSeverity
 enum	metal2vulkan-runtime::MipmapProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MipmapProblem
-enum	metal2vulkan-runtime::MipmapVerdict	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MipmapVerdict
 enum	metal2vulkan-runtime::MultisampleDepthResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleDepthResolveFilter
 enum	metal2vulkan-runtime::MultisampleStencilResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleStencilResolveFilter
 enum	metal2vulkan-runtime::NoticePlace	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum NoticePlace
@@ -1388,7 +1383,6 @@ enum	metal2vulkan::bind::MergePhase	#[derive(Clone, Copy, Debug, PartialEq, Eq, 
 enum	metal2vulkan::bind::MeshArgumentsForm	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum MeshArgumentsForm
 enum	metal2vulkan::bind::MeshGroups	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshGroups
 enum	metal2vulkan::bind::MeshRecordsRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshRecordsRegion
-enum	metal2vulkan::bind::MipmapRule	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MipmapRule
 enum	metal2vulkan::bind::NeutralResource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NeutralResource
 enum	metal2vulkan::bind::PlanDiagnostic	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PlanDiagnostic
 enum	metal2vulkan::bind::PlaneSource	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PlaneSource
@@ -2719,6 +2713,7 @@ field	metal2vulkan-runtime::WorkCounts.memory_blocks_live	pub memory_blocks_live
 field	metal2vulkan-runtime::WorkCounts.memory_frees	pub memory_frees: MemoryFrees
 field	metal2vulkan-runtime::WorkCounts.merged_draw_commands	pub merged_draw_commands: u64
 field	metal2vulkan-runtime::WorkCounts.mipmap_first_levels_fetched	pub mipmap_first_levels_fetched: u64
+field	metal2vulkan-runtime::WorkCounts.mipmaps_filtered	pub mipmaps_filtered: u64
 field	metal2vulkan-runtime::WorkCounts.missed_completion_wakes	pub missed_completion_wakes: u64
 field	metal2vulkan-runtime::WorkCounts.modifier_feature_queries	pub modifier_feature_queries: u64
 field	metal2vulkan-runtime::WorkCounts.new_buffer_bytes_cleared	pub new_buffer_bytes_cleared: u64
@@ -3291,14 +3286,11 @@ field	metal2vulkan::bind::MipmapFilterChain.bytes	pub bytes: u64
 field	metal2vulkan::bind::MipmapFilterChain.fetch	pub fetch: Option<Format>
 field	metal2vulkan::bind::MipmapFilterChain.layers	pub layers: u32
 field	metal2vulkan::bind::MipmapFilterChain.levels	pub levels: Vec<MipmapFilterLevel>
-field	metal2vulkan::bind::MipmapFilterChain.near_ties	pub near_ties: bool
 field	metal2vulkan::bind::MipmapFilterChain.pixel_format	pub pixel_format: PixelFormat
-field	metal2vulkan::bind::MipmapFilterChain.unlike_an_m3	pub unlike_an_m3: bool
 field	metal2vulkan::bind::MipmapFilterChain.zeroed	pub zeroed: bool
 field	metal2vulkan::bind::MipmapFilterLevel.bytes	pub bytes: u64
 field	metal2vulkan::bind::MipmapFilterLevel.extent	pub extent: [u32; 3]
 field	metal2vulkan::bind::MipmapFilterLevel.groups	pub groups: [u32; 2]
-field	metal2vulkan::bind::MipmapFilterLevel.kept	pub kept: Option<(u64, u64)>
 field	metal2vulkan::bind::MipmapFilterLevel.kernel	pub kernel: Option<MipmapFilterKernel>
 field	metal2vulkan::bind::MipmapFilterLevel.offset	pub offset: u64
 field	metal2vulkan::bind::MipmapFilterLevel.params	pub params: Option<(u64, Vec<u32>)>
@@ -4950,6 +4942,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceAnisotropicFilter	DeviceAn
 macro-member	metal2vulkan-runtime::Degradation::DeviceArithmetic	DeviceArithmetic = "device-arithmetic";
 macro-member	metal2vulkan-runtime::Degradation::DeviceColorConversion	DeviceColorConversion = "device-color-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals = "device-denormals";
+macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncoding = "device-nan-encoding";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
@@ -5027,8 +5020,6 @@ macro-member	metal2vulkan-runtime::Degradation::LinkedSamplerNumbering	LinkedSam
 macro-member	metal2vulkan-runtime::Degradation::LoopedSampleOutputs	LoopedSampleOutputs = "looped-sample-outputs";
 macro-member	metal2vulkan-runtime::Degradation::MemorylessBacked	MemorylessBacked = "memoryless-backed", Performance,
 macro-member	metal2vulkan-runtime::Degradation::MemorylessTextureBuffer	MemorylessTextureBuffer = "memoryless-texture-buffer", Performance,
-macro-member	metal2vulkan-runtime::Degradation::MipmapTieRounding	MipmapTieRounding = "mipmap-tie-rounding", Precision,
-macro-member	metal2vulkan-runtime::Degradation::MipmapsWithinSpread	MipmapsWithinSpread = "mipmaps-within-spread", Precision,
 macro-member	metal2vulkan-runtime::Degradation::MisplacedNotice	MisplacedNotice = "misplaced-notice", Performance,
 macro-member	metal2vulkan-runtime::Degradation::MixedDepthStencilResolve	MixedDepthStencilResolve = "mixed-depth-stencil-resolve", Precision,
 macro-member	metal2vulkan-runtime::Degradation::MoltenVkArgumentBuffersUnread	MoltenVkArgumentBuffersUnread = "moltenvk-argument-buffers-unread", Precision,
@@ -7668,7 +7659,6 @@ method	metal2vulkan-runtime::Device::imports_shared_host_pointers	pub fn imports
 method	metal2vulkan-runtime::Device::in_place_check_report	pub fn in_place_check_report(&self) -> Vec<String>
 method	metal2vulkan-runtime::Device::in_place_check_took	pub fn in_place_check_took(&self) -> Option<Duration>
 method	metal2vulkan-runtime::Device::metal_heap_texture_size_and_align	pub fn metal_heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<Option<SizeAndAlign>, Error>
-method	metal2vulkan-runtime::Device::mipmap_generation	pub fn mipmap_generation(&self, pixel_format: PixelFormat) -> MipmapVerdict
 method	metal2vulkan-runtime::Device::name	pub fn name(&self) -> &str
 method	metal2vulkan-runtime::Device::new_argument_encoder_with_arguments	pub fn new_argument_encoder_with_arguments(&self, arguments: &[ArgumentDescriptor]) -> Result<ArgumentEncoder, Error>
 method	metal2vulkan-runtime::Device::new_argument_encoder_with_buffer_binding	pub fn new_argument_encoder_with_buffer_binding(&self, binding: &BufferBinding) -> Result<ArgumentEncoder, Error>
@@ -8456,7 +8446,8 @@ method	metal2vulkan::bind::MetalInstance::new	pub fn new() -> MetalInstance
 method	metal2vulkan::bind::MipmapFilterChain::expected_levels	pub fn expected_levels(&self, first: &[u8]) -> Option<Vec<Vec<u8>>>
 method	metal2vulkan::bind::MipmapFilterChain::fetch_converts	pub fn fetch_converts(format: Format) -> bool
 method	metal2vulkan::bind::MipmapFilterChain::fetch_format	pub fn fetch_format(image: Format) -> Option<Format>
-method	metal2vulkan::bind::MipmapFilterChain::plan	pub fn plan(pixel_format: PixelFormat, extent: [u32; 3], layers: u32, levels: u32, volume: bool, compressed: bool, rule: MipmapRule, alignment: u64, max_range: u32, max_groups: [u32; 2], fetch: Option<Format>) -> Option<MipmapFilterChain>
+method	metal2vulkan::bind::MipmapFilterChain::plan	pub fn plan(pixel_format: PixelFormat, extent: [u32; 3], layers: u32, levels: u32, volume: bool, alignment: u64, max_range: u32, max_groups: [u32; 2], fetch: Option<Format>) -> Option<MipmapFilterChain>
+method	metal2vulkan::bind::MipmapFilterChain::texel_bytes	pub fn texel_bytes(pixel_format: PixelFormat) -> Option<u32>
 method	metal2vulkan::bind::MipmapFilterKernel::fetches	pub fn fetches(&self) -> bool
 method	metal2vulkan::bind::NeutralResource::for_image	pub fn for_image(class: &ImageHandleClass) -> Option<NeutralResource>
 method	metal2vulkan::bind::NeutralResource::format	pub fn format(&self) -> Option<vk::Format>
@@ -11561,9 +11552,6 @@ variant	metal2vulkan-runtime::MessageSeverity::Info	Info
 variant	metal2vulkan-runtime::MessageSeverity::Verbose	Verbose
 variant	metal2vulkan-runtime::MessageSeverity::Warning	Warning
 variant	metal2vulkan-runtime::MipmapProblem::NotColorRenderable	NotColorRenderable
-variant	metal2vulkan-runtime::MipmapVerdict::AcceptedWithinSpread	AcceptedWithinSpread
-variant	metal2vulkan-runtime::MipmapVerdict::NotChecked	NotChecked
-variant	metal2vulkan-runtime::MipmapVerdict::Refused	Refused
 variant	metal2vulkan-runtime::MultisampleDepthResolveFilter::Max	Max
 variant	metal2vulkan-runtime::MultisampleDepthResolveFilter::Min	Min
 variant	metal2vulkan-runtime::MultisampleDepthResolveFilter::Sample0	Sample0
@@ -12081,8 +12069,6 @@ variant	metal2vulkan::bind::MeshGroups::Direct	Direct([u32; 3])
 variant	metal2vulkan::bind::MeshGroups::Scanned	Scanned { arguments: Option<BufferRange> }
 variant	metal2vulkan::bind::MeshRecordsRegion::Exact	Exact(u64)
 variant	metal2vulkan::bind::MeshRecordsRegion::Pool	Pool
-variant	metal2vulkan::bind::MipmapRule::AppleM3MaxPasses	AppleM3MaxPasses
-variant	metal2vulkan::bind::MipmapRule::Filter	Filter
 variant	metal2vulkan::bind::NeutralResource::Image	Image { view_type: vk::ImageViewType, sampled_type: SampledType, depth_compare: bool, samples: u32, storage_format: Option<vk::Format> }
 variant	metal2vulkan::bind::NeutralResource::Sampler	Sampler { compare: bool }
 variant	metal2vulkan::bind::NeutralResource::Sink	Sink { min_bytes: u32 }

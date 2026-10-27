@@ -72,7 +72,7 @@ use super::error::{internal, invalid, Error, Problem, RuntimeGap};
 use super::fresh_unwritten::FreshUnwritten;
 use super::image_plan::copies_between;
 use super::mipmap::record_blit;
-use super::mipmap_plan::{leaves_as_is, not_implemented, plan_mipmaps, MipmapPlan, MipmapRefusal};
+use super::mipmap_plan::{leaves_as_is, plan_mipmaps, MipmapPlan, MipmapRefusal};
 use super::nan_clear;
 use super::pvrtc::{image_block_extent, image_buffer_region, image_region, is_pvrtc};
 use super::replay::{BlitCall, BufferToTexture, TextureToBuffer, TextureToTexture};
@@ -86,6 +86,7 @@ use super::texture::{buffer_image_copy, texture_aspects, texture_region, Texture
 use super::tracker::Access;
 use super::two_planes;
 use super::values::{Origin, Region, ResourceOptions, Size, StorageMode};
+use super::view_plan::ViewRecord;
 use super::Buffer;
 use crate::device::functions::Vk;
 use ash::vk;
@@ -1875,23 +1876,16 @@ impl BlitCommandEncoder {
     }
 
     /// `generateMipmapsForTexture:`: each level after the texture's first from the one above it,
-    /// by bilinear (in 3D, trilinear) filtering, as a chain of blits; every slice of an array or
-    /// cube texture, and on a view its own levels and slices.
+    /// by bilinear (in 3D, trilinear) filtering at the scaled texel centres; every slice of an
+    /// array or cube texture, and on a view its own levels and slices.
     ///
-    /// Every colour format Metal filters but `B5G6R5Unorm` and `BGR5A1Unorm`, extended range
-    /// included, is computed as Metal's filter computes it, on every device with `shaderInt64`
-    /// and without a blit (`mipmap_filter.rs`): a scratch buffer of the levels, one compute
-    /// dispatch per level, and copies in and out, by the rule of the release every device answers
-    /// as ([`MACOS_RELEASE`](crate::MACOS_RELEASE)): every level an Apple M3 Max's filter of the
-    /// level above.
-    ///
-    /// Elsewhere (those two formats, a device without `shaderInt64`, limits that do not fit the
-    /// chain) Metal's answers differ between Apple GPUs, so the runtime checks this device's
-    /// blits per pixel format at the format's first `generate_mipmaps` (on the device's internal
-    /// submission, synchronously) and keeps the verdict ([`Device::mipmap_generation`]): an
-    /// accepted format's mipmaps lie within the spread measured between an Apple M3 Max and an
-    /// Apple M4, not at Metal's exact answer, a near-equivalent announced once per device
-    /// (`mipmaps-within-spread`).
+    /// The device's filter, not Apple's: the device's blit chain (`vkCmdBlitImage` with
+    /// `VK_FILTER_LINEAR`, one blit a level) for every format its blits filter, and for the others
+    /// (an extended-range format, an 8-bit sRGB texture the device holds as its UNORM twin, a
+    /// format without blits or linear filtering) the runtime's compute filter in `float`: a
+    /// scratch buffer of the levels, one compute dispatch per level, and copies in and out
+    /// (`mipmap_filter.rs`). Neither gives Metal's bytes exactly, which also differ between
+    /// Apple's GPUs; announced once per device (`device-filtered-mipmaps`).
     ///
     /// An integer format, which Metal's API validation stops, takes plain Metal's answer exactly,
     /// on every device (an M4 under macOS 27.0.1): each level's texel `i` is the level above's
@@ -1903,24 +1897,21 @@ impl BlitCommandEncoder {
     /// leaves them; Metal's API validation asserts on them.
     ///
     /// Refused: what Metal stops with no defined answer (`Invalid` with a
-    /// [`MipmapProblem`](super::MipmapProblem): a compressed format); a format the device cannot
-    /// filter linearly (`Unsupported`, naming the format); a format whose check failed or whose
-    /// Metal answer is not measured, a 1D texture, a view of another format than its texture (of
-    /// another texel size, for an integer format), an integer texture whose image takes no
-    /// transfers or whose scratch buffer would pass the device's `max_buffer_length`, and a
-    /// texture of an extended-range format the filter cannot compute on the device (its image
-    /// holds raw codes, which no blit filters: `Unsupported`, `NotImplemented` for
-    /// `MipmapGeneration`); a texture of another device (`Invalid`).
-    ///
-    /// [`Device::mipmap_generation`]: super::Device::mipmap_generation
+    /// [`MipmapProblem`](super::MipmapProblem): a compressed format); a format neither the
+    /// device's blits filter nor the compute filter takes (`Unsupported`, naming the format's
+    /// linear filter where the device lacks it); a YCbCr or RGBX format, a view of another format
+    /// than its texture (of another texel size, for an integer format), a texture whose image
+    /// takes no transfers, and a chain whose scratch buffer or dispatches pass the device's limits
+    /// (`Unsupported`, `NotImplemented` for `MipmapGeneration`); a texture of another device
+    /// (`Invalid`).
     pub fn generate_mipmaps(&mut self, texture: &Texture) -> Result<(), Error> {
         self.logged(
             |_| BlitCall::GenerateMipmaps(texture.clone()),
             |this| {
                 // A view that reads its image in the image's own format generates them as a texture
-                // of that format over the same levels: the same bits, filtered alike
-                // (`bind::mipmap_filter`'s layouts pair the formats `metal::format::swizzle_over`
-                // pairs).
+                // of that format over the same levels: the same bits, filtered alike (a filter
+                // takes each channel alone, and `metal::format::swizzle_over` pairs formats of the
+                // same channels).
                 match texture.bound_twin() {
                     Some(twin) => this.mipmaps(&twin),
                     None => this.mipmaps(texture),
@@ -1959,32 +1950,22 @@ impl BlitCommandEncoder {
             Ok(MipmapPlan::Picks(picks)) => {
                 return self.pick_mipmaps(texture, &picks, read(), write());
             }
-            Ok(MipmapPlan::Blits(blits)) => Ok(blits),
+            // A format the device's blits cannot filter: the compute filter (`mipmap_filter.rs`).
+            Ok(MipmapPlan::Filter) => {
+                if !self.filter_mipmaps(texture, &facts, read(), write())? {
+                    return Err(gap());
+                }
+                announce_mipmaps(&device, record, "the runtime's compute filter");
+                return Ok(());
+            }
+            Ok(MipmapPlan::Blits(blits)) => blits,
             Err(MipmapRefusal::Invalid(problem)) => {
                 return Err(invalid(CALL, Problem::Mipmap(problem)));
             }
-            Err(MipmapRefusal::Unsupported(unsupported)) => Err(Error::Unsupported(unsupported)),
+            Err(MipmapRefusal::Unsupported(unsupported)) => {
+                return Err(Error::Unsupported(unsupported))
+            }
         };
-        // Metal's filter, computed (`mipmap_filter.rs`), where the device runs it; no blit, so
-        // no check. An extended-range format, which no blit filters, is refused without it.
-        let own_format = texture.record().pixel_format == texture.image_plan()?.pixel_format;
-        if own_format && self.filter_mipmaps(texture, &facts, read(), write())? {
-            return Ok(());
-        }
-        if not_implemented(texture.record().pixel_format) {
-            return Err(gap());
-        }
-        let blits = blits?;
-        let one_dimensional = matches!(
-            texture.record().texture_type,
-            TextureType::Type1D | TextureType::Type1DArray
-        );
-        if one_dimensional || !own_format {
-            return Err(gap());
-        }
-        if !device.mipmaps_accepted(texture)? {
-            return Err(gap());
-        }
         let (image, aspects) = (texture.raw_image()?, texture_aspects(texture.image_plan()?));
         device.shared().counts.pool_compiled(
             crate::work_counts::PoolCompiled::ImageBlit,
@@ -2019,15 +2000,7 @@ impl BlitCommandEncoder {
             })
             .collect();
         self.scrub(texture, written)?;
-        let pixel_format = texture.record().pixel_format;
-        device.degrade(Degradation::MipmapsWithinSpread, || {
-            (
-                format!("generate_mipmaps of a {} texture", pixel_format.name()),
-                "the device's blit chain gives the format's mipmaps within Metal's measured \
-                 spread, which the runtime checked at the format's first generate_mipmaps"
-                    .to_owned(),
-            )
-        });
+        announce_mipmaps(&device, record, "the device's blit chain");
         Ok(())
     }
 
@@ -2287,4 +2260,23 @@ fn through_buffer(
         out_of,
         into: into.iter().copied().zip(regions).collect(),
     })
+}
+
+/// Announce `generate_mipmaps` of a texture presenting `record` made by `how` (the device's blit
+/// chain or the runtime's compute filter) as the device's filter, not Apple's
+/// (`device-filtered-mipmaps`).
+fn announce_mipmaps(device: &super::Device, record: &ViewRecord, how: &str) {
+    let (pixel_format, texture_type) = (record.pixel_format, record.texture_type);
+    device.degrade(Degradation::DeviceFilteredMipmaps, || {
+        (
+            format!(
+                "generate_mipmaps of a {} {texture_type:?} texture",
+                pixel_format.name()
+            ),
+            format!(
+                "each level is {how}'s linear filter of the one above, not Apple's GPU's, whose \
+                 bytes differ near rounding boundaries"
+            ),
+        )
+    });
 }

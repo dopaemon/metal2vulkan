@@ -104,7 +104,7 @@ feature	TextureSize	app	a texture past a device's image limits
 feature	TextureSampleCount	app	a sample count a device lacks for the texture
 feature	TextureView	app	a texture view Vulkan cannot make exactly
 feature	TextureSwizzle	app	texture swizzles whose Metal behaviour is unmeasured
-feature	MipmapGeneration	app	generateMipmapsForTexture: where the device's filter is not Metal's
+feature	MipmapGeneration	app	generateMipmapsForTexture: of a format or chain neither the device's blits nor the compute filter can run
 feature	HostMemory	system	newBufferWithBytesNoCopy: where the device cannot import the memory
 feature	GpuTimes	rare	GPU times on a queue without timestamps
 feature	CountingVisibility	rare	counting occlusion queries on a device without precise queries

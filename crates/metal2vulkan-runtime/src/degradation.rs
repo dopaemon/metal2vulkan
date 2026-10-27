@@ -857,14 +857,21 @@ degradations! {
              resource: coalesced accesses at the bus's speed, and scattered writes far slower \
              (4-byte stores 12 bytes apart at 0.08 GB/s on an RTX 3090, where device-local \
              memory takes them at 850 GB/s)";
-        /// `generate_mipmaps` through the device's blit chain, which the runtime's check accepted
-        /// for the texture's pixel format within the spread Metal's own GPUs show
-        /// (`mipmap.rs`): Metal has no one answer, an Apple M3 Max's and an Apple M4's differing by
-        /// up to 1 unit in the last place.
-        MipmapsWithinSpread = "mipmaps-within-spread", Precision,
-            "each level is the device's linear blit of the one above, which on the check's inputs \
-             lay within 1 unit in the last place (2 for 32-bit float) of an Apple M3 Max's or an \
-             Apple M4's answer, not at either's exactly; other inputs are not checked";
+        /// `generate_mipmaps` of a filtered format (not an integer one, whose texels are picked as
+        /// plain Metal picks them): each level is the device's linear filter of the one above at
+        /// the scaled texel centres, its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`,
+        /// `mipmap_plan.rs`) where its blits filter the image's format, else the runtime's
+        /// bilinear (trilinear in 3D) filter in `float` (`mipmap_filter.rs`): an extended-range
+        /// format, an 8-bit sRGB texture held as its UNORM twin, or a format without blits or
+        /// linear filtering. Neither is Apple's datapath, whose answers also differ between
+        /// Apple's GPUs (an M3 Max's and an M4's by up to a unit in the last place, and wholly
+        /// where a box averages a float format's largest and smallest values). Announced once per
+        /// device; no bound against Metal's answer is measured.
+        DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
+            "each level is the device's linear filter of the one above (its blit, or a bilinear \
+             filter in float where its blits cannot filter the format), not Apple's: a channel \
+             can differ from Metal's where the filtered value lies near a rounding boundary, and \
+             wholly where a box averages infinities, NaNs or a float format's extremes";
         /// A depth or stencil texture made in a heap on a device whose driver lays depth and
         /// stencil images apart from the memory they are bound to
         /// ([`metal2vulkan::device::DriverFact::DepthStencilImagesLieApart`]) that no shadow of the
@@ -1542,16 +1549,6 @@ degradations! {
              answer, which is Metal's for small regions, where Metal's copy of a larger region \
              races and differs from run to run; the source goes through a scratch buffer, two \
              copies instead of one";
-        /// `generate_mipmaps` computed as Metal's filter (`mipmap_filter.rs`) whose levels take a
-        /// rounding the chain does not fit at sums a hair from a rounding boundary
-        /// (`MipmapFilterChain::near_ties`): a texture of a format with an 8-bit sRGB colour
-        /// channel (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`), whose
-        /// filtered levels take it. `RGB10A2Unorm`, `BGR10A2Unorm`, `BGR10_XR`, `BGRA10_XR`,
-        /// `ABGR4Unorm` and `A1BGR5Unorm` are exact.
-        MipmapTieRounding = "mipmap-tie-rounding", Precision,
-            "each level is Metal's but at a value whose sum lies a hair from a rounding boundary, \
-             which may be one unit off: an 8-bit sRGB colour code of a filtered level (1 of \
-             5,331,270 measured values)";
         /// A draw whose render pipeline state blends into, or reads (a framebuffer fetch, or the
         /// interlocked storage form an extended-range blend takes), a color attachment of an
         /// extended-range format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their sRGB

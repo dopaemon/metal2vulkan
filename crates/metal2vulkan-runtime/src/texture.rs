@@ -87,7 +87,6 @@ use super::linear_plan::{
     aliases, check_linear_limits, holding, linear_lack, LinearImage, LinearLack,
 };
 use super::memory::{MemoryClass, Placement};
-use super::mipmap::MipmapChecks;
 use super::nan_clear;
 use super::neutral::Neutrals;
 use super::pvrtc::{
@@ -203,8 +202,6 @@ pub(super) struct TextureState {
     linear_attachments: bool,
     /// How the runtime places an image in a memory block of its own.
     placement: ImagePlacement,
-    /// The verdicts of `generate_mipmaps`' per-format checks (`mipmap.rs`).
-    pub(super) mipmaps: Mutex<MipmapChecks>,
     /// The neutral images and samplers bindings take where nothing is bound (`neutral.rs`).
     pub(super) neutrals: Mutex<Neutrals>,
     /// Parked images, and the makings of the live recyclable ones (`recycle.rs`).
@@ -266,7 +263,6 @@ impl TextureState {
                 buffer_image_granularity,
                 &crate::driver_defects::of(description),
             ),
-            mipmaps: Mutex::new(MipmapChecks::new()),
             neutrals: Mutex::new(Neutrals::default()),
             recycled: Mutex::new(Recycler::new(recycle::IMAGES)),
             storage_placeholders: Mutex::new(Placeholders::default()),
@@ -2045,15 +2041,6 @@ impl Device {
         undeclared_usage(plan, layout, usage, facts, |plan, candidate| {
             self.if_free(plan, candidate, layout.texture_type)
         })
-    }
-
-    /// A texture of `descriptor` only the runtime uses (a check image): as
-    /// [`new_texture`](Self::new_texture) makes it, with an ID no program reads.
-    pub(super) fn new_runtime_texture(
-        &self,
-        descriptor: &TextureDescriptor,
-    ) -> Result<Texture, Error> {
-        self.texture_as("new_texture", descriptor, IdUse::Runtime)
     }
 
     fn texture_as(

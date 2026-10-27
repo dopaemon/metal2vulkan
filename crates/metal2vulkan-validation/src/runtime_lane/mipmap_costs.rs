@@ -1,20 +1,20 @@
 //! The GPU cost of `generate_mipmaps` on the device the cfg selects, without the validation layer:
-//! report only, in release builds, to weigh the path the runtime takes for a format (Metal's filter
-//! computed by the runtime's kernel, or the device's blit chain) before and after a change to it.
+//! report only, in release builds, to weigh the path the runtime takes for a format (the device's
+//! blit chain, or the runtime's compute filter where its blits cannot filter the format) before
+//! and after a change to it.
 //!
 //! Each case times one command buffer holding one `generate_mipmaps` of a private texture, by the
 //! command buffer's GPU start and end times, by the host's wall time from its commit until its
 //! wait returns, and the call's encoding on the host, [`RUNS`] times after one untimed run (which
-//! pays for the format's first-use check or the kernel's pipeline). The wall time bounds the GPU's
+//! pays for the filter kernel's pipeline where the filter runs). The wall time bounds the GPU's
 //! from above on a device whose timestamps are not the command buffer's whole work (MoltenVK's on
 //! an Apple GPU gave a 4096x4096 `RGBA16Float` level in 6.4 us, under the memory's bandwidth).
 //! The cases: `RGBA8Unorm` and `RGBA16Float`, a 4096x4096 texture's whole chain, and two-level
 //! textures from 4096 down to 64 (one level's cost at each size). Printed per case: the median and
 //! the fastest GPU time, the median and the fastest wall time, the median encoding time, and the
-//! notices the case announced (each kind once per device, so at
-//! its first case: `mipmaps-within-spread` for the blit chain). A case the device refuses (for example a format
-//! whose blit chain failed the runtime's check, on a device that runs no filter for it) is
-//! printed with its refusal and skipped.
+//! notices the case announced (each kind once per device, so at its first case:
+//! `device-filtered-mipmaps`). A case the device refuses (a chain past its limits) is printed with
+//! its refusal and skipped.
 //!
 //! Beside each case, the parts of the filter's command that move bytes, each timed alone the same
 //! way in a command buffer of its own (the GPU-side follow-up): the first level copied into a

@@ -1448,6 +1448,7 @@ impl Gpu for Runtime {
             ("calibration_disagreements", c.calibration_disagreements),
             ("storage_forms_taken", c.storage_forms_taken),
             ("addressable_buffers_made", c.addressable_buffers_made),
+            ("mipmaps_filtered", c.mipmaps_filtered),
             ("mipmap_first_levels_fetched", c.mipmap_first_levels_fetched),
             ("compressed_rows_rewritten", c.compressed_rows_rewritten),
             ("pipelines_pooled", c.pipelines_pooled),

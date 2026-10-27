@@ -299,7 +299,6 @@ pub use library::{Function, FunctionDescriptor, Library};
 pub use linear_plan::BufferTextureProblem;
 pub use metal2vulkan::device::DriverFact;
 pub use metal_release::MACOS_RELEASE;
-pub use mipmap::MipmapVerdict;
 pub use mipmap_plan::MipmapProblem;
 #[doc(hidden)]
 pub use pipeline::budget::{set_making_budget_for_measurement, MakingBudgetStarted};

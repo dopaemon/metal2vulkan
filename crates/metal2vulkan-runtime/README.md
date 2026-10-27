@@ -351,7 +351,7 @@ possible on this device (a refusal), or Metal's own answer is no. Run it on the 
 list.
 
 Where Metal's answers differ by macOS release (which pixel formats it describes, how a heap
-texture's blocks lie, how `generate_mipmaps` makes each level, its private device properties),
+texture's blocks lie, its private device properties),
 every device answers as one release, `MACOS_RELEASE` (macOS 27.0.1, measured on an Apple M3 Max),
 on every host, whatever release the host runs. What a device can do, its GPU family, features and
 limits, follows its GPU.

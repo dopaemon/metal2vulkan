@@ -1639,7 +1639,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// that path either.
 ///
 /// `SampledFetchRecoversCodes`, measured by
-/// `runtime_lane::mipmaps_exact::a_first_level_read_in_place_recovers_every_code` at a scratch
+/// `runtime_lane::mipmap_chains::a_first_level_read_in_place_recovers_every_code` at a scratch
 /// commit that reads every fetchable first level in place on every driver (2026-10-08): for each of
 /// the 30 formats a fetch reads, every code of every component, the second level each probe's
 /// filter equal to the CPU's (the filter's answers told apart every probe but those it reads alike:
@@ -1841,7 +1841,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///   (`heap_textures::heap_textures_answer_and_place_as_metal_s_do`),
 ///   `ColorResolveAverageIsMetals` (`resolve_rounding`'s resolves against Metal's rules),
 ///   `SampledFetchRecoversCodes`
-///   (`mipmaps_exact::a_first_level_read_in_place_recovers_every_code`), `DynamicRestartWarns`
+///   (`mipmap_chains::a_first_level_read_in_place_recovers_every_code`), `DynamicRestartWarns`
 ///   (`restart`, `made_at_creation`: its warning withheld at each such pipeline's creation and
 ///   nowhere else), `DontCareStoreIsMetals` (`dont_care_stores`, `kept_buffer_bytes`),
 ///   `ColorBlockDecodeIsMetals` and `ChannelBlockDecodeIsMetals`

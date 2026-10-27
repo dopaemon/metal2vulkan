@@ -57,8 +57,8 @@ impl Degradation {
                 // keeps the earlier texels unless its tiler overflows; reads rows past the first
                 // as memory-dependent bytes; runs no stable range; reads what its copy already
                 // wrote, differently from run to run; answers a plain state's identifier, an
-                // address that differs from run to run. Not `mipmaps-within-spread`: its levels lie
-                // within a unit of an M3 Max's or an M4's, at neither's exactly, so they are a
+                // address that differs from run to run. Not `device-filtered-mipmaps`: its levels are
+                // the device's filter, at no Apple GPU's answer exactly, so they are a
                 // near-equivalent, not one of Metal's. A removed argument's read: Metal gives it no
                 // one value (its compiler drops or folds it, and its debug layer reads zero), and
                 // the runtime gives zero. A color fill packed where fills ignore the color: Metal

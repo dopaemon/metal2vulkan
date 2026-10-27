@@ -1,22 +1,19 @@
-//! `generate_mipmaps` computed as Metal's texture filter computes it: Metal's answer on every
-//! device, whatever its blits give, for every pixel format `bind::mipmap_filter` computes (the
-//! colour formats Metal filters, but `B5G6R5Unorm` and `BGR5A1Unorm`), extended range included, in
-//! a 2D, 2D array, cube, cube array or 3D texture or a view of its texture's format, whatever its
-//! levels' sizes.
-//!
-//! Each level is the Apple M3 Max's at the release every device answers as (`metal_release.rs`,
-//! `bind::MipmapRule::Filter`): its bilinear (trilinear in 3D) filter of the level above at each
-//! texel's centre, at every level of every chain.
+//! `generate_mipmaps` of a format the device's blits cannot filter (`mipmap_plan.rs`'s
+//! [`MipmapPlan::Filter`](super::mipmap_plan::MipmapPlan::Filter): an extended-range format, an
+//! 8-bit sRGB texture held as its UNORM twin, a format without blits or linear filtering), by the
+//! compute filter of `bind::mipmap_filter`: each level a bilinear (trilinear in 3D) filter of the
+//! one above at the scaled texel centres, in `float`, in a 2D, 2D array, cube, cube array or 3D
+//! texture whatever its levels' sizes. It is not Apple's datapath, and it is announced as the
+//! blit chain is (`device-filtered-mipmaps`).
 //!
 //! **The command.** One blit command, between barriers from the commands before it and to the
 //! ones after it ([`BlitCommandEncoder::command`]), over a scratch block the device keeps between
 //! calls (`mipmap_scratch.rs`; `bind::MipmapFilterChain` lays it out): the first level of every
 //! layer copied in, unless it is read in place (below), every later level zeroed where its
 //! texels are narrower than a word (each dispatch ORs them in; a wider texel's writes every
-//! word), each level's words uploaded, one dispatch per later level of its kernel
-//! (`owned_kernel.rs`: one per `MipmapFilterKernel`, the level's format and step built in), each
-//! reading the level the one before wrote (and the values it kept, where it kept them), and
-//! every later level copied back into the texture.
+//! word), each level's tap words uploaded, one dispatch per later level of its kernel
+//! (`owned_kernel.rs`: one per `MipmapFilterKernel`), each reading the level the one before
+//! wrote, and every later level copied back into the texture.
 //!
 //! **The first level read in place**: the first dispatch fetches its taps from a sampled view of
 //! the first level (a 2D array of every layer, 3D for a 3D texture) and recovers each texel's bytes
@@ -25,27 +22,20 @@
 //! samples, and the fetch is exact: the extended-range formats' integer carriers on every device,
 //! the normalized and 16-bit float formats on a driver measured to return values whose recovery
 //! reads every code back (`DriverFact::SampledFetchRecoversCodes`). Vulkan states no precision for
-//! those conversions, so on any other driver the level is copied in. The command buffer holds the
-//! block's lease and the dispatches' descriptor sets until it completes. Where the device lacks
-//! `shaderInt64` (the kernel's), where its limits do not fit the chain (a level or a level's words
-//! past `maxStorageBufferRange`, the scratch past `max_buffer_length`, a dispatch past
-//! `maxComputeWorkGroupCount`), where the image lacks transfers, or where the scratch's memory runs
-//! out, the mipmaps take the device's blit chain instead, as before this path (an extended-range
-//! format, which no blit filters, is refused).
-//!
-//! **Announced** (`mipmap-tie-rounding`, once per device) where a level may be one unit from
-//! Metal's at a sum a hair from a rounding boundary (`MipmapFilterChain::near_ties`).
+//! those conversions, so on any other driver the level is copied in. The
+//! command buffer holds the block's lease and the dispatches' descriptor sets until it completes.
+//! Where the device's limits do not fit the chain (a level past `maxStorageBufferRange`, the
+//! scratch past `max_buffer_length`, a dispatch past `maxComputeWorkGroupCount`) or the scratch's
+//! memory runs out, nothing is recorded and the call is refused.
 
 use super::binding_view::{views_as, VkView};
 use super::blit::BlitCommandEncoder;
-use super::degradation::Degradation;
 use super::error::Error;
 use super::image_plan::ImageFacts;
 use super::image_plan::ImagePlan;
 use super::owned_kernel::OwnedSet;
 use super::owned_kernel::{OwnedModule, OwnedSets};
 use super::sparse::emulated::Written;
-use super::texture::heap_tiled::metal_compresses;
 use super::texture::{texture_aspects, Texture};
 use super::tracker::{Access, Barrier};
 use ash::vk;
@@ -60,9 +50,10 @@ use metal2vulkan::vk::{
 const UPDATE_BYTES: usize = 65536;
 
 impl BlitCommandEncoder {
-    /// Record `texture`'s mipmaps as Metal's filter where this device runs it (the module docs):
-    /// `false`, recording nothing, where it does not. The caller checked Metal's rules and that
-    /// the texture presents its image's own format.
+    /// Record `texture`'s mipmaps by the compute filter (the module docs): `false`, recording
+    /// nothing, where the device's limits do not fit its chain. The caller planned it
+    /// (`mipmap_plan::plan_mipmaps`: Metal's rules, the format, the image's own format and its
+    /// transfers).
     pub(super) fn filter_mipmaps(
         &mut self,
         texture: &Texture,
@@ -73,17 +64,6 @@ impl BlitCommandEncoder {
         let record = texture.record();
         let plan = texture.image_plan()?;
         let volume = record.texture_type == TextureType::Type3D;
-        if matches!(
-            record.texture_type,
-            TextureType::Type1D | TextureType::Type1DArray
-        ) {
-            return Ok(false);
-        }
-        let transfers = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
-        let features = FormatFeatureFlags2::TRANSFER_SRC | FormatFeatureFlags2::TRANSFER_DST;
-        if !plan.usage.contains(transfers) || !facts.optimal(plan.format).contains(features) {
-            return Ok(false);
-        }
         let mut extent = record.extent();
         if !volume {
             extent[2] = 1;
@@ -91,27 +71,12 @@ impl BlitCommandEncoder {
         let device = self.core().device().clone();
         let fetch = fetch_view(plan, facts, &device);
         let limits = &device.properties().description.limits;
-        // Whether Metal keeps the texture (a view's first texture) losslessly compressed, which
-        // the chain's plan takes.
-        let mut root = texture;
-        while let Some(parent) = root.parent_texture() {
-            root = parent;
-        }
-        let compressed = !texture.over_buffer()
-            && metal_compresses(
-                true,
-                root.usage(),
-                root.allow_gpu_optimized_contents(),
-                [root.width(), root.height()],
-            );
         let Some(chain) = MipmapFilterChain::plan(
             record.pixel_format,
             extent,
             record.layer_count,
             record.level_count,
             volume,
-            compressed,
-            crate::metal_release::MIPMAP_RULE,
             limits.min_storage_buffer_offset_alignment,
             limits.max_storage_buffer_range,
             [
@@ -125,8 +90,7 @@ impl BlitCommandEncoder {
         if chain.bytes > device.properties().max_buffer_length {
             return Ok(false);
         }
-        // Each later level's kernel (levels of one kernel share it). The kernels need
-        // `shaderInt64`; a device without it has none.
+        // Each later level's kernel (levels of one kernel share it).
         let mut kernels = Vec::with_capacity(chain.levels.len() - 1);
         for level in &chain.levels[1..] {
             let Some(key) = level.kernel else {
@@ -134,13 +98,7 @@ impl BlitCommandEncoder {
                     "a mipmap filter level without its kernel",
                 ));
             };
-            match device.owned_kernel(OwnedModule::MipmapFilter(key)) {
-                Ok(kernel) => kernels.push(kernel),
-                Err(Error::Compile(metal2vulkan::error::Error::Unsupported(_))) => {
-                    return Ok(false)
-                }
-                Err(error) => return Err(error),
-            }
+            kernels.push(device.owned_kernel(OwnedModule::MipmapFilter(key))?);
         }
         // The device's scratch block, kept between calls (`mipmap_scratch.rs`).
         let Some(scratch) = device.mipmap_scratch(chain.bytes)? else {
@@ -182,15 +140,8 @@ impl BlitCommandEncoder {
             };
             let bytes: Vec<u8> = params.iter().flat_map(|w| w.to_le_bytes()).collect();
             let params_range = (raw, at + offset, bytes.len() as u64);
-            // A kept-values binding the dispatch does not touch takes the level's params.
-            let kept = |k: Option<(u64, u64)>| k.map_or(params_range, |(o, b)| (raw, at + o, b));
             let destination = (raw, at + level.offset, words(level.bytes));
-            let rest = [
-                destination,
-                params_range,
-                kept(above.kept),
-                kept(level.kept),
-            ];
+            let rest = [destination, params_range];
             // The first dispatch's source: the first level's view where it is read in place.
             ranges.push(match first_view.filter(|_| ranges.is_empty()) {
                 Some(view) => OwnedSet {
@@ -266,8 +217,8 @@ impl BlitCommandEncoder {
             // features (checked above), and sampled usage and features where its view is bound
             // (`fetch_view`); every copy, fill, upload (each at most 65536 bytes, a multiple of
             // 4 at a multiple of 4) and binding lies inside the scratch
-            // (`MipmapFilterChain::plan`), and each step reads what the one before it wrote (a
-            // level's kept values included), past a barrier.
+            // (`MipmapFilterChain::plan`), and each step reads what the one before it wrote, past
+            // a barrier.
             unsafe {
                 for (offset, bytes) in &uploads {
                     device.cmd_update_buffer(command_buffer, raw, *offset, bytes);
@@ -334,21 +285,7 @@ impl BlitCommandEncoder {
             })
             .collect();
         self.scrub(texture, written)?;
-        if chain.near_ties {
-            let (pixel_format, texture_type) = (record.pixel_format, record.texture_type);
-            let levels = record.level_count;
-            device.degrade(Degradation::MipmapTieRounding, || {
-                (
-                    format!(
-                        "generate_mipmaps of a {} {texture_type:?} texture of {levels} levels",
-                        pixel_format.name()
-                    ),
-                    "a level's value whose sum lies a hair from a rounding boundary may be one \
-                     unit from Metal's: an 8-bit sRGB code of a filtered level"
-                        .to_owned(),
-                )
-            });
-        }
+        device.shared().counts.mipmaps_filtered();
         Ok(true)
     }
 }

@@ -63,6 +63,7 @@ pub(crate) struct Counters {
     calibration_disagreements: AtomicU64,
     storage_forms_taken: AtomicU64,
     addressable_buffers_made: AtomicU64,
+    mipmaps_filtered: AtomicU64,
     mipmap_first_levels_fetched: AtomicU64,
     compressed_rows_rewritten: AtomicU64,
     pipelines_pooled: AtomicU64,
@@ -816,6 +817,12 @@ impl Counters {
             self.addressable_buffers_made
                 .fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// A `generate_mipmaps` ran the compute filter rather than the device's blits
+    /// (`mipmap_filter.rs`).
+    pub(crate) fn mipmaps_filtered(&self) {
+        self.mipmaps_filtered.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A `generate_mipmaps` read its texture's first level in place, through a sampled view,
@@ -2852,6 +2859,11 @@ pub struct WorkCounts {
     /// no-copy buffer's, a preprocess buffer's). None per buffer placed in the runtime's memory:
     /// MoltenVK makes each such buffer resident in every encoder whose pipeline reads pointers.
     pub addressable_buffers_made: u64,
+    /// `generate_mipmaps` calls that ran the compute filter, of a format the device's blits
+    /// cannot filter, rather than the blit chain (`mipmap_filter.rs`; the chain's blits count in
+    /// [`image_blits_recorded`](Self::image_blits_recorded)): the lanes that make mipmaps hold
+    /// themselves to them.
+    pub mipmaps_filtered: u64,
     /// `generate_mipmaps` calls that read the first level in place through a sampled view, not
     /// copied in (`mipmap_filter.rs`): the lane that measures the fetch holds itself to them.
     pub mipmap_first_levels_fetched: u64,
@@ -4728,6 +4740,7 @@ impl Device {
             calibration_disagreements: (counters.calibration_disagreements).load(Ordering::Relaxed),
             storage_forms_taken: counters.storage_forms_taken.load(Ordering::Relaxed),
             addressable_buffers_made: counters.addressable_buffers_made.load(Ordering::Relaxed),
+            mipmaps_filtered: counters.mipmaps_filtered.load(Ordering::Relaxed),
             mipmap_first_levels_fetched: counters
                 .mipmap_first_levels_fetched
                 .load(Ordering::Relaxed),

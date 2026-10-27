@@ -1740,13 +1740,18 @@ bound.
   it across the bus, as a discrete Mac's GPU does a shared resource: coalesced accesses at the bus's
   speed, and scattered writes far slower (4-byte stores 12 bytes apart at 0.08 GB/s on an RTX 3090,
   where device-local memory takes them at 850 GB/s).
-- `metal2vulkan-degrade-mipmaps-within-spread` (precision). `MipmapsWithinSpread`:
-  `generate_mipmaps` through the device's blit chain, which the runtime's check accepted for the
-  texture's pixel format within the spread Metal's own GPUs show: Metal has no one answer, an Apple
-  M3 Max's and an Apple M4's differing by up to 1 unit in the last place. Cost: each level is the
-  device's linear blit of the one above, which on the check's inputs lay within 1 unit in the last
-  place (2 for 32-bit float) of an Apple M3 Max's or an Apple M4's answer, not at either's exactly;
-  other inputs are not checked.
+- `metal2vulkan-degrade-device-filtered-mipmaps` (precision). `DeviceFilteredMipmaps`:
+  `generate_mipmaps` of a filtered format (an integer format's texels are picked as plain Metal
+  picks them): each level is the device's linear filter of the one above at the scaled texel
+  centres, its blit chain (`vkCmdBlitImage` with `VK_FILTER_LINEAR`) where its blits filter the
+  image's format, else the runtime's bilinear (trilinear in 3D) compute filter in `float`: an
+  extended-range format, an 8-bit sRGB texture held as its UNORM twin, or a format without blits or
+  linear filtering. Neither is Apple's datapath, whose answers also differ between Apple's GPUs (an
+  M3 Max's and an M4's by up to a unit in the last place). Announced once per device; no bound
+  against Metal's answer is measured. Cost: each level is the device's linear filter of the one
+  above (its blit, or a bilinear filter in float where its blits cannot filter the format), not
+  Apple's: a channel can differ from Metal's where the filtered value lies near a rounding boundary,
+  and wholly where a box averages infinities, NaNs or a float format's extremes.
 - `metal2vulkan-degrade-heap-depth-stencil-apart` (precision). `HeapDepthStencilApart`: A depth or
   stencil texture made in a heap on a device whose driver lays depth and stencil images apart from
   the memory they are bound to (`DriverFact::DepthStencilImagesLieApart`) that no shadow of the
@@ -2212,16 +2217,6 @@ bound.
   the copy, memmove's answer, which is Metal's for small regions, where Metal's copy of a larger
   region races and differs from run to run; the source goes through a scratch buffer, two copies
   instead of one.
-- `metal2vulkan-degrade-mipmap-tie-rounding` (precision). `MipmapTieRounding`: `generate_mipmaps`
-  computed as Metal's filter whose levels take a rounding the chain does not fit at sums a hair from
-  a rounding boundary (`MipmapFilterChain::near_ties`): a texture of a format with an 8-bit sRGB
-  colour channel (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`), whose
-  filtered levels take it. `RGB10A2Unorm`, `BGR10A2Unorm`, `BGR10_XR`, `BGRA10_XR`, `ABGR4Unorm` and
-  `A1BGR5Unorm` are exact. Cost: each level is Metal's but at a value whose sum lies a hair from a
-  rounding boundary, which may be one unit off: an 8-bit sRGB colour code of a filtered level (1 of
-  5,331,270 measured values). An Apple M3 Max under macOS 27.0.1 stores an 8-bit sRGB texel one unit
-  below the chain's at two measured sums a hair above a tie (test
-  `the_filter_gives_the_m3_s_chains_under_macos_27_0_1`), which no rule fits yet.
 - `metal2vulkan-degrade-extended-range-blends-stored-codes` (precision).
   `ExtendedRangeBlendsStoredCodes`: A draw whose render pipeline state blends into, or reads (a
   framebuffer fetch, or the interlocked storage form an extended-range blend takes), a color
