@@ -44,14 +44,20 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 
 These override anything below.
 
-1. **Fast by default, exact on request, both kept.** Every choice that trades accuracy for speed
-   (pipeline-creation time or GPU time) defaults to the fast form. Its accurate form stays behind
-   an opt-in `DevicePolicy` switch (`DevicePolicy::exact_answers()` selects them all), with tests
-   of both settings. Never delete either form, and never make the accurate form the default: that
-   is the owner's call alone. `docs/FAST-PATHS.md` is the ledger, one row per choice, edited in
-   place (a ledger, not a journal). A commit that adds, removes or changes such a choice, its
-   bound or its switch updates its row in the same commit; `tests::fast_paths` checks the ledger
-   against the code.
+1. **The GPU's native arithmetic; fast by default, exact on request for the rest.** Arithmetic
+   and value answers (`float` and `half` maths, NaN bits, minimum and maximum, rounding, texel and
+   colour conversions, sampling and filtering, resolves) are the device's own: where the device
+   has a native form, it is the only form, recorded as a `PrecisionNote` where it can differ from
+   Metal's. Never add a path or a switch that emulates Metal's bits where the device has a native
+   form. Capability stays: what the device lacks is implemented or emulated (Translation honesty,
+   below). Every other choice that trades accuracy for speed (pipeline-creation time or GPU time)
+   defaults to the fast form. Its accurate form stays behind an opt-in `DevicePolicy` switch
+   (`DevicePolicy::exact_answers()` selects them all), with tests of both settings. Never delete
+   either form of such a choice, and never make its accurate form the default: that is the
+   owner's call alone. `docs/FAST-PATHS.md` is the ledger, one row per choice, edited in place (a
+   ledger, not a journal). A commit that adds, removes or changes such a choice, its bound or its
+   switch updates its row in the same commit; `tests::fast_paths` checks the ledger against the
+   code.
 2. **An accuracy note is logged, never fatal.** A precision note or degradation is recorded and
    announced, and the work runs, on every device. Only what Metal itself refuses, or an operation
    that cannot run at all, may fail or end anything.
@@ -65,9 +71,10 @@ These override anything below.
   defect. No behavior keyed to an app, a shader hash or a corpus census.
 - **Honest FALLBACK.** Unsupported input returns a typed `Err` (the command line prints
   `FALLBACK`). Never emit wrong-but-valid SPIR-V to silence a gate.
-- **Scope is the device's.** Refuse only what the device truly lacks; implement or exactly
-  emulate the rest. Where no exact form exists, a near-equivalent is allowed only when the
-  artifact records it (a `PrecisionNote`) and the runtime announces it.
+- **Scope is the device's.** Refuse only what the device truly lacks; implement or emulate the
+  rest (an arithmetic or value answer is the device's native one: rule 1). A near-equivalent, the
+  device's native answer included, is allowed only when the artifact records it (a
+  `PrecisionNote`) and the runtime announces it.
 - **Unknown stays unknown.** Do not invent semantics for unsupported opcodes, types or layouts.
   Fail visibly and leave a test or a doc note.
 - **No env-gated product paths.** Translation never branches on environment variables. The

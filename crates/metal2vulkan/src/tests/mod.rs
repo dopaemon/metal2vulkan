@@ -2,8 +2,7 @@
 //! internal items through the former `unstable-internals` feature; as unit tests of the crate they
 //! reach those items directly, so the crate exports nothing for them. `tests/` keeps the tests that
 //! use only the public API. Their data stays where it was: `tests/golden_hashes.tsv`,
-//! `tests/golden_hashes_exact.tsv`, `tests/public_fixture_expectations_engine.tsv`, and
-//! `tests/air_input/`.
+//! `tests/public_fixture_expectations_engine.tsv`, and `tests/air_input/`.
 
 mod air_abi;
 mod air_canon;

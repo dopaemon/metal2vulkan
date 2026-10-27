@@ -43,12 +43,6 @@
 //! ```
 //!
 //! Rows of a fixture whose assembler is not installed (`metal-as` off macOS) are skipped visibly.
-//!
-//! A second table, `golden_hashes_exact.tsv`, pins the same cells of the fixtures that sample,
-//! gather or compute a level of detail (their source declares an `air.sample_texture*`,
-//! `air.gather_texture*` or `air.calculate_*` intrinsic) under every exact form
-//! (`DevicePolicy::exact_answers`). Its profiles' fingerprints are those of that policy. The bless
-//! writes both tables, under the same rule.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -94,29 +88,8 @@ const DEFAULT: Golden = Golden {
     takes: every,
 };
 
-/// The table of the fixtures that sample under every exact form.
-const EXACT: Golden = Golden {
-    table: "tests/golden_hashes_exact.tsv",
-    title: "# Golden output hashes of the engine over the public fixtures that sample x the\n\
-            # committed profiles under every exact form\n\
-            # (src/tests/golden_hashes.rs). Written by the bless; do not edit:\n",
-    policy: DevicePolicy::UNTRUSTED.exact_answers(),
-    takes: samples,
-};
-
 fn every(_: &str) -> bool {
     true
-}
-
-/// Whether a fixture's source declares a sample, a gather or a level-of-detail query.
-fn samples(text: &str) -> bool {
-    [
-        "@air.sample_texture",
-        "@air.gather_texture",
-        "@air.calculate_",
-    ]
-    .iter()
-    .any(|family| text.contains(family))
 }
 
 const BLESS: &str = "cargo nextest run -p metal2vulkan --all-features --run-ignored ignored-only \
@@ -997,14 +970,6 @@ fn golden_hashes_match_the_table() {
     matches_the_table(DEFAULT, &devices, &observed);
 }
 
-/// The fixtures that sample, under every exact form.
-#[test]
-fn exact_golden_hashes_match_the_table() {
-    let devices = devices(EXACT.policy);
-    let observed = observe(EXACT, &devices);
-    matches_the_table(EXACT, &devices, &observed);
-}
-
 /// `golden`'s committed table holds `observed` cell for cell.
 fn matches_the_table(golden: Golden, devices: &[(String, Device)], observed: &Observed) {
     let table = golden.table;
@@ -1045,13 +1010,14 @@ fn matches_the_table(golden: Golden, devices: &[(String, Device)], observed: &Ob
     );
 }
 
-/// Rewrite both tables from what this build observes: `BLESS` above. Refuses when an assembler is
+/// Rewrite the table from what this build observes: `BLESS` above. Refuses when an assembler is
 /// missing; names the cells that changed under an unchanged key, which need a
 /// `cache::SEMANTICS_VERSION` bump since the last bless (the master bless checks it).
 #[test]
 #[ignore]
 fn bless_golden_hashes() {
-    for golden in [DEFAULT, EXACT] {
+    {
+        let golden = DEFAULT;
         let table = golden.table;
         let devices = devices(golden.policy);
         let observed = observe(golden, &devices);
@@ -1132,32 +1098,6 @@ fn a_stale_cell_names_the_key_that_moved_and_not_an_unmoved_cell() {
     assert_eq!(d.changed, ["f.ll | main | a-gpu: was -> now"]);
 }
 
-/// The exact table takes the fixtures that sample, under Metal's exact answers. Those answers are
-/// the runtime's switches alone, which no profile carries, so its profiles' fingerprints are the
-/// default table's.
-#[test]
-fn the_exact_table_takes_the_sampling_fixtures_under_the_exact_answers() {
-    assert_eq!(EXACT.policy, DevicePolicy::default().exact_answers());
-    assert_eq!(DEFAULT.policy, DevicePolicy::default());
-    let all = fixture_paths(DEFAULT);
-    let taken = fixture_paths(EXACT);
-    assert!(!taken.is_empty() && taken.len() < all.len());
-    assert!(taken.iter().all(|f| all.contains(f)));
-    for anisotropic in ["engine/ani_cube_grad.ll", "engine/a4_sample_grad.ll"] {
-        assert!(
-            taken.iter().any(|(name, _)| name == anisotropic),
-            "{anisotropic}"
-        );
-    }
-    let (stem, default) = &devices(DEFAULT.policy)[0];
-    let (_, exact) = &devices(EXACT.policy)[0];
-    assert_eq!(
-        default.profile().fingerprint(),
-        exact.profile().fingerprint(),
-        "{stem}"
-    );
-}
-
 #[test]
 fn the_table_format_round_trips() {
     let mut rows = BTreeMap::new();
@@ -1178,9 +1118,7 @@ fn the_table_format_round_trips() {
         ],
         rows,
     };
-    for golden in [DEFAULT, EXACT] {
-        assert_eq!(Table::parse(&t.render(golden)), Ok(t.clone()));
-    }
+    assert_eq!(Table::parse(&t.render(DEFAULT)), Ok(t.clone()));
 }
 
 /// The rule itself on synthetic tables: a changed cell under unchanged inputs needs a bump; a

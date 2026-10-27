@@ -1,21 +1,26 @@
 # Fast paths: the accuracy ledger
 
-**An accuracy note is logged, never fatal.** The work keeps running; only what Metal itself refuses
-ends it.
+**The GPU's native arithmetic is the contract.** Where the device has a native form of an
+operation (its `float` and `half` arithmetic and functions, NaN bits, minimum and maximum, rounding,
+texel and colour conversions, sampler and filters, resolves), that form is the only one: no path
+emulates Metal's bits. What the device lacks is still implemented or emulated, as capability.
+
+**An accuracy note is logged, never fatal.** Each difference from Metal is recorded in the
+pipeline's artifact as a `PrecisionNote` and announced as `metal2vulkan-degrade-<code>` when the
+runtime makes the pipeline state; each note's rustdoc and docs/API.md section 9 state its bound.
+The work keeps running; only what Metal itself refuses ends it. On MoltenVK on an Apple GPU, whose
+sampler and `float` functions are Metal's own, most rows do not apply.
 
 Each row of the first table is one place where the default trades exactness against Metal for
-speed: pipeline-creation ("making") time or GPU time, mostly off Apple's GPUs. The fast form is the
-default, the accurate form stays behind its switch, and both are kept. This file is a ledger, not a
-journal: rows are edited in place, with no history. A change that adds, removes or changes a fast
-default, its bound or its switch updates its row in the same commit. The test `tests::fast_paths`
-fails when a `DevicePolicy` accuracy choice, one of its values, or a precision note a fast default
-records is missing here, or when this file names a policy value that no longer exists.
-
-Every switch is a field of `DevicePolicy` (the runtime's `DeviceOptions::policy`). On MoltenVK on
-an Apple GPU, whose sampler and `float` functions are Metal's own, most rows do not apply. Each
-difference is recorded in the pipeline's artifact as a `PrecisionNote` and announced as
-`metal2vulkan-degrade-<code>` when the runtime makes the pipeline state; each note's rustdoc and
-docs/API.md section 9 state its bound.
+speed (pipeline-creation ("making") time or GPU time) outside arithmetic: the fast form is the
+default, the accurate form stays behind its `DevicePolicy` switch (the runtime's
+`DeviceOptions::policy`; `DevicePolicy::exact_answers()` selects every one), and both are kept. The
+other tables record the device gaps, the switches whose default is Metal's, the costs of matching
+Metal and the known gaps. This file is a ledger, not a journal: rows are edited in place, with no
+history. A change that adds, removes or changes a fast default, its bound or its switch updates its
+row in the same commit. The test `tests::fast_paths` fails when a `DevicePolicy` accuracy choice,
+one of its values, or a precision note a fast default records is missing here, or when this file
+names a policy value that no longer exists.
 
 ## Fast defaults
 
