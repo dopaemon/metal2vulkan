@@ -110,9 +110,8 @@
 //! `--policy NAMES` (`run` and `time`) opens the device with those `DevicePolicy` switches at their
 //! accurate forms, where it opens at the default policy otherwise: a comma-separated list of
 //! `exact-answers` (`DevicePolicy::exact_answers`) and field names (`sampling`, `ycbcr_filter`,
-//! `float_maths`, `texel_conversion`, `nan_and_min_max`, `rounding_order`), each set to its
-//! `Exact` form, so a making under an application's exact forms is
-//! timed as it makes them.
+//! `texel_conversion`, `nan_and_min_max`), each set to its `Exact` form, so a making under an
+//! application's exact forms is timed as it makes them.
 //!
 //! `--device-type` names the device the draw runs on, as validation's other device commands do
 //! (`cpu` matches only a CPU implementation such as lavapipe); the device opens through
@@ -149,8 +148,7 @@
 
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::{
-    DevicePolicy, FloatMathsPolicy, NanMinMaxPolicy, RoundingOrderPolicy, SamplingPolicy,
-    TexelConversionPolicy, YCbCrFilterPolicy,
+    DevicePolicy, NanMinMaxPolicy, SamplingPolicy, TexelConversionPolicy, YCbCrFilterPolicy,
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::CompareFunction;
@@ -317,14 +315,12 @@ fn policy(options: &BTreeMap<String, String>) -> Result<DevicePolicy, String> {
             "exact-answers" => policy = policy.exact_answers(),
             "sampling" => policy.sampling = SamplingPolicy::Exact,
             "ycbcr_filter" => policy.ycbcr_filter = YCbCrFilterPolicy::Exact,
-            "float_maths" => policy.float_maths = FloatMathsPolicy::Exact,
             "texel_conversion" => policy.texel_conversion = TexelConversionPolicy::Exact,
             "nan_and_min_max" => policy.nan_and_min_max = NanMinMaxPolicy::Exact,
-            "rounding_order" => policy.rounding_order = RoundingOrderPolicy::Exact,
             _ => {
                 return Err(format!(
-                    "--policy {name:?}: exact-answers, sampling, ycbcr_filter, float_maths, \
-                     texel_conversion, nan_and_min_max or rounding_order"
+                    "--policy {name:?}: exact-answers, sampling, ycbcr_filter, texel_conversion \
+                     or nan_and_min_max"
                 ))
             }
         }

@@ -310,8 +310,7 @@ pub(super) const POSITIONED: [Degradation; 1] = [Degradation::PositionsThroughSc
 
 /// The kinds a device announces as it is made, which the lane's constructor takes and checks
 /// exactly (`runtime_lane::creation_kinds`).
-/// `float-tininess-after-rounding` is announced by the devices `native_maths` makes with native
-/// device maths, on every venue but MoltenVK, and by none made with the lane's exact policy.
+/// `float-tininess-after-rounding` is announced by every device on every venue but MoltenVK.
 pub(super) const CREATED: [Degradation; 2] = [
     Degradation::DriverPipelineCacheKept,
     Degradation::FloatTininessAfterRounding,

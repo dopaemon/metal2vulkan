@@ -320,7 +320,7 @@ fn fetch_taps(
     let Some(cube) = cx.decl.families.sampler.linear_cube else {
         return Err(cx.fail("a cube footprint without its fold"));
     };
-    let routines = site.routines.declared(cx)?;
+    let routines = site.routines.declared();
     let i32_ = fb.module().ty(SType::Int {
         width: 32,
         signed: true,

@@ -1020,7 +1020,7 @@ pub fn snapped_on(
     let kind = match snap.kind {
         SnapKind::Axes(kind) => kind,
         SnapKind::Cube(routines) => {
-            let routines = routines.declared(cx)?;
+            let routines = routines.declared();
             let n = lane(fb, size, size_lanes, 0)?;
             return super::face::snapped(fb, coord, n, (routines, snap.face_wrap()));
         }

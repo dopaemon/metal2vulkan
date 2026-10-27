@@ -533,10 +533,8 @@ pub struct ProfileFields {
     /// The enabled capability sets `Requirements` are checked against.
     pub enabled: EnabledCaps,
     /// Which functions the device's `GLSL.std.450` instructions and `OpFDiv` of `float` compute:
-    /// Metal's own, so the translation leaves a function to the device where Metal's compile of the
-    /// module computes it in the call's math mode, and takes the fast reciprocal from the device's
-    /// division, or the device's, so the translation computes the functions whose device answer may
-    /// leave Apple's bound itself.
+    /// Metal's own, in the math mode Metal's compile of the module takes, or the device's. The
+    /// module takes the device's instructions on either; the notes it records differ.
     pub float_functions: FloatFunctions,
     /// Which NaN the device's `float` and `half` arithmetic answers: Metal's canonical NaN, so the
     /// translation leaves it to the device, or the device's own, so the translation selects Metal's
@@ -567,10 +565,6 @@ pub struct ProfileFields {
     /// `NanMinMaxPolicy::Native`). Derived, so a device that keeps Metal's picks keys the same
     /// under both policies.
     pub min_max: MinMaxRoute,
-    /// In whose order Metal's `dot`, `mix` and `fast::sqrt` round: Metal's, or the device's
-    /// single instructions (the policy's `RoundingOrderPolicy::Native`). Derived, as
-    /// [`ProfileFields::min_max`] is.
-    pub rounding_order: RoundingOrderRoute,
     /// The Function storage a thread holds correctly (`device::function_storage`): a stage's
     /// private memory, its call stacks included, may take this much a thread
     /// (`VkLimit::FunctionStorageBytesPerThread`), and a vertex or fragment function on a device
@@ -675,21 +669,19 @@ impl FunctionStorage {
 
 /// Which functions a device's `GLSL.std.450` instructions and `OpFDiv` of `float` compute
 /// ([`ProfileFields::float_functions`]), decided by the driver's measured deviation
-/// [`DriverDeviation::MetalFloatFunctions`].
+/// [`DriverDeviation::MetalFloatFunctions`]. Either way the module takes the device's
+/// instructions.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FloatFunctions {
     /// Metal's own, in the math mode Metal compiles the module with: fast where the entry
     /// declares no `SignedZeroInfNanPreserve`, precise where it declares one, and precise
     /// `tanh` and `atan2` either way. The division likewise: Metal's fast division and
-    /// reciprocal in a fast-math module, its correctly rounded ones otherwise.
+    /// reciprocal in a fast-math module, its correctly rounded ones otherwise. A call that is
+    /// Metal's own in the entry's mode records no note there.
     Metal,
-    /// The device's, within Vulkan's precision table, which the translation does not take
-    /// where Metal answers beyond it: its routines of Metal's answers instead (the policy's
-    /// `FloatMathsPolicy::Exact`).
-    Device,
-    /// The device's, within Vulkan's precision table, taken as they are: native device maths
-    /// (`FloatMathsPolicy::Native`, the default), each kind recorded with its bound.
+    /// The device's, within Vulkan's precision table, taken as they are, each kind recorded with
+    /// its bound.
     Native,
 }
 
@@ -704,20 +696,6 @@ pub enum MinMaxRoute {
     Metal,
     /// The device's `NMin`, `NMax` and `NClamp` as they are (`NanMinMaxPolicy::Native`, the
     /// default), noted `PrecisionNote::NativeMinMax` with its bound.
-    Native,
-}
-
-/// In whose order Metal's `dot`, `mix` and `fast::sqrt` on `float` and `half` round
-/// ([`ProfileFields::rounding_order`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RoundingOrderRoute {
-    /// Metal's: its fused chain, its two fused multiply-adds, its `x · rsqrt(x)`, or the
-    /// device's own instruction where the device's functions are Metal's
-    /// (`DriverDeviation::MetalFloatFunctions`); under `RoundingOrderPolicy::Exact` everywhere.
-    Metal,
-    /// The device's `OpDot`, `FMix` and `Sqrt` (`RoundingOrderPolicy::Native`, the default),
-    /// noted `PrecisionNote::NativeDot`, `NativeMix` and `NativeTranscendentals` with their
-    /// bounds.
     Native,
 }
 

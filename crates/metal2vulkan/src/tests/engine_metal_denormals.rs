@@ -7,12 +7,10 @@
 //! Each kernel loops over its rows (three operand words a row in `[[buffer(0)]]`) and stores one
 //! answer word a row in `[[buffer(1)]]`. The CPU SPIR-V interpreter keeps denormals, as a device
 //! without `DriverDeviation::MetalFloatDenormals` may, so on each such committed profile (one per
-//! fused multiply-add route and routine of its small results) an entry that records no
-//! `PrecisionNote::DeviceDenormals` must answer every row as Metal did, but, where the device's
-//! fused multiply-add is unchecked (`fma::tiny_route`), for its rounding before the flush
-//! ([`device_fma_gap`]). `llvm-as` assembles the module; without it the tests skip visibly.
+//! fused multiply-add route) an entry that records no `PrecisionNote::DeviceDenormals` must answer
+//! every row as Metal did. `llvm-as` assembles the module; without it the tests skip visibly.
 
-use crate::device::{DevicePolicy, DeviceProfile, FloatMathsPolicy, RoundingOrderPolicy};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::error::DriverDeviation;
 use crate::lower::arith::fma;
 use crate::pipeline::artifact::PrecisionNote;
@@ -260,49 +258,15 @@ fn interpret(bc: &[u8], name: &str, p: &DeviceProfile, rows: &[([u32; 3], [u32; 
 }
 
 /// The committed profiles under `policy` whose device may keep denormals (no
-/// `DriverDeviation::MetalFloatDenormals`), one per fused multiply-add route and routine of its
-/// small results ([`fma::tiny_route`]).
+/// `DriverDeviation::MetalFloatDenormals`), one per fused multiply-add route.
 fn profiles(policy: DevicePolicy) -> Vec<(String, DeviceProfile)> {
     let mut seen = BTreeSet::new();
     committed_profiles_with(policy)
         .expect("profiles")
         .into_iter()
         .filter(|(_, p)| !p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals))
-        .filter(|(_, p)| seen.insert((fma::float_route(p), fma::tiny_route(p))))
+        .filter(|(_, p)| seen.insert(fma::float_route(p)))
         .collect()
-}
-
-/// An `f32` denormal as the zero of its sign.
-fn ftz(x: u32) -> u32 {
-    if x & 0x7F80_0000 == 0 {
-        x & 0x8000_0000
-    } else {
-        x
-    }
-}
-
-/// The device's fused multiply-add (`OpFmaKHR`, or native device maths' `Fma`) on a device that
-/// keeps denormals, read as Metal reads them around it: the operands and the rounded result
-/// flushed, a NaN Metal's.
-fn device_fma(a: u32, b: u32, c: u32) -> u32 {
-    let f = |x: u32| f32::from_bits(ftz(x));
-    let r = ftz(f(a).mul_add(f(b), f(c)).to_bits());
-    if f32::from_bits(r).is_nan() {
-        0x7FC0_0000
-    } else {
-        r
-    }
-}
-
-/// The device's fused multiply-add unchecked (native device maths, which the runtime announces as
-/// `float-tininess-after-rounding`; docs/FAST-PATHS.md): Metal flushes a result whose exact value
-/// is below `2^-126` before rounding it, where the device has rounded it up to `2^-126`, which the
-/// flush after it keeps. `fun`'s answer with each `fma` so, where it is a composition of them.
-fn device_fma_gap(fun: Fun, [a, b, c]: [u32; 3]) -> Option<u32> {
-    match fun {
-        Fun::Mix | Fun::FmaFma => Some(device_fma(c, b, device_fma(c ^ 0x8000_0000, a, a))),
-        _ => None,
-    }
 }
 
 /// What every kernel on one profile answered.
@@ -310,15 +274,12 @@ fn device_fma_gap(fun: Fun, [a, b, c]: [u32; 3]) -> Option<u32> {
 struct Report {
     /// The kernels that record `DeviceDenormals`.
     noted: Vec<String>,
-    /// The rows of [`device_fma_gap`]'s known gap, per kernel.
-    gaps: Vec<(String, usize)>,
-    /// Every other answer that is not Metal's word.
+    /// Every answer of the others that is not Metal's word.
     wrong: Vec<String>,
 }
 
 /// Every kernel on `p` against Metal's words.
 fn check(bc: &[u8], stem: &str, p: &DeviceProfile) -> Report {
-    let device = fma::float_route(p).device_float() && fma::tiny_route(p).is_none();
     let mut report = Report::default();
     for (fun, fast) in kernels() {
         let name = fun.name(fast);
@@ -339,14 +300,9 @@ fn check(bc: &[u8], stem: &str, p: &DeviceProfile) -> Report {
         .any(|n| a.precision.contains(n));
         let rows = rows(fun);
         let got = interpret(bc, &name, p, &rows);
-        let mut gaps = 0;
         for ((ops, metal), g) in rows.iter().zip(&got) {
             let want = metal[usize::from(fast)];
             if *g == want || (device_nan && nan(*g) && nan(want)) {
-                continue;
-            }
-            if device && device_fma_gap(fun, *ops) == Some(*g) {
-                gaps += 1;
                 continue;
             }
             report.wrong.push(format!(
@@ -354,35 +310,12 @@ fn check(bc: &[u8], stem: &str, p: &DeviceProfile) -> Report {
                 &ops[..fun.arity()]
             ));
         }
-        if gaps > 0 {
-            report.gaps.push((name, gaps));
-        }
     }
     report
 }
 
-fn exact_answers() -> DevicePolicy {
-    DevicePolicy::default().exact_answers()
-}
-
-fn exact_float_maths() -> DevicePolicy {
-    DevicePolicy {
-        float_maths: FloatMathsPolicy::Exact,
-        ..DevicePolicy::default()
-    }
-}
-
-fn exact_rounding_order() -> DevicePolicy {
-    DevicePolicy {
-        rounding_order: RoundingOrderPolicy::Exact,
-        ..DevicePolicy::default()
-    }
-}
-
-/// Each policy's kernels on each route, against Metal's words: no answer off Metal's but
-/// [`device_fma_gap`]'s on the device's fused multiply-add unchecked, and `DeviceDenormals`
-/// recorded by exactly the kernels `noted` names (`mix`: the device's `FMix` under the device's
-/// order; the others: native device maths).
+/// The kernels on each route against Metal's words: no answer off Metal's, and `DeviceDenormals`
+/// recorded by exactly the kernels `noted` names.
 fn run_policy(bc: &[u8], policy: DevicePolicy, what: &str, noted: &[Fun]) -> Vec<String> {
     let want: Vec<String> = kernels()
         .into_iter()
@@ -393,12 +326,9 @@ fn run_policy(bc: &[u8], policy: DevicePolicy, what: &str, noted: &[Fun]) -> Vec
     for (stem, p) in profiles(policy) {
         let report = check(bc, &stem, &p);
         eprintln!(
-            "{what} on {stem} ({:?}, checked by {:?}): DeviceDenormals on {:?}; the device fma's \
-             gap on {:?}; {} other answers off Metal's",
+            "{what} on {stem} ({:?}): DeviceDenormals on {:?}; {} other answers off Metal's",
             fma::float_route(&p),
-            fma::tiny_route(&p),
             report.noted,
-            report.gaps,
             report.wrong.len()
         );
         assert_eq!(report.noted, want, "{what} on {stem}: DeviceDenormals");
@@ -407,57 +337,15 @@ fn run_policy(bc: &[u8], policy: DevicePolicy, what: &str, noted: &[Fun]) -> Vec
     wrong
 }
 
-/// The accurate forms read every probed function's denormals as Metal does: under
-/// `exact_answers()` no kernel records `DeviceDenormals`, under `FloatMathsPolicy::Exact` only
-/// `mix` by the device's `FMix` (the device's order), under `RoundingOrderPolicy::Exact` only the
-/// functions native device maths answers; on every route of a device that may keep a denormal,
-/// every other kernel answers every row with Metal's word. Under `FloatMathsPolicy::Exact`
-/// (`exact_answers()` too) the device's fused multiply-add is checked and has no gap; under
-/// `RoundingOrderPolicy::Exact` alone, `mix` by it rounds before its flush.
-#[test]
-fn the_accurate_forms_read_denormals_as_metal() {
-    let Some(bc) = assemble() else {
-        return;
-    };
-    let native = [Fun::Atan2, Fun::SinPi, Fun::CosPi, Fun::TanPi, Fun::Fmod];
-    let mut wrong = run_policy(&bc, exact_answers(), "exact_answers", &[]);
-    wrong.extend(run_policy(
-        &bc,
-        exact_float_maths(),
-        "FloatMathsPolicy::Exact",
-        &[Fun::Mix],
-    ));
-    wrong.extend(run_policy(
-        &bc,
-        exact_rounding_order(),
-        "RoundingOrderPolicy::Exact",
-        &native,
-    ));
-    assert!(
-        wrong.is_empty(),
-        "{} answers off Metal's, the first: {:#?}",
-        wrong.len(),
-        &wrong[..wrong.len().min(40)]
-    );
-}
-
-/// The default forms answer as Metal does at denormals wherever they record no `DeviceDenormals`
-/// (but the unchecked device `fma`'s rounding before its flush); native device maths and the
-/// device's `FMix` record it.
+/// The forms answer as Metal does at denormals wherever they record no `DeviceDenormals`; on a
+/// device that may keep a denormal every kernel here records it: the device's maths functions, its
+/// `FMix` and its fused multiply-adds read them as the device does.
 #[test]
 fn the_default_forms_note_what_they_leave_to_the_device() {
     let Some(bc) = assemble() else {
         return;
     };
-    let noted = [
-        Fun::Mix,
-        Fun::Atan2,
-        Fun::SinPi,
-        Fun::CosPi,
-        Fun::TanPi,
-        Fun::Fmod,
-    ];
-    let wrong = run_policy(&bc, DevicePolicy::default(), "default", &noted);
+    let wrong = run_policy(&bc, DevicePolicy::default(), "default", &FUNS);
     assert!(
         wrong.is_empty(),
         "{} answers off Metal's, the first: {:#?}",

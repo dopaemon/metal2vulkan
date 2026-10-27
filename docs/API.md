@@ -84,11 +84,14 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   and guest shaders cannot reach each other's resources. Where the device enables
   `robustBufferAccess`, buffer accesses and vertex input are left to it. (MoltenVK advertises the
   feature without implementing it; there such accesses are not contained, as on native Metal.)
+- **The device's arithmetic.** The device's own maths library, divisions, fused multiply-adds,
+  `float` denormals, and rounding order of `dot`/`mix`/`fast::sqrt`, on every device and with no
+  exact form. Each records a precision note with its bound; on MoltenVK on an Apple GPU, whose
+  `float` functions are Metal's own, they are Metal's answers.
 - **Fast native forms off Apple's GPUs.** The device's own sampler (its filter of a two-plane
-  YCbCr texture among them), maths library, divisions, fused multiply-adds, texel conversions,
-  NaN bits, min/max and rounding order of `dot`/`mix`/`fast::sqrt`. Each records a precision note
-  with its bound, and each has an exact switch. The device's own `half` rounding and its blend of
-  a `half` color have none: each records its note.
+  YCbCr texture among them), texel conversions, NaN bits and min/max. Each records a precision
+  note with its bound, and each has an exact switch. The device's own `half` rounding and its
+  blend of a `half` color have none: each records its note.
   `DevicePolicy::exact_answers()` turns on every exact form but sampling's, Metal's filter of a
   two-plane YCbCr texture (`YCbCrFilterPolicy::Exact`) included; `sampling =
   SamplingPolicy::Exact` emulates Metal's sampler too.
@@ -2539,14 +2542,12 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   attachment, on ANV (`RuntimeDriverDefect::OcclusionCountPerColorOutput`). Cost: the result is
   Metal's count multiplied by the colors the draw writes; a `Boolean` result is Metal's.
 - `metal2vulkan-degrade-float-tininess-after-rounding` (precision). `FloatTininessAfterRounding`: A
-  device whose policy takes native device maths (`FloatMathsPolicy::Native`, the default) where its
-  float functions are not Metal's own (not MoltenVK): Metal flushes a `float` product or fused
+  device whose float functions are not Metal's own (not MoltenVK): Metal flushes a `float` product or fused
   multiply-add whose exact value lies below `2^-126` to the zero of its sign, deciding tininess
   before rounding, and the device rounds before it decides (measured on RADV, ANV, NVIDIA and
   lavapipe, whether they flush denormals or keep them). Announced once, as the device is made. Cost:
   a `float` product or fused multiply-add whose exact value lies within half a unit below `2^-126`
-  answers `2^-126` of its sign where Metal answers the zero of its sign; `FloatMathsPolicy::Exact`
-  computes Metal's.
+  answers `2^-126` of its sign where Metal answers the zero of its sign.
 - `metal2vulkan-degrade-shader-cache-entry-not-written` (performance).
   `ShaderCacheEntryNotWritten`: an entry of the device's shader cache directory was not written --
   the directory, a temporary file in it or the rename over the entry failed, on the device's cache
@@ -2570,25 +2571,28 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   `maintenance8`, a fragment's implicit-level sample with a dynamic texel offset samples with its
   derivatives too, taken before the switch over the offset's values (`docs/FAST-PATHS.md`).
 - `metal2vulkan-degrade-device-transcendentals` (precision). `PrecisionNote::DeviceTranscendentals`:
-  Transcendentals answer within Apple's stated bound, not Metal's bits: the device's own functions,
-  or the translation's routines where a device's instruction may leave the bound (and, for the
-  functions no routine covers yet, the device's precision).
+  Transcendentals answer within Apple's stated bound, not Metal's bits: the device's own functions
+  where they are Metal's (MoltenVK), and the device's precision for a call no other note bounds.
 - `metal2vulkan-degrade-reduction-order` (precision). `PrecisionNote::ReductionOrder`: Float
   reductions use the device's association order.
 - `metal2vulkan-degrade-device-denormals` (precision). `PrecisionNote::DeviceDenormals`: `float`
   denormals follow the device: Metal reads an `f32` denormal operand of its float arithmetic,
   comparisons, and functions as the zero of its sign and flushes a denormal result to one, where a
   Vulkan device keeps or flushes them by its own float controls (this translation declares no
-  `DenormFlushToZero`). Recorded only by the instructions of native device maths
-  (`FloatMathsPolicy::Native`, `fast::fmod`'s fused multiply-add among them) and of the device's
-  order (`RoundingOrderPolicy::Native`: `mix` by `FMix`, `fast::sqrt` by `Sqrt`, and `dot` of
-  vectors of other than two to four lanes, whose chunks' products the device sums where Metal
-  flushes each one below `2^-126`), the fast defaults off Apple's GPUs; and, under every policy, by
-  a conversion to or from `double`, where Metal's reading is not measured. Under
-  `DevicePolicy::exact_answers()` every other `float` operation reads its denormals as Metal does,
-  `mix`, `atan2`, `sinpi`, `cospi`, `tanpi`, `fast::fmod` and `fma` among them. Under
-  `FloatMathsPolicy::Native` the device's fused multiply-add rounds a result whose exact value is
-  below `2^-126` up to `2^-126`, which Metal flushes (docs/FAST-PATHS.md, known gaps).
+  `DenormFlushToZero`). Recorded where the module leaves an operation's denormals to a device not
+  measured to read them as Metal does: `+ - *`, the comparisons, `fma`, `dot`, `sqrt`, `rsqrt`,
+  `trunc` and `rint` but on a device that takes the measured
+  `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and the remainder,
+  `floor` and `ceil`, the device's maths functions (`fast::fmod`'s fused multiply-add among them),
+  `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of vectors of other than two to four lanes, whose
+  chunks' products the device sums where Metal flushes each one below `2^-126`, and a conversion
+  to or from `double`, where Metal's reading is not measured. The operations that read a denormal
+  on its bits answer Metal on every device: `ldexp`, `sign`, `fract`, `copysign`, `fabs` and
+  `atan2`; and so do the functions the device answers as Metal's own. Where the minimum and maximum
+  functions and `saturate` are the device's `NMin`, `NMax` and `NClamp`, their pick of a denormal
+  is `NativeMinMax`'s. Off MoltenVK the device's multiply and fused multiply-add round a result whose
+  exact value is below `2^-126` up to `2^-126`, which Metal flushes
+  (`float-tininess-after-rounding`).
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
   Pixel-coordinate samplers scale coordinates in the shader, rounding differently.
 - `metal2vulkan-degrade-device-arithmetic` (precision). `PrecisionNote::DeviceArithmetic`: Float
@@ -2597,11 +2601,7 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-device-signed-zero-inf-nan` (precision).
   `PrecisionNote::DeviceSignedZeroInfNan`: Float operations LLVM requires to keep signed zeros,
   infinities, and NaNs run without `SignedZeroInfNanPreserve`, which the device does not support at
-  their width. Under `FloatMathsPolicy::Exact` so does an operation that answers Metal's zero of
-  its sign: a fused multiply-add the translation computes itself (in `double` or in integers
-  without `OpFmaKHR`), one by `OpFmaKHR` whose result is at most `2^-126` in magnitude, and a
-  `float` product flushed below `2^-126`. Without the mode the device may answer such a zero with
-  either sign.
+  their width. Without the mode the device may answer such a zero with either sign.
 - `metal2vulkan-degrade-device-ray-intersection` (precision).
   `PrecisionNote::DeviceRayIntersection`: A ray intersection traversed by the device's ray query.
 - `metal2vulkan-degrade-fast-math-rewrites` (precision). `PrecisionNote::FastMathRewrites`: Float
@@ -2985,20 +2985,18 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   sum on the format's grid, so a draw binding such a texture makes no pipeline of its own.
 - `metal2vulkan-degrade-native-transcendentals` (precision). `PrecisionNote::NativeTranscendentals`:
   Native device maths: the module computes a `float` or `half` math-library function by the device's
-  own `GLSL.std.450` instruction (or Metal's composition of the device's `Exp2` and `Log2`), not by
-  the translation's routine of Metal's answer, on a device whose functions are not Metal's own,
-  under `FloatMathsPolicy::Native`; and `fast::sqrt` the device's `Sqrt`, under
-  `RoundingOrderPolicy::Native`.
+  own `GLSL.std.450` instruction (or Metal's composition of the device's `Exp2` and `Log2`) where
+  Metal's function is not the device's own; and `fast::sqrt` the device's `Sqrt` on a device whose
+  functions are not Metal's own.
 - `metal2vulkan-degrade-native-division` (precision). `PrecisionNote::NativeDivision`: Native device
   maths: a precise `float` or `half` division, or Metal's fast division or reciprocal, is the
-  device's `OpFDiv`, not the translation's correctly rounded routine or its `RN(1 / y)`, on a device
-  whose division is not Metal's own, under `FloatMathsPolicy::Native` (the default).
+  device's `OpFDiv` where the device's division is not Metal's own: within Vulkan's 2.5 ulp, where
+  Metal's precise division is correctly rounded.
 - `metal2vulkan-degrade-native-fma` (precision). `PrecisionNote::NativeFma`: Native device maths: a
-  `float` fused multiply-add on a device without `OpFmaKHR`, under `FloatMathsPolicy::Native` (the
-  default), not the translation's correctly rounded routine, or a `half` one, under every policy,
-  where the device's 16-bit `Fma` is not measured to be Metal's and the device has no 16-bit
-  `OpFmaKHR` under the 16-bit float controls, is the device's `GLSL.std.450 Fma` (on the `half`
-  operands held in `float`, its result rounded to `half`).
+  `float` fused multiply-add on a device without `OpFmaKHR`, or a `half` one where the device's
+  16-bit `Fma` is not measured to be Metal's and the device has no 16-bit `OpFmaKHR` under the
+  16-bit float controls, is the device's `GLSL.std.450 Fma` (on the `half` operands held in
+  `float`, its result rounded to `half`), where Metal's rounds once.
 - `metal2vulkan-degrade-device-texel-conversion` (precision).
   `PrecisionNote::DeviceTexelConversion`: Native device sampling (a texel conversion): the module
   hands a read, sample or gather with a `float` result the device's own conversion of the texel's
@@ -3032,11 +3030,11 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-native-dot` (precision). `PrecisionNote::NativeDot`: Native device maths:
   Metal's `dot` on `float`, or on `half` where its fused multiply-add is not the measured 16-bit
   one, is the device's `OpDot` (a `half` one summed in `float` and rounded once to `half`), not
-  Metal's fused chain of its products, under `RoundingOrderPolicy::Native`.
+  Metal's fused chain of its products, on a device whose functions are not Metal's own.
 - `metal2vulkan-degrade-native-mix` (precision). `PrecisionNote::NativeMix`: Native device maths:
   Metal's `mix(x, y, t)` on `float`, or on `half` where its fused multiply-add is not the measured
   16-bit one, is the device's `FMix` (a `half` one computed in `float` and rounded once to `half`),
-  not Metal's `fma(t, y, fma(-t, x, x))`, under `RoundingOrderPolicy::Native`.
+  not Metal's `fma(t, y, fma(-t, x, x))`, on a device whose functions are not Metal's own.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

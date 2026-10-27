@@ -1929,11 +1929,10 @@ fn an_unstated_word_the_product_approximates_keeps_its_reading_open() {
 /// sign-off stands, whatever arithmetic notes the row records. A fast `sinpi` of a subnormal: +0
 /// where the operand is read as zero, as Metal reads it, the subnormal pi times it
 /// where the device keeps it (fast `sinpi`'s lowering records `DeviceDenormals`), and Table 8.2's
-/// absolute 2^-13 admits both. A product whose result is a subnormal keeps Apple's verdict: the
-/// product's multiply flushes it on every profile, so the note is not its. A product one rounding
-/// away (toward zero, which "correctly rounded" admits) touches no subnormal. (Metal's divisions
-/// flush their own subnormals and record no such note, and precise `fmod` answers Metal at
-/// denormals itself.)
+/// absolute 2^-13 admits both. A product whose result is a subnormal is open too: lavapipe's
+/// multiply is the device's, not measured to flush as Metal does, and records the note. A product
+/// one rounding away (toward zero, which "correctly rounded" admits) touches no subnormal. (Precise
+/// `fmod` answers Metal at denormals itself.)
 #[test]
 fn a_word_within_apples_bound_that_shows_a_recorded_near_equivalent_keeps_its_reading_open() {
     let report_of = |computes: &str,
@@ -1999,13 +1998,14 @@ fn a_word_within_apples_bound_that_shows_a_recorded_near_equivalent_keeps_its_re
     }
     assert!(!report.holds());
 
-    // 2^-100 * 2^-30, Metal's +0 against a kept 2^-130: the multiply records no denormal note,
-    // so within, and the sign-off stands with every note recorded.
+    // 2^-100 * 2^-30, Metal's +0 against a kept 2^-130: the multiply records the denormal note,
+    // so open, and the sign-off refused.
     let (a, b) = (f32::from_bits(27 << 23), f32::from_bits((127 - 30) << 23)); // 2^-100, 2^-30
     let report = report_of("mul(a, b)", Math::Precise, &[a, b], 0.0, tiny, &every);
     let check = report.readings[0].bound.as_ref().unwrap();
-    assert_eq!(check.count("within"), 1);
-    assert!(report.refused.is_empty());
+    assert_eq!(check.count("near_equivalent"), 1);
+    assert_eq!(report.refused.len(), 1);
+    assert!(report.refused[0].words[0].contains("(Metal's mul)"));
 
     // (1 / 3)^2 rounded toward zero against Metal's nearest: no subnormal, no NaN, so within,
     // and the sign-off stands with every note recorded.

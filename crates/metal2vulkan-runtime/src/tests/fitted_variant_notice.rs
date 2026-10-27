@@ -71,15 +71,13 @@ fn library(name: &str) -> Library {
     Library::from_air(&bitcode).unwrap()
 }
 
-/// Add to `dependencies` the fit's record of dropping exact sampling and exact float maths.
+/// Add to `dependencies` the fit's record of dropping exact sampling and exact texel conversion.
 fn fit_into(dependencies: &mut Vec<RuntimeDependency>) {
     dependencies.push(RuntimeDependency::new(
         RuntimeFact::ExactFormsOverCompilerLimit {
             sampling: true,
-            float_maths: true,
-            texel_conversion: false,
+            texel_conversion: true,
             nan_and_min_max: false,
-            rounding_order: false,
         },
         Mechanism::None,
     ));
@@ -195,8 +193,8 @@ fn a_variant_fitted_while_its_base_was_not_still_announces() {
     let (object, reason) = &said[0];
     assert_eq!(object, "a render pipeline state");
     assert!(
-        reason.contains("exact sampling, exact float maths")
-            && !reason.contains("exact half blend"),
+        reason.contains("exact sampling, exact texel conversion")
+            && !reason.contains("exact NaN and minimum and maximum"),
         "{reason}"
     );
     // Once per device: a later fitted variant adds no second notice.
@@ -242,7 +240,7 @@ fn every_kind_of_fitted_pipeline_announces_its_state_kind() {
     assert_eq!(said.len(), 1, "{said:?}");
     assert_eq!(said[0].0, "a compute pipeline state");
     assert!(
-        said[0].1.contains("exact sampling, exact float maths"),
+        said[0].1.contains("exact sampling, exact texel conversion"),
         "{said:?}"
     );
 

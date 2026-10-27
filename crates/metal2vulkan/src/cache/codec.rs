@@ -1273,10 +1273,8 @@ codec_enum! {
         ObjectThreadgroupArena { static_bytes, payload },
         ExactFormsOverCompilerLimit {
             sampling,
-            float_maths,
             texel_conversion,
-            nan_and_min_max,
-            rounding_order
+            nan_and_min_max
         },
         MergedDraws,
         QuadPrimitiveIds,

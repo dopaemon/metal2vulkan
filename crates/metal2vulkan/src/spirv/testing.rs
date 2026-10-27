@@ -248,8 +248,8 @@ pub fn committed_exact_profiles() -> Result<Vec<(String, DeviceProfile)>, String
     committed_profiles_under(crate::pipeline::testing::EXACT_SAMPLING)
 }
 
-/// [`committed_profiles`] under `policy` (the tests of the exact maths routines take
-/// `FloatMathsPolicy::Exact`, [`crate::pipeline::testing::exact_maths`]).
+/// [`committed_profiles`] under `policy` (the tests of Metal's NaN and `half` rounding take
+/// [`crate::pipeline::testing::exact_maths`]).
 pub fn committed_profiles_with(
     policy: DevicePolicy,
 ) -> Result<Vec<(String, DeviceProfile)>, String> {

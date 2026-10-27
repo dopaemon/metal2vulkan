@@ -421,8 +421,7 @@ impl Difference<'_> {
 /// `float` forms only).
 ///
 /// Each reason names the exact path that would close the value: the canonicalizing or flushing
-/// select (or `DenormFlushToZero` where a profile offers it), which Metal's precise and fast float
-/// divisions already take, so neither records these notes.
+/// select (or `DenormFlushToZero` where a profile offers it).
 fn value_near_equivalent(
     recorded: &BTreeSet<PrecisionNote>,
     expr: &Expr,

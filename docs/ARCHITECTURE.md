@@ -93,9 +93,9 @@ needs an internal item is one of the crate's own tests (`src/tests/`).
   policy. Every device-dependent choice (subgroup tier, buffer views, storage widths, robustness,
   push-constant room, limits, measured driver deviations) reads it, and its fingerprint is part of
   every cache key.
-- **The policy's accuracy choices.** Off Apple's GPUs the default policy takes the device's own
-  sampler, maths, texel conversions, `half` rounding, NaNs and blends where they are faster; each
-  has an exact switch ([FAST-PATHS.md](FAST-PATHS.md)).
+- **The policy's accuracy choices.** The maths are the device's own on every device. Off Apple's
+  GPUs the default policy takes the device's own sampler, texel conversions, `half` rounding, NaNs
+  and blends where they are faster; each has an exact switch ([FAST-PATHS.md](FAST-PATHS.md)).
 - **Structure, not names.** Families decide from IR types, address spaces, the metadata ABI and the
   `air.*` and `llvm.*` intrinsic contract. No branch keys on a function, type or variable name.
 - **Typed refusals.** An input the device cannot run exactly is `Error::Unsupported`, naming the

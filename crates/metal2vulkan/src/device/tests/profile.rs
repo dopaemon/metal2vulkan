@@ -307,22 +307,14 @@ fn below_1_2_and_contradictory_policies_are_refused() {
 }
 
 /// Each of the policy's choices between the device's answer and Metal's, with a function that
-/// flips it alone: the maths functions, the texel conversions, a normalized vertex attribute's
-/// conversion, the NaN and minimum and maximum, the rounding order, and the filter of a two-plane
-/// YCbCr texture.
-fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 6] {
+/// flips it alone: the texel conversions, a normalized vertex attribute's conversion, the NaN and
+/// minimum and maximum, and the filter of a two-plane YCbCr texture.
+fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 4] {
     use crate::device::{
-        FloatMathsPolicy as F, NanMinMaxPolicy as N, RoundingOrderPolicy as R,
-        TexelConversionPolicy as T, VertexNormalizedPolicy as V, YCbCrFilterPolicy as Y,
+        NanMinMaxPolicy as N, TexelConversionPolicy as T, VertexNormalizedPolicy as V,
+        YCbCrFilterPolicy as Y,
     };
     [
-        ("float_maths", |p| DevicePolicy {
-            float_maths: match p.float_maths {
-                F::Native => F::Exact,
-                F::Exact => F::Native,
-            },
-            ..p
-        }),
         ("texel_conversion", |p| DevicePolicy {
             texel_conversion: match p.texel_conversion {
                 T::Device => T::Exact,
@@ -344,13 +336,6 @@ fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 6] {
             },
             ..p
         }),
-        ("rounding_order", |p| DevicePolicy {
-            rounding_order: match p.rounding_order {
-                R::Native => R::Exact,
-                R::Exact => R::Native,
-            },
-            ..p
-        }),
         ("ycbcr_filter", |p| DevicePolicy {
             ycbcr_filter: match p.ycbcr_filter {
                 Y::Device => Y::Exact,
@@ -362,14 +347,14 @@ fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 6] {
 }
 
 /// On MoltenVK on the M3, whose functions, NaN, minimum and maximum are measured to be Metal's,
-/// the maths functions' and the rounding order's choices change nothing, so each keys as the default does; the texel conversions' is the
-/// policy's own field there, the NaN and minimum and maximum's moves the texel
+/// each choice still moves the key: the texel conversions' is the policy's own field there, the
+/// NaN and minimum and maximum's moves the texel
 /// NaN route (`TexelNanRoute`): a texel's NaN is the image's decode, which no arithmetic fact
 /// covers, and the YCbCr filter's moves whether a two-plane YCbCr slot takes its variant
 /// (`ProfileFields::ycbcr_variant`), Metal's sampler filtering such a texture's converted texels
 /// otherwise.
 #[test]
-fn metal_s_own_answers_key_the_same_under_either_choice() {
+fn each_choice_keys_apart_on_moltenvk() {
     let desc = profile("moltenvk-m3");
     let fp = |p: DevicePolicy| {
         Device::new(desc.clone(), p)
@@ -379,14 +364,7 @@ fn metal_s_own_answers_key_the_same_under_either_choice() {
     };
     let base = DevicePolicy::default();
     for (name, flip) in exactness_flips() {
-        assert_eq!(
-            fp(flip(base)) == fp(base),
-            !matches!(
-                name,
-                "texel_conversion" | "vertex_normalized" | "nan_and_min_max" | "ycbcr_filter"
-            ),
-            "{name}"
-        );
+        assert_ne!(fp(flip(base)), fp(base), "{name}");
     }
 }
 

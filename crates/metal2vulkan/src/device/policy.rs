@@ -33,11 +33,6 @@ pub struct DevicePolicy {
     /// two-plane YCbCr texture is the device's own filter of its texels (the default) or Metal's
     /// filter of the format, emulated in a variant of the pipeline the draw binding it makes.
     pub ycbcr_filter: YCbCrFilterPolicy,
-    /// Whether the math library's functions (`sin`, `cos`, `exp`, `log`, `pow` and the rest), a
-    /// precise division and Metal's fast reciprocal, and a fused multiply-add are the device's
-    /// own instructions (native device maths, the default) or the translation's routines of
-    /// Metal's answers.
-    pub float_maths: FloatMathsPolicy,
     /// Whether a texel's `float` or `half` value is the device's conversion of its codes (native
     /// device sampling, the default off Apple's GPUs) or Metal's, converted exactly in the
     /// shader.
@@ -49,10 +44,6 @@ pub struct DevicePolicy {
     /// (`fmin`, `fmax`, `min3`, `max3`, `clamp`, `saturate`) pick at a NaN or a signed zero, are
     /// the device's own (the default) or Metal's.
     pub nan_and_min_max: NanMinMaxPolicy,
-    /// Whether Metal's `dot`, `mix` and `fast::sqrt` round in Metal's order (its fused chain of
-    /// the products, its two fused multiply-adds, its `x · rsqrt(x)`) or are the device's single
-    /// instructions (the default).
-    pub rounding_order: RoundingOrderPolicy,
 
     /// Whether a texture whose format the device lacks, held in a carrier (an ASTC LDR texture,
     /// or an EAC 11-bit one), samples a decoded twin of compact codes (the default) or of Metal's
@@ -89,8 +80,7 @@ pub struct DevicePolicy {
 impl DevicePolicy {
     /// The untrusted-guest production policy: containment and isolation on, Metal's 8-bit linear
     /// filter emulated exactly where the emulation runs, native device sampling (a two-plane YCbCr texture's samples among them),
-    /// native device maths, the device's own texel
-    /// conversions, the device's NaN and minimum and maximum, the device's rounding order, compact
+    /// the device's own texel conversions, the device's NaN and minimum and maximum, compact
     /// codes in a carried texture's decoded twin, the driver's compressed image of a heap's texture
     /// Metal keeps compressed, command buffers ready together in one kernel submission, batches of
     /// one queue ordered by their ends where the driver runs them one after another, and a sampled
@@ -103,11 +93,9 @@ impl DevicePolicy {
         unorm8_linear_filter: Unorm8LinearFilterPolicy::Exact,
         sampling: SamplingPolicy::NativeDevice,
         ycbcr_filter: YCbCrFilterPolicy::Device,
-        float_maths: FloatMathsPolicy::Native,
         texel_conversion: TexelConversionPolicy::Device,
         vertex_normalized: VertexNormalizedPolicy::Device,
         nan_and_min_max: NanMinMaxPolicy::Native,
-        rounding_order: RoundingOrderPolicy::Native,
         decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
         completion: CompletionPolicy::Grouped,
@@ -116,12 +104,10 @@ impl DevicePolicy {
         host_page_textures: HostPageTexturePolicy::InPlace,
     };
 
-    /// This policy with Metal's answer wherever the choices offer it: its maths functions,
-    /// divisions and fused multiply-adds ([`FloatMathsPolicy::Exact`]), its texel conversions
+    /// This policy with Metal's answer wherever the choices offer it: its texel conversions
     /// ([`TexelConversionPolicy::Exact`]), its normalized vertex attributes
-    /// ([`VertexNormalizedPolicy::Exact`]), its
-    /// NaN and minimum and maximum ([`NanMinMaxPolicy::Exact`]), its rounding order
-    /// ([`RoundingOrderPolicy::Exact`]), its filter of a
+    /// ([`VertexNormalizedPolicy::Exact`]), its NaN and minimum and maximum
+    /// ([`NanMinMaxPolicy::Exact`]), its filter of a
     /// two-plane YCbCr texture
     /// ([`YCbCrFilterPolicy::Exact`]), its decode of a carried texture's texels
     /// ([`DecodedTexelsPolicy::Exact`]), a heap's texture whose bytes alias the heap's
@@ -136,11 +122,9 @@ impl DevicePolicy {
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             ycbcr_filter: YCbCrFilterPolicy::Exact,
-            float_maths: FloatMathsPolicy::Exact,
             texel_conversion: TexelConversionPolicy::Exact,
             vertex_normalized: VertexNormalizedPolicy::Exact,
             nan_and_min_max: NanMinMaxPolicy::Exact,
-            rounding_order: RoundingOrderPolicy::Exact,
             decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
             completion: CompletionPolicy::Exact,
@@ -246,32 +230,6 @@ pub enum YCbCrFilterPolicy {
     Exact,
 }
 
-/// How the `float` and `half` maths functions, divisions and fused multiply-adds Metal answers
-/// beyond Vulkan's precision table are computed on a device whose functions are not Metal's own
-/// (the owner's "Maths functions" of 2026-10-11, native by default). On a device whose functions
-/// are Metal's (MoltenVK on an Apple GPU, `DriverDeviation::MetalFloatFunctions`), the device's
-/// instructions are Metal's own whatever the policy. A NaN such a function answers is
-/// [`NanMinMaxPolicy`]'s, `dot`, `mix` and `fast::sqrt` are [`RoundingOrderPolicy`]'s, and a `half`
-/// result's rounding is the device's own (`lower::arith::narrow`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum FloatMathsPolicy {
-    /// Native device maths (the default): the math library's functions are the device's
-    /// `GLSL.std.450` instructions (or Metal's compositions of them), a precise division and
-    /// Metal's fast reciprocal the device's `OpFDiv`, and a fused multiply-add without
-    /// `OpFmaKHR` the device's `Fma`, each within Vulkan's precision table rather than Metal's
-    /// answer, and each recording its kind
-    /// ([`PrecisionNote::NativeTranscendentals`](crate::pipeline::PrecisionNote::NativeTranscendentals),
-    /// [`NativeDivision`](crate::pipeline::PrecisionNote::NativeDivision),
-    /// [`NativeFma`](crate::pipeline::PrecisionNote::NativeFma)) with the bound in its docs.
-    #[default]
-    Native,
-    /// The translation's routines, which answer as Metal does on every device: larger modules and
-    /// longer pipeline creation.
-    Exact,
-}
-
 /// How a texel's value reaches a read, sample or gather with a `float` or `half` result on a
 /// device that does not sample through Metal's own texture unit (`VkProperty::MetalSampler`). On
 /// such a device Metal's conversion of a texel is emulated by a routine that tells the bound
@@ -369,29 +327,6 @@ pub enum NanMinMaxPolicy {
     /// conversion under the float controls, and a
     /// `half` read from its bits is decoded in integer arithmetic where the default takes the
     /// device's widening (a `half` stored back unchanged keeps its bits under either).
-    Exact,
-}
-
-/// The order in which Metal's `dot`, `mix` and `fast::sqrt` on `float` and `half` round, on a
-/// device whose functions are not Metal's own (the owner's "rounding order in dot products, blends
-/// between two values (mix) and fast square root" of 2026-10-11). On a device whose functions are
-/// Metal's (MoltenVK on an Apple GPU, `DriverDeviation::MetalFloatFunctions`) they are Metal's
-/// under either setting.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum RoundingOrderPolicy {
-    /// The device's single instructions (the default): `dot` the device's `OpDot`, `mix` its
-    /// `FMix` (a `half` result summed in `float` and rounded once), and `fast::sqrt` its `Sqrt`.
-    /// Such a module records
-    /// [`PrecisionNote::NativeDot`](crate::pipeline::PrecisionNote::NativeDot),
-    /// [`NativeMix`](crate::pipeline::PrecisionNote::NativeMix) or
-    /// [`NativeTranscendentals`](crate::pipeline::PrecisionNote::NativeTranscendentals)
-    /// (`fast::sqrt`, with `DeviceDenormals`), whose docs state the bound.
-    #[default]
-    Native,
-    /// Metal's order: `dot` the fused chain of its products, `mix` `fma(t, y, fma(-t, x, x))`, and
-    /// `fast::sqrt` `x · rsqrt(x)` with Metal's answers at a zero, a denormal and `+inf`.
     Exact,
 }
 

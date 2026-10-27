@@ -2,64 +2,29 @@
 //! and M4), and its wrap of a repeating face axis (the cube probes, Apple M4). Each kernel
 //! invocation reads a direction's bits and a face size, hands the direction through `metal_ties`
 //! and then `snapped`, and writes the handed direction's bits; a device reading it in exact
-//! arithmetic, or rounding each operation to `f32`, must read the texel Metal's position names.
+//! arithmetic, or rounding each operation to `f32`, must read the texel Metal's position names with
+//! the device's reciprocal (here the interpreter's correctly rounded one).
 
-use super::super::{snapped, FaceWrap, SnapRoutines, SCALAR, SNAP_WORDS};
+use super::super::{snapped, FaceRoutines, FaceWrap, SnapRoutines, SCALAR, SNAP_WORDS};
 use super::{
-    kernel_on, lanes, metal_axis, metal_ties, read_as_zero, run_records, selecting, MOST_READ,
-    SIZES,
+    kernel_on, lanes, metal_axis, metal_ties, read_as_zero, run_records, selecting, SIZES,
 };
-use crate::lower::arith::divide::{self, Path};
-use crate::lower::arith::fma::{self, Fma, Route, FLOAT_ROUTES};
-use crate::lower::arith::libm::{self, rcp, Fun, Helpers};
+use crate::lower::arith::fma::{self, Fma, Route};
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ir::TypedModule;
 
-/// The routines of `fma`'s route on module `b`: Metal's reciprocal (`libm::Fun::Recip`), with its
-/// table and the precise division by the path a profile pairs with the route
-/// (`divide::Path::on`: fused where the fused multiply-add is `OpFmaKHR`), and the fused
-/// multiply-add's own routine where it has one.
-fn routines(b: &mut ModuleBuilder, fma: Fma) -> BResult<SnapRoutines> {
-    let (path, khr) = match fma.route {
-        Route::Khr => (Path::Fused, true),
-        Route::Wide | Route::Soft | Route::F16 | Route::F16Khr | Route::Native => {
-            (Path::Integer, false)
-        }
-    };
-    let helpers = Helpers {
-        division: Some(divide::define(b, divide::Routine { lanes: 1, path })?),
-        rcp: Some(rcp::declare(b)?),
-        ..Helpers::default()
-    };
-    let recip = Some(libm::define(b, Fun::Recip, khr, helpers)?);
-    let fma_routine = match fma.routine() {
-        Some(r) => Some(fma::define(b, r)?),
-        None => None,
-    };
-    Ok(SnapRoutines {
-        recip,
-        fma,
-        fma_routine,
-    })
-}
-
-/// Metal's reciprocal of a major magnitude `top` that it reads (`2^-125` up to `2^126`; past
-/// `2^126` it reads every minor component as zero, and the reciprocal is its flushed zero): the
-/// model of `libm::Fun::Recip`'s routine.
-fn metal_recip(top: f32) -> f32 {
-    match top > MOST_READ {
-        true => 0.0,
-        false => rcp::model(top),
-    }
+/// The device's reciprocal of a major magnitude `top`, as the interpreter divides: `RN(1 / top)`.
+fn device_recip(top: f32) -> f32 {
+    1.0 / top
 }
 
 /// A kernel whose invocation reads a direction and a face size and writes the direction that
-/// `metal_ties` and then (`snap`) `snapped` hand the device, with the routines of `fma`'s route,
-/// wrapping the face axes `wrap` names.
+/// `metal_ties` and then (`snap`) `snapped` hand the device, by `fma`'s route, wrapping the face
+/// axes `wrap` names.
 fn kernel(fma: Fma, snap: bool, wrap: FaceWrap) -> BResult<TypedModule> {
-    let mut b = ModuleBuilder::new();
-    let r = routines(&mut b, fma)?;
+    let b = ModuleBuilder::new();
+    let r = SnapRoutines { fma };
     kernel_on(b, 4, &|f, p, n| {
         let p = metal_ties(f, p)?;
         match snap {
@@ -74,7 +39,6 @@ fn by(route: Route) -> Fma {
     let routes = fma::Routes {
         float: route,
         half: Route::Native,
-        tiny: None,
     };
     Fma::by(routes, SCALAR).expect("float")
 }
@@ -128,9 +92,9 @@ fn metal_x(c: f32, r: f32, n: u32, wraps: bool) -> f32 {
 }
 
 /// Metal's nearest texel along a finite direction `d` on faces of size `n`, its reciprocal of the
-/// major magnitude [`metal_recip`]'s: the face `metal_reading` reads, and on each face
-/// axis `floor(X)` of [`metal_x`] (wrapped on the axes `wrap` names), at most `n - 1`, with each
-/// component Metal reads as zero `0`; a direction left zero at face `+x`'s texel `(0, 0)`.
+/// major magnitude the device's ([`device_recip`]): the face `metal_reading` reads, and on each
+/// face axis `floor(X)` of [`metal_x`] (wrapped on the axes `wrap` names), at most `n - 1`, with
+/// each component Metal reads as zero `0`; a direction left zero at face `+x`'s texel `(0, 0)`.
 fn metal_texel(d: [f32; 3], n: u32, wrap: FaceWrap) -> Texel {
     let m = selecting(d);
     let major = metal_axis(m);
@@ -143,7 +107,7 @@ fn metal_texel(d: [f32; 3], n: u32, wrap: FaceWrap) -> Texel {
         false => d[k],
     });
     let positive = d[major] > 0.0;
-    let r = metal_recip(top);
+    let r = device_recip(top);
     let [s, t] = face_minors(read, major, positive);
     let texels = [(s, wrap.s), (t, wrap.t)].map(|(c, w)| clamped(metal_x(c, r, n, w).into(), n));
     (major, positive, texels)
@@ -237,57 +201,10 @@ fn check(lanes: &[([f32; 3], u32)], got: &[[f32; 3]], wrap: FaceWrap, what: &str
     }
 }
 
-/// Lanes of WRG's cube rounding probe 2 (Apple M3 Max on macOS 26.7 and
-/// M4 on macOS 27.0.1, byte-identical) on faces of 1,024 texels along which Metal's texture
-/// unit's reciprocal is not `RN(1 / |m_a|)`: each direction's bits (face `+x`) and the texel
-/// Metal read on the face's `s` and `t` axes. Every 25th of the 202 such lanes that Metal's
-/// reciprocal's model reads.
-const PINNED: [([u32; 3], [u32; 2]); 9] = [
-    ([0x3FFC_C375, 0x3FFC_4513, 0x3FFC_4515], [0, 0]),
-    ([0x3F80_AEB9, 0x3F78_D1D8, 0x3F80_6E62], [0, 16]),
-    ([0x3F95_653D, 0x3F82_6DE3, 0x3F95_1A8B], [0, 64]),
-    ([0x3FEE_D65E, 0x3FEE_5EF2, 0x3FEE_5EF4], [0, 0]),
-    ([0x3FA7_0203, 0x3FA6_AE82, 0x3FA6_AE83], [0, 0]),
-    ([0x3FB4_BA15, 0x3FB4_5FB8, 0x3FB4_5FB9], [0, 0]),
-    ([0x3FC8_66C7, 0x3FC8_0293, 0x3FC8_0295], [0, 0]),
-    ([0x3E2A_E95C, 0x3E2A_93E7, 0x3E2A_93E8], [0, 0]),
-    ([0x4060_9D9A, 0x4060_2D4B, 0x4060_2D4C], [0, 0]),
-];
-
-/// Along [`PINNED`]'s lanes, where the correctly rounded reciprocal names another texel than Metal
-/// read, Metal's reciprocal's model names Metal's, and the device reads it along the handed
-/// direction through every `float` route.
-#[test]
-fn metals_reciprocal_reads_the_pinned_texels() {
-    let lanes: Vec<([f32; 3], u32)> = PINNED
-        .iter()
-        .map(|(d, _)| (d.map(f32::from_bits), 1024))
-        .collect();
-    let none = FaceWrap::default();
-    for ((d, n), (_, texel)) in lanes.iter().zip(PINNED) {
-        assert_eq!(metal_texel(*d, *n, none), (0, true, texel), "{d:?}");
-        let r = 1.0 / d[0];
-        let rounded =
-            face_minors(*d, 0, true).map(|c| clamped(metal_x(c, r, *n, false).into(), *n));
-        assert_ne!(
-            rounded, texel,
-            "{d:?}: the correctly rounded reciprocal's texel"
-        );
-    }
-    for route in FLOAT_ROUTES {
-        check(
-            &lanes,
-            &run(by(route), &lanes, none),
-            none,
-            &format!("{route:?}"),
-        );
-    }
-}
-
 /// On every lane of `metal_ties`'s tests, at every size, through `OpFmaKHR`, and on the texel-step
-/// lanes and the through every `float` route, the device reads the face and texel Metal's position
-/// names (Metal's reciprocal) along the handed direction; a direction with an infinite or NaN
-/// component passes unchanged.
+/// lanes through the device's `Fma` too, the device reads the face and texel Metal's position
+/// names with the device's reciprocal along the handed direction; a direction with an infinite or
+/// NaN component passes unchanged.
 #[test]
 fn the_device_reads_metals_nearest_texel() {
     let mut all: Vec<([f32; 3], u32)> = lanes()
@@ -303,14 +220,7 @@ fn the_device_reads_metals_nearest_texel() {
     check(&all, &run(by(Route::Khr), &all, none), none, "Khr");
     let mut few: Vec<([f32; 3], u32)> = steps.iter().step_by(5).copied().collect();
     few.push(TODO_1_14);
-    for route in FLOAT_ROUTES.into_iter().filter(|r| *r != Route::Khr) {
-        check(
-            &few,
-            &run(by(route), &few, none),
-            none,
-            &format!("{route:?}"),
-        );
-    }
+    check(&few, &run(by(Route::Native), &few, none), none, "Native");
 }
 
 /// The step lanes reach the hazards Metal's position decides: on many of them the texel differs
@@ -322,7 +232,7 @@ fn the_step_lanes_reach_the_rounding_hazards() {
     let steps = steps();
     let (mut unfused, mut quotient, mut residue) = (0, 0, 0);
     for ([ma, c, _], n) in &steps {
-        let r = metal_recip(*ma);
+        let r = device_recip(*ma);
         let texel = |x: f32| clamped(x.into(), *n);
         let want = texel(metal_x(*c, r, *n, false));
         unfused += usize::from(texel((c * r + 1.0) * 0.5 * *n as f32) != want);
@@ -342,9 +252,9 @@ fn the_step_lanes_reach_the_rounding_hazards() {
     assert!(residue > 1000, "{residue} of {} lanes", steps.len());
 }
 
-/// `SNAP_WORDS`, a reciprocal's use, two fused multiply-adds', and the wrap's bound the words
-/// `snapped` adds beside its routines, in a module valid on every committed profile, without a wrap
-/// and wrapping either face axis or both.
+/// `SNAP_WORDS`, the reciprocal's division, two fused multiply-adds', and the wrap's bound the
+/// words `snapped` adds beside its routines, in a module valid on every committed profile, without
+/// a wrap and wrapping either face axis or both.
 #[test]
 fn the_estimate_bounds_the_emitted_words() {
     let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
@@ -362,7 +272,7 @@ fn the_estimate_bounds_the_emitted_words() {
                 profile,
             );
             let added = with.len() - without.len();
-            let estimate = SNAP_WORDS + libm::use_words(1, 1) + 2 * fma.words() + wrap.words();
+            let estimate = SNAP_WORDS + FaceRoutines { fma }.use_words() + wrap.words();
             assert!(
                 added <= estimate as usize,
                 "{stem} {wrap:?}: snapped adds {added} words, estimated {estimate}"

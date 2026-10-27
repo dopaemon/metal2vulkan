@@ -333,12 +333,12 @@ fn select(d: [f32; 3]) -> (usize, f32, f32, f32) {
 }
 
 /// Metal's base texel and 1/256 steps on a face axis of `n` texels of minor component `c` beside
-/// major magnitude `ma`: `X = RN(RN(1 + c r) / 2 n)` with `r` Metal's reciprocal of `ma` (its
-/// model, `libm::rcp::model`), the sum fused, then `q = floor(256 X + 1/2) - 128`; on a repeating
+/// major magnitude `ma`: `X = RN(RN(1 + c r) / 2 n)` with `r` the device's reciprocal of `ma` (the
+/// interpreter's `RN(1 / ma)`), the sum fused, then `q = floor(256 X + 1/2) - 128`; on a repeating
 /// axis (`wraps`) of a size that is not a power of two, a face coordinate `RN(1 + c r) / 2` of 1 or
 /// more less 1 first.
 fn axis(c: f32, ma: f32, n: u32, wraps: bool) -> (i64, i64) {
-    let r = crate::lower::arith::libm::rcp::model(ma);
+    let r = 1.0 / ma;
     let f = c.mul_add(r, 1.0);
     let u = f * 0.5;
     let u = match wraps && !n.is_power_of_two() && u >= 1.0 {

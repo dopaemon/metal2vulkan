@@ -4,20 +4,14 @@
 //! computes:
 //!
 //! - `air.fast_tanh` on `float` is the MSL fast-math formula `(t - 1) / (t + 1)`,
-//!   `t = exp2(x * 2 log2 e)` of Metal's `exp2` (no `Tanh`), every step of it `NoContraction`; the
-//!   precise `air.tanh` is Metal's `tanh`, and a `half` `fast_tanh` Metal's `half` `tanh`, `(t - 1)
-//!   rcp(t + 1)` of the same `t` with Metal's reciprocal (no `Tanh`). Metal's `exp2` and `tanh` are
-//!   the device's `Exp2` and `Tanh` where the profile's `float` functions are Metal's
-//!   (`FloatFunctions::Metal`) and the translation's routines elsewhere, and so is its reciprocal
-//!   in a fast-math entry, the device's `1 / y` (`OpFDiv`); the checks below leave the routines out
-//!   of the kernel's own instructions, with the precise division they divide through
-//!   (`without_math_routines`);
+//!   `t = exp2(x * 2 log2 e)` of the device's `Exp2` (no `Tanh`), every step of it
+//!   `NoContraction`, its quotient the device's division (`OpFDiv`); the precise `air.tanh` is the
+//!   device's `Tanh`, and a `half` `fast_tanh` Metal's `half` `tanh`, `(t - 1) · (1 / (t + 1))` of
+//!   the same `t` (no `Tanh`);
 //! - `air.sign` is Metal's `sign` with and without fast math (no `FSign`, which keeps the sign
 //!   of a zero where Metal answers `+0`), and both answer `-1` for `-3` on the interpreter;
-//! - the precise `air.sinpi` calls Metal's routine on every profile, so the entry's own
-//!   instructions hold no `Sin` and no `RoundEven`; the fast `air.fast_sinpi` reduces its argument
-//!   (`RoundEven`) and takes the sine of the residue from the device's `Sin` where the profile's
-//!   `float` functions are Metal's (`FloatFunctions::Metal`), and calls the routine elsewhere.
+//! - `air.sinpi` and `air.fast_sinpi` reduce their argument (`RoundEven`) and take the sine of the
+//!   residue from the device's `Sin` on every profile.
 //!
 //! The values of these functions are the unit tests' (`lower::arith::tests`); no GPU is used.
 //!
@@ -39,7 +33,7 @@ use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, exact_maths, link_and_validate, llvm_assemble, meter, profile,
-    tiny_check_scales, typed_module, without_math_routines, AssembleError, Scratch,
+    typed_module, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::ir::StorageClass;
@@ -61,14 +55,8 @@ struct Kernel {
     /// `GLSL.std.450` instructions the module must and must not contain.
     has: &'static [u32],
     lacks: &'static [u32],
-    /// `GLSL.std.450` instructions the module contains exactly where the profile's `float`
-    /// functions are Metal's.
-    metal_functions_only: &'static [u32],
-    /// Whether the module divides (`OpFDiv`) by the fast division's routine.
+    /// Whether the module divides (`OpFDiv`): `fast::tanh`'s quotient.
     divides: bool,
-    /// Whether the module divides (`OpFDiv`) exactly where the profile's `float` functions are
-    /// Metal's: the device's reciprocal in a fast-math entry.
-    metal_divides: bool,
     /// The stored word on the interpreter, when it models the kernel.
     want: Option<u32>,
 }
@@ -77,42 +65,34 @@ const KERNELS: [Kernel; 8] = [
     Kernel {
         name: "fast_tanh_float",
         body: "  %a = fadd fast float 0x4046000000000000, -0.0\n  %r = call fast float @air.fast_tanh.f32(float %a)\n",
-        has: &[],
+        has: &[EXP2],
         lacks: &[TANH],
-        metal_functions_only: &[EXP2],
         divides: true,
-        metal_divides: false,
         want: None,
     },
     // RC3 cases e72f550f and 2d5f3949's GELU tail at x = -8: 0.5 * x * (1 + tanh(...)).
     Kernel {
         name: FAST_TANH_IN_GELU,
         body: "  %a = fadd fast float 0xC038A66660000000, -0.0\n  %x = fadd fast float 0xC020000000000000, -0.0\n  %t = call fast float @air.fast_tanh.f32(float %a)\n  %s = fadd fast float %t, 1.000000e+00\n  %h = fmul fast float %x, 5.000000e-01\n  %r = fmul fast float %h, %s\n",
-        has: &[],
+        has: &[EXP2],
         lacks: &[TANH],
-        metal_functions_only: &[EXP2],
         divides: true,
-        metal_divides: false,
         want: None,
     },
     Kernel {
         name: "precise_tanh_float",
         body: "  %a = fadd fast float 0x4046000000000000, -0.0\n  %r = call fast float @air.tanh.f32(float %a)\n",
-        has: &[],
+        has: &[TANH],
         lacks: &[EXP2],
-        metal_functions_only: &[TANH],
         divides: false,
-        metal_divides: false,
         want: None,
     },
     Kernel {
         name: "fast_tanh_half",
         body: "  %a = fadd fast float 0x4000000000000000, -0.0\n  %h = fptrunc float %a to half\n  %t = call fast half @air.fast_tanh.f16(half %h)\n  %r = fpext half %t to float\n",
-        has: &[],
+        has: &[EXP2],
         lacks: &[TANH],
-        metal_functions_only: &[EXP2],
-        divides: false,
-        metal_divides: true,
+        divides: true,
         want: None,
     },
     Kernel {
@@ -120,9 +100,7 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd fast float 0xC008000000000000, -0.0\n  %r = call fast float @air.sign.f32(float %a)\n",
         has: &[],
         lacks: &[FSIGN],
-        metal_functions_only: &[],
         divides: false,
-        metal_divides: false,
         want: Some(0xBF80_0000),
     },
     Kernel {
@@ -130,29 +108,23 @@ const KERNELS: [Kernel; 8] = [
         body: "  %a = fadd float 0xC008000000000000, -0.0\n  %r = call float @air.sign.f32(float %a)\n",
         has: &[],
         lacks: &[FSIGN],
-        metal_functions_only: &[],
         divides: false,
-        metal_divides: false,
         want: Some(0xBF80_0000),
     },
     Kernel {
         name: "precise_sinpi",
         body: "  %a = fadd fast float 0x3FF0000000000000, -0.0\n  %r = call fast float @air.sinpi.f32(float %a)\n",
-        has: &[],
-        lacks: &[SIN, ROUND_EVEN],
-        metal_functions_only: &[],
+        has: &[SIN, ROUND_EVEN],
+        lacks: &[],
         divides: false,
-        metal_divides: false,
         want: None,
     },
     Kernel {
         name: "fast_sinpi",
         body: "  %a = fadd fast float 0x3FF0000000000000, -0.0\n  %r = call fast float @air.fast_sinpi.f32(float %a)\n",
-        has: &[],
+        has: &[SIN, ROUND_EVEN],
         lacks: &[],
-        metal_functions_only: &[SIN, ROUND_EVEN],
         divides: false,
-        metal_divides: false,
         want: None,
     },
 ];
@@ -264,7 +236,7 @@ fn metal_math_variants_select_metals_functions() {
             let a = compile(&bitcode, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (ext, div) = ext_insts(&without_math_routines(&words));
+            let (ext, div) = ext_insts(&words);
             for i in k.has {
                 assert!(
                     ext.contains(i),
@@ -278,25 +250,16 @@ fn metal_math_variants_select_metals_functions() {
                 );
             }
             let metal = p.fields().float_functions == FloatFunctions::Metal;
-            for i in k.metal_functions_only {
-                assert_eq!(
-                    ext.contains(i),
-                    metal,
-                    "{what}: GLSL.std.450 {i} with float functions Metal's = {metal} ({ext:?})"
-                );
-            }
-            assert_eq!(
-                div,
-                k.divides || (k.metal_divides && metal),
-                "{what}: OpFDiv"
-            );
-            // The fast-math entry's `fast_tanh` notes the routines it calls, except where every
-            // step is Metal's own function on the device (`FloatFunctions::Metal`), which notes
-            // nothing in such an entry.
+            assert_eq!(div, k.divides, "{what}: OpFDiv");
+            // The fast-math entry's `fast_tanh` notes its steps' precision (the device's
+            // `Exp2` and division), except where every step is Metal's own function on the device
+            // (`FloatFunctions::Metal`), which notes nothing in such an entry.
+            // A `half` one's division is its reciprocal, a function of its own.
             if k.divides {
+                let half = k.name.ends_with("_half");
                 assert_eq!(
-                    a.precision.contains(&PrecisionNote::DeviceArithmetic)
-                        && a.precision.contains(&PrecisionNote::DeviceTranscendentals),
+                    (half || a.precision.contains(&PrecisionNote::DeviceArithmetic))
+                        && a.precision.contains(&PrecisionNote::NativeTranscendentals),
                     !metal,
                     "{what}: {:?}",
                     a.precision
@@ -311,9 +274,8 @@ fn metal_math_variants_select_metals_functions() {
 }
 
 /// Each float arithmetic result of `words` (`OpFAdd`, `OpFSub`, `OpFMul`, `OpFDiv`, and
-/// `GLSL.std.450 Fma`) but those of `apart`, as its opcode and whether it is decorated
-/// `NoContraction`.
-fn float_arithmetic(words: &[u32], apart: &[u32]) -> Vec<(u32, bool)> {
+/// `GLSL.std.450 Fma`), as its opcode and whether it is decorated `NoContraction`.
+fn float_arithmetic(words: &[u32]) -> Vec<(u32, bool)> {
     let (mut results, mut exact) = (Vec::new(), Vec::new());
     let arith = [
         crate::spv::Op::FAdd,
@@ -338,24 +300,19 @@ fn float_arithmetic(words: &[u32], apart: &[u32]) -> Vec<(u32, bool)> {
     }
     results
         .into_iter()
-        .filter(|(_, id)| !apart.contains(id))
         .map(|(op, id)| (op, exact.contains(&id)))
         .collect()
 }
 
 /// `air.fast_tanh` is one operation to Metal, so the device may not fuse or regroup any of its
-/// steps with the caller's arithmetic. Every step is `NoContraction` whatever the call's flags: `x
-/// · 2 log2 e`, the quotient's product and the same product `2^24` larger that decides its flush
-/// (each in the profile's form: `GLSL.std.450 Fma(a, b, -0.0)` where its `float` functions are
-/// Metal's, an `OpFMul` elsewhere), `t - 1`, `t + 1`, and the reciprocal's estimate. The caller's
+/// steps with the caller's arithmetic. Every step is `NoContraction` whatever the call's flags:
+/// `x · 2 log2 e` (in the profile's form: `GLSL.std.450 Fma(a, b, -0.0)` where its `float`
+/// functions are Metal's, an `OpFMul` elsewhere), `t - 1`, `t + 1`, and the quotient. The caller's
 /// `fast` arithmetic stays undecorated. Without the decorations, Mesa's `lower_flrp` rule turned
 /// GELU's `1 + tanh` into `t` on RADV and x86 lavapipe (RC3 cases e72f550f and 2d5f3949,
-/// `gelu(-8)`). Under `FloatMathsPolicy::Exact` each of the caller's two products is checked; a
-/// fused check (`TinyCheck::Fused`) scales an operand by its own multiply, `NoContraction`,
-/// counted apart.
+/// `gelu(-8)`).
 #[test]
 fn fast_tanh_is_one_operation() {
-    use crate::lower::arith::denormal::{tiny_check, TinyCheck};
     let Some(bitcode) = assemble() else {
         return;
     };
@@ -365,24 +322,7 @@ fn fast_tanh_is_one_operation() {
         let a =
             compile(&bitcode, FAST_TANH_IN_GELU, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
         let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let own = without_math_routines(&words);
-        let scales = tiny_check_scales(&own);
-        let fused = tiny_check(&p) == Some(TinyCheck::Fused);
-        assert_eq!(
-            scales.len(),
-            2 * usize::from(fused),
-            "{what}: the checks' scaling"
-        );
-        let ops = float_arithmetic(&own, &scales);
-        let exact_muls = |ops: &[(u32, bool)]| {
-            let mul = (crate::spv::Op::FMul as u32, true);
-            ops.iter().filter(|&&o| o == mul).count()
-        };
-        assert_eq!(
-            exact_muls(&float_arithmetic(&own, &[])),
-            exact_muls(&ops) + scales.len(),
-            "{what}: the checks' scaling, NoContraction"
-        );
+        let ops = float_arithmetic(&words);
         let count = |op: crate::spv::Op, exact: bool| {
             ops.iter()
                 .filter(|(o, e)| *o == op as u32 && *e == exact)
@@ -393,21 +333,17 @@ fn fast_tanh_is_one_operation() {
                 .filter(|(o, e)| *o == crate::spv::Op::ExtInst as u32 && *e == exact)
                 .count()
         };
-        // The tanh's products are in the profile's form, and none in the other.
-        let metal = p.fields().float_functions == FloatFunctions::Metal;
-        let (products, other) = if metal {
-            (fma(true), count(crate::spv::Op::FMul, true))
-        } else {
-            (count(crate::spv::Op::FMul, true), fma(true))
-        };
+        // The tanh's product is in the profile's form.
+        let metal = usize::from(p.fields().float_functions == FloatFunctions::Metal);
         assert_eq!(
             (
-                products,
+                count(crate::spv::Op::FMul, true),
                 count(crate::spv::Op::FSub, true),
                 count(crate::spv::Op::FAdd, true),
-                count(crate::spv::Op::FDiv, true)
+                count(crate::spv::Op::FDiv, true),
+                fma(true)
             ),
-            (4, 1, 1, 1),
+            (1 - metal, 1, 1, 1, metal),
             "{what}: the tanh's steps, NoContraction: {ops:?}"
         );
         assert_eq!(
@@ -416,9 +352,8 @@ fn fast_tanh_is_one_operation() {
                 count(crate::spv::Op::FSub, false),
                 count(crate::spv::Op::FDiv, false),
                 count(crate::spv::Op::FMul, false),
-                other
             ),
-            (0, 0, 0, 2, 0),
+            (0, 0, 0, 2),
             "{what}: only the caller's multiplies are left free: {ops:?}"
         );
         assert!(

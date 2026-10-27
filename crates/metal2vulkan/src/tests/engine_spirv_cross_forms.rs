@@ -289,11 +289,10 @@ fn only_the_entry_reads_the_coverage_of_a_looped_body() {
 /// requires `VkProperty::MetalHalfFma`; on macOS it compiles as MoltenVK's MSL. A profile that
 /// rounds a `half` under the 16-bit float controls (`QuantizeForm::Controlled`: ANV and RADV) with
 /// `shaderFmaFloat16` takes `OpFmaKHR` on 16 bits (`fma::Route::F16Khr`), inline and under no note.
-/// Every other committed profile takes native device maths (the default): the device's `float`
+/// Every other committed profile takes the device's `float`
 /// `Fma` rounded to `half`, inline too, under `PrecisionNote::NativeFma`; it holds a 16-bit float
 /// only where it rounds a `half` through the device's conversion, measured
-/// (`QuantizeForm::Converted`) or under the float controls. Under `FloatMathsPolicy::Exact` it
-/// calls the `half` routine where it takes neither 16-bit form.
+/// (`QuantizeForm::Converted`) or under the float controls.
 #[test]
 fn a_half_fused_multiply_add_is_inline_on_moltenvk() {
     let Some(lib) = library("fmx_fma_precise") else {

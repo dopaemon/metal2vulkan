@@ -454,8 +454,20 @@ fn fast_atan2_past_the_divisors_domain_is_unstated() {
 
 /// The verdict on one `float` word computing `computes` of the `float` bit patterns `operands`
 /// under `math`, where Metal answers `metal` and the device `device`, in a row recording
-/// `recorded`.
+/// `recorded`, on lavapipe.
 fn verdict_of(
+    computes: &str,
+    math: Math,
+    operands: &[u32],
+    answers: (u32, u32),
+    recorded: &[PrecisionNote],
+) -> WordVerdict {
+    verdict_on(lavapipe(), computes, math, operands, answers, recorded)
+}
+
+/// [`verdict_of`] on `profile`'s device.
+fn verdict_on(
+    profile: &DeviceProfile,
     computes: &str,
     math: Math,
     operands: &[u32],
@@ -480,7 +492,7 @@ fn verdict_of(
         &lanes,
         &[],
         &recorded.iter().copied().collect(),
-        lavapipe(),
+        profile,
         &metal.to_le_bytes(),
         &device.to_le_bytes(),
     )
@@ -588,10 +600,10 @@ fn a_nan_encoding_the_product_answers_is_not_a_near_equivalent() {
 /// in an operation whose lowering records `DeviceDenormals` and the row records the note, the value
 /// stays open even though section 8.5 lets a denormal be flushed or not. Fast `sinpi` is such an
 /// operation: its lowering is not among those that answer Metal at `float` denormals themselves
-/// (`FloatFn::metal_denormals`; precise `fmod` is one). The product's `float` `+ - *` read and
-/// flush denormals as Metal does on every profile (the device's where a measured fact states it,
-/// else the module's flushes), and Metal's precise and fast divisions flush their own subnormals,
-/// so none records the note and a product's or quotient's subnormal keeps Apple's verdict, even
+/// (`FloatFn::metal_denormals`; precise `fmod` is one). The product's `float` `+ - *` and
+/// divisions are the device's: on lavapipe, which is not measured to read denormals as Metal does,
+/// each records the note, so a product's or quotient's subnormal stays open too; where the device
+/// is measured to (MoltenVK), a product records none and its subnormal keeps Apple's verdict, even
 /// where the row records the note for another operation. A value no subnormal touches keeps its
 /// verdict.
 #[test]
@@ -622,22 +634,33 @@ fn a_denormal_the_device_keeps_stays_open() {
         assert!(open.detail().contains(part), "{part}: {open:?}");
     }
     assert_eq!(sinpi(&[]), WordVerdict::Within);
-    // `tiny * 1`: the product's multiply flushes on every profile, so the row's note is not its.
-    let product = verdict_of(
-        "mul(a, b)",
-        Math::Precise,
-        &[tiny, one],
-        (0, tiny),
-        &denormals,
-    );
-    assert_eq!(product, WordVerdict::Within);
+    // `tiny * 1`: lavapipe's multiply keeps the subnormal, so the row's note is its; MoltenVK's
+    // reads it as Metal does, so the note is not its.
+    let product = |profile| {
+        verdict_on(
+            profile,
+            "mul(a, b)",
+            Math::Precise,
+            &[tiny, one],
+            (0, tiny),
+            &denormals,
+        )
+    };
+    let kept = product(lavapipe());
+    assert_eq!(kept.label(), "near_equivalent", "{kept:?}");
+    assert!(kept.detail().contains("(Metal's mul)"), "{kept:?}");
+    assert_eq!(product(moltenvk()), WordVerdict::Within);
     // A quotient below the smallest normal (2^-100 / 2^30): Metal's +0, the device's 2^-130.
     let bits = |e| (pow2(e) as f32).to_bits();
     let (num, den) = (bits(-100), bits(30));
     let quotient = bits(-130);
     for math in [Math::Precise, Math::Fast] {
         let division = verdict_of("div(a, b)", math, &[num, den], (0, quotient), &denormals);
-        assert_eq!(division, WordVerdict::Within, "{math:?}");
+        assert_eq!(
+            division.label(),
+            "near_equivalent",
+            "{math:?}: {division:?}"
+        );
     }
     // A subnormal intermediate the next operation scales back up: fast::sinpi(2^-140) * 2^30,
     // +0 where the operand is read as zero, and the subnormal pi * 2^-140 scaled by 2^30 where
@@ -652,16 +675,21 @@ fn a_denormal_the_device_keeps_stays_open() {
         &denormals,
     );
     assert_eq!(scaled.label(), "near_equivalent", "{scaled:?}");
-    // The same through two multiplies (2^-140 * 2^-1 * 2^30): the product flushes the
-    // intermediate as Metal does, so the row's note is not the multiplies'.
-    let multiplied = verdict_of(
-        "mul(mul(a, b), c)",
-        Math::Precise,
-        &[small, bits(-1), big],
-        (0, bits(-111)),
-        &denormals,
-    );
-    assert_eq!(multiplied, WordVerdict::Within);
+    // The same through two multiplies (2^-140 * 2^-1 * 2^30): lavapipe keeps the intermediate,
+    // MoltenVK reads it as Metal does.
+    let multiplied = |profile| {
+        verdict_on(
+            profile,
+            "mul(mul(a, b), c)",
+            Math::Precise,
+            &[small, bits(-1), big],
+            (0, bits(-111)),
+            &denormals,
+        )
+    };
+    let kept = multiplied(lavapipe());
+    assert_eq!(kept.label(), "near_equivalent", "{kept:?}");
+    assert_eq!(multiplied(moltenvk()), WordVerdict::Within);
     // A product of normals one ulp off is outside the correctly rounded bound, as before.
     let two = 2.0f32.to_bits();
     let normal = verdict_of(

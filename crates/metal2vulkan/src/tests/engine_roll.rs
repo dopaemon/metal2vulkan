@@ -22,7 +22,7 @@ use crate::spirv::ir::TypedModule;
 use crate::spirv::roll::{entry_weight, ROLL_ABOVE};
 
 /// The `float` operations of the body: two inlined copies are above `ROLL_ABOVE`.
-const OPS: usize = 8_000;
+const OPS: usize = 13_000;
 
 /// The operations before the body's first selection; each later stretch is one longer than the
 /// one before, and [`halves`] picks each operation, so no stretch of the body repeats another

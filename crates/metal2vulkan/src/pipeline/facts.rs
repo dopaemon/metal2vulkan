@@ -767,10 +767,8 @@ pub enum RuntimeFact {
     /// dropped. Nothing binds it.
     ExactFormsOverCompilerLimit {
         sampling: bool,
-        float_maths: bool,
         texel_conversion: bool,
         nan_and_min_max: bool,
-        rounding_order: bool,
     },
     /// The render pipeline was compiled under `VariantKey::quad_primitive_ids`, and its fragment
     /// function reads `[[primitive_id]]` from Vulkan's `PrimitiveId` shifted right by one

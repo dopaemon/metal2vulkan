@@ -13,14 +13,14 @@ use crate::device::description::{
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::{
-    ContainmentPolicy, DevicePolicy, FloatMathsPolicy, NanMinMaxPolicy, RoundingOrderPolicy,
-    SamplingPolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
+    ContainmentPolicy, DevicePolicy, NanMinMaxPolicy, SamplingPolicy, Unorm8LinearFilterPolicy,
+    YCbCrFilterPolicy,
 };
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
     ImageCaps, Independence, LeafCaps, MinMaxRoute, NanEncoding, ProfileFields, Robustness,
-    RoundingOrderRoute, TexelNanRoute,
+    TexelNanRoute,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -359,12 +359,9 @@ fn derive_fields(
         // so the extended dynamic states a pipeline makes are exactly what it requires.
         dynamic_vertex_stride: has(VkFeature::ExtendedDynamicState),
         enabled: enabled_caps(desc, deviations, policy),
-        // The measured deviation; unmeasured, the translation's own functions. Elsewhere native
-        // device maths unless the policy asks for Metal's answers.
+        // The measured deviation; unmeasured, the device's own functions.
         float_functions: if deviates(DriverDeviation::MetalFloatFunctions) {
             FloatFunctions::Metal
-        } else if policy.float_maths == FloatMathsPolicy::Exact {
-            FloatFunctions::Device
         } else {
             FloatFunctions::Native
         },
@@ -413,15 +410,6 @@ fn derive_fields(
             MinMaxRoute::Metal
         } else {
             MinMaxRoute::Native
-        },
-        // Metal's order where the device's functions are Metal's own; elsewhere the device's
-        // instructions where the policy takes them.
-        rounding_order: if deviates(DriverDeviation::MetalFloatFunctions)
-            || policy.rounding_order == RoundingOrderPolicy::Exact
-        {
-            RoundingOrderRoute::Metal
-        } else {
-            RoundingOrderRoute::Native
         },
         // The device's measured value, keyed on its identity as the workarounds are, or the floor.
         function_storage: function_storage::of(desc),

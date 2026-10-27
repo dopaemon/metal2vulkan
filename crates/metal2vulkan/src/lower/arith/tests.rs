@@ -8,7 +8,6 @@
 //! behavior are skipped, so an interpreter trap is a real failure). References are written from
 //! the LLVM and Metal definitions in plain Rust.
 
-use super::divide::Reciprocal;
 use super::legal::{f16_to_f64, f64_to_f16, FloatFmt, Form, Held};
 use super::libm::Lib;
 use super::math::{self, ConvertKind, FloatFn, IntFn, Sign};
@@ -2514,21 +2513,17 @@ fn half_nan_answers_follow_the_measured_states() {
     }
 }
 
-/// The float facts of a profile whose `float` fused multiply-add is `OpFmaKHR`, checked by the
-/// integer routine, whose `half` one is the device's `float` `Fma`, and whose `float` functions are
-/// the device's.
+/// The float facts of a profile whose `float` fused multiply-add is `OpFmaKHR`, whose `half` one
+/// is the device's `float` `Fma`, and whose `float` functions are the device's.
 const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     routes: super::fma::Routes {
         float: super::fma::Route::Khr,
         half: super::fma::Route::Native,
-        tiny: Some(super::fma::Route::Soft),
     },
-    reciprocal: super::divide::Reciprocal::Rounded,
     metal_functions: false,
-    native: false,
+    device_denormals: false,
     nan_native: false,
     native_min_max: false,
-    native_order: false,
 };
 
 /// Class E: Metal's `float` `fneg` and `fabs` flip or clear the sign bit alone, a NaN's payload and
@@ -2670,7 +2665,7 @@ fn nan_answers_follow_the_measured_flag_states() {
             .iter()
             .fold(FastMath::NONE, |every, (flag, _)| every.union(*flag));
         let fmf = if flagged { all } else { FastMath::NONE };
-        let selected = super::refine_float(op, fast, fmf, float(32), Reciprocal::Device);
+        let selected = super::refine_float(op, fast, fmf, float(32));
         assert_eq!(
             function_answer(selected, fast, flagged, f32_),
             want,
@@ -3158,27 +3153,15 @@ fn pi_scaled_functions_reduce_exactly_to_metal_answers() {
     }
 }
 
-/// [`FloatFn::words`] bounds what `sinpi`, `cospi`, and `tanpi` emit on every form: on `float` and
-/// `half` the calls of Metal's routines (the routines are charged on their own), a fast call's on
-/// `float` also where the device's functions are Metal's, which is the exact reduction around the
-/// device's `Sin` and `Cos`, as on a `bfloat`, which no routine answers, the axis arms and
-/// `tanpi`'s quarter turns included. The module's growth over an identity kernel (with the same
-/// routines) is charged in full, its constants and the `GLSL.std.450` import included.
+/// [`FloatFn::words`] bounds what `sinpi`, `cospi`, and `tanpi` emit on every form: the exact
+/// reduction around the device's `Sin` and `Cos`, the axis arms and `tanpi`'s quarter turns
+/// included, whether or not the device's functions are Metal's. The module's growth over an
+/// identity kernel is charged in full, its constants and the `GLSL.std.450` import included.
 #[test]
 fn pi_scaled_functions_stay_within_their_word_estimate() {
-    use super::libm::{self, Fun, Mode};
-    use std::collections::BTreeMap;
-    let routines = [Mode::Precise, Mode::Fast]
-        .map(|m| [Fun::SinPi(m), Fun::CosPi(m), Fun::TanPi(m)])
-        .concat();
-    let defs = |b: &mut ModuleBuilder| -> BResult<Vec<FuncId>> {
-        routines
-            .iter()
-            .map(|fun| libm::define_alone(b, *fun, false))
-            .collect()
-    };
-    let module_words = |f: Form, body: BodyCalling<'_>| {
-        let m = kernel_defs(&[f], f, &defs, body, false, false).expect("kernel");
+    use super::libm::Mode;
+    let module_words = |f: Form, body: Body<'_>| {
+        let m = kernel(&[f], f, body).expect("kernel");
         crate::spirv::serialize::serialize(m)
             .expect("words")
             .words
@@ -3186,9 +3169,16 @@ fn pi_scaled_functions_stay_within_their_word_estimate() {
     };
     let precise = [FloatFn::SinPi, FloatFn::CosPi, FloatFn::TanPi];
     let fast = [FloatFn::FastSinPi, FloatFn::FastCosPi, FloatFn::FastTanPi];
-    for f in [float(32), vec(float(32), 4), float(16), vec(float(16), 4)] {
-        let bare = module_words(f, &|_, x, _| Ok(x[0]));
-        // `refine_float` gives a `half` call no fast function.
+    for f in [
+        float(32),
+        vec(float(32), 4),
+        float(16),
+        vec(float(16), 4),
+        bfloat(),
+        vec(bfloat(), 4),
+    ] {
+        let bare = module_words(f, &|_, x| Ok(x[0]));
+        // `refine_float` gives a narrow call no fast function.
         let calls = if f.float_fmt() == Some(FloatFmt::F32) {
             [precise, fast].concat()
         } else {
@@ -3196,12 +3186,7 @@ fn pi_scaled_functions_stay_within_their_word_estimate() {
         };
         for g in calls {
             for metal in [None, Some(Mode::Fast), Some(Mode::Precise)] {
-                let used = module_words(f, &|fb, x, funcs| {
-                    let map: BTreeMap<Fun, FuncId> = routines
-                        .iter()
-                        .copied()
-                        .zip(funcs.iter().copied())
-                        .collect();
+                let used = module_words(f, &|fb, x| {
                     math::float_fn(
                         fb,
                         g,
@@ -3209,7 +3194,7 @@ fn pi_scaled_functions_stay_within_their_word_estimate() {
                         Contraction::Allowed,
                         NanTest::IsNan,
                         x,
-                        &Lib::new(metal, &map),
+                        &Lib::new(metal, None),
                     )
                 });
                 let (emitted, bound) = (used - bare, g.words(f) as usize);
@@ -3220,69 +3205,31 @@ fn pi_scaled_functions_stay_within_their_word_estimate() {
             }
         }
     }
-    let module_words = |f: Form, body: Body<'_>| {
-        let m = kernel(&[f], f, body).expect("kernel");
-        crate::spirv::serialize::serialize(m)
-            .expect("words")
-            .words
-            .len()
-    };
-    for f in [bfloat(), vec(bfloat(), 4)] {
-        let bare = module_words(f, &|_, x| Ok(x[0]));
-        for g in [FloatFn::SinPi, FloatFn::CosPi, FloatFn::TanPi] {
-            let used = module_words(f, &|fb, x| {
-                math::float_fn(
-                    fb,
-                    g,
-                    f,
-                    Contraction::Allowed,
-                    NanTest::IsNan,
-                    x,
-                    &Lib::instructions(),
-                )
-            });
-            let (emitted, bound) = (used - bare, g.words(f) as usize);
-            assert!(
-                emitted <= bound,
-                "{g:?} {f:?}: {emitted} words over {bound}"
-            );
-        }
-    }
 }
 
 /// `air.fast_tanh` on `float` is the MSL fast-math formula `(t - 1) / (t + 1)` of `t = exp(2x)`,
-/// divided as Metal's fast division (`(t - 1) · (1 / (t + 1))`, the reciprocal flushed past
-/// `2^126`). The interpreter does not model `Exp2`, so the kernel takes `t` as an input (`exp2(x *
-/// 2 log2 e)` in `f32` on the host) and runs the quotient. Where the quotient does not depend on
-/// the last place of `t` it gives the Metal observation of the authored case
-/// `fast-tanh-through-all-three-of-its-regimes` (M3 Max, ORACLE_ABI v32): `x = 0` is 0, `x = 43`
-/// is 1, `x = 44` (where `t + 1` is above `2^126` and the reciprocal flushes) is 0, `x = 44.4`
-/// (where `t` overflows) is NaN, and `x = -100` (where `t` is 0) is -1.
+/// its quotient the device's division. The interpreter does not model `Exp2`, so the kernel takes
+/// `t` as an input (`exp2(x * 2 log2 e)` in `f32` on the host) and runs the quotient. Where the
+/// quotient does not depend on the last place of `t` it gives the Metal observation of the
+/// authored case `fast-tanh-through-all-three-of-its-regimes` (M3 Max, ORACLE_ABI v32): `x = 0` is
+/// 0, `x = 43` is 1, `x = 44.4` (where `t` overflows) is NaN, and `x = -100` (where `t` is 0) is
+/// -1. At `x = 44`, where `t + 1` is above `2^126`, Metal's fast reciprocal flushes and answers 0;
+/// the device's quotient answers 1 (`PrecisionNote::NativeDivision`).
 #[test]
 fn fast_tanh_is_the_fast_math_formula() {
     let f = float(32);
     let two_log2e = (2.0 * std::f64::consts::LOG2_E) as f32;
     let t_of = |x: f32| (x * two_log2e).exp2();
     // (x, Metal's fast::tanh(x)).
-    let metal: [(f32, u32); 5] = [
+    let metal: [(f32, u32); 4] = [
         (0.0, 0x0000_0000),
         (43.0, 0x3F80_0000),
-        (44.0, 0x0000_0000),
         (44.4, 0x7FC0_0000),
         (-100.0, 0xBF80_0000),
     ];
-    // Metal's fast quotient: the numerator times the reciprocal, flushed past 2^126.
-    let quotient = |t: f32| {
-        let den = t + 1.0;
-        let r = if den.abs() > 2f32.powi(126) {
-            0.0
-        } else {
-            1.0 / den
-        };
-        (t - 1.0) * r
-    };
+    let quotient = |t: f32| (t - 1.0) / (t + 1.0);
     let mut xs: Vec<f32> = metal.iter().map(|m| m.0).collect();
-    xs.extend([0.5, -3.75, 5.0, 1e-3, -1e-3, 20.0, -44.4, 43.7]);
+    xs.extend([44.0, 0.5, -3.75, 5.0, 1e-3, -1e-3, 20.0, -44.4, 43.7]);
     let cases: Vec<Case> = xs
         .iter()
         .map(|x| vec![vec![u64::from(t_of(*x).to_bits())]])
@@ -3293,24 +3240,7 @@ fn fast_tanh_is_the_fast_math_formula() {
         f,
         &|fb, t| {
             let divide = |fb: &mut FunctionBuilder<'_>, x: Value, y: Value| {
-                math::fast_divide(fb, f, x, y, Contraction::Forbidden, Reciprocal::Device)
-            };
-            math::tanh_of_exp(fb, f, &divide, t[0])
-        },
-        &cases,
-        &|c| {
-            let t = f32v(arg(c, 0));
-            Some(vec![u64::from(quotient(t).to_bits())])
-        },
-        false,
-    );
-    check(
-        "fast tanh quotient f32, the reciprocal rounded",
-        &[f],
-        f,
-        &|fb, t| {
-            let divide = |fb: &mut FunctionBuilder<'_>, x: Value, y: Value| {
-                math::fast_divide(fb, f, x, y, Contraction::Forbidden, Reciprocal::Rounded)
+                fb.binary_with(BinOp::FDiv, x, y, Contraction::Forbidden)
             };
             math::tanh_of_exp(fb, f, &divide, t[0])
         },
@@ -3329,8 +3259,9 @@ fn fast_tanh_is_the_fast_math_formula() {
             got.to_bits()
         );
     }
-    // x = 44: t + 1 > 2^126, where the reciprocal flushes.
+    // x = 44: t + 1 > 2^126, where Metal's reciprocal flushes and the device's quotient is 1.
     assert!(t_of(44.0) + 1.0 > 2f32.powi(126));
+    assert_eq!(quotient(t_of(44.0)), 1.0);
 }
 
 /// The function a call computes follows its `air` symbol's `fast_` variant, never a name: on
@@ -3347,9 +3278,8 @@ fn fast_tanh_is_the_fast_math_formula() {
 #[test]
 fn fast_variants_refine_float_functions() {
     use crate::air::ir::FastMath;
-    let refine = |op: FloatFn, fast: bool, fmf: FastMath, f: Form| {
-        super::refine_float(op, fast, fmf, f, Reciprocal::Rounded)
-    };
+    let refine =
+        |op: FloatFn, fast: bool, fmf: FastMath, f: Form| super::refine_float(op, fast, fmf, f);
     let every = FastMath::ALL
         .iter()
         .fold(FastMath::NONE, |all, (flag, _)| all.union(*flag));
@@ -3357,12 +3287,7 @@ fn fast_variants_refine_float_functions() {
     let f32_ = float(32);
     for fmf in [FastMath::NONE, some, every] {
         for (op, fast) in [
-            (
-                FloatFn::Tanh,
-                FloatFn::FastTanh {
-                    reciprocal: Reciprocal::Rounded,
-                },
-            ),
+            (FloatFn::Tanh, FloatFn::FastTanh),
             (
                 FloatFn::Asinh,
                 if fmf == every {
@@ -3381,12 +3306,7 @@ fn fast_variants_refine_float_functions() {
             (FloatFn::Pow, FloatFn::FastPow),
             (FloatFn::Sin, FloatFn::FastSin),
             (FloatFn::Cos, FloatFn::FastCos),
-            (
-                FloatFn::Tan,
-                FloatFn::FastTan {
-                    reciprocal: Reciprocal::Rounded,
-                },
-            ),
+            (FloatFn::Tan, FloatFn::FastTan),
             (FloatFn::Asin, FloatFn::FastAsin),
             (FloatFn::Acos, FloatFn::FastAcos),
             (FloatFn::Atan, FloatFn::FastAtan),
@@ -3433,27 +3353,8 @@ fn fast_variants_refine_float_functions() {
             assert_eq!(refine(op, false, fmf, bfloat()), op);
         }
     }
-    // The fast division's reciprocal is the profile's.
-    let device = super::refine_float(
-        FloatFn::Tanh,
-        true,
-        FastMath::NONE,
-        f32_,
-        Reciprocal::Device,
-    );
-    assert_eq!(
-        device,
-        FloatFn::FastTanh {
-            reciprocal: Reciprocal::Device
-        }
-    );
-    assert!(device.divides() && !FloatFn::Tanh.divides());
-    assert_eq!(
-        super::refine_float(FloatFn::Tan, true, FastMath::NONE, f32_, Reciprocal::Device),
-        FloatFn::FastTan {
-            reciprocal: Reciprocal::Device
-        }
-    );
+    assert!(FloatFn::FastTanh.divides() && !FloatFn::Tanh.divides());
+    assert!(FloatFn::FastTan.divides());
     for reciprocal_flushed in [false, true] {
         assert!(FloatFn::FastAtan2 { reciprocal_flushed }.divides());
     }
@@ -3461,7 +3362,7 @@ fn fast_variants_refine_float_functions() {
 }
 
 /// The transcendental and device-precision functions build and pass L3 (the interpreter does not
-/// model them), `fast::tanh` with its division routine; `ldexp` and `dot` run: part `part` of `of`
+/// model them), `fast::tanh` among them; `ldexp` and `dot` run: part `part` of `of`
 /// of the checks.
 fn device_precision_float_functions(part: usize, of: usize) {
     let device = [
@@ -3481,9 +3382,7 @@ fn device_precision_float_functions(part: usize, of: usize) {
         FloatFn::FastSin,
         FloatFn::FastCos,
         FloatFn::Tan,
-        FloatFn::FastTan {
-            reciprocal: Reciprocal::Device,
-        },
+        FloatFn::FastTan,
         FloatFn::Asin,
         FloatFn::FastAsin,
         FloatFn::Acos,
@@ -3493,6 +3392,7 @@ fn device_precision_float_functions(part: usize, of: usize) {
         FloatFn::Sinh,
         FloatFn::Cosh,
         FloatFn::Tanh,
+        FloatFn::FastTanh,
         FloatFn::Asinh,
         FloatFn::FastAsinh,
         FloatFn::Acosh,
@@ -3533,36 +3433,6 @@ fn device_precision_float_functions(part: usize, of: usize) {
                     )
                 })
                 .unwrap_or_else(|e| panic!("{op:?}: {e:?}"));
-                assert_valid(m, &wide_profile());
-            }));
-        }
-    }
-    for lanes in [1u8, 3] {
-        let f = vec(float(32), lanes);
-        for reciprocal in [Reciprocal::Device, Reciprocal::Rounded] {
-            checks.push(Box::new(move || {
-                let routine = math::FastDivision::new(f, reciprocal, Contraction::Forbidden);
-                let m = kernel_defs(
-                    &[f],
-                    f,
-                    &|b| Ok(vec![math::define_fast_division(b, routine)?]),
-                    &|fb, x, funcs| {
-                        let divide = |fb: &mut FunctionBuilder<'_>, p: Value, q: Value| {
-                            math::call_fast_division(fb, funcs[0], p, q)
-                        };
-                        math::fast_tanh(
-                            fb,
-                            FloatFn::FastTanh { reciprocal },
-                            f,
-                            x[0],
-                            &Lib::instructions(),
-                            &divide,
-                        )
-                    },
-                    false,
-                    false,
-                )
-                .unwrap_or_else(|e| panic!("fast tanh {reciprocal:?}: {e:?}"));
                 assert_valid(m, &wide_profile());
             }));
         }
@@ -4109,7 +3979,6 @@ mod float_texel;
 mod fused;
 mod half_texel;
 mod libm;
-mod libm_exp;
 mod narrow;
 mod round_texel;
 mod snapshot_codes;

@@ -45,7 +45,6 @@ use crate::budget::Meter;
 use crate::device::profile::NanEncoding;
 use crate::device::DeviceProfile;
 use crate::error::Error;
-use crate::lower::arith::divide::Reciprocal;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::math::FloatFn;
 use crate::lower::arith::narrow::u32_form;
@@ -165,7 +164,7 @@ pub fn function_answer(op: FloatFn, fast: bool, flagged: bool, fmt: FloatFmt) ->
         precise_of(op)
     } else {
         // The reciprocal a refinement divides by does not decide its NaN.
-        super::refine_float(op, true, FastMath::NONE, f32_scalar(), Reciprocal::Device)
+        super::refine_float(op, true, FastMath::NONE, f32_scalar())
     };
     (measured(other, !fast) == Some(here)).then_some(here)
 }
@@ -183,12 +182,12 @@ fn f32_scalar() -> Form {
 fn precise_of(op: FloatFn) -> FloatFn {
     use FloatFn as F;
     match op {
-        F::FastTanh { .. } => F::Tanh,
+        F::FastTanh => F::Tanh,
         F::FastAsinh => F::Asinh,
         F::FastSinh => F::Sinh,
         F::FastCosh => F::Cosh,
         F::FastAcosh => F::Acosh,
-        F::FastAtanh { .. } => F::Atanh,
+        F::FastAtanh => F::Atanh,
         F::FastExp10 => F::Exp10,
         F::FastLog10 => F::Log10,
         F::FastFract { .. } => F::Fract,
@@ -202,7 +201,7 @@ fn precise_of(op: FloatFn) -> FloatFn {
         F::FastLog2 => F::Log2,
         F::FastPowr => F::Powr,
         F::FastAtan2 { .. } => F::Atan2,
-        F::FastTan { .. } => F::Tan,
+        F::FastTan => F::Tan,
         F::FastAsin => F::Asin,
         F::FastAcos => F::Acos,
         F::FastAtan => F::Atan,
@@ -251,9 +250,9 @@ fn measured(op: FloatFn, fast: bool) -> Option<NanAnswer> {
         | F::Cosh
         | F::FastCosh
         | F::Tanh
-        | F::FastTanh { .. }
+        | F::FastTanh
         | F::FastAsinh
-        | F::FastAtanh { .. }
+        | F::FastAtanh
         | F::Acosh
         | F::FastAcosh
         | F::Powr
@@ -280,7 +279,7 @@ fn measured(op: FloatFn, fast: bool) -> Option<NanAnswer> {
         | F::FastTanPi => A::Canonical,
         F::Sin | F::Cos if !fast => A::Canonical,
         F::Tan if fast => A::Operand,
-        F::FastTan { .. } => A::Operand,
+        F::FastTan => A::Operand,
         F::Tan => A::Canonical,
         F::Asin if fast => A::DomainSign,
         F::FastAsin => A::DomainSign,
@@ -603,7 +602,7 @@ pub fn drops_payload(e: &Entry, func: FuncId, inst: &Inst) -> bool {
                 return true;
             }
             // The reciprocal a refinement divides by does not decide its NaN.
-            let op = super::refine_float(op, fast, call.fmf, f, Reciprocal::Device);
+            let op = super::refine_float(op, fast, call.fmf, f);
             matches!(
                 function_answer(op, fast, super::every_flag(call.fmf), fmt),
                 Some(NanAnswer::Canonical | NanAnswer::CanonicalExact)

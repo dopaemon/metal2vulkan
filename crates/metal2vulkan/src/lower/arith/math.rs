@@ -6,22 +6,22 @@
 //! Exact sequences are used wherever `GLSL.std.450` differs from Metal: `clz`/`ctz` from
 //! `FindUMsb`/`FindILsb` with the zero case, `rotate` and the funnel shifts with an in-range
 //! second shift (`(x >> 1) >> (N - 1 - s)`), `round` (half away from zero) from `Trunc`, `mix`
-//! as Metal computes it (on `float` and `half` `fma(t, y, fma(-t, x, x))` by the profile's fused
-//! multiply-add route, `metal_mix`; elsewhere `x * (1 - t) + y * t`), and saturating
+//! as Metal computes it where the device's functions are Metal's (on `float` and `half`
+//! `fma(t, y, fma(-t, x, x))` by the profile's fused multiply-add route, `metal_mix`; on `bfloat`
+//! and `double` `x * (1 - t) + y * t`), and saturating
 //! float-to-integer `air.convert` (NaN to 0, out-of-range to the bound, measured on Apple GPUs)
 //! with the clamp applied before the conversion so no conversion is out of range. `sign`, `fract`,
 //! `saturate`, `median3`, and on `float` and `half` `fmin`, `fmax`, `min3`, `max3`, and `clamp`
 //! answer as Metal does at their special operands (zeros, NaNs, infinities, `f32` denormals), which
 //! `FSign`, `Fract`, `NClamp`, and `NMin`/`NMax` leave to the device. Where `GLSL.std.450` is a
-//! different function from Metal's, Metal's is emitted: `sinpi`, `cospi`, and `tanpi` are Metal's
-//! own forms (`libm`) and elsewhere reduce their argument exactly instead of scaling it by
-//! `float(π)`, `fast_tanh` on `float` is the MSL fast-math formula, and the sRGB conversions go
+//! different function from Metal's, Metal's is emitted: `sinpi`, `cospi`, and `tanpi` reduce their
+//! argument exactly instead of scaling it by `float(π)`, `fast_tanh` on `float` is the MSL
+//! fast-math formula, and the sRGB conversions go
 //! through Metal's twelve-bit tables ([`srgb`]). Functions whose Vulkan precision is looser than
 //! correct rounding record a `PrecisionNote` at selection.
 
 use crate::air::intrinsics::PackFormat;
 use crate::lower::arith::denormal;
-use crate::lower::arith::divide::{self, Reciprocal, Rough};
 use crate::lower::arith::exact_division::{div_exact_lanes, per_lane};
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::libm::{self, Lib};
@@ -29,10 +29,10 @@ use crate::lower::arith::nan::{self, NanTest};
 use crate::lower::arith::narrow;
 use crate::lower::arith::ops::{fsplat, mask, ones, sext, splat, ty, CastKind};
 use crate::lower::arith::srgb;
-use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
+use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
-use crate::spirv::ids::{FuncId, GlobalId, Value};
-use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, Type, UnOp};
+use crate::spirv::ids::{GlobalId, Value};
+use crate::spirv::ir::{BinOp, Contraction, ConvOp, GlslOp, UnOp};
 
 /// Whether an integer function reads its operands as signed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -746,14 +746,15 @@ pub enum FloatFn {
     /// of the `f32` container, so exact for NaNs and zeros on every device. Not on `double`.
     CopySign,
     // Device precision (`PrecisionNote::DeviceArithmetic`).
-    /// Metal's precise `sqrt`: correctly rounded (MSL Table 8.1). On `float` and `half`, the
-    /// device's instruction where it is Metal's own in a module compiled with precise functions,
-    /// the translation's routine otherwise ([`libm`]).
+    /// Metal's precise `sqrt`: correctly rounded (MSL Table 8.1). The device's `Sqrt`, Metal's own
+    /// where the device's functions are Metal's in a module compiled with precise functions
+    /// ([`libm`]).
     Sqrt,
     /// `fma` on `double` (`GLSL.std.450 Fma`) and `bfloat` (`narrow::bf16_fma`). `float` and `half`
     /// select the correctly rounded [`super::fma`].
     Fma,
-    /// Metal's precise `fmod`: exact (Table 8.1), `fmod(x, ±inf) = x`; as [`FloatFn::Sqrt`].
+    /// Metal's precise `fmod`: exact (Table 8.1), `fmod(x, ±inf) = x`. On `float` and `half` its
+    /// routine, but where the device's `OpFRem` is Metal's `fmod` ([`libm::Fun::device_answers`]).
     Fmod,
     Dot,
     // Device precision (`PrecisionNote::DeviceTranscendentals`).
@@ -766,18 +767,17 @@ pub enum FloatFn {
     /// `+inf` (`fast_sqrt_of`).
     FastSqrt,
     /// Metal's precise `exp`: within 4 ulp (MSL Table 8.1). On `float` and `half`, where the
-    /// device's functions are Metal's, the device's instruction in a module compiled with precise
-    /// functions and Metal's own composition of the device's `exp2` in a fast-math one (as
-    /// [`FloatFn::Exp10`]); the translation's routine elsewhere ([`libm`]).
+    /// device's functions are Metal's in a module compiled with precise functions, the device's
+    /// instruction; elsewhere Metal's own composition of the device's `exp2` (as
+    /// [`FloatFn::Exp10`], `metal_exp`).
     Exp,
     /// `air.fast_exp` on `float`: `exp2(x · log2(e))` as Metal composes it, the product rounded,
     /// of Metal's `exp2` ([`FloatFn::Exp2`]).
     FastExp,
-    /// Metal's `exp2`, the same function in both modes: the device's instruction where it is
-    /// Metal's own, the translation's routine otherwise.
+    /// Metal's `exp2`, the same function in both modes: the device's instruction.
     Exp2,
-    /// Metal's precise `exp10`: Metal's own composition of the device's `exp2` where that is
-    /// Metal's, the translation's routine on `float` and `half` otherwise, as no instruction is it.
+    /// Metal's precise `exp10`: Metal's own composition of the device's `exp2` (`metal_exp`), as no
+    /// instruction is it.
     Exp10,
     /// `air.fast_exp10` on `float`: `exp2(x · log2(10))` (MSL Table 8.2), the product rounded.
     FastExp10,
@@ -788,25 +788,22 @@ pub enum FloatFn {
     FastLog,
     /// Metal's `log2`, the same function in both modes; as [`FloatFn::Exp2`].
     Log2,
-    /// `air.fast_log2` on `float`: Metal's `log2` ([`FloatFn::Log2`]), the device's instruction
-    /// where it is Metal's own, elsewhere the translation's routine of it (`libm::Fun::Log2`).
+    /// `air.fast_log2` on `float`: Metal's `log2` ([`FloatFn::Log2`]), the device's instruction.
     FastLog2,
     /// Metal's precise `log10`; as [`FloatFn::Exp10`].
     Log10,
     /// `air.fast_log10` on `float`: `log2(x) · log10(2)` (MSL Table 8.2), the product rounded:
     /// every lane of case f6524207.
     FastLog10,
-    /// Metal's precise `sin`: within 4 ulp (MSL Table 8.1). On `float` and `half`, the device's
-    /// instruction where it is Metal's own in a module compiled with precise functions, the
-    /// translation's routine otherwise ([`libm`]).
+    /// Metal's precise `sin`: within 4 ulp (MSL Table 8.1). The device's instruction, Metal's own
+    /// where the device's functions are Metal's in a module compiled with precise functions
+    /// ([`libm`]).
     Sin,
     /// Metal's precise `cos`: within 4 ulp; as [`FloatFn::Sin`].
     Cos,
     /// `air.fast_sin` on `float`: [`FloatFn::Sin`], but `+0` past `float(π/2) · 2^22` and for an
-    /// infinity or NaN, as Metal answers (`fast_trig_flush`). The device's `Sin` where its
-    /// functions are Metal's, in either mode; elsewhere the device's `Sin` inside `[-π, π]`
-    /// (Apple's `2^-13` bound) and the translation's precise routine past it ([`libm`]). Where
-    /// they are Metal's in its fast mode (`Lib::metal_fast`), the device's `Sin` is Metal's
+    /// infinity or NaN, as Metal answers (`fast_trig_flush`), of the device's `Sin`. Where its
+    /// functions are Metal's in its fast mode (`Lib::metal_fast`), the device's `Sin` is Metal's
     /// `fast::sin` itself, which answers the flush, and no flush is added (every exponent's 4,096
     /// mantissas of both signs and the specials, 2,097,161 inputs, equal on an Apple M3 Max, macOS
     /// 27.0.1).
@@ -818,15 +815,12 @@ pub enum FloatFn {
     Tan,
     /// `air.fast_tan` on `float`: Metal's fast `tan`, the formula `sin(x) · (1 / cos(x))` of MSL
     /// Table 8.2: the device's `Tan` where its functions are Metal's in a fast-math module, and
-    /// elsewhere the formula of [`FloatFn::FastSin`] and [`FloatFn::FastCos`] divided by Metal's
-    /// fast division (`fast_tan`), a call of its [`FastDivision`] routine.
-    FastTan {
-        /// The fast division's reciprocal on the profile.
-        reciprocal: Reciprocal,
-    },
-    /// Metal's precise `asin`: within 4 ulp (MSL Table 8.1). On `float`, the device's
-    /// instruction where it is Metal's own in a module compiled with precise functions, the
-    /// translation's routine otherwise ([`libm`]).
+    /// elsewhere the formula of [`FloatFn::FastSin`] and [`FloatFn::FastCos`] divided by the
+    /// device's division (`fast_tan`).
+    FastTan,
+    /// Metal's precise `asin`: within 4 ulp (MSL Table 8.1). The device's instruction, Metal's own
+    /// where the device's functions are Metal's in a module compiled with precise functions
+    /// ([`libm`]).
     Asin,
     /// `air.fast_asin` on `float`: within 5 ulp (Table 8.2); as [`FloatFn::Asin`], in Metal's
     /// fast mode.
@@ -848,24 +842,21 @@ pub enum FloatFn {
     Cosh,
     /// `air.fast_cosh` on `float`: `(exp(x) + exp(-x)) · 0.5`; as [`FloatFn::FastSinh`].
     FastCosh,
-    /// Metal's precise `tanh` (within 5 ulp): the device's instruction where its functions are
-    /// Metal's (SPIRV-Cross emits `precise::tanh` in either mode), the routine otherwise.
+    /// Metal's precise `tanh` (within 5 ulp): the device's instruction, Metal's own where its
+    /// functions are Metal's (SPIRV-Cross emits `precise::tanh` in either mode).
     Tanh,
     /// `air.fast_tanh` on `float`: the MSL fast-math accuracy table defines it as the formula
     /// `(t - 1) / (t + 1)` with `t = exp(2x)`, not as an accuracy bound, so it is a different
     /// function from `tanh` (it is `NaN` once `t` overflows). Emitted as that formula with
-    /// `t = Exp2(x * 2 log2(e))` (`tanh_of_exp`). Narrow forms keep [`FloatFn::Tanh`]: the
-    /// fast-math table is the single-precision one.
-    FastTanh {
-        /// The fast division's reciprocal on the profile.
-        reciprocal: Reciprocal,
-    },
+    /// `t = Exp2(x * 2 log2(e))` (`tanh_of_exp`), its quotient the device's division. Narrow
+    /// forms keep [`FloatFn::Tanh`]: the fast-math table is the single-precision one.
+    FastTanh,
     /// Metal's precise `asinh`; as [`FloatFn::Exp`].
     Asinh,
     /// `air.fast_asinh` on `float` with every flag: Metal's fast formula
-    /// `log(x + sqrt(x * x + 1))` (MSL Table 8.2) in Metal's own form (`libm::Fun::FastAsinh`),
-    /// which is the canonical NaN at `-inf` (`-inf + inf`), or the device's `Asinh` where it is
-    /// Metal's in a fast-math module.
+    /// `log(x + sqrt(x * x + 1))` (MSL Table 8.2), which is the canonical NaN at `-inf`
+    /// (`-inf + inf`): the device's `Asinh`, Metal's own in a fast-math module where its functions
+    /// are Metal's.
     FastAsinh,
     /// Metal's precise `acosh`; as [`FloatFn::Exp`].
     Acosh,
@@ -873,24 +864,18 @@ pub enum FloatFn {
     FastAcosh,
     /// Metal's precise `atanh`; as [`FloatFn::Exp`].
     Atanh,
-    /// `air.fast_atanh` on `float`: `0.5 · log((1 + x) / (1 - x))` (MSL Table 8.2) with Metal's
-    /// fast division, or the device's `Atanh` where it is Metal's in a fast-math module.
-    FastAtanh {
-        /// The fast division's reciprocal on the profile.
-        reciprocal: Reciprocal,
-    },
-    /// Metal's `sinpi`: within 4 ulp (MSL Table 8.1). On `float` and `half`, Metal's own form,
-    /// the translation's routine ([`libm`]); on a `bfloat` the exact reduction around the device's
-    /// `Sin` and `Cos` (`pi_scaled`).
+    /// `air.fast_atanh` on `float`: `0.5 · log((1 + x) / (1 - x))` (MSL Table 8.2) with the
+    /// device's division, or the device's `Atanh` where it is Metal's in a fast-math module.
+    FastAtanh,
+    /// Metal's `sinpi`: within 4 ulp (MSL Table 8.1). The exact reduction around the device's `Sin`
+    /// and `Cos` (`pi_scaled`), as no instruction is it.
     SinPi,
     /// Metal's `cospi`; as [`FloatFn::SinPi`].
     CosPi,
     /// Metal's `tanpi`: within 6 ulp; as [`FloatFn::SinPi`].
     TanPi,
     /// `air.fast_sinpi` on `float`: Metal's fast `sinpi`, which is its precise one
-    /// ([`FloatFn::SinPi`]): the routine, but where the device's functions are Metal's, the exact
-    /// reduction around its `Sin` and `Cos` (`pi_scaled`), within Apple's `2^-13` bound on
-    /// `[-1, 1]` (MSL Table 8.2).
+    /// ([`FloatFn::SinPi`]), the same reduction.
     FastSinPi,
     /// `air.fast_cospi` on `float`; as [`FloatFn::FastSinPi`].
     FastCosPi,
@@ -908,9 +893,8 @@ pub enum FloatFn {
     /// rather than itself.
     FastPow,
     /// Metal `atan2(y, x)`: C99 Annex F's special values, as Metal answers them
-    /// (`atan2_special`), around the generic value: on `float`, the device's `Atan2` where its
-    /// functions are Metal's (always `precise::atan2` there), the translation's routine
-    /// otherwise ([`libm`]).
+    /// (`atan2_special`), around the generic value, the device's `Atan2` (always `precise::atan2`
+    /// where its functions are Metal's).
     Atan2,
     /// `air.fast_atan2` on `float`: `atan(y / x)` turned by `±π` when `x` is below zero, as Metal
     /// answers it (`fast_atan2`): `0 / 0` and `inf / inf` are NaN, where `atan2` answers C99's
@@ -985,7 +969,7 @@ impl FloatFn {
             | F::FastSin
             | F::FastCos
             | F::Tan
-            | F::FastTan { .. }
+            | F::FastTan
             | F::Asin
             | F::FastAsin
             | F::Acos
@@ -997,13 +981,13 @@ impl FloatFn {
             | F::Cosh
             | F::FastCosh
             | F::Tanh
-            | F::FastTanh { .. }
+            | F::FastTanh
             | F::Asinh
             | F::FastAsinh
             | F::Acosh
             | F::FastAcosh
             | F::Atanh
-            | F::FastAtanh { .. }
+            | F::FastAtanh
             | F::SinPi
             | F::CosPi
             | F::TanPi
@@ -1029,22 +1013,18 @@ impl FloatFn {
     /// reads a denormal operand as the zero of its sign and flushes a denormal result on the bits,
     /// and `fast::sqrt`, which selects the zero of a denormal operand's sign and has no denormal
     /// result. The arc tangent family (`asin`, `acos`, and `atan`, both modes), precise `sin`,
-    /// `cos`, and `tan`, and `sinpi`, `cospi`, and `tanpi` do too on `float`: each is either the
-    /// device's instruction where that is Metal's own function, or the translation's routine, which
-    /// reads a denormal operand as Metal does (`denormal::operand`) and has no denormal result for
-    /// a normal operand (where llvmpipe's `atan(2^-126)` is `0x007fff52`); and
+    /// `cos`, and `tan`, `sinpi`, `cospi`, and `tanpi`, and the second stage's functions are listed
+    /// where the device's instruction is Metal's own function; where it is not, the call records
+    /// the device's denormals with its precision (`PrecisionNote::NativeTranscendentals`).
     /// `fast::sin`, `fast::cos`, and `fast::tan` keep a denormal operand as Metal does, where RADV,
-    /// ANV, and NVIDIA flush it (case cc234732). `fast::atan2` does not: its quotient is the
-    /// device's division, whose operands `denormal::coverage` reads as Metal does. The second stage's
-    /// functions do: their routines read a denormal operand as Metal does (`exp` and the hyperbolic
-    /// functions as itself below `2^-12`, the logarithms and `pow`'s base as a zero) and flush a
-    /// denormal result, and the fast formulas' steps have no denormal intermediate on which their
-    /// result depends (`fast::sinh` of a denormal is `(1 - 1) · 0.5 = +0`, as Metal answers, case
-    /// f6524207). `round` answers `+0` for every zero it reaches, whatever zero the device's
-    /// `Trunc` gives a denormal, which Metal's `round` of a denormal is (the denormal probes, both
-    /// modes); precise `fmod` on `float` is the remainder's routine, which reads a denormal divisor
-    /// as a zero on the bits and computes the remainder in integers (`libm::fmod`), or on MoltenVK
-    /// Metal's own.
+    /// ANV, and NVIDIA flush it (case cc234732), and the fast formulas' steps have no denormal
+    /// intermediate on which their result depends (`fast::sinh` of a denormal is
+    /// `(1 - 1) · 0.5 = +0`, as Metal answers, case f6524207). `fast::atan2` does not: its quotient
+    /// is the device's division, whose operands `denormal::coverage` reads. `round` answers `+0`
+    /// for every zero it reaches, whatever zero the device's `Trunc` gives a denormal, which
+    /// Metal's `round` of a denormal is (the denormal probes, both modes); precise `fmod` on
+    /// `float` is the remainder's routine, which reads a denormal divisor as a zero on the bits and
+    /// computes the remainder in integers (`libm::fmod`), or on MoltenVK Metal's own.
     pub fn metal_denormals(self) -> bool {
         use FloatFn as F;
         matches!(
@@ -1073,7 +1053,7 @@ impl FloatFn {
                 | F::Tan
                 | F::FastSin
                 | F::FastCos
-                | F::FastTan { .. }
+                | F::FastTan
                 | F::SinPi
                 | F::CosPi
                 | F::TanPi
@@ -1099,13 +1079,13 @@ impl FloatFn {
                 | F::Cosh
                 | F::FastCosh
                 | F::Tanh
-                | F::FastTanh { .. }
+                | F::FastTanh
                 | F::Asinh
                 | F::FastAsinh
                 | F::Acosh
                 | F::FastAcosh
                 | F::Atanh
-                | F::FastAtanh { .. }
+                | F::FastAtanh
                 | F::Pow
                 | F::FastPow
                 | F::Powr
@@ -1113,8 +1093,8 @@ impl FloatFn {
         )
     }
 
-    /// Whether the device's order (`RoundingOrderRoute::Native`) answers the function by the
-    /// device's instruction where Metal's answer is computed around one without a routine:
+    /// Whether the device's order (`Lib::orders_natively`) answers the function by the device's
+    /// instruction where Metal's answer is computed around one:
     /// `fast::sqrt`, the device's `Sqrt`, where Metal's is `x · rsqrt(x)` with its own answers at
     /// a zero, a denormal and `+inf` ([`fast_sqrt_of`]).
     pub fn native_instruction(self) -> bool {
@@ -1124,7 +1104,7 @@ impl FloatFn {
     /// Whether the lowering on lanes of format `fmt` answers Metal's NaN bit pattern itself, so it
     /// records no `PrecisionNote::DeviceNanEncoding` and needs no select: the functions that select
     /// their NaN (or answer a number for one: `sign`, `saturate`, `fast::sin`, `fast::cos`),
-    /// `fast::tanh`, whose result is Metal's fast quotient, `median3`, and on `float` and `half`
+    /// `median3`, and on `float` and `half`
     /// `fmin`, `fmax`, `min3`, `max3`, and `clamp` (`metal_min_max`), which return an operand,
     /// `copysign`, which moves bits, and `fabs` on `float`, which clears the sign bit on the bits
     /// ([`sign_on_bits`]; a `half` `fabs` answers its canonical NaN by a select).
@@ -1148,7 +1128,6 @@ impl FloatFn {
                 | F::CopySign
                 | F::Atan2
                 | F::FastAtan2 { .. }
-                | F::FastTanh { .. }
                 | F::Pow
                 | F::FastPow
                 | F::FastSin
@@ -1159,17 +1138,17 @@ impl FloatFn {
     /// Whether the function divides by a device division besides its [`FloatFn::precision`]
     /// class (`PrecisionNote::DeviceArithmetic`): `fast_tanh`'s quotient, whose divisor leaves
     /// the range where Metal's fast division and Vulkan's `OpFDiv` bound their error (`2^-126` to
-    /// `2^126`) as `t` approaches overflow, `fast_atan2`'s `y · rcp(x)` (Metal's reciprocal's
-    /// model, or the device's division where it is Metal's), `fast::tan`'s quotient of its sine by
+    /// `2^126`) as `t` approaches overflow, `fast_atan2`'s `y / x` (the device's division),
+    /// `fast::tan`'s quotient of its sine by
     /// its cosine, `fast::atanh`'s `(1 + x) / (1 - x)`, and `fast::tanpi`'s quotient where the
     /// device's functions are Metal's.
     pub fn divides(self) -> bool {
         matches!(
             self,
-            FloatFn::FastTanh { .. }
+            FloatFn::FastTanh
                 | FloatFn::FastAtan2 { .. }
-                | FloatFn::FastTan { .. }
-                | FloatFn::FastAtanh { .. }
+                | FloatFn::FastTan
+                | FloatFn::FastAtanh
                 | FloatFn::FastTanPi
         )
     }
@@ -1217,7 +1196,7 @@ impl FloatFn {
         let half = f.float_fmt() == Some(FloatFmt::Half);
         let base = match metal_half(self, f) {
             // `half_tanh`: the quotient's operands and product, and the far operands' test and
-            // signed one (its routines' calls are counted below).
+            // signed one.
             FloatFn::Tanh if half => 160,
             // Metal's other `half` functions by its fast compositions (`metal_half`), and a
             // scalar's constants of the rounding.
@@ -1230,22 +1209,20 @@ impl FloatFn {
             {
                 128
             }
-            FloatFn::FastSinh | FloatFn::FastCosh if half => 128 + libm::use_words(f.lanes, 1),
+            FloatFn::FastSinh | FloatFn::FastCosh if half => 144,
             FloatFn::Sign | FloatFn::Saturate | FloatFn::Fract | FloatFn::FastFract { .. } => 96,
             // `fract`, and the operand's exponent test and the bound's select.
             FloatFn::FlaggedFract => 128,
             // The steps and the `+0` of a zero result.
             FloatFn::Round => 128,
             // The device's function and the operands' tests where Metal answers NaN, the precise
-            // sign's on the bits, each operand classified once: 226 words with the routine's calls
-            // on `float4`.
+            // sign's on the bits, each operand classified once.
             FloatFn::Powr => 208,
             // And the infinite product's tests and select, on the same classification
             // (`fast_powr_special`).
             FloatFn::FastPowr => 208 + INFINITE_PRODUCT_WORDS,
-            // Metal's formulas of its fast `exp` (two calls of `exp2`'s routine, the second
-            // counted here).
-            FloatFn::FastSinh | FloatFn::FastCosh => 96 + libm::use_words(f.lanes, 1),
+            // Metal's formulas of its fast `exp`, of two of the device's `exp2`.
+            FloatFn::FastSinh | FloatFn::FastCosh => 112,
             // Two selects per step for the operand and its compared value, and each operand's
             // flush test.
             FloatFn::Median3 | FloatFn::FastMedian3 => 192,
@@ -1256,41 +1233,36 @@ impl FloatFn {
             FloatFn::Clamp | FloatFn::Min3 | FloatFn::Max3 => 288,
             // The device's remainder and, on `half`, the zero's tests and selects.
             FloatFn::Fmod if f.float_fmt() == Some(FloatFmt::Half) => 192,
-            // `|x|`, and C99's special cases around the magnitude (`pow_special`): 390 words
-            // with the routine's calls on `float4`.
+            // `|x|`, and C99's special cases around the magnitude (`pow_special`).
             FloatFn::Pow => 344,
             // And `pow(x, 1)`'s flush of an `f32` denormal `x` (`pow_special`).
             FloatFn::FastPow => 344 + INFINITE_PRODUCT_WORDS + denormal::flush_words(f),
-            // The magnitude's test against the last evaluated quadrant (the routine's calls are
-            // counted below).
+            // The magnitude's test against the last evaluated quadrant.
             FloatFn::FastSin | FloatFn::FastCos => 48,
-            // Both flushes, the denormal operand's select, and the call of the fast division's
-            // routine ([`FastDivision`], whose words are the module's).
-            FloatFn::FastTan { .. } => 160 + FAST_DIVISION_CALL_WORDS,
+            // Both flushes, the denormal operand's select, and the device's division.
+            FloatFn::FastTan => 176,
             // The product and Metal's zeros and infinity.
             FloatFn::FastSqrt => 96,
             // The special operands' tests and the selected constant's sign.
             FloatFn::Atan2 => 320,
             // The quotient, its special values and sign, and the turn.
             FloatFn::FastAtan2 { .. } => 400,
-            // Where no routine answers them (a `bfloat`), the period reduction, the exact axis
-            // arms, both quadrant selections, `tanpi`'s quarter turns, and the finiteness guard around
-            // the device's `Sin` and `Cos` (`pi_scaled`); the routines' calls are counted below.
-            FloatFn::SinPi | FloatFn::CosPi | FloatFn::TanPi if libm::uses(self, f).is_empty() => {
-                384
-            }
-            // Through the routine: its call, counted below, and Metal's NaN's select.
-            FloatFn::SinPi | FloatFn::CosPi | FloatFn::TanPi => 112,
-            // The routine's call, or where the device's functions are Metal's the reduction
-            // around its `Sin` and `Cos`, which the routine's words do not cover.
-            FloatFn::FastSinPi | FloatFn::FastCosPi | FloatFn::FastTanPi => 384,
+            // The period reduction, the exact axis arms, both quadrant selections, `tanpi`'s
+            // quarter turns, and the finiteness guard around the device's `Sin` and `Cos`
+            // (`pi_scaled`).
+            FloatFn::SinPi
+            | FloatFn::CosPi
+            | FloatFn::TanPi
+            | FloatFn::FastSinPi
+            | FloatFn::FastCosPi
+            | FloatFn::FastTanPi => 384,
             // The tie correction of a bfloat fused multiply-add (`narrow::bf16_fma`).
             FloatFn::Fma if f.float_fmt() == Some(FloatFmt::BFloat) => 208,
-            // `t`, the quotient's operands, their `NoContraction` decorations, and the call of
-            // the fast division's routine ([`FastDivision`], whose words are the module's).
-            FloatFn::FastTanh { .. } => 80 + FAST_DIVISION_CALL_WORDS,
-            // `1 ± x`, the call of the fast division's routine, and the halving.
-            FloatFn::FastAtanh { .. } => 96 + FAST_DIVISION_CALL_WORDS,
+            // `t`, the quotient's operands, their `NoContraction` decorations, and the device's
+            // division.
+            FloatFn::FastTanh => 96,
+            // `1 ± x`, the device's division, and the halving.
+            FloatFn::FastAtanh => 112,
             // Metal's composition where its `exp2` is the device's (`metal_exp`): five products
             // and sums, two fused ones, the device's `exp2`, and the ends' tests: 136 words on
             // `float4`.
@@ -1302,8 +1274,9 @@ impl FloatFn {
             FloatFn::Ldexp => 160,
             _ => 48,
         };
-        // A routine's calls, one per lane; the routine itself is the module's. A `half` function's
-        // zero select (`half_zero`), its operand below a magnitude (`half_small`), `half` `cospi`'s
+        // Each function the call takes: the device's instruction, or precise `fmod`'s routine's
+        // calls, one per lane (the routine itself is the module's). A `half` function's zero
+        // select (`half_zero`), its operand below a magnitude (`half_small`), `half` `cospi`'s
         // zero sign (`half_cospi_zero`), and `half` `asin`'s NaN sign (`half_signed_nan`).
         let base = base
             + libm::uses(self, f)
@@ -1328,11 +1301,12 @@ impl FloatFn {
     }
 }
 
-/// Emit float function `op` on `args` (floats of form `f`; `Ldexp`'s exponent is a held `i32`
-/// and `Dot` gives the scalar), calling `lib`'s routines where the device's instruction does not
-/// answer the function. Metal's operand-picking functions (`metal_min_max`, `metal_median3`) test
-/// their operands for NaNs by `test`, the test the entry's float modes leave exact
-/// ([`NanTest::for_modes`]). A `half` `fmod` answers Metal's zero remainder (`half_fmod_zero`).
+/// Emit float function `op` on `args` (floats of form `f`; `Ldexp`'s exponent is a held `i32` and
+/// `Dot` gives the scalar), by the device's instructions, and precise `fmod` by `lib`'s routine
+/// where the module defines it. Metal's operand-picking functions (`metal_min_max`,
+/// `metal_median3`) test their operands for NaNs by `test`, the test the entry's float modes leave
+/// exact ([`NanTest::for_modes`]). A `half` `fmod` answers Metal's zero remainder
+/// (`half_fmod_zero`).
 pub fn float_fn(
     fb: &mut FunctionBuilder<'_>,
     op: FloatFn,
@@ -1340,7 +1314,7 @@ pub fn float_fn(
     contract: Contraction,
     test: NanTest,
     args: &[Value],
-    lib: &Lib<'_>,
+    lib: &Lib,
 ) -> BResult<Value> {
     use FloatFn as F;
     let r = float_fn_core(fb, op, f, contract, test, args, lib)?;
@@ -1390,8 +1364,8 @@ pub fn float_fn(
 /// and the precise function is not at 2 operands of `cosh`, 3 pairs of `pow` and `powr`, and 4
 /// operands of `sinh`, whose fast one is again Metal's with the translation's `exp2` and `log2`
 /// in place of Metal's. Its `tanh` is `half_tanh`, and its `atan`, `atan2`, `tan`, `sin`, `cos`,
-/// and `asinh` are its own `half` forms, which no `float` function rounds to: `libm::uses` gives
-/// them their routines.
+/// and `asinh` are its own `half` forms, which no `float` function rounds to: the device's `float`
+/// function rounded answers them at the device's precision (`libm::uses`).
 pub(crate) fn metal_half(op: FloatFn, f: Form) -> FloatFn {
     if f.float_fmt() != Some(FloatFmt::Half) {
         return op;
@@ -1412,35 +1386,20 @@ pub(crate) fn metal_half(op: FloatFn, f: Form) -> FloatFn {
 
 /// Metal's `half` `tanh(x)` on `half` lanes `x` (form `f`, held in `f32`) before its rounding:
 /// `(t - 1) · rcp(t + 1)` of `t = exp2(x · RN(2 log2 e))`, MSL Table 8.2's `fast::tanh` of
-/// Metal's `exp2` and reciprocal (the routines `libm::Fun::Exp2` and `libm::Fun::Recip`, or the
-/// device's instructions where they are Metal's), and `±1` from `|x| = 16`, where the answer
-/// rounds to `±1` (the quotient is a NaN past `x ≈ 44`, where Metal's `half` `tanh` is `1`).
-/// Below `2^-13` the operand itself (`half_small`). Every `half` of our probes is
-/// this, with the translation's `exp2` and reciprocal in place of Metal's (and with a correctly
-/// rounded reciprocal or quotient in place of the reciprocal); Metal's precise `float` `tanh`,
-/// rounded, is not at 7 of them, nor its fast one, rounded, below `2^-13` and past `44`.
-fn half_tanh(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, lib: &Lib<'_>) -> BResult<Value> {
+/// Metal's `exp2` and reciprocal (the device's `Exp2` and division), and `±1` from `|x| = 16`,
+/// where the answer rounds to `±1` (the quotient is a NaN past `x ≈ 44`, where Metal's `half`
+/// `tanh` is `1`). Below `2^-13` the operand itself (`half_small`). Every `half` of our probes is
+/// this, with the device's `exp2` and reciprocal in place of Metal's; Metal's precise `float`
+/// `tanh`, rounded, is not at 7 of them, nor its fast one, rounded, below `2^-13` and past `44`.
+fn half_tanh(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     let exact = Contraction::Forbidden;
     let k = wide_splat(fb, f, 2.0 * std::f64::consts::LOG2_E)?;
     let p = fb.binary_with(BinOp::FMul, x, k, exact)?;
-    let t = routine_or(
-        fb,
-        lib,
-        FloatFn::Tanh,
-        f,
-        libm::Fun::Exp2,
-        GlslOp::Exp2,
-        &[p],
-    )?;
+    let t = glsl(fb, GlslOp::Exp2, &[p])?;
     let one = wide_splat(fb, f, 1.0)?;
     let num = fb.binary_with(BinOp::FSub, t, one, exact)?;
     let den = fb.binary_with(BinOp::FAdd, t, one, exact)?;
-    let recip = libm::Fun::Recip;
-    let r = if libm::uses(FloatFn::Tanh, f).contains(&recip) && !lib.device(recip) {
-        lib.call(fb, recip, f, &[den])?
-    } else {
-        fb.binary_with(BinOp::FDiv, one, den, exact)?
-    };
+    let r = fb.binary_with(BinOp::FDiv, one, den, exact)?;
     let q = fb.binary_with(BinOp::FMul, num, r, exact)?;
     let ax = glsl(fb, GlslOp::FAbs, &[x])?;
     let limit = wide_splat(fb, f, 16.0)?;
@@ -1582,25 +1541,16 @@ fn float_fn_core(
     contract: Contraction,
     test: NanTest,
     args: &[Value],
-    lib: &Lib<'_>,
+    lib: &Lib,
 ) -> BResult<Value> {
     use FloatFn as F;
     let a = arg(args, 0)?;
     // Metal's `half` functions, by the `float` function whose rounded answer each is.
     if f.float_fmt() == Some(FloatFmt::Half) && op == F::Tanh {
-        return half_tanh(fb, f, a, lib);
+        return half_tanh(fb, f, a);
     }
     let op = metal_half(op, f);
-    // The device's instruction `o`, or `op`'s routine where the device does not answer it.
-    let lib1 = |fb: &mut FunctionBuilder<'_>, o: GlslOp, x: Value| -> BResult<Value> {
-        match libm::uses(op, f) {
-            [r] if !lib.device(*r) => lib.call(fb, *r, f, &[x]),
-            _ => glsl(fb, o, &[x]),
-        }
-    };
     let g1 = |fb: &mut FunctionBuilder<'_>, o: GlslOp| glsl(fb, o, &[a]);
-    // The device's instruction answers `op` itself (`lib1` calls no routine).
-    let by_device = !matches!(libm::uses(op, f), [r] if !lib.device(*r));
     let times = |fb: &mut FunctionBuilder<'_>, k: f64| -> BResult<Value> {
         let c = wide_splat(fb, f, k)?;
         bin(fb, BinOp::FMul, a, c)
@@ -1635,7 +1585,7 @@ fn float_fn_core(
         }
         F::Sign => metal_sign(fb, f, a),
         // Metal's `clamp(x, +0, 1)` at every operand: the device's `NClamp` where the minimum and
-        // maximum functions take it (measured to be Metal's, or native device maths,
+        // maximum functions take it (measured to be Metal's, or the device's own,
         // `PrecisionNote::NativeMinMax`).
         F::Saturate if metal_picks(f.float_fmt()) && lib.device_min_max() => {
             let (z, one) = (fsplat(fb, f, 0.0)?, fsplat(fb, f, 1.0)?);
@@ -1665,8 +1615,8 @@ fn float_fn_core(
             let (b, c) = (arg(args, 1)?, arg(args, 2)?);
             metal_median3(fb, f, test, [a, b, c], op == F::FastMedian3)
         }
-        // `float` and `half` take Metal's fused form ([`metal_mix`]), a strategy of its own with
-        // its fused multiply-adds' routines; the device's order takes the device's `FMix`
+        // `float` and `half` take Metal's fused form ([`metal_mix`]) where the device's functions
+        // are Metal's, a strategy of its own; the device's order takes the device's `FMix`
         // (`PrecisionNote::NativeMix`).
         F::Mix if matches!(f.float_fmt(), Some(FloatFmt::F32 | FloatFmt::Half)) => {
             if !lib.orders_natively() {
@@ -1699,20 +1649,20 @@ fn float_fn_core(
             let r = bin(fb, BinOp::FAdd, p, arg(args, 2)?)?;
             narrow::round_exact_below_normal(fb, f, r)
         }
-        F::Sqrt => lib1(fb, GlslOp::Sqrt, a),
+        F::Sqrt => g1(fb, GlslOp::Sqrt),
         F::Fma if f.float_fmt() == Some(FloatFmt::BFloat) => {
             narrow::bf16_fma(fb, f, a, arg(args, 1)?, arg(args, 2)?)
         }
         F::Fma => glsl(fb, GlslOp::Fma, &[a, arg(args, 1)?, arg(args, 2)?]),
         F::Fmod => {
             let y = arg(args, 1)?;
-            match libm::uses(op, f) {
-                [r] if !lib.device(*r) => lib.call(fb, *r, f, &[a, y]),
+            match lib.fmod(fb, f, a, y)? {
+                Some(r) if libm::uses(op, f).contains(&libm::Fun::Fmod) => Ok(r),
                 _ => bin(fb, BinOp::FRem, a, y),
             }
         }
         F::Dot => bin(fb, BinOp::Dot, a, arg(args, 1)?),
-        F::Rsqrt => lib1(fb, GlslOp::InverseSqrt, a),
+        F::Rsqrt => g1(fb, GlslOp::InverseSqrt),
         F::FastRsqrt => g1(fb, GlslOp::InverseSqrt),
         // The device's order: its `Sqrt`.
         F::FastSqrt if lib.orders_natively() => g1(fb, GlslOp::Sqrt),
@@ -1720,32 +1670,23 @@ fn float_fn_core(
             let r = g1(fb, GlslOp::InverseSqrt)?;
             fast_sqrt_of(fb, f, a, r)
         }
-        // A device whose functions are Metal's answers precise `exp` in a precise module; in a
-        // fast-math one, Metal's own composition of its `exp2` does.
-        F::Exp => match libm::uses(op, f) {
-            [r] if !lib.device(*r) => lib.call(fb, *r, f, &[a]),
-            [_] if !lib.metal_in(libm::Mode::Precise) => {
-                metal_exp(fb, f, a, std::f64::consts::LOG2_E)
-            }
-            _ => g1(fb, GlslOp::Exp),
-        },
-        F::Exp2 => lib1(fb, GlslOp::Exp2, a),
-        // Likewise precise `log`: in a fast-math module Metal's composition of its `log2`.
-        F::Log => match libm::uses(op, f) {
-            [r] if !lib.device(*r) => lib.call(fb, *r, f, &[a]),
-            [_] if !lib.metal_in(libm::Mode::Precise) => {
-                metal_log(fb, f, a, &libm::log::LOG_NEAR, libm::log::LN_2_BITS)
-            }
-            _ => g1(fb, GlslOp::Log),
-        },
-        F::Log2 | F::FastLog2 => lib1(fb, GlslOp::Log2, a),
-        // No instruction is Metal's `exp10` or `log10`: their routines, or Metal's own
-        // compositions of the device's `exp2` and `log2` where those are Metal's.
-        F::Exp10 | F::Log10 => match libm::uses(op, f) {
-            [r] if !lib.device(*r) => lib.call(fb, *r, f, &[a]),
-            _ if op == F::Exp10 => metal_exp(fb, f, a, std::f64::consts::LOG2_10),
-            _ => metal_log(fb, f, a, &libm::log::LOG10_NEAR, libm::log::LOG10_2_BITS),
-        },
+        // A device whose functions are Metal's answers precise `exp` in a precise module;
+        // elsewhere Metal's own composition of the device's `exp2` does.
+        F::Exp if f.float_fmt() == Some(FloatFmt::F32) && !lib.metal_in(libm::Mode::Precise) => {
+            metal_exp(fb, f, a, std::f64::consts::LOG2_E)
+        }
+        F::Exp => g1(fb, GlslOp::Exp),
+        F::Exp2 => g1(fb, GlslOp::Exp2),
+        // Likewise precise `log`: elsewhere Metal's composition of the device's `log2`.
+        F::Log if f.float_fmt() == Some(FloatFmt::F32) && !lib.metal_in(libm::Mode::Precise) => {
+            metal_log(fb, f, a, &libm::LOG_NEAR, libm::LN_2_BITS)
+        }
+        F::Log => g1(fb, GlslOp::Log),
+        F::Log2 | F::FastLog2 => g1(fb, GlslOp::Log2),
+        // No instruction is Metal's `exp10` or `log10`: Metal's own compositions of the device's
+        // `exp2` and `log2`.
+        F::Exp10 => metal_exp(fb, f, a, std::f64::consts::LOG2_10),
+        F::Log10 => metal_log(fb, f, a, &libm::LOG10_NEAR, libm::LOG10_2_BITS),
         // Metal's fast compositions of its `exp2` and `log2` (MSL Table 8.2).
         F::FastExp | F::FastExp10 => {
             let k = if op == F::FastExp {
@@ -1754,10 +1695,10 @@ fn float_fn_core(
                 std::f64::consts::LOG2_10
             };
             let x = times(fb, k)?;
-            routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[x])
+            glsl(fb, GlslOp::Exp2, &[x])
         }
         F::FastLog | F::FastLog10 => {
-            let l = routine_or(fb, lib, op, f, libm::Fun::Log2, GlslOp::Log2, &[a])?;
+            let l = g1(fb, GlslOp::Log2)?;
             let k = if op == F::FastLog {
                 std::f64::consts::LN_2
             } else {
@@ -1766,12 +1707,12 @@ fn float_fn_core(
             let c = wide_splat(fb, f, k)?;
             fb.binary_with(BinOp::FMul, l, c, Contraction::Forbidden)
         }
-        F::Sin => lib1(fb, GlslOp::Sin, a),
-        F::Cos => lib1(fb, GlslOp::Cos, a),
+        F::Sin => g1(fb, GlslOp::Sin),
+        F::Cos => g1(fb, GlslOp::Cos),
         // Where the device's instruction is Metal's own `fast::sin` or `fast::cos` (a fast-math
         // module on MoltenVK), it answers Metal's `+0` past the flush point and at an infinity or
         // NaN itself: no flush is added.
-        F::FastSin | F::FastCos if lib.metal_fast() && by_device => {
+        F::FastSin | F::FastCos if lib.metal_fast() => {
             let o = if op == F::FastSin {
                 GlslOp::Sin
             } else {
@@ -1780,78 +1721,66 @@ fn float_fn_core(
             g1(fb, o)
         }
         F::FastSin => {
-            let r = lib1(fb, GlslOp::Sin, a)?;
+            let r = g1(fb, GlslOp::Sin)?;
             fast_trig_flush(fb, f, a, r)
         }
         F::FastCos => {
-            let r = lib1(fb, GlslOp::Cos, a)?;
+            let r = g1(fb, GlslOp::Cos)?;
             fast_trig_flush(fb, f, a, r)
         }
-        F::Tan => lib1(fb, GlslOp::Tan, a),
-        // A device whose functions are Metal's in a fast-math module: its `Tan` is `fast::tan`.
-        F::FastTan { .. } if lib.metal_in(libm::Mode::Fast) => g1(fb, GlslOp::Tan),
-        // Its quotient is a call of the fast division's routine, which the caller declares:
-        // [`fast_tan`].
-        F::FastTan { .. } => Err(BuildError::Type(TypeRule::FunctionSignature)),
-        F::Asin | F::FastAsin => lib1(fb, GlslOp::Asin, a),
-        F::Acos | F::FastAcos => lib1(fb, GlslOp::Acos, a),
-        F::Atan | F::FastAtan => lib1(fb, GlslOp::Atan, a),
-        F::Sinh => lib1(fb, GlslOp::Sinh, a),
-        F::Cosh => lib1(fb, GlslOp::Cosh, a),
-        F::Tanh => lib1(fb, GlslOp::Tanh, a),
-        F::Asinh => lib1(fb, GlslOp::Asinh, a),
-        F::Acosh => lib1(fb, GlslOp::Acosh, a),
-        F::Atanh => lib1(fb, GlslOp::Atanh, a),
+        F::Tan => g1(fb, GlslOp::Tan),
+        F::FastTan => fast_tan(fb, f, a, lib),
+        F::Asin | F::FastAsin => g1(fb, GlslOp::Asin),
+        F::Acos | F::FastAcos => g1(fb, GlslOp::Acos),
+        F::Atan | F::FastAtan => g1(fb, GlslOp::Atan),
+        F::Sinh => g1(fb, GlslOp::Sinh),
+        F::Cosh => g1(fb, GlslOp::Cosh),
+        F::Tanh => g1(fb, GlslOp::Tanh),
+        F::Asinh => g1(fb, GlslOp::Asinh),
+        F::Acosh => g1(fb, GlslOp::Acosh),
+        F::Atanh => g1(fb, GlslOp::Atanh),
         // A device whose functions are Metal's in a fast-math module: its instruction is Metal's
         // fast function. Elsewhere Metal's formula (MSL Table 8.2).
         F::FastSinh if lib.metal_in(libm::Mode::Fast) => g1(fb, GlslOp::Sinh),
         F::FastCosh if lib.metal_in(libm::Mode::Fast) => g1(fb, GlslOp::Cosh),
-        F::FastSinh | F::FastCosh => fast_sinh_cosh(fb, op, f, a, lib),
-        // Metal's own forms of its fast `asinh` and `acosh` (`libm::hyper::fast_arc`), or the
-        // device's instructions where they are Metal's fast functions.
-        F::FastAsinh => lib1(fb, GlslOp::Asinh, a),
-        F::FastAcosh => lib1(fb, GlslOp::Acosh, a),
-        // Their quotients are calls of the fast division's routine, which the caller declares:
-        // [`fast_tanh`], [`fast_atanh`].
-        F::FastTanh { .. } | F::FastAtanh { .. } => {
-            Err(BuildError::Type(TypeRule::FunctionSignature))
-        }
+        F::FastSinh | F::FastCosh => fast_sinh_cosh(fb, op, f, a),
+        // The device's instructions, Metal's fast functions where its functions are Metal's in a
+        // fast-math module.
+        F::FastAsinh => g1(fb, GlslOp::Asinh),
+        F::FastAcosh => g1(fb, GlslOp::Acosh),
+        F::FastTanh => fast_tanh(fb, f, a),
+        F::FastAtanh => fast_atanh(fb, f, a, lib),
         F::SinPi | F::CosPi | F::TanPi | F::FastSinPi | F::FastCosPi | F::FastTanPi => {
             let which = match op {
                 F::SinPi | F::FastSinPi => PiScaled::Sin,
                 F::CosPi | F::FastCosPi => PiScaled::Cos,
                 _ => PiScaled::Tan,
             };
-            // Metal's own form, the routine; where none answers (a `bfloat`, a fast call where the
-            // device's functions are Metal's, or a unit test that leaves them to the device), the
-            // device's `Sin` and `Cos` of `float(π) r`.
-            match libm::uses(op, f) {
-                [fun] if !lib.device(*fun) => lib.call(fb, *fun, f, &[a]),
-                _ => pi_scaled(
-                    fb,
-                    f,
-                    which,
-                    a,
-                    &|fb, residue| {
-                        let pi = wide_splat(fb, f, std::f64::consts::PI)?;
-                        let angle = bin(fb, BinOp::FMul, pi, residue)?;
-                        Ok((
-                            glsl(fb, GlslOp::Sin, &[angle])?,
-                            glsl(fb, GlslOp::Cos, &[angle])?,
-                        ))
-                    },
-                    &|fb, num, den| bin(fb, BinOp::FDiv, num, den),
-                ),
-            }
+            // The device's `Sin` and `Cos` of `float(π) r`.
+            pi_scaled(
+                fb,
+                f,
+                which,
+                a,
+                &|fb, residue| {
+                    let pi = wide_splat(fb, f, std::f64::consts::PI)?;
+                    let angle = bin(fb, BinOp::FMul, pi, residue)?;
+                    Ok((
+                        glsl(fb, GlslOp::Sin, &[angle])?,
+                        glsl(fb, GlslOp::Cos, &[angle])?,
+                    ))
+                },
+                &|fb, num, den| bin(fb, BinOp::FDiv, num, den),
+            )
         }
         F::Powr => {
             let y = arg(args, 1)?;
-            let r = routine_or(fb, lib, op, f, libm::Fun::Powr, GlslOp::Pow, &[a, y])?;
+            let r = glsl(fb, GlslOp::Pow, &[a, y])?;
             powr_nan(fb, f, a, y, r)
         }
         F::FastPowr => {
             let y = arg(args, 1)?;
-            let r = exp2_of_product(fb, lib, op, f, y, a)?;
+            let r = exp2_of_product(fb, y, a)?;
             fast_powr_special(fb, f, a, y, r)
         }
         // C99 Annex F's special cases around the magnitude of `|x|`, which `GLSL.std.450 Pow`
@@ -1860,43 +1789,24 @@ fn float_fn_core(
             let y = arg(args, 1)?;
             let ax = glsl(fb, GlslOp::FAbs, &[a])?;
             let magnitude = if op == F::Pow {
-                routine_or(fb, lib, op, f, libm::Fun::Powr, GlslOp::Pow, &[ax, y])?
+                glsl(fb, GlslOp::Pow, &[ax, y])?
             } else {
-                let r = exp2_of_product(fb, lib, op, f, y, ax)?;
+                let r = exp2_of_product(fb, y, ax)?;
                 infinite_product(fb, f, y, ax, r)?
             };
             pow_special(fb, f, a, y, magnitude, op == F::Pow)
         }
         F::Atan2 => {
             let x = arg(args, 1)?;
-            let generic = match libm::uses(op, f) {
-                [r] if !lib.device(*r) => lib.call(fb, *r, f, &[a, x])?,
-                _ => glsl(fb, GlslOp::Atan2, &[a, x])?,
-            };
+            let generic = glsl(fb, GlslOp::Atan2, &[a, x])?;
             atan2_special(fb, f, a, x, generic)
         }
         F::FastAtan2 { reciprocal_flushed } => {
-            // Metal's fast `atan` of its fast quotient `y · rcp(x)`: each the device's where it is
-            // Metal's in the module's mode, the routines otherwise.
-            let atan = |fb: &mut FunctionBuilder<'_>, q: Value| {
-                routine_or(
-                    fb,
-                    lib,
-                    op,
-                    f,
-                    libm::Fun::Atan(libm::Mode::Fast),
-                    GlslOp::Atan,
-                    &[q],
-                )
-            };
+            // Metal's fast `atan` of its fast quotient `y · rcp(x)`: the device's `Atan` and
+            // division.
+            let atan = |fb: &mut FunctionBuilder<'_>, q: Value| glsl(fb, GlslOp::Atan, &[q]);
             let divide = |fb: &mut FunctionBuilder<'_>, n: Value, d: Value| -> BResult<Value> {
-                let recip = libm::Fun::Recip;
-                if libm::uses(op, f).contains(&recip) && !lib.device(recip) {
-                    let r = lib.call(fb, recip, f, &[d])?;
-                    fb.binary_with(BinOp::FMul, n, r, Contraction::Forbidden)
-                } else {
-                    bin(fb, BinOp::FDiv, n, d)
-                }
+                bin(fb, BinOp::FDiv, n, d)
             };
             fast_atan2(fb, f, a, arg(args, 1)?, reciprocal_flushed, &atan, &divide)
         }
@@ -2494,40 +2404,33 @@ pub(super) fn fast_trig_flush(
     fb.select(past, zero, r)
 }
 
-/// Metal's `fast::tanh(x)` (`op`, [`FloatFn::FastTanh`]) on `float` lanes `x` (form `f`):
-/// [`tanh_of_exp`] of `t = exp2(x · 2 log2 e)`, Metal's `exp2` ([`routine_or`]), its quotient by
-/// `divide` (a call of its [`FastDivision`] routine).
-pub(super) fn fast_tanh(
-    fb: &mut FunctionBuilder<'_>,
-    op: FloatFn,
-    f: Form,
-    x: Value,
-    lib: &Lib<'_>,
-    divide: DivideOf<'_>,
-) -> BResult<Value> {
+/// Metal's `fast::tanh(x)` ([`FloatFn::FastTanh`]) on `float` lanes `x` (form `f`):
+/// [`tanh_of_exp`] of `t = exp2(x · 2 log2 e)`, the device's `Exp2`, its quotient the device's
+/// division.
+pub(super) fn fast_tanh(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     // One operation to Metal: no step of it is fused or regrouped (`tanh_of_exp`).
     let k = wide_splat(fb, f, 2.0 * std::f64::consts::LOG2_E)?;
     let x = fb.binary_with(BinOp::FMul, x, k, Contraction::Forbidden)?;
-    let t = routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[x])?;
-    tanh_of_exp(fb, f, divide, t)
+    let t = glsl(fb, GlslOp::Exp2, &[x])?;
+    tanh_of_exp(fb, f, &device_quotient, t)
 }
 
-/// Metal's `fast::atanh(x)` (`op`, [`FloatFn::FastAtanh`]) on `float` lanes `x` (form `f`): the
+/// The device's `OpFDiv(n, d)`, rounded on its own: the quotient of Metal's fast formulas.
+fn device_quotient(fb: &mut FunctionBuilder<'_>, n: Value, d: Value) -> BResult<Value> {
+    fb.binary_with(BinOp::FDiv, n, d, Contraction::Forbidden)
+}
+
+/// Metal's `fast::atanh(x)` ([`FloatFn::FastAtanh`]) on `float` lanes `x` (form `f`): the
 /// device's `Atanh` where `lib` says its functions are Metal's in a fast-math module; elsewhere
-/// MSL Table 8.2's `0.5 · log((1 + x) · rcp(1 - x))`, the quotient by `divide` (a call of its
-/// [`FastDivision`] routine, Metal's fast division) and the logarithm Metal's fast `log`
-/// ([`fast_log_of`]), each step its own. The formula answers Metal's specials itself: a zero and a
-/// denormal give `+0`, `±1` gives `±inf`, an infinity gives NaN (`inf · 0`), and `±FLT_MAX` gives
-/// `-inf`, the reciprocal of `∓FLT_MAX` flushed (case f6524207, every special lane). On that case
-/// the formula of correctly rounded `log2` and reciprocal matches Metal on 871 of 1,024 lanes; the
-/// rest is Metal's `log2`.
+/// MSL Table 8.2's `0.5 · log((1 + x) · rcp(1 - x))`, the quotient the device's division and the
+/// logarithm Metal's fast `log` of the device's `log2` ([`fast_log_of`]), each step its own. The
+/// formula answers Metal's specials: a zero and a denormal give `+0`, `±1` gives `±inf`, and an
+/// infinity gives NaN (`inf · 0`) (case f6524207's special lanes).
 pub(super) fn fast_atanh(
     fb: &mut FunctionBuilder<'_>,
-    op: FloatFn,
     f: Form,
     x: Value,
-    lib: &Lib<'_>,
-    divide: DivideOf<'_>,
+    lib: &Lib,
 ) -> BResult<Value> {
     if lib.metal_in(libm::Mode::Fast) {
         return glsl(fb, GlslOp::Atanh, &[x]);
@@ -2536,8 +2439,8 @@ pub(super) fn fast_atanh(
     let one = wide_splat(fb, f, 1.0)?;
     let num = fb.binary_with(BinOp::FAdd, one, x, exact)?;
     let den = fb.binary_with(BinOp::FSub, one, x, exact)?;
-    let q = divide(fb, num, den)?;
-    let l = fast_log_of(fb, lib, op, f, q)?;
+    let q = device_quotient(fb, num, den)?;
+    let l = fast_log_of(fb, f, q)?;
     let half = wide_splat(fb, f, 0.5)?;
     fb.binary_with(BinOp::FMul, half, l, exact)
 }
@@ -2545,31 +2448,24 @@ pub(super) fn fast_atanh(
 /// Metal's `fast::tan(x)` on `float` lanes `x` (form `f`, [`FloatFn::FastTan`]): the device's `Tan`
 /// where `lib` says its functions are Metal's in a fast-math module; elsewhere Apple's formula
 /// `sin(x) · (1 / cos(x))` (MSL Table 8.2) of Metal's fast sine and cosine, each the device's
-/// instruction or its routine with Metal's flush past the last evaluated quadrant
-/// ([`fast_trig_flush`]), their quotient by `divide` (a call of its [`FastDivision`] routine). A
-/// denormal `x` is its own `fast::tan`, as Metal keeps it, where the quotient's product reads a
-/// denormal sine as a zero (`denormal::operand`).
+/// instruction with Metal's flush past the last evaluated quadrant ([`fast_trig_flush`]), their
+/// quotient the device's division. A denormal `x` is its own `fast::tan`, as Metal keeps it.
 pub(super) fn fast_tan(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
     x: Value,
-    lib: &Lib<'_>,
-    divide: DivideOf<'_>,
+    lib: &Lib,
 ) -> BResult<Value> {
     if lib.metal_in(libm::Mode::Fast) {
         return glsl(fb, GlslOp::Tan, &[x]);
     }
-    let fast = |fb: &mut FunctionBuilder<'_>, r: libm::Fun, o: GlslOp| -> BResult<Value> {
-        let v = if lib.device(r) {
-            glsl(fb, o, &[x])?
-        } else {
-            lib.call(fb, r, f, &[x])?
-        };
+    let fast = |fb: &mut FunctionBuilder<'_>, o: GlslOp| -> BResult<Value> {
+        let v = glsl(fb, o, &[x])?;
         fast_trig_flush(fb, f, x, v)
     };
-    let sin = fast(fb, libm::Fun::FastSin, GlslOp::Sin)?;
-    let cos = fast(fb, libm::Fun::FastCos, GlslOp::Cos)?;
-    let r = divide(fb, sin, cos)?;
+    let sin = fast(fb, GlslOp::Sin)?;
+    let cos = fast(fb, GlslOp::Cos)?;
+    let r = device_quotient(fb, sin, cos)?;
     match denormal_lanes(fb, f, x)? {
         Some(d) => fb.select(d, x, r),
         None => Ok(r),
@@ -2577,9 +2473,10 @@ pub(super) fn fast_tan(
 }
 
 /// `(t - 1) / (t + 1)`: `tanh(x)` from `t = exp(2x)`, the MSL fast-math definition of
-/// `fast::tanh`, divided as Metal's fast division does (`divide`, [`fast_divide`]): past `x ≈
-/// 43.7`, where `t + 1` passes `2^126`, the flushed reciprocal gives `0` (Metal's answer at `x =
-/// 44`, A1 case a919193f), and `t = +inf` gives `inf · 0 = NaN`, as Metal does past `x ≈ 44.4`.
+/// `fast::tanh`, divided by `divide` (the device's division): Metal's own fast division gives `0`
+/// past `x ≈ 43.7`, where `t + 1` passes `2^126` and its reciprocal flushes (A1 case a919193f),
+/// and `t = +inf` gives NaN past `x ≈ 44.4`, where the device's division may answer otherwise
+/// (`PrecisionNote::NativeDivision`).
 ///
 /// `air.fast_tanh` is one operation to Metal, whatever the call's fast-math flags, so every step
 /// here (and `x · 2 log2 e` before it) is `NoContraction`: the device rounds each on its own and
@@ -2600,282 +2497,20 @@ pub(super) fn tanh_of_exp(
     divide(fb, num, den)
 }
 
-/// Metal's fast reciprocal of `y` (floats of form `f`): `1 / y` by `reciprocal`, the device's
-/// division or `RN(1 / y)` (Metal's own is neither on every lane, so both are
-/// `PrecisionNote::DeviceArithmetic`), with the two ranges where Metal's answer is a flush,
-/// measured on Apple M3 Max (probe case 08bc6611's `1 / y` lanes): past `2^126` the reciprocal is
-/// an `f32` denormal, which Metal flushes to the zero of `y`'s sign (an infinity included), and an
-/// `f32` denormal `y` is a zero to Metal, whose reciprocal is the infinity of `y`'s sign. Vulkan
-/// bounds `OpFDiv` only for a divisor in `[2^-126, 2^126]`, so both ranges are selected rather than
-/// left to the device.
-pub(super) fn fast_reciprocal(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    y: Value,
-    contract: Contraction,
-    reciprocal: Reciprocal,
-) -> BResult<Value> {
-    let device = move |fb: &mut FunctionBuilder<'_>, a: Value, b: Value| {
-        fb.binary_with(BinOp::FDiv, a, b, contract)
-    };
-    fast_reciprocal_with(fb, f, y, reciprocal, &device)
-}
-
-/// [`fast_reciprocal`] with `rough` the device's division (a test moves it within Vulkan's
-/// bound).
-pub(super) fn fast_reciprocal_with(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    y: Value,
-    reciprocal: Reciprocal,
-    rough: Rough<'_>,
-) -> BResult<Value> {
-    let one = wide_splat(fb, f, 1.0)?;
-    let r = match reciprocal {
-        Reciprocal::Device | Reciprocal::Native => rough(fb, one, y)?,
-        Reciprocal::Rounded => rounded_reciprocal(fb, f, one, y, rough)?,
-    };
-    let ay = glsl(fb, GlslOp::FAbs, &[y])?;
-    let limit = wide_splat(fb, f, 2f64.powi(126))?;
-    let past = bin(fb, BinOp::FOrdGreaterThan, ay, limit)?;
-    let zero = wide_splat(fb, f, 0.0)?;
-    let signed_zero = copysign(fb, f, zero, y)?;
-    let r = fb.select(past, signed_zero, r)?;
-    match flushed(fb, f, y)? {
-        Some(z) => {
-            let inf = wide_splat(fb, f, f64::INFINITY)?;
-            let signed_inf = copysign(fb, f, inf, y)?;
-            fb.select(z, signed_inf, r)
-        }
-        None => Ok(r),
-    }
-}
-
-/// `RN(1 / y)` of `f32` lanes `y` (form `f`) whose magnitude is in `[2^-126, 2^126]`, from
-/// `rough`'s estimate ([`divide::rounded_reciprocal_bits`]); the other lanes are
-/// [`fast_reciprocal`]'s flushes, or a NaN's. A `y` past `2^125`, whose estimate may fall below
-/// `2^-126`, is halved first and its reciprocal halved after, each by its exponent field: both
-/// moves are exact there, and the result is at least `2^-126`. `one` is `1.0`.
-fn rounded_reciprocal(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    one: Value,
-    y: Value,
-    rough: Rough<'_>,
-) -> BResult<Value> {
-    let u = u32_form(f);
-    let (ut, ft) = (ty(fb, u)?, ty(fb, f)?);
-    let yb = fb.convert(ConvOp::Bitcast, y, ut)?;
-    let magnitude = splat(fb, u, 0x7FFF_FFFF)?;
-    let ay = bin(fb, BinOp::BitwiseAnd, yb, magnitude)?;
-    // `|y|` in `(2^125, 2^126]`: one less in the exponent field.
-    let low = splat(fb, u, 0x7E00_0001)?;
-    let span = splat(fb, u, 0x80_0000)?;
-    let off = bin(fb, BinOp::ISub, ay, low)?;
-    let high = bin(fb, BinOp::ULessThan, off, span)?;
-    let zero = splat(fb, u, 0)?;
-    let shift = fb.select(high, span, zero)?;
-    let sb = bin(fb, BinOp::ISub, yb, shift)?;
-    let ys = fb.convert(ConvOp::Bitcast, sb, ft)?;
-    let ny = fb.unary(UnOp::FNegate, ys)?;
-    let r = rough(fb, one, ys)?;
-    let rb = divide::rounded_reciprocal_bits(fb, f, one, ny, yb, r)?;
-    let rb = bin(fb, BinOp::ISub, rb, shift)?;
-    fb.convert(ConvOp::Bitcast, rb, ft)
-}
-
-/// An upper estimate of the SPIR-V words of `fast_divide` on form `f` by `reciprocal`: the
-/// reciprocal, its two flushes' tests and selects, the product, and Metal's answers at denormals
-/// and NaNs (`metal_fast_product`), with their constants, types, and the `GLSL.std.450` import.
-pub fn fast_divide_words(f: Form, reciprocal: Reciprocal) -> u32 {
-    match reciprocal {
-        // The device's `OpFDiv` alone.
-        Reciprocal::Native => 16,
-        _ => 320 + 48 * u32::from(f.lanes) + reciprocal.words(f),
-    }
-}
-
-/// Metal's fast division of two values of one form: a call of its [`FastDivision`] routine, or
-/// (a unit test) [`fast_divide`] itself.
+/// A division of two values of one form: the device's (a unit test substitutes a reference).
 pub(super) type DivideOf<'a> = &'a dyn Fn(&mut FunctionBuilder<'_>, Value, Value) -> BResult<Value>;
 
-/// The module-scope routine of Metal's fast division (`fast_divide`) on `float` lanes of
-/// `lanes` lanes, by `reciprocal`, its device division `NoContraction` where `exact`. Every `arcp`
-/// division, `fast::tanh`, `fast::fmod`, and `fast::tan` on those lanes calls it, so a module holds
-/// it once, as it holds the precise division's routines; expanded at every use, Metal's answers at
-/// denormals and NaNs made each use about 330 to 570 words.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FastDivision {
-    pub lanes: u8,
-    pub reciprocal: Reciprocal,
-    pub exact: bool,
-}
-
-impl FastDivision {
-    /// The routine of a fast division of form `f` (`float` lanes) by `reciprocal`, whose device
-    /// division contracts as `contract` allows.
-    pub fn new(f: Form, reciprocal: Reciprocal, contract: Contraction) -> FastDivision {
-        FastDivision {
-            lanes: f.lanes,
-            reciprocal,
-            exact: contract == Contraction::Forbidden,
-        }
-    }
-
-    /// The routine's operand form.
-    fn form(self) -> Form {
-        Form {
-            held: Held::Float(FloatFmt::F32),
-            lanes: self.lanes,
-        }
-    }
-
-    /// The contraction of the routine's device division.
-    fn contract(self) -> Contraction {
-        if self.exact {
-            Contraction::Forbidden
-        } else {
-            Contraction::Allowed
-        }
-    }
-
-    /// An upper estimate of the routine's SPIR-V words: `fast_divide`'s, and the function's
-    /// type, parameters, and frame.
-    pub fn words(self) -> u32 {
-        fast_divide_words(self.form(), self.reciprocal) + 32
-    }
-}
-
-/// An upper estimate of the SPIR-V words of one call of a [`FastDivision`] routine.
-pub const FAST_DIVISION_CALL_WORDS: u32 = 24;
-
-/// Define routine `r`: a function of two `float` values of `r.lanes` lanes returning Metal's
-/// fast quotient (`fast_divide`).
-pub fn define_fast_division(mb: &mut ModuleBuilder, r: FastDivision) -> BResult<FuncId> {
-    let e = mb.ty(Type::Float { width: 32 })?;
-    let t = if r.lanes == 1 {
-        e
-    } else {
-        mb.ty(Type::Vector {
-            elem: e,
-            len: r.lanes,
-        })?
-    };
-    let mut fb = mb.routine(t)?;
-    let (x, y) = (fb.param(t)?, fb.param(t)?);
-    let q = fast_divide(&mut fb, r.form(), x, y, r.contract(), r.reciprocal)?;
-    fb.ret(Some(q))?;
-    fb.finish()
-}
-
-/// Metal's fast quotient of `x` and `y` through `routine`, a [`define_fast_division`].
-pub fn call_fast_division(
-    fb: &mut FunctionBuilder<'_>,
-    routine: FuncId,
-    x: Value,
-    y: Value,
-) -> BResult<Value> {
-    fb.call(routine, &[x, y])?
-        .ok_or(BuildError::Type(TypeRule::FunctionSignature))
-}
-
-/// Metal's fast quotient `x / y` as the device's own `OpFDiv(x, y)`, contracting as routine `r`'s
-/// device division does: the form of an `arcp` division whose quotient is the device's
-/// (`ArithPlan::device_quotient`), where no routine is called.
-pub fn device_fast_division(
-    fb: &mut FunctionBuilder<'_>,
-    r: FastDivision,
-    x: Value,
-    y: Value,
-) -> BResult<Value> {
-    fb.binary_with(BinOp::FDiv, x, y, r.contract())
-}
-
-/// Metal's fast division `x / y`: `x` times its fast reciprocal of `y` ([`fast_reciprocal`] by
-/// `reciprocal`), two roundings, as Metal computes it (every lane of probe case 08bc6611's fast `x
-/// / y` equals `x` times its fast `1 / y`), with Metal's answers at `f32` denormals and NaNs
-/// ([`metal_fast_product`]).
-pub(super) fn fast_divide(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    x: Value,
-    y: Value,
-    contract: Contraction,
-    reciprocal: Reciprocal,
-) -> BResult<Value> {
-    // Native device maths: the device's quotient itself.
-    if reciprocal == Reciprocal::Native {
-        return fb.binary_with(BinOp::FDiv, x, y, contract);
-    }
-    let r = fast_reciprocal(fb, f, y, contract, reciprocal)?;
-    if f.float_fmt() != Some(FloatFmt::F32) {
-        return fb.binary_with(BinOp::FMul, x, r, contract);
-    }
-    metal_fast_product(fb, f, x, r)
-}
-
-/// `x · r`, the product that ends Metal's fast division, as Metal answers it on `f32` lanes
-/// (form `f`) whatever the device's denormal mode and NaN encoding: a denormal `x` is a zero of its
-/// sign ([`flushed`]); a product whose 24-bit rounding, with an unbounded exponent, is below
-/// `2^-126` is a zero of its sign (Metal's precise quotient flushes by that rounding, a probe case
-/// c10cba13; the product scaled by `2^24` is a normal there, so its rounding decides, and the
-/// device's own rounding of a denormal result, or its flush, does not); and a NaN is `0x7FC00000`.
-/// Metal answered `0x7fc00000` for every NaN fast quotient measured (a probe cases 914cc4d2 and
-/// 711cc190, 155 and 62 lanes, probe case 08bc6611, A1 case a919193f), where RADV answered
-/// `0xffc00000` for `0 / 0` and a NaN divisor, and a denormal numerator over a denormal divisor
-/// `NaN` (`0 · inf`, A1 case f9a12252), where lavapipe kept the numerator and answered `+inf`. No
-/// step is fused or regrouped (`NoContraction`), and the selects keep the device from fusing the
-/// product into its user. The NaN is told by the bits, which no float mode folds.
-fn metal_fast_product(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, r: Value) -> BResult<Value> {
-    let exact = Contraction::Forbidden;
-    let zero = wide_splat(fb, f, 0.0)?;
-    let x = match flushed(fb, f, x)? {
-        Some(z) => {
-            let signed_zero = copysign(fb, f, zero, x)?;
-            fb.select(z, signed_zero, x)?
-        }
-        None => x,
-    };
-    let q = fb.binary_with(BinOp::FMul, x, r, exact)?;
-    // The same product `2^24` larger: exact up to its rounding, which is the 24-bit one.
-    let up = wide_splat(fb, f, 2f64.powi(24))?;
-    let xs = fb.binary_with(BinOp::FMul, x, up, exact)?;
-    let s = fb.binary_with(BinOp::FMul, xs, r, exact)?;
-    let abs_s = glsl(fb, GlslOp::FAbs, &[s])?;
-    let tiny_limit = wide_splat(fb, f, 2f64.powi(-102))?;
-    let tiny = bin(fb, BinOp::FOrdLessThan, abs_s, tiny_limit)?;
-    // A 24-bit rounding of at least `2^-126` (`s` is a number: not `inf · 0`), which the device
-    // answered below it (a flush before rounding): `2^-126`.
-    let rounds_normal = bin(fb, BinOp::FOrdGreaterThanEqual, abs_s, tiny_limit)?;
-    let abs_q = glsl(fb, GlslOp::FAbs, &[q])?;
-    let least = wide_splat(fb, f, 2f64.powi(-126))?;
-    let below = bin(fb, BinOp::FOrdLessThan, abs_q, least)?;
-    let raised = bin(fb, BinOp::LogicalAnd, rounds_normal, below)?;
-    let signed_least = copysign(fb, f, least, s)?;
-    let q = fb.select(raised, signed_least, q)?;
-    let signed_zero = copysign(fb, f, zero, s)?;
-    let q = fb.select(tiny, signed_zero, q)?;
-    // Told by the bits: the routine runs in entries of every float mode, and one without
-    // `SignedZeroInfNanPreserve` lets a device fold `OpIsNan`.
-    let nan = nan::is_nan(fb, f, NanTest::Bits, q)?;
-    let canonical = fsplat(fb, f, f64::NAN)?;
-    fb.select(nan, canonical, q)
-}
-
-/// A fused multiply-add of three floats (`super::fma::emit` with its routine; a unit test
-/// substitutes a reference).
+/// A fused multiply-add of three floats (`super::fma::emit`; a unit test substitutes a
+/// reference).
 pub(super) type FmaOf<'a> = &'a dyn Fn(&mut FunctionBuilder<'_>, &[Value]) -> BResult<Value>;
 
-/// Metal's `fast::fmod(x, y)` on `float`: `fma(-trunc(q), y, x)` of its fast quotient
-/// `q = x / y` (`divide`, a call of its [`FastDivision`] routine), the fused multiply-add
-/// rounding once (`fma`; Metal's answers for `f32` denormals and NaNs are its). Every lane of
-/// probe case 08bc6611 (1,024, specials among them) is this expression on Metal's own quotient; the
-/// quotient's reciprocal is a near-equivalent of Metal's (`PrecisionNote::DeviceArithmetic`), so
-/// `fmod(1e10, 3)` is Metal's `-512` exactly where that reciprocal of `3` is Metal's. Metal reads a
-/// denormal `x` or `y` as the zero of its sign and answers no denormal, with and without fast math
-/// (every pair of 28 patterns): the caller flushes the operands and the result where
-/// the fused multiply-add is the device's and the profile asks Metal's functions; under native
-/// device maths they are the device's (`PrecisionNote::DeviceDenormals`).
+/// Metal's `fast::fmod(x, y)` on `float`: `fma(-trunc(q), y, x)` of the quotient `q = x / y`
+/// (`divide`, the device's division), the fused multiply-add `fma`. Every lane of probe case
+/// 08bc6611 (1,024, specials among them) is this expression on Metal's own quotient; the device's
+/// quotient is a near-equivalent of it (`PrecisionNote::DeviceArithmetic`), so `fmod(1e10, 3)` is
+/// Metal's `-512` exactly where the device's quotient is Metal's. Metal reads a denormal `x` or `y`
+/// as the zero of its sign and answers no denormal, with and without fast math (every pair of 28
+/// patterns); the device's are its own (`PrecisionNote::DeviceDenormals`).
 pub(super) fn fast_fmod(
     fb: &mut FunctionBuilder<'_>,
     x: Value,
@@ -2889,27 +2524,6 @@ pub(super) fn fast_fmod(
     fma(fb, &[n, y, x])
 }
 
-/// Metal's LLVM `frem` on `float` without every fast-math flag: `x - y * trunc(q)` of its precise
-/// quotient `q = x / y` (`divide`, a call of the shared routine, which reads a denormal operand as
-/// a zero and flushes a denormal quotient), the product and the difference each rounded on its own
-/// (`NoContraction`), the product read as Metal reads an `f32` denormal where `flush` (the caller
-/// flushes the operands and the result). Not the exact remainder: on the M3 Max
-/// `frem(1, 0.1)` is `+0` where `fmod` gives `0x3dcccccb`, and this expression is Metal's answer on
-/// all 49,753 measured pairs, every class of operand.
-pub(super) fn metal_frem(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    (x, y): (Value, Value),
-    divide: DivideOf<'_>,
-    flush: bool,
-) -> BResult<Value> {
-    let q = divide(fb, x, y)?;
-    let t = glsl(fb, GlslOp::Trunc, &[q])?;
-    let p = fb.binary_no_contraction(BinOp::FMul, y, t)?;
-    let p = if flush { denormal::flush(fb, f, p)? } else { p };
-    fb.binary_no_contraction(BinOp::FSub, x, p)
-}
-
 /// Metal's precise `mix(x, y, t)` on `float` and `half`: `fma(t, y, fma(-t, x, x))`, each fused
 /// multiply-add rounding once (`fma`, the profile's route), with and without fast-math flags. Every
 /// lane of `nan_functions`, `nan_functions_fast`, `nan_half`, and `nan_half_fast` whose answer is a
@@ -2917,24 +2531,16 @@ pub(super) fn metal_frem(
 /// is NaN: `fma(-0, inf, inf)`; `mix(-0, -0, 0)` is `+0`; `half` `mix(-0.3, 0.7, 0.2)` is
 /// `0xAE68`). `t` is negated on its bits, which no float mode changes. Each fused multiply-add
 /// reads an `f32` denormal operand as the zero of its sign and flushes a denormal result (an Apple
-/// M3 Max under macOS 27.0.1: every finite triple of 28 patterns, denormals
-/// among them, in both modes); where `flush`, the inner one's result is read so
-/// ([`denormal::flush`]), for a device whose `OpFmaKHR` may keep one; the operands and the result
-/// are the caller's to flush.
+/// M3 Max under macOS 27.0.1: every finite triple of 28 patterns, denormals among them, in both
+/// modes).
 pub(super) fn metal_mix(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
     [x, y, t]: [Value; 3],
     fma: FmaOf<'_>,
-    flush: bool,
 ) -> BResult<Value> {
     let minus_t = sign_bits(fb, f, t, SignBit::Flip)?;
     let rest = fma(fb, &[minus_t, x, x])?;
-    let rest = if flush {
-        denormal::flush(fb, f, rest)?
-    } else {
-        rest
-    };
     fma(fb, &[t, y, rest])
 }
 
@@ -2943,17 +2549,12 @@ pub(super) fn metal_mix(
 /// rounded to `f`'s format on its own and each later lane added by one fused multiply-add (`fma`,
 /// the profile's route), with and without fast-math flags. On 4,096 lanes of two, three and four
 /// lanes each, in both modes, every `float` and `half` answer of the M3 Max and the M4 is this
-/// chain's (a `half` keeps its denormals). Where `flush`, each of the chain's `float` values before
-/// the last is read as Metal reads a denormal ([`denormal::flush`]), for a device whose multiply
-/// and `OpFmaKHR` may keep one; the operands and the result are the caller's to flush. Where
-/// `tiny` (`float` lanes), the first product is Metal's where the device's rounding of a product
-/// below `2^-126` reaches `±2^-126`, by that check ([`denormal::tiny_product`]).
+/// chain's (a `half` keeps its denormals).
 pub(super) fn metal_dot(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
     [x, y]: [Value; 2],
     fma: FmaOf<'_>,
-    (flush, tiny): (bool, Option<denormal::TinyCheck>),
 ) -> BResult<Value> {
     let lane = |fb: &mut FunctionBuilder<'_>, i: u32| -> BResult<(Value, Value)> {
         if f.lanes == 1 {
@@ -2965,46 +2566,26 @@ pub(super) fn metal_dot(
             ))
         }
     };
-    metal_chain(
-        fb,
-        f.scalar_form(),
-        u32::from(f.lanes),
-        &lane,
-        fma,
-        (flush, tiny),
-    )
+    metal_chain(fb, f.scalar_form(), u32::from(f.lanes), &lane, fma)
 }
 
 /// Lane `i`'s two operands of a dot product.
 pub(super) type LaneOf<'a> = &'a dyn Fn(&mut FunctionBuilder<'_>, u32) -> BResult<(Value, Value)>;
 
 /// [`metal_dot`]'s fused chain over `lanes` lanes of scalar form `s`, lane `i`'s operands by
-/// `lane`, each taken as the chain reaches it; its first product Metal's at `2^-126` where `tiny`.
+/// `lane`, each taken as the chain reaches it.
 pub(super) fn metal_chain(
     fb: &mut FunctionBuilder<'_>,
     s: Form,
     lanes: u32,
     lane: LaneOf<'_>,
     fma: FmaOf<'_>,
-    (flush, tiny): (bool, Option<denormal::TinyCheck>),
 ) -> BResult<Value> {
-    let step = |fb: &mut FunctionBuilder<'_>, v: Value| -> BResult<Value> {
-        if flush {
-            denormal::flush(fb, s, v)
-        } else {
-            Ok(v)
-        }
-    };
     let (x0, y0) = lane(fb, 0)?;
     // A `half` product is exact in its `float` container, and rounded once.
     let p = fb.binary_no_contraction(BinOp::FMul, x0, y0)?;
-    let p = match tiny {
-        Some(check) => denormal::tiny_product(fb, s, [x0, y0], p, check)?,
-        None => p,
-    };
     let mut sum = narrow::round(fb, s, p)?;
     for i in 1..lanes {
-        sum = step(fb, sum)?;
         let (xi, yi) = lane(fb, i)?;
         sum = fma(fb, &[xi, yi, sum])?;
     }
@@ -3012,18 +2593,12 @@ pub(super) fn metal_chain(
 }
 
 /// An upper estimate of the SPIR-V words of [`metal_dot`] on form `f` whose fused multiply-adds
-/// take `fma_words` each: two extractions per lane, the product, its check where `tiny` and its
-/// rounding, and per later lane the fused multiply-add and, where `flush`, the flush before it.
-pub(super) fn metal_dot_words(
-    f: Form,
-    fma_words: u32,
-    (flush, tiny): (bool, Option<denormal::TinyCheck>),
-) -> u32 {
+/// take `fma_words` each: two extractions per lane, the product and its rounding, and per later
+/// lane the fused multiply-add.
+pub(super) fn metal_dot_words(f: Form, fma_words: u32) -> u32 {
     let s = f.scalar_form();
     let lanes = u32::from(f.lanes);
-    let step = fma_words + if flush { denormal::flush_words(s) } else { 0 };
-    let check = tiny.map_or(0, |check| denormal::tiny_product_words(s, check));
-    (10 * lanes + 5 + narrow::round_words(s) + check).saturating_add(lanes.saturating_sub(1) * step)
+    (10 * lanes + 5 + narrow::round_words(s)).saturating_add(lanes.saturating_sub(1) * fma_words)
 }
 
 /// Which of Metal's pi-scaled functions [`pi_scaled`] computes.
@@ -3166,24 +2741,17 @@ pub(super) fn pi_scaled(
 /// The words of `infinite_product` on a scalar: about 23 instructions and their constants.
 const INFINITE_PRODUCT_WORDS: u32 = 128;
 
-/// `exp2(y · log2(x))` with the product rounded, of Metal's `exp2` and `log2` ([`routine_or`]):
-/// Metal's `fast::powr(x, y)`, and its `fast::pow`'s magnitude of `|x|` (`op`, on form `f`).
+/// `exp2(y · log2(x))` with the product rounded, of the device's `Exp2` and `Log2`: Metal's
+/// `fast::powr(x, y)`, and its `fast::pow`'s magnitude of `|x|`.
 /// Every lane of probe case 08bc6611 (1,024, specials among them) gives Metal's `fast::powr` as
 /// this expression of Metal's own `exp2` and `log2`, and its `fast::pow` at a base that is not
 /// negative. Where the product is infinite the callers select IEEE's answer by the operands' bits
 /// ([`infinite_product`], [`fast_powr_special`]), so a device's arithmetic on the infinite
 /// intermediates cannot move it.
-fn exp2_of_product(
-    fb: &mut FunctionBuilder<'_>,
-    lib: &Lib<'_>,
-    op: FloatFn,
-    f: Form,
-    y: Value,
-    x: Value,
-) -> BResult<Value> {
-    let l = routine_or(fb, lib, op, f, libm::Fun::Log2, GlslOp::Log2, &[x])?;
+fn exp2_of_product(fb: &mut FunctionBuilder<'_>, y: Value, x: Value) -> BResult<Value> {
+    let l = glsl(fb, GlslOp::Log2, &[x])?;
     let p = bin(fb, BinOp::FMul, y, l)?;
-    routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[p])
+    glsl(fb, GlslOp::Exp2, &[p])
 }
 
 /// `r`, the value of `exp2(y · log2(x))` (floats of form `f`, `x` not negative where it
@@ -3223,25 +2791,6 @@ pub(super) fn infinite_product(
     fb.select(infinite, answer, r)
 }
 
-/// `fun` of `args` (floats of form `f`) where float function `op` calls it: `fun`'s routine
-/// where `op` takes it ([`libm::uses`]) and the device's instruction does not answer it, the
-/// device's instruction `o` otherwise.
-fn routine_or(
-    fb: &mut FunctionBuilder<'_>,
-    lib: &Lib<'_>,
-    op: FloatFn,
-    f: Form,
-    fun: libm::Fun,
-    o: GlslOp,
-    args: &[Value],
-) -> BResult<Value> {
-    if libm::uses(op, f).contains(&fun) && !lib.device(fun) {
-        lib.call(fb, fun, f, args)
-    } else {
-        glsl(fb, o, args)
-    }
-}
-
 /// Metal's precise `exp10(x)` (`c` is `log2(10)`) or `exp(x)` (`log2(e)`) from the device's
 /// `exp2` (floats of form `f` in a 32-bit container, the constants the container's), as Metal
 /// composes it: `E = exp2(p)` of the rounded product `p = x c_hi`, `c_hi + c_lo = c`, corrected by
@@ -3277,7 +2826,7 @@ fn metal_log(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
     x: Value,
-    near: &libm::log::Near,
+    near: &libm::Near,
     c: u32,
 ) -> BResult<Value> {
     let exact = Contraction::Forbidden;
@@ -3310,24 +2859,18 @@ fn metal_log(
 
 /// Metal's `fast::sinh(x)` or `fast::cosh(x)` (`op`) on `float` lanes `x` (form `f`): MSL Table
 /// 8.2's `(e(x) - e(-x)) · 0.5` and `(e(x) + e(-x)) · 0.5` of its fast `exp`,
-/// `e(v) = exp2(v · log2 e)` ([`routine_or`]; `-x · log2 e` is the product negated). One
+/// `e(v) = exp2(v · log2 e)` (the device's `Exp2`; `-x · log2 e` is the product negated). One
 /// operation to Metal: no step is fused with another or with the caller's arithmetic. On case
 /// f6524207 the formula of correctly rounded `exp2` matches Metal on 768 and 822 of 1,024 lanes,
 /// every special one among them (a zero and a denormal give `+0` and `1`, an infinity `±inf` and
 /// `+inf`); the rest is Metal's `exp2`, which is not correctly rounded.
-fn fast_sinh_cosh(
-    fb: &mut FunctionBuilder<'_>,
-    op: FloatFn,
-    f: Form,
-    x: Value,
-    lib: &Lib<'_>,
-) -> BResult<Value> {
+fn fast_sinh_cosh(fb: &mut FunctionBuilder<'_>, op: FloatFn, f: Form, x: Value) -> BResult<Value> {
     let exact = Contraction::Forbidden;
     let k = wide_splat(fb, f, std::f64::consts::LOG2_E)?;
     let p = fb.binary_with(BinOp::FMul, x, k, exact)?;
-    let up = routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[p])?;
+    let up = glsl(fb, GlslOp::Exp2, &[p])?;
     let n = fb.unary(UnOp::FNegate, p)?;
-    let down = routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[n])?;
+    let down = glsl(fb, GlslOp::Exp2, &[n])?;
     let combine = if op == FloatFn::FastSinh {
         BinOp::FSub
     } else {
@@ -3338,16 +2881,10 @@ fn fast_sinh_cosh(
     fb.binary_with(BinOp::FMul, s, half, exact)
 }
 
-/// Metal's fast `log(v)` of `float` lanes `v` (form `f`) where float function `op` calls it:
-/// `log2(v) · ln 2` ([`routine_or`]), each step its own.
-fn fast_log_of(
-    fb: &mut FunctionBuilder<'_>,
-    lib: &Lib<'_>,
-    op: FloatFn,
-    f: Form,
-    v: Value,
-) -> BResult<Value> {
-    let l = routine_or(fb, lib, op, f, libm::Fun::Log2, GlslOp::Log2, &[v])?;
+/// Metal's fast `log(v)` of `float` lanes `v` (form `f`): `log2(v) · ln 2` of the device's
+/// `Log2`, each step its own.
+fn fast_log_of(fb: &mut FunctionBuilder<'_>, f: Form, v: Value) -> BResult<Value> {
+    let l = glsl(fb, GlslOp::Log2, &[v])?;
     let c = wide_splat(fb, f, std::f64::consts::LN_2)?;
     fb.binary_with(BinOp::FMul, l, c, Contraction::Forbidden)
 }

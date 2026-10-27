@@ -607,38 +607,32 @@ pub enum PrecisionNote {
     /// Metal's own sample.
     GradFromBias,
     /// Transcendentals answer within Apple's stated bound, not Metal's bits: the device's own
-    /// functions, or the translation's routines where a device's instruction may leave the bound
-    /// (and, for the functions no routine covers yet, the device's precision). Not recorded by
-    /// `sqrt`, `rsqrt`, and `fmod`, precise, whose answer is the one right value on every device,
-    /// nor, on a device whose `float` functions are Metal's own (MoltenVK), in an entry Metal
+    /// functions where they are Metal's (MoltenVK), and the device's precision for a call no
+    /// other note bounds. Not recorded by precise `fmod`, whose answer is the one right value on
+    /// every device, nor, on a device whose `float` functions are Metal's own, in an entry Metal
     /// compiles with fast math ([`EntryMath::Fast`]) by a call the device answers as Metal's own
-    /// function; there its fast `sinpi`, `cospi`, and `tanpi`, near-equivalents, and the
-    /// translation's own routines still record it.
+    /// function; there its fast `sinpi`, `cospi`, and `tanpi`, near-equivalents, still record it.
     DeviceTranscendentals,
     /// Float reductions use the device's association order.
     ReductionOrder,
     /// `float` denormals follow the device: Metal reads an `f32` denormal operand of its float
     /// arithmetic, comparisons, and functions as the zero of its sign and flushes a denormal result
     /// to one, where a Vulkan device keeps or flushes them by its own float controls (this
-    /// translation declares no `DenormFlushToZero`). Recorded only where the module leaves an
-    /// operation's denormals to the device: the instructions of native device maths
-    /// (`FloatMathsPolicy::Native`, `fast::fmod`'s fused multiply-add among them) and of the
-    /// device's order (`RoundingOrderPolicy::Native`: `mix` by `FMix`, `fast::sqrt` by `Sqrt`,
-    /// and `dot` of vectors of other than two to four lanes, whose chunks' products the device
-    /// sums where Metal flushes each one below `2^-126`), beside their own notes; and, under every
-    /// policy, a conversion to or from `double`, whose reading Metal's is not measured. Every other
-    /// `float` operation reads its denormals as Metal does on every device (the device's where the
-    /// profile takes the measured `DriverDeviation::MetalFloatDenormals`, an exponent-field select
-    /// elsewhere): `+ - *`, the comparisons, the divisions, `fma`, `mix`, `dot`, `sqrt`, `rsqrt`,
-    /// `floor` and `ceil`, `ldexp` (on its operand's bits), the minimum and maximum functions
-    /// (`llvm.minnum` and `llvm.maxnum` among them, with any flags), and the functions the
-    /// translation computes itself or the device answers as Metal's own; `mix`, `atan2`, `sinpi`,
-    /// `cospi`, `tanpi` and `fast::fmod` in both modes, and two chained `fma`s, answer Metal's
-    /// words on an Apple M3 Max under macOS 27.0.1 at and around denormal operands,
-    /// but where the device's fused multiply-add under native device maths rounds a result whose
-    /// exact value is below `2^-126` up to `2^-126`, which Metal flushes (docs/FAST-PATHS.md,
-    /// known gaps). Validation derives no tolerance and no explanation from it: every `float`
-    /// computation is exposed to it.
+    /// translation declares no `DenormFlushToZero`). Recorded where the module leaves an
+    /// operation's denormals to a device not measured to read them as Metal does: `+ - *`, the
+    /// comparisons, `fma`, `dot`, `sqrt`, `rsqrt`, `trunc` and `rint` but on a device that takes
+    /// the measured `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and
+    /// the remainder, `floor` and `ceil`, the device's maths functions (`fast::fmod`'s fused
+    /// multiply-add among them), `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of vectors of other
+    /// than two to four lanes, whose chunks' products the device sums where Metal flushes each one
+    /// below `2^-126`, beside their own notes, and a conversion to or from `double`, whose reading
+    /// Metal's is not measured. The operations that read a denormal on its bits answer Metal on
+    /// every device: `ldexp`, `sign`, `fract`, `copysign`, `fabs` and `atan2`; and so do the
+    /// functions the device answers as Metal's own. Where the minimum and maximum functions
+    /// (`llvm.minnum` and `llvm.maxnum` among them, with any flags) and `saturate` are the device's
+    /// `NMin`, `NMax` and `NClamp`, their pick of a denormal is
+    /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from
+    /// it: every `float` computation is exposed to it.
     DeviceDenormals,
     /// Pixel-coordinate samplers scale coordinates in the shader, rounding differently.
     /// Recorded for an access through a runtime sampler slot whose word may state pixel
@@ -655,21 +649,16 @@ pub enum PrecisionNote {
     PixelSamplerScaling,
     /// Float division, remainder, square root, fused multiply-add, and dot products use Vulkan's
     /// precision bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct
-    /// rounding. A fast (`arcp`) division's reciprocal, which Metal rounds within about 0.64
-    /// ulp but not correctly, is the device's or, where the profile has `OpFmaKHR`, `RN(1 / y)`,
-    /// which differs from Metal's by an ulp near rounding midpoints. Not recorded by `sqrt` and
-    /// `fmod`, precise, whose answer is the one right value on every device, nor, on a device whose
-    /// `float` functions are Metal's own (MoltenVK), in an entry Metal compiles with fast math
+    /// rounding. A fast (`arcp`) division is the device's `OpFDiv`, where Metal's is `x` times a
+    /// reciprocal it rounds within about 0.64 ulp but not correctly. Not recorded by precise
+    /// `fmod`, whose answer is the one right value on every device, nor, on a device whose `float`
+    /// functions are Metal's own (MoltenVK), in an entry Metal compiles with fast math
     /// ([`EntryMath::Fast`]), by a fast division, which is Metal's own there, or by a call the
     /// device answers as Metal's own function.
     DeviceArithmetic,
     /// Float operations LLVM requires to keep signed zeros, infinities, and NaNs run without
-    /// `SignedZeroInfNanPreserve`, which the device does not support at their width. Under
-    /// `FloatMathsPolicy::Exact` so does an operation that answers Metal's zero of its sign: a
-    /// fused multiply-add the translation computes itself (in `double` or in integers without
-    /// `OpFmaKHR`), one by `OpFmaKHR` whose result is at most `2^-126` in magnitude, and a `float`
-    /// product flushed below `2^-126`. Without the mode the device may answer such a zero with
-    /// either sign.
+    /// `SignedZeroInfNanPreserve`, which the device does not support at their width. Without the
+    /// mode the device may answer such a zero with either sign.
     DeviceSignedZeroInfNan,
     /// A ray intersection traversed by the device's ray query. The hit distance and the
     /// barycentrics are the device's arithmetic. The conventions no Metal reading has settled yet
@@ -1671,9 +1660,8 @@ pub enum PrecisionNote {
     DeviceSampling,
     /// Native device maths: the module computes a `float` or `half` math-library function by the
     /// device's own `GLSL.std.450` instruction (or Metal's composition of the device's `Exp2` and
-    /// `Log2`), not by the translation's routine of Metal's answer, on a device whose functions
-    /// are not Metal's own, under `FloatMathsPolicy::Native` (the default; the owner's ruling of
-    /// 2026-10-11); and `fast::sqrt` the device's `Sqrt`, under `RoundingOrderPolicy::Native`.
+    /// `Log2`) where Metal's function is not the device's own; and `fast::sqrt` the device's
+    /// `Sqrt` on a device whose functions are not Metal's own.
     /// **Recorded bound:** Vulkan's precision table for the instruction, where Metal promises 4 to
     /// 6 ulp precise and its fast-math table fast (MSL Tables 8.1, 8.2): `Exp2` and `Exp` 3 + 2·|x|
     /// ulp; `Log2` and `Log` 3 ulp outside `[0.5, 2]` and `2^-21` absolute inside; `Pow` inherited
@@ -1685,9 +1673,8 @@ pub enum PrecisionNote {
     /// `DeviceNanEncoding` where recorded). Validation derives no tolerance from it.
     NativeTranscendentals,
     /// Native device maths: a precise `float` or `half` division, or Metal's fast division or
-    /// reciprocal, is the device's `OpFDiv`, not the translation's correctly rounded routine or
-    /// its `RN(1 / y)`, on a device whose division is not Metal's own, under
-    /// `FloatMathsPolicy::Native` (the default). **Recorded bound:** Vulkan's 2.5 ulp of the
+    /// reciprocal, is the device's `OpFDiv` where the device's division is not Metal's own.
+    /// **Recorded bound:** Vulkan's 2.5 ulp of the
     /// quotient for a divisor in `[2^-126, 2^126]`, where Metal's precise division is correctly
     /// rounded and its fast one `x` times a reciprocal within about 0.64 ulp; beyond that range
     /// a precise division's operands are scaled by `2^-2` into it, exactly, and a fast one is the
@@ -1695,12 +1682,11 @@ pub enum PrecisionNote {
     /// once more: within one unit in the last place of the `half` result. Validation derives no
     /// tolerance from it.
     NativeDivision,
-    /// Native device maths: a `float` fused multiply-add on a device without `OpFmaKHR`, under
-    /// `FloatMathsPolicy::Native` (the default), not the translation's correctly rounded routine,
-    /// or a `half` one, under every policy, where the device's 16-bit `Fma` is not measured to be
-    /// Metal's and the device has no 16-bit `OpFmaKHR` under the 16-bit float controls, is the
-    /// device's `GLSL.std.450 Fma` (on the `half` operands held in `float`, its result rounded to
-    /// `half`). **Recorded bound:** a `half` result within one unit in its last place of
+    /// Native device maths: a `float` fused multiply-add on a device without `OpFmaKHR`, or a
+    /// `half` one where the device's 16-bit `Fma` is not measured to be Metal's and the device has
+    /// no 16-bit `OpFmaKHR` under the 16-bit float controls, is the device's `GLSL.std.450 Fma`
+    /// (on the `half` operands held in `float`, its result rounded to `half`), where Metal's rounds
+    /// once. **Recorded bound:** a `half` result within one unit in its last place of
     /// Metal's (the product of two `half` values is exact in `float`, so only the two roundings
     /// differ); a `float` one within half a unit in the last place of the product plus half a
     /// unit in the last place of the result (Vulkan lets `Fma` round the product and then the
@@ -1805,8 +1791,8 @@ pub enum PrecisionNote {
     NativeMinMax,
     /// Native device maths: Metal's `dot` on `float`, or on `half` where its fused multiply-add is
     /// not the measured 16-bit one, is the device's `OpDot` (a `half` one summed in `float` and
-    /// rounded once to `half`), not Metal's fused chain of its products, under
-    /// `RoundingOrderPolicy::Native` (the default). **Recorded bound:** a `float` `dot` of `n`
+    /// rounded once to `half`), not Metal's fused chain of its products, on a device whose
+    /// functions are not Metal's own. **Recorded bound:** a `float` `dot` of `n`
     /// lanes within `(3n - 1) * 2^-24 * sum |a_i * b_i|` of Metal's chain, plus `n * 2^-126` where
     /// a product is an `f32` denormal the device keeps (Vulkan's `OpDot` inherits `OpFMul`'s and
     /// `OpFAdd`'s rounding, `2n - 1` roundings, where Metal's chain rounds `n` times); a `half`
@@ -1815,8 +1801,8 @@ pub enum PrecisionNote {
     NativeDot,
     /// Native device maths: Metal's `mix(x, y, t)` on `float`, or on `half` where its fused
     /// multiply-add is not the measured 16-bit one, is the device's `FMix` (a `half` one computed
-    /// in `float` and rounded once to `half`), not Metal's `fma(t, y, fma(-t, x, x))`, under
-    /// `RoundingOrderPolicy::Native` (the default). **Recorded bound:** a `float` result within
+    /// in `float` and rounded once to `half`), not Metal's `fma(t, y, fma(-t, x, x))`, on a device
+    /// whose functions are not Metal's own. **Recorded bound:** a `float` result within
     /// `2^-21 * (|x * (1 - t)| + |y * t|)` of Metal's (Vulkan's `FMix` inherits
     /// `x * (1 - t) + y * t`'s rounding, four roundings, where Metal's rounds twice); a `half`
     /// one within `3 * 2^-10 * (|x * (1 - t)| + |y * t|) + 2^-23`. Validation derives no

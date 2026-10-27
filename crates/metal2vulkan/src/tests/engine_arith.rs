@@ -11,9 +11,9 @@
 //! an integer where it needs one. `llvm-as` assembles the generated module; without it the test
 //! skips visibly.
 //!
-//! Every profile here takes the translation's routines of Metal's maths
-//! (`FloatMathsPolicy::Exact`, `exact_maths`), whose answers these tests check; native device
-//! maths, the default, is `engine_native_maths`'.
+//! Every profile here takes Metal's `half` rounding and NaN (`exact_maths`), whose answers these
+//! tests check; the maths functions are the device's on every device but MoltenVK
+//! (`engine_native_maths`).
 
 use crate::air::{self, SpecRequest};
 use crate::device::profile::{DeviceProfile, DriverWorkaround, FloatFunctions};
@@ -29,8 +29,7 @@ use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{plan_bitcode, EntryRef};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, exact_maths, link_and_validate, llvm_assemble, meter, profile, tiny_check_scales,
-    without_math_routines, AssembleError, Scratch,
+    compile, exact_maths, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -402,8 +401,7 @@ fn kernels() -> Vec<Kernel> {
         ),
         0x9522_6620,
     ));
-    // Metal's fast division reads the device's reciprocal; its precise division is a routine, exact
-    // on every profile.
+    // A fast division is the device's quotient, noted.
     v.push(Kernel {
         name: "arcp_fdiv_notes_device_precision",
         body: format!("{}  %r = fdiv arcp float %a, 2.0\n", of("a", 7.0)),
@@ -607,9 +605,10 @@ fn kernels() -> Vec<Kernel> {
         needs: &[],
         note: None,
     });
-    // `dot` of chunked vectors, under the exact maths these kernels compile with, is Metal's fused
-    // chain over every lane (`wide_dot_is_metals_fused_chain_in_metals_order`), with no note;
-    // `sincos` of one computes per chunk and stores its cosine as one chunked leaf.
+    // `dot` of chunked vectors is Metal's fused chain over every lane where the profile's `float`
+    // functions are Metal's, and each chunk's `OpDot` elsewhere
+    // (`wide_dot_is_metals_fused_chain_in_metals_order`), exact on these lanes; `sincos` of one
+    // computes per chunk and stores its cosine as one chunked leaf.
     v.push(Kernel {
         name: "chunked_dot_sums_every_chunk",
         body: format!(
@@ -1064,6 +1063,16 @@ fn arith_kernels_validate_and_compute_on_every_profile() {
                         plan.estimate.words
                     );
                     if let Some(n) = kk.note {
+                        // A maths function off Metal's own functions records the device's
+                        // precision.
+                        let n = match n {
+                            PrecisionNote::DeviceTranscendentals
+                                if p.fields().float_functions != FloatFunctions::Metal =>
+                            {
+                                PrecisionNote::NativeTranscendentals
+                            }
+                            n => n,
+                        };
                         assert!(a.precision.contains(&n), "{what}: {:?}", a.precision);
                     }
                     // Only an 8-bit float to integer conversion reads the unverified value.
@@ -1209,19 +1218,17 @@ fn wide_divisions_share_one_routine_per_form() {
     }
 }
 
-/// `float` and `half` fused multiply-adds (`air.fma`, `llvm.fma`, `llvm.fmuladd`) round once on
-/// every profile, by the profile's route: `OpFmaKHR` where `shaderFmaFloat32` is enabled
-/// (moltenvk-m3), else one shared `double` routine (lavapipe) or integer routine (vk12-floor) per
-/// lane count, which every use on that many lanes calls; called on one and two lanes, the two-lane
-/// routine calls the one-lane routine on each lane. A1 case 52343cc4's lane (`a = 1 + 2^-23`, `b =
-/// 1 - 2^-24`, `c = -RN(a * b)`), on one lane and on a vector's first, gives the product's rounding
-/// error, which an unfused `Fma` loses; a `half` triple whose `float` sum is a `half` midpoint
-/// gives the once-rounded `half` inline as the device's 16-bit `Fma`, which the driver computes as
-/// Metal's `half` `fma` (moltenvk-m3), and elsewhere (lavapipe, vk12-floor) is the device's
-/// `float` `Fma` rounded to `half`, inline too, noted `NativeFma`, within one unit in the last place
-/// of the `half`. No module notes `DeviceArithmetic` or `F16FmaDoubleRounding`.
+/// `float` and `half` fused multiply-adds (`air.fma`, `llvm.fma`, `llvm.fmuladd`) take the
+/// profile's route, inline: `OpFmaKHR` where `shaderFmaFloat32` is enabled (moltenvk-m3), else the
+/// device's `Fma` (lavapipe, vk12-floor), noted `NativeFma`. A1 case 52343cc4's lane (`a = 1 +
+/// 2^-23`, `b = 1 - 2^-24`, `c = -RN(a * b)`), on one lane and on a vector's first, gives the
+/// product's rounding error, which an unfused `Fma` loses (the interpreter's `Fma` rounds once); a
+/// `half` triple whose `float` sum is a `half` midpoint gives the once-rounded `half` as the
+/// device's 16-bit `Fma`, which the driver computes as Metal's `half` `fma` (moltenvk-m3), and
+/// rounds twice as the device's `Fma` on the operands held in `float`, its result rounded to
+/// `half` (lavapipe, vk12-floor). No module notes `DeviceArithmetic`.
 #[test]
-fn fused_multiply_adds_round_once_on_every_route() {
+fn fused_multiply_adds_take_the_profiles_route() {
     let (a, b) = (1.0f32 + f32::EPSILON, 1.0f32 - f32::EPSILON / 2.0);
     let c = -(a * b);
     let fused = a.mul_add(b, c);
@@ -1266,14 +1273,11 @@ fn fused_multiply_adds_round_once_on_every_route() {
     let Some(bitcode) = assemble("fma-routes", &text) else {
         return;
     };
-    // (profile, OpFmaKHR, functions, calls) of the float kernel: the entry and one routine per
-    // lane count (scalar, two lanes), one call per use, and the two-lane routine's call per lane.
-    // And whether the half kernel's is the device's `float` `Fma` rounded to `half`, the entry
-    // alone either way.
-    for (stem, khr, functions, calls, native_half) in [
-        ("moltenvk-m3", 3, 1, 0, false),
-        ("lavapipe", 0, 3, 5, true),
-        ("vk12-floor", 0, 3, 5, true),
+    // (profile, OpFmaKHR of the float kernel, whether the routes are the device's `Fma`).
+    for (stem, khr, native) in [
+        ("moltenvk-m3", 3, false),
+        ("lavapipe", 0, true),
+        ("vk12-floor", 0, true),
     ] {
         let p = profile(stem, exact_maths()).expect("profile");
         for kk in &ks {
@@ -1283,48 +1287,35 @@ fn fused_multiply_adds_round_once_on_every_route() {
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             for n in [
                 PrecisionNote::DeviceArithmetic,
-                PrecisionNote::F16FmaDoubleRounding,
                 PrecisionNote::FastMathRewrites,
             ] {
                 assert!(!a.precision.contains(&n), "{what}: {:?}", a.precision);
             }
-            if kk.name == "fma_float_rounds_once" {
-                assert_eq!(
-                    (
-                        count_op(&words, crate::spv::Op::FmaKHR),
-                        count_op(&words, crate::spv::Op::Function),
-                        count_op(&words, crate::spv::Op::FunctionCall)
-                    ),
-                    (khr, functions, calls),
-                    "{what}: OpFmaKHR, functions, calls"
-                );
-            } else {
-                assert_eq!(
-                    (
-                        count_op(&words, crate::spv::Op::Function),
-                        count_op(&words, crate::spv::Op::FunctionCall)
-                    ),
-                    (1, 0),
-                    "{what}: functions, calls"
-                );
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::NativeFma),
-                    native_half,
-                    "{what}: {:?}",
-                    a.precision
-                );
-            }
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeFma),
+                native,
+                "{what}: {:?}",
+                a.precision
+            );
+            let float = kk.name == "fma_float_rounds_once";
+            assert_eq!(
+                (
+                    count_op(&words, crate::spv::Op::FmaKHR),
+                    count_op(&words, crate::spv::Op::Function),
+                    count_op(&words, crate::spv::Op::FunctionCall)
+                ),
+                (if float { khr } else { 0 }, 1, 0),
+                "{what}: OpFmaKHR, functions, calls"
+            );
             let got = interpret(&bitcode, kk.name, &p);
-            if kk.name == "fma_half_rounds_once" && native_half {
-                let want = f32::from_bits(kk.want.expect("want"));
-                let ulp = 2f32.powi(-10);
-                assert!(
-                    (f32::from_bits(got) - want).abs() <= ulp,
-                    "{what}: {got:#x} beyond one ulp of {want}"
-                );
+            // The device's `Fma` in `float` rounds the `half` midpoint to even, away from the
+            // once-rounded `half`.
+            let want = if native && !float {
+                Some((-1182.0f32 / 1024.0).to_bits())
             } else {
-                assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
-            }
+                kk.want
+            };
+            assert_eq!(Some(got), want, "{what}: {got:#x}");
         }
     }
 }
@@ -1358,18 +1349,17 @@ fn opaque_vector(name: &str, half: bool, vals: &[f32]) -> String {
 }
 
 /// Metal's `dot` on `float` and `half` is the products' fused chain, `fma(x[n-1], y[n-1], ...
-/// fma(x[1], y[1], x[0] * y[0]))`, with and without fast math, on every profile: the multiply and
-/// `OpFmaKHR` (amd-rdna3-radv), or the shared routine of the profile's route (lavapipe's `double`
-/// one, vk12-floor's and lunarg-desktop-baseline-2023's integer one), and on moltenvk-m3, whose
-/// `float` functions are Metal's, the device's `OpDot` on `float`, which reaches Metal's own `dot`.
-/// A `half` is summed in `half` by the chain on every profile. The words are Metal's (a probe, the
-/// M3 Max and the M4 alike, at lanes where no other order, tree, unfused or exact sum gives them),
-/// and fast math's zero signs where a device that regroups `dot(float2(a, b), float2(b, c))` as
-/// `b * (a + c)` misses them (`nan_denormals_fast` with zeros for its denormals;
-/// `nan_functions_fast`'s `dot((-0, +0), (+0, -0))`). No `dot` notes `DeviceArithmetic` or
-/// `DeviceDenormals`.
+/// fma(x[1], y[1], x[0] * y[0]))`, with and without fast math. On moltenvk-m3, whose `float`
+/// functions are Metal's, `dot` on `float` is the device's `OpDot`, which reaches Metal's own
+/// `dot`, and on `half` the chain of the device's 16-bit fused multiply-add, Metal's own: the words
+/// are Metal's (a probe, the M3 Max and the M4 alike, at lanes where no other order, tree, unfused
+/// or exact sum gives them), and fast math's zero signs where a device that regroups
+/// `dot(float2(a, b), float2(b, c))` as `b * (a + c)` misses them (`nan_denormals_fast` with zeros
+/// for its denormals; `nan_functions_fast`'s `dot((-0, +0), (+0, -0))`), with no
+/// `DeviceArithmetic` or `DeviceDenormals`. Every other profile takes the device's `OpDot`, noted
+/// `NativeDot`.
 #[test]
-fn dot_is_metals_fused_chain_on_every_profile() {
+fn dot_is_metals_fused_chain_on_moltenvk_and_the_devices_op_dot_elsewhere() {
     let f = |b: u32| f32::from_bits(b);
     let x = [0x3F2121E3, 0xC1504426, 0x40D96C9D, 0x3EC6C559].map(f);
     let y = [0xBFD689B8, 0xC0608ADE, 0xC0D7159F, 0x402DE9ED].map(f);
@@ -1475,13 +1465,22 @@ fn dot_is_metals_fused_chain_on_every_profile() {
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            if !metal {
+                assert!(
+                    count_op(&words, crate::spv::Op::Dot) > 0
+                        && a.precision.contains(&PrecisionNote::NativeDot),
+                    "{what}: OpDot, {:?}",
+                    a.precision
+                );
+                continue;
+            }
             for n in [
                 PrecisionNote::DeviceArithmetic,
                 PrecisionNote::DeviceDenormals,
             ] {
                 assert!(!a.precision.contains(&n), "{what}: {:?}", a.precision);
             }
-            let device_dot = metal && !kk.name.ends_with("_half");
+            let device_dot = !kk.name.ends_with("_half");
             assert_eq!(
                 count_op(&words, crate::spv::Op::Dot) > 0,
                 device_dot,
@@ -1501,9 +1500,8 @@ fn dot_is_metals_fused_chain_on_every_profile() {
 /// 27.0.1, 16,384 rows of seeded random lanes each on 5, 8 and 16 `float` lanes and 8 and 16 `half`
 /// lanes, every answer the chain's. Each row here is one where the chain backwards, the chunks'
 /// sums added and the exact sum rounded once all miss Metal's word. Where Metal's order is the
-/// profile's (`RoundingOrderPolicy::Exact`; moltenvk-m3 under every policy) every profile answers it
-/// by the chain ([`ArithStrategy::ChunkedChain`]): no `OpDot`, no `DeviceArithmetic` and no
-/// `DeviceDenormals`. Under the default, a profile of the device's order keeps each chunk's
+/// profile's (moltenvk-m3) it answers it by the chain ([`ArithStrategy::ChunkedChain`]): no
+/// `OpDot`, no `DeviceArithmetic` and no `DeviceDenormals`. Every other profile keeps each chunk's
 /// `OpDot`, noted `DeviceArithmetic`.
 ///
 /// [`ArithStrategy::ChunkedChain`]: crate::lower::arith::ArithStrategy::ChunkedChain
@@ -1605,9 +1603,9 @@ fn wide_dot_is_metals_fused_chain_in_metals_order() {
     ] {
         for (policy, exact) in [(exact_maths(), true), (DevicePolicy::default(), false)] {
             let p = profile(stem, policy).expect("profile");
-            let chain = exact || p.fields().float_functions == FloatFunctions::Metal;
+            let chain = p.fields().float_functions == FloatFunctions::Metal;
             for kk in &ks {
-                let what = format!("{} on {stem} (exact: {exact})", kk.name);
+                let what = format!("{} on {stem} (exact forms: {exact})", kk.name);
                 let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let (_, words) =
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -1632,16 +1630,12 @@ fn wide_dot_is_metals_fused_chain_in_metals_order() {
     }
 }
 
-/// `air.fast_fmod` on `float` is Metal's `fma(-trunc(x / y), y, x)` of its fast quotient (`x` times
-/// the reciprocal of `y`), on every profile's fused multiply-add: `OpFmaKHR` (moltenvk-m3) or the
-/// shared routine (lavapipe, vk12-floor). A1 case dd3b3b99's `fmod(1e10, 3)` is Metal's `-512` (the
-/// quotient one ulp above the correctly rounded one), where `OpFRem`'s expression on the correctly
-/// rounded quotient gives `0`. The module notes `DeviceArithmetic` (the reciprocal's rounding). On
-/// moltenvk-m3, whose float functions and division are Metal's, the reciprocal is the device's
-/// `OpFDiv(1, y)`; a profile with `OpFmaKHR` and without that fact refines it to `RN(1 / y)` by
-/// four more `OpFmaKHR` (`fast_division_follows_the_metal_float_functions_fact`). The quotient is a
-/// call of the fast division's routine, one function beside the entry (and the fused multiply-add's
-/// routine where it has one).
+/// `air.fast_fmod` on `float` is Metal's `fma(-trunc(x / y), y, x)` (MSL Table 8.2), of the
+/// device's quotient `OpFDiv(x, y)`, on every profile's fused multiply-add: `OpFmaKHR`
+/// (moltenvk-m3) or the device's `Fma` (lavapipe, vk12-floor), inline, the entry the module's one
+/// function. A1 case dd3b3b99's `fmod(1e10, 3)` is Metal's `-512` (its fast quotient one ulp above
+/// the correctly rounded one); on the interpreter's correctly rounded quotient, `3333333248`, the
+/// fused expression gives `256`. The module notes `DeviceArithmetic` (the quotient's rounding).
 #[test]
 fn fast_fmod_is_metals_composition() {
     let kernel = Kernel {
@@ -1652,7 +1646,7 @@ fn fast_fmod_is_metals_composition() {
             of("y", 3.0)
         ),
         float: true,
-        want: Some((-512.0f32).to_bits()),
+        want: Some(256.0f32.to_bits()),
         needs: &[],
         note: None,
     };
@@ -1665,9 +1659,9 @@ fn fast_fmod_is_metals_composition() {
         return;
     };
     for (stem, khr, functions) in [
-        ("moltenvk-m3", 1, 2),
-        ("lavapipe", 0, 3),
-        ("vk12-floor", 0, 3),
+        ("moltenvk-m3", 1, 1),
+        ("lavapipe", 0, 1),
+        ("vk12-floor", 0, 1),
     ] {
         let p = profile(stem, exact_maths()).expect("profile");
         let kk = &ks[0];
@@ -1943,7 +1937,7 @@ fn a_fused_subtraction_negates_a_factor_that_is_not_a_sum() {
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             // On moltenvk-m3 both pairs are `OpFmaKHR` and the negation is the module's only
-            // one; the routes that call routines negate the same operand.
+            // one; the device's `Fma` negates the same operand.
             if stem == "moltenvk-m3" {
                 let negated = negated_operands(&words);
                 assert_eq!(negated.len(), 1, "{what}: one OpFNegate");
@@ -2097,29 +2091,17 @@ fn negated_operands(words: &[u32]) -> Vec<u32> {
 }
 
 /// Metal divides `float` under `arcp` as `x` times its fast reciprocal of `y` (a probe cases
-/// 9496749c and 3921d3e2, every flag set with `arcp`, every lane). The probe's lane 0, `0x42aa3a21
-/// / 0x44c80075`, is `0x3d59e381` under `arcp` (`x` times `1 / y` rounded; without a flag it is
-/// `0x3d59e382`, [`a_division_without_arcp_is_metals_precise_division`]). The reciprocal flushes: a
-/// divisor past `2^126` gives a zero and a denormal divisor the infinity. On moltenvk-m3, whose
-/// float functions and division are Metal's, the reciprocal is the device's `OpFDiv(1, y)`, Metal's
-/// own under its fast-math compile, with no `OpFmaKHR`. A profile with `OpFmaKHR` and without that
-/// fact takes `RN(1 / y)`, the device's estimate refined by four `OpFmaKHR`
-/// (`fast_division_follows_the_metal_float_functions_fact`), so `6 / 3` is `2` whatever the
-/// device's estimate (RC3 case f8494e2f read `0x3fffffff` from RADV's). The others take the
-/// device's. Metal's own reciprocal is not on every lane of any of them in every math mode, and the
-/// note stays.
+/// 9496749c and 3921d3e2, every flag set with `arcp`, every lane): the probe's lane 0, `0x42aa3a21
+/// / 0x44c80075`, is `0x3d59e381` under `arcp` (`x` times `1 / y` rounded). The module takes the
+/// device's `OpFDiv(x, y)` on every profile, with no `OpFmaKHR` and its note: here the
+/// interpreter's correctly rounded quotient, `0x3d59e382`, as without a flag
+/// ([`a_division_without_arcp_is_the_devices_quotient`]), and `6 / 3` is `2`.
 #[test]
-fn an_arcp_division_is_metals_fast_division() {
+fn an_arcp_division_is_the_devices_quotient() {
     let xy = format!(
         "{}{}",
         of("x", f32::from_bits(0x42AA_3A21)),
         of("y", f32::from_bits(0x44C8_0075))
-    );
-    let one = of("one", 1.0);
-    let far = format!("{one}{}", of("far", 2f32.powi(127)));
-    let tiny = format!(
-        "{one}{}  %tiny = bitcast i32 %tb to float\n",
-        oi("tb", 0x0040_0000)
     );
     let kernel = |name: &'static str, body: String, want: u32| Kernel {
         name,
@@ -2133,22 +2115,12 @@ fn an_arcp_division_is_metals_fast_division() {
         kernel(
             "arcp_divide",
             format!("{xy}  %r = fdiv arcp float %x, %y\n"),
-            0x3D59_E381,
+            0x3D59_E382,
         ),
         kernel(
             "fast_divide",
             format!("{xy}  %r = fdiv fast float %x, %y\n"),
-            0x3D59_E381,
-        ),
-        kernel(
-            "arcp_divide_past_2_126",
-            format!("{far}  %r = fdiv arcp float %one, %far\n"),
-            0,
-        ),
-        kernel(
-            "arcp_divide_by_a_denormal",
-            format!("{tiny}  %r = fdiv arcp float %one, %tiny\n"),
-            0x7F80_0000,
+            0x3D59_E382,
         ),
         kernel(
             "arcp_six_by_three",
@@ -2171,9 +2143,12 @@ fn an_arcp_division_is_metals_fast_division() {
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             assert_eq!(
-                count_op(&words, crate::spv::Op::FmaKHR),
-                0,
-                "{what}: OpFmaKHR"
+                (
+                    count_op(&words, crate::spv::Op::FmaKHR),
+                    count_op(&words, crate::spv::Op::FDiv)
+                ),
+                (0, 1),
+                "{what}: OpFmaKHR, OpFDiv"
             );
             assert!(
                 a.precision.contains(&PrecisionNote::DeviceArithmetic),
@@ -2200,19 +2175,17 @@ fn every_profile() -> Vec<String> {
     out
 }
 
-/// Metal's fast division answers its NaNs and denormals on every committed profile, whatever the
-/// device's NaN encoding and denormal mode: `0x7FC00000` for a NaN divisor of either sign (RADV
-/// answered `0xffc00000`, a probe cases 9496749c and 3921d3e2), a NaN numerator, `0 / 0`, `inf /
-/// inf`, and `inf · 0` (`inf / 2^127`, A1 case a919193f's `tanh` past `x = 44.4`); a denormal
-/// numerator as a zero of its sign, so a denormal over a denormal is `0 · inf = NaN` (A1 case
-/// f9a12252, where lavapipe kept the numerator and answered `+inf`); and a quotient whose 24-bit
-/// rounding is below `2^-126` as a zero of its sign, `(2^24 - 1) · 2^-150` included, which the
-/// denormal grid rounds up to `2^-126`. The operands are integer bits, so the division is the
-/// kernel's only float operation, and it records the device's arithmetic (its reciprocal) and no
-/// denormal or NaN note. The interpreter keeps denormals and NaN payloads, so each answer is the
-/// lowering's.
+/// Metal's fast division answers `0x7FC00000` for a NaN divisor of either sign (RADV answered
+/// `0xffc00000`, a probe cases 9496749c and 3921d3e2), a NaN numerator, `0 / 0` and `inf / inf`,
+/// which the module selects after the device's `OpFDiv` where the profile does not leave NaNs to
+/// the device (where it does, the device's `OpFDiv` answers it; `inf / 2^127`, Metal's `inf · 0`
+/// of its flushed reciprocal, is the device's infinity); its `f32`
+/// denormals are the device's on every committed profile. The operands are integer bits, so the
+/// division is the kernel's only float operation, and it records the device's arithmetic, its
+/// division and its denormals, and no NaN note. The interpreter keeps NaN payloads, so each NaN
+/// answer is the lowering's.
 #[test]
-fn a_fast_division_answers_metal_at_nans_and_denormals_on_every_profile() {
+fn a_fast_division_answers_metals_nans_on_every_profile() {
     let bits = |name: &str, b: u32| {
         format!("  %{name}.i = call i32 @llvm.umin.i32(i32 {b}, i32 -1)\n  %{name} = bitcast i32 %{name}.i to float\n")
     };
@@ -2236,52 +2209,6 @@ fn a_fast_division_answers_metal_at_nans_and_denormals_on_every_profile() {
         kernel("fast_nan_by_two", 0x7FC0_0001, 0x4000_0000, nan),
         kernel("fast_zero_by_zero", 0, 0, nan),
         kernel("fast_inf_by_inf", 0x7F80_0000, 0x7F80_0000, nan),
-        kernel("fast_inf_by_2_127", 0x7F80_0000, 0x7F00_0000, nan),
-        kernel("fast_denormal_by_one", 0x0040_0000, 0x3F80_0000, 0),
-        kernel(
-            "fast_negative_denormal_by_two",
-            0x8040_0000,
-            0x4000_0000,
-            0x8000_0000,
-        ),
-        kernel(
-            "fast_denormal_by_minus_one",
-            0x0000_0001,
-            0xBF80_0000,
-            0x8000_0000,
-        ),
-        kernel("fast_denormal_by_denormal", 0x0040_0000, 0x0040_0000, nan),
-        kernel("fast_tiny_quotient", 0x0D80_0000, 0x4E80_0000, 0),
-        kernel(
-            "fast_negative_tiny_quotient",
-            0x8D80_0000,
-            0x4E80_0000,
-            0x8000_0000,
-        ),
-        kernel(
-            "fast_tiny_quotient_negative_divisor",
-            0x0D80_0000,
-            0xCE80_0000,
-            0x8000_0000,
-        ),
-        kernel(
-            "fast_quotient_below_the_grid_rounding",
-            0x00FF_FFFF,
-            0x4000_0000,
-            0,
-        ),
-        kernel(
-            "fast_negative_quotient_below_the_grid_rounding",
-            0x80FF_FFFF,
-            0x4000_0000,
-            0x8000_0000,
-        ),
-        kernel(
-            "fast_least_normal_quotient",
-            0x0100_0000,
-            0x4000_0000,
-            0x0080_0000,
-        ),
         kernel("fast_six_by_three", 0x40C0_0000, 0x4040_0000, 0x4000_0000),
     ];
     let Some(bitcode) = assemble("fast-divide-specials", &module(&ks)) else {
@@ -2289,48 +2216,57 @@ fn a_fast_division_answers_metal_at_nans_and_denormals_on_every_profile() {
     };
     for stem in every_profile() {
         let p = profile(&stem, exact_maths()).expect("profile");
+        let metal_functions =
+            p.takes_driver_deviation(crate::error::DriverDeviation::MetalFloatFunctions);
+        let device_nans =
+            p.takes_driver_deviation(crate::error::DriverDeviation::MetalCanonicalNans);
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert!(
-                a.precision.contains(&PrecisionNote::DeviceArithmetic),
-                "{what}: {:?}",
-                a.precision
-            );
             for n in [
+                PrecisionNote::DeviceArithmetic,
+                PrecisionNote::NativeDivision,
                 PrecisionNote::DeviceDenormals,
-                PrecisionNote::DeviceNanEncoding,
             ] {
                 assert!(
-                    !a.precision.contains(&n),
-                    "{what}: {n:?} in {:?}",
+                    a.precision.contains(&n),
+                    "{what}: {n:?} not in {:?}",
                     a.precision
                 );
             }
+            assert!(
+                !a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                "{what}: {:?}",
+                a.precision
+            );
+            // Where the device answers Metal's canonical NaN itself (the measured
+            // `MetalCanonicalNans`), the interpreter's NaN is no Metal's.
+            if device_nans && kk.want == Some(nan) {
+                continue;
+            }
             let got = interpret(&bitcode, kk.name, &p);
-            assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
+            assert_eq!(
+                Some(got),
+                kk.want,
+                "{what} (Metal's functions: {metal_functions}): {got:#x}"
+            );
         }
     }
 }
 
-/// An `fdiv` without `arcp` on `float` is Metal's precise division on every profile (a probe cases
-/// 9496749c, 3921d3e2, and c10cba13): the correctly rounded quotient (lane 0x42aa3a21 / 0x44c80075
-/// gives 0x3D59E382, where `arcp` gives 0x3D59E381), a denormal operand read as a zero, a denormal
-/// quotient flushed, also `(2 - 2^-23) / 2^127`, whose 24-bit quotient `2^-126 - 2^-150` the
-/// denormal grid would round up to the smallest normal (c10cba13: Metal answers 0), and
-/// `0x7FC00000` for `0 / 0`. The interpreter's `OpFDiv` keeps denormals (it answers `2^-127` for `1
-/// / 2^127`), so these lanes fail on the device's division. A `half` division is the routine's
-/// under every flag set, `arcp` included, rounded once to `half` (4c363561, 54f0fe8e). The routine
-/// is exact: no `DeviceArithmetic` note.
+/// An `fdiv` without `arcp` on `float`, Metal's precise division, is the device's `OpFDiv` on
+/// every profile (`arith.fdiv.native`), noted `NativeDivision`: here the interpreter's correctly
+/// rounded quotient (lane 0x42aa3a21 / 0x44c80075 gives 0x3D59E382, Metal's word, where `arcp`
+/// gives 0x3D59E381), and `0x7FC00000` for `0 / 0`. A `half` division under every flag set,
+/// `arcp` included, is the `float` quotient rounded once to `half`.
 #[test]
-fn a_division_without_arcp_is_metals_precise_division() {
+fn a_division_without_arcp_is_the_devices_quotient() {
     let xy = format!(
         "{}{}",
         of("x", f32::from_bits(0x42AA_3A21)),
         of("y", f32::from_bits(0x44C8_0075))
     );
-    let one = of("one", 1.0);
     // 1 / 3 in `half`: 0x3555, whose `float` value is the stored word.
     let hxy = format!(
         "{}{}  %hx = bitcast i16 %hxb to half\n  %hy = bitcast i16 %hyb to half\n",
@@ -2358,31 +2294,6 @@ fn a_division_without_arcp_is_metals_precise_division() {
             0x3D59_E382,
         ),
         kernel(
-            "divide_to_a_denormal",
-            format!(
-                "{one}{}  %r = fdiv float %one, %far\n",
-                of("far", 2f32.powi(127))
-            ),
-            0,
-        ),
-        kernel(
-            "divide_a_denormal",
-            format!(
-                "{one}{}  %tiny = bitcast i32 %tb to float\n  %r = fdiv float %tiny, %one\n",
-                oi("tb", 0x0040_0000)
-            ),
-            0,
-        ),
-        kernel(
-            "divide_to_just_below_the_smallest_normal",
-            format!(
-                "{}{}  %r = fdiv float %x, %y\n",
-                of("x", f32::from_bits(0x3FFF_FFFF)),
-                of("y", -(2f32.powi(127)))
-            ),
-            0x8000_0000,
-        ),
-        kernel(
             "divide_zero_by_zero",
             format!("{}  %r = fdiv float %z, %z\n", of("z", 0.0)),
             0x7FC0_0000,
@@ -2408,12 +2319,12 @@ fn a_division_without_arcp_is_metals_precise_division() {
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             assert!(
-                !a.precision.contains(&PrecisionNote::DeviceArithmetic),
+                a.precision.contains(&PrecisionNote::NativeDivision),
                 "{what}: {:?}",
                 a.precision
             );
             assert!(
-                a.strategies.entries.contains_key("arith.fdiv.precise"),
+                a.strategies.entries.contains_key("arith.fdiv.native"),
                 "{what}: {:?}",
                 a.strategies.entries
             );
@@ -2493,14 +2404,14 @@ fn fast_sincos_flushes_past_the_last_quadrant() {
     }
 }
 
-/// `float` `+ - *`, a comparison and `OpFmaKHR` record neither `DeviceDenormals` nor
-/// `DeviceNanEncoding`: their denormals are read as Metal reads them, the device's where the
-/// profile states it reads them so and flushed elsewhere, and their NaN is Metal's, the device's
-/// where the profile states it and selected elsewhere; so does a remainder, Metal's composition of
-/// those; the functions that answer Metal at denormals and NaNs themselves (`sign`), `half`
-/// arithmetic, and the fused multiply-add routines record neither; nor does `fast::atan2`, whose
-/// device quotient reads its operands as Metal does, flushed off the deviation.
-/// The operands come from bits (`llvm.umin` of constants, bitcast), not from `float` arithmetic.
+/// `float` `+ - *`, a comparison and `OpFmaKHR` record `DeviceDenormals` exactly where the
+/// profile does not take `DriverDeviation::MetalFloatDenormals` (lavapipe), whose device keeps or
+/// flushes them by its own controls; a remainder, the device's `OpFRem`, records it on every
+/// profile; `sign`, which answers Metal at denormals itself, and `half` arithmetic record it on
+/// none; `fast::atan2`, whose quotient is the device's division, records it off the deviation.
+/// None records `DeviceNanEncoding`: the NaN is Metal's, the device's where the profile states it
+/// and selected elsewhere. The operands come from bits (`llvm.umin` of constants, bitcast), not
+/// from `float` arithmetic.
 #[test]
 fn device_float_environment_notes_follow_the_operations() {
     // 0x3fc03c00: a float near 1.5 whose low half is half 1.0.
@@ -2509,32 +2420,29 @@ fn device_float_environment_notes_follow_the_operations() {
     let none = &[][..];
     let ks = [
         k("env_fadd", format!("{w}  %s = fadd float %x, %x\n  %r = bitcast float %s to i32\n"), (x + x).to_bits()),
-        // Metal's remainder: `x - x * trunc(x / x)`.
+        // The device's remainder of `x` by itself.
         k("env_frem", format!("{w}  %s = frem float %x, %x\n  %r = bitcast float %s to i32\n"), 0),
         k("env_sign", format!("{w}  %s = call float @air.sign.f32(float %x)\n  %r = bitcast float %s to i32\n"), 1.0f32.to_bits()),
         k("env_fcmp", format!("{w}  %c = fcmp olt float %x, 0.0\n  %r = zext i1 %c to i32\n"), 0),
         k("env_half", format!("{w}  %t = trunc i32 %w to i16\n  %h = bitcast i16 %t to half\n  %s = fadd half %h, %h\n  %u = bitcast half %s to i16\n  %r = zext i16 %u to i32\n"), 0x4000),
         k("env_fma", format!("{w}  %s = call float @air.fma.f32(float %x, float %x, float %x)\n  %r = bitcast float %s to i32\n"), x.mul_add(x, x).to_bits()),
-        // `fast::atan2` selects Metal's NaN but returns the `atan` of the device's quotient:
-        // the device's `Atan` only in a fast-math entry on a device whose functions are
-        // Metal's, and the translation's routine here, an entry that keeps NaNs. The value is not
-        // checked here.
+        // `fast::atan2` selects Metal's NaN but returns the device's `Atan` of the device's
+        // quotient. The value is not checked here.
         Kernel {
             want: None,
             ..k("env_fast_atan2", format!("{w}  %s = call float @air.fast_atan2.f32(float %x, float %x)\n  %r = bitcast float %s to i32\n"), 0)
         },
     ];
-    // The notes each kernel records on moltenvk-m3 and on lavapipe. A `float` sum answers
-    // Metal's NaN and denormals on both: the device's on moltenvk-m3, selected and flushed on
-    // lavapipe.
+    // The notes each kernel records on moltenvk-m3 and on lavapipe.
+    let dd = &[PrecisionNote::DeviceDenormals][..];
     let notes: [(&[PrecisionNote], &[PrecisionNote]); 7] = [
+        (none, dd),
+        (dd, dd),
         (none, none),
+        (none, dd),
         (none, none),
-        (none, none),
-        (none, none),
-        (none, none),
-        (none, none),
-        (none, none),
+        (none, dd),
+        (none, dd),
     ];
     let text = module(&ks).replace(
         DECLS,
@@ -2568,20 +2476,20 @@ fn device_float_environment_notes_follow_the_operations() {
     }
 }
 
-/// An `frem` on `float` is Metal's. Without every fast-math flag it is `x - y * trunc(x / y)` of
-/// Metal's precise quotient, each step rounded (`arith.frem`): `frem(1, 0.1)` is `+0`, as on the M3
-/// Max, where the exact remainder is `0x3DCCCCCB`; with every flag it is Metal's `fast::fmod`
-/// (`arith.fmod.fast`). Neither leaves the remainder to the device's `OpFRem`, and the one without
-/// flags records no note.
+/// An `frem` on `float` without every fast-math flag is the device's `OpFRem`, noted
+/// `DeviceArithmetic` and `DeviceDenormals`, where Metal computes `x - y * trunc(x / y)` of its
+/// precise quotient, each step rounded: `frem(1, 0.1)` is `+0` on the M3 Max, and here the
+/// interpreter's exact remainder, `0x3DCCCCCB`. With every flag it is Metal's `fast::fmod`
+/// (`arith.fmod.fast`), with no `OpFRem`.
 #[test]
-fn a_float_remainder_is_metals() {
+fn a_float_remainder_is_the_devices_without_every_flag() {
     let one = "  %w = call i32 @llvm.umin.i32(i32 1065353216, i32 2147483647)\n  %x = bitcast i32 %w to float\n";
     let tenth = "  %v = call i32 @llvm.umin.i32(i32 1036831949, i32 2147483647)\n  %y = bitcast i32 %v to float\n";
     let ks = [
         k(
             "frem_precise",
             format!("{one}{tenth}  %s = frem float %x, %y\n  %r = bitcast float %s to i32\n"),
-            0,
+            0x3DCC_CCCB,
         ),
         Kernel {
             want: None,
@@ -2604,27 +2512,27 @@ fn a_float_remainder_is_metals() {
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(count_op(&words, crate::spv::Op::FRem), 0, "{what}: OpFRem");
-            let census = if kk.name == "frem_precise" {
-                "arith.frem"
-            } else {
-                "arith.fmod.fast"
-            };
-            assert!(
-                a.strategies.entries.contains_key(census),
-                "{what}: {:?}",
-                a.strategies.entries
+            let precise = kk.name == "frem_precise";
+            assert_eq!(
+                count_op(&words, crate::spv::Op::FRem),
+                usize::from(precise),
+                "{what}: OpFRem"
             );
-            if kk.name == "frem_precise" {
+            if precise {
                 for n in [
                     PrecisionNote::DeviceArithmetic,
                     PrecisionNote::DeviceDenormals,
-                    PrecisionNote::DeviceNanEncoding,
                 ] {
-                    assert!(!a.precision.contains(&n), "{what}: {n:?}");
+                    assert!(a.precision.contains(&n), "{what}: {n:?}");
                 }
                 let got = interpret(&bitcode, kk.name, &p);
-                assert_eq!(got, 0, "{what}: {got:#x}");
+                assert_eq!(got, 0x3DCC_CCCB, "{what}: {got:#x}");
+            } else {
+                assert!(
+                    a.strategies.entries.contains_key("arith.fmod.fast"),
+                    "{what}: {:?}",
+                    a.strategies.entries
+                );
             }
         }
     }
@@ -2720,9 +2628,7 @@ fn glsl_fma_results(words: &[u32]) -> Vec<u32> {
 /// left undecorated; every other addition is decorated `NoContraction`, and every other multiply is
 /// the product rounded on its own, decorated `NoContraction`: an `OpFMul` where the profile's
 /// `float` functions are the device's, and `GLSL.std.450 Fma(a, b, -0.0)` where they are Metal's,
-/// whose SPIR-V reaches Metal through SPIRV-Cross. Under `FloatMathsPolicy::Exact` the product's
-/// check of a profile whose check is fused (`TinyCheck::Fused`) scales an operand by its own
-/// multiply, `NoContraction` too, counted apart. The decoration matters where the addition may be
+/// whose SPIR-V reaches Metal through SPIRV-Cross. The decoration matters where the addition may be
 /// fused: Mesa splits a contractable `Fma` into a multiply and an add and folds the `-0.0` away,
 /// and the multiply may then be fused with the `reassoc contract` add of `mul_strict_add_fast`
 /// (NIR's `fuse` option on older Mesa, or a backend such as ACO) unless the multiply is
@@ -2731,7 +2637,6 @@ fn glsl_fma_results(words: &[u32]) -> Vec<u32> {
 /// one fused multiply-add, the multiply no operation of its own, 2^-24 on every profile.
 #[test]
 fn float_ops_without_contract_and_reassoc_are_no_contraction() {
-    use crate::lower::arith::denormal::{tiny_check, TinyCheck};
     let inputs = format!(
         "{}{}",
         of("a", 1.0 + 2f32.powi(-12)),
@@ -2781,19 +2686,6 @@ fn float_ops_without_contract_and_reassoc_are_no_contraction() {
             let (muls, decorated) = results_and_no_contraction(&words, crate::spv::Op::FMul);
             let (adds, _) = results_and_no_contraction(&words, crate::spv::Op::FAdd);
             let fmas = glsl_fma_results(&words);
-            // The product's check, where it is fused, scales an operand by its own multiply.
-            let scales = tiny_check_scales(&words);
-            let fused = tiny_check(&p) == Some(TinyCheck::Fused);
-            assert_eq!(
-                scales.len(),
-                usize::from(fused),
-                "{what}: the check's scaling"
-            );
-            assert!(
-                scales.iter().all(|s| decorated.contains(s)),
-                "{what}: the check's scaling NoContraction: {scales:?}"
-            );
-            let muls: Vec<u32> = muls.into_iter().filter(|m| !scales.contains(m)).collect();
             let add_rewritable = kk.name == "mul_strict_add_fast";
             // No unfused multiply here carries both flags: each is the profile's product with
             // `NoContraction`.
@@ -2892,16 +2784,11 @@ fn arithmetic_the_air_lets_a_compiler_rewrite_notes_fast_math_rewrites() {
 }
 
 /// Growth report: the same chain of 16 float operations on `float`, `half`, and `bfloat`. Each
-/// widened `half` operation adds its rounding; each `bfloat` operation adds its integer rounding.
-/// The narrow chains grow over the `float` chain without the check of a product at `2^-126`
-/// (native float maths, `FloatMathsPolicy::Native`); under exact float maths each of its eight
-/// products adds at most that check (`denormal::tiny_product_words`). The measured words are
-/// printed (`--nocapture`) and bounded so a growth regression fails.
+/// widened `half` operation adds its rounding; each `bfloat` operation adds its integer rounding,
+/// over the `float` chain. The measured words are printed (`--nocapture`) and bounded so a growth
+/// regression fails.
 #[test]
 fn narrow_float_module_growth_is_bounded() {
-    use crate::device::FloatMathsPolicy;
-    use crate::lower::arith::denormal::{tiny_product_words, TinyCheck};
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
     let chain = |ty: &str| -> String {
         let (enter, leave) = match ty {
             "float" => (
@@ -2937,15 +2824,6 @@ fn narrow_float_module_growth_is_bounded() {
     let Some(bitcode) = assemble("growth", &module(&ks)) else {
         return;
     };
-    let plain = DevicePolicy {
-        float_maths: FloatMathsPolicy::Native,
-        ..exact_maths()
-    };
-    let float = Form {
-        held: Held::Float(FloatFmt::F32),
-        lanes: 1,
-    };
-    let checks = 8 * tiny_product_words(float, TinyCheck::Bits) as usize;
     for stem in PROFILES {
         let words_on = |policy: DevicePolicy, kk: &Kernel| {
             let p = profile(stem, policy).expect("profile");
@@ -2955,25 +2833,14 @@ fn narrow_float_module_growth_is_bounded() {
             a.module.words.len()
         };
         let p = profile(stem, exact_maths()).expect("profile");
-        let checked = words_on(exact_maths(), &ks[0]);
-        let words = [
-            words_on(plain, &ks[0]),
-            words_on(exact_maths(), &ks[1]),
-            words_on(exact_maths(), &ks[2]),
-        ];
+        let words = ks.each_ref().map(|kk| words_on(exact_maths(), kk));
         eprintln!(
-            "half and bfloat growth on {stem}: float {} words ({checked} with its products' \
-             checks), half {} ({:+}), bfloat {} ({:+})",
+            "half and bfloat growth on {stem}: float {} words, half {} ({:+}), bfloat {} ({:+})",
             words[0],
             words[1],
             words[1] as i64 - words[0] as i64,
             words[2],
             words[2] as i64 - words[0] as i64
-        );
-        assert!(
-            words[0] <= checked && checked <= words[0] + checks,
-            "{stem}: float {} words, {checked} with its products' checks",
-            words[0]
         );
         // Half: through the device's measured quantize, per multiply and per narrowing
         // conversion a six-instruction rounding with the denormal arithmetic (at most 32 words),
@@ -3013,15 +2880,15 @@ fn narrow_float_module_growth_is_bounded() {
 ///
 /// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. The
 /// `fast` chain's seven multiplies whose one use is the next addition are fused into it: each pair
-/// is the device's `float` `Fma` rounded to `half` (`fma::Route::Native`), whose rounding carries
-/// the denormal arithmetic as a product's does, so the chain keeps the first addition's, the last
-/// multiply's, the conversion's, and each pair's roundings. On a profile whose driver computes a
-/// 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3) each pair is that `Fma` instead, inline, on
-/// its operands converted to 16 bits and its result widened, all exactly (four `OpFConvert`, the
-/// module's one 16-bit float type), so the chain keeps the other three roundings. On a profile
-/// whose driver's 16-bit `+ - *`, kept apart, is Metal's (moltenvk-m3), each `fadd` and `fmul` that
-/// rounds is that instruction, between two narrowings and a widening (three `OpFConvert`), and
-/// rounds nothing itself: the conversion's rounding alone is left to the module.
+/// is the device's `Fma` on the operands held in `float`, its result rounded to `half` with the
+/// denormal arithmetic a product's rounding carries, so the chain keeps the first addition's, the
+/// last multiply's, the conversion's, and the seven pairs' roundings. On a profile whose driver
+/// computes a 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3) each pair is that `Fma` instead,
+/// inline, on its operands converted to 16 bits and its result widened, all exactly (four
+/// `OpFConvert`, the module's one 16-bit float type), so the chain keeps the other three roundings.
+/// On a profile whose driver's 16-bit `+ - *`, kept apart, is Metal's (moltenvk-m3), each `fadd`
+/// and `fmul` that rounds is that instruction, between two narrowings and a widening (three
+/// `OpFConvert`), and rounds nothing itself: the conversion's rounding alone is left to the module.
 #[test]
 fn half_rounding_follows_the_operation() {
     let chain = |fast: bool| -> String {
@@ -3073,7 +2940,7 @@ fn half_rounding_follows_the_operation() {
                 );
             let (q, c, r) = match (kk.name == "fast_chain", f16) {
                 (true, true) => (3, 7 * 4, 2),
-                (true, false) => (10, 0, 9),
+                (true, false) => (3 + 7, 0, 2 + 7),
                 (false, _) => (17, 0, 9),
             };
             // With `shaderFloat16` each rounding is the device's conversion and its widening, with
@@ -3244,9 +3111,8 @@ fn no_rounding_requires_the_conversion_fact() {
 /// Only a `half` result that is a value of the format wherever it lies below the smallest normal
 /// half skips the denormal arithmetic. A square root and `fract`'s difference round through
 /// `OpQuantizeToF16` alone, and an integer converted to `half` rounds by integer arithmetic with
-/// neither; a transcendental,
-/// `ldexp`, a quotient, and the rounding of each fused sum (`fmuladd`'s, and `mix`'s two fused
-/// multiply-adds', each the device's `float` `Fma` rounded to `half`) keep one `RoundEven` each, since
+/// neither; a transcendental, `ldexp`, a quotient, and the one rounding of a fused sum (`fmuladd`
+/// and `mix`, the device's `Fma` and `FMix` in `float`) keep one `RoundEven` each, since
 /// their `f32` result below `2^-14` is off the `2^-24` grid (half `exp(-10)` is about `4.54e-5`).
 /// The counts pin which steps may take `round_exact_below_normal`. On a profile whose driver
 /// computes a 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3), a fused sum rounds nothing
@@ -3277,8 +3143,8 @@ fn only_an_exact_half_result_skips_the_denormal_rounding() {
         (
             "half_mix",
             "call half @air.mix.f16(half %h, half %g, half %u)",
-            2,
-            2,
+            1,
+            1,
         ),
         (
             "half_fmuladd",
@@ -3502,11 +3368,10 @@ fn float_ops_without_fast_flags_preserve_signed_zero_inf_nan() {
             let note = a.precision.contains(&PrecisionNote::DeviceSignedZeroInfNan);
             let mode = declares_signed_zero_inf_nan(&words, 32);
             if kk.name == "fast_mul" {
-                let checked = crate::lower::arith::denormal::checks_tiny_products(&p);
                 assert_eq!(
                     (mode, note),
-                    (checked && supported, checked && !supported),
-                    "{what}: fast needs preservation only for its product's check"
+                    (false, false),
+                    "{what}: fast needs no preservation"
                 );
             } else {
                 assert_eq!((mode, note), (supported, !supported), "{what}");
@@ -3521,18 +3386,11 @@ fn float_ops_without_fast_flags_preserve_signed_zero_inf_nan() {
     );
 }
 
-/// Under `FloatMathsPolicy::Exact` a fused multiply-add the translation computes by a routine (in
-/// `double` or in integers without `OpFmaKHR`, and a checked `OpFmaKHR`'s small results) answers
-/// Metal's zero of its sign through float instructions, so a `fast` entry that calls one declares
-/// `SignedZeroInfNanPreserve` at 32 bits, and at 64 for a routine in `double`, where the profile
-/// supports it, else notes `DeviceSignedZeroInfNan`: without the mode Vulkan lets a device answer a
-/// zero of either sign (Metal's `fma(+0, 100, +0)` is `+0`). A `half` one calls no routine, so its
-/// kernel never declares it. Nothing else in the kernels needs the mode: their operands are bits,
-/// their calls `fast`. Where the profile's functions are Metal's own (MoltenVK), and under the
-/// default policy, neither kernel declares it.
+/// A `fast` entry's fused multiply-add is the device's instruction on every profile (`OpFmaKHR`,
+/// the device's `Fma`, or a `half` one's 16-bit form), so no kernel declares
+/// `SignedZeroInfNanPreserve`, at 32 bits or 64: their operands are bits, their calls `fast`.
 #[test]
-fn fused_multiply_add_routines_keep_zero_signs() {
-    use crate::lower::arith::fma::{self, Route};
+fn fused_multiply_adds_keep_no_zero_signs() {
     use crate::spirv::testing::committed_profiles_with;
     let ks = [
         Kernel {
@@ -3571,51 +3429,9 @@ fn fused_multiply_add_routines_keep_zero_signs() {
     let Some(bitcode) = assemble("fma-zero-signs", &text) else {
         return;
     };
-    // The routes and widths some profile keeps zero signs at (by the mode or the note).
-    let mut kept = std::collections::BTreeSet::new();
-    for (stem, p) in committed_profiles_with(exact_maths()).expect("profiles") {
-        let exact = p.fields().float_functions == FloatFunctions::Device;
-        let r = fma::routes(&p);
-        let fc = p.fields().float_controls;
-        let supported = [
-            fc.f32.signed_zero_inf_nan_preserve,
-            fc.f64.signed_zero_inf_nan_preserve,
-        ];
-        for kk in &ks {
-            let what = format!("{} on {stem}", kk.name);
-            // The kernel's route, whether it calls a routine, and whether that one is in `double`.
-            let (route, routine) = if kk.float {
-                let routine = matches!(r.float, Route::Wide | Route::Soft) || r.tiny.is_some();
-                let double = r.float == Route::Wide || r.tiny == Some(Route::Wide);
-                (r.float, [routine, double])
-            } else {
-                (r.half, [false, false])
-            };
-            let wanted = routine.map(|w| w && exact);
-            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            for (i, width) in [32, 64].into_iter().enumerate() {
-                let mode = declares_signed_zero_inf_nan(&words, width);
-                assert_eq!(mode, wanted[i] && supported[i], "{what}: mode {width}");
-                if wanted[i] {
-                    kept.insert((route, width));
-                }
-            }
-            let unsupported = (0..2).any(|i| wanted[i] && !supported[i]);
-            assert_eq!(
-                a.precision.contains(&PrecisionNote::DeviceSignedZeroInfNan),
-                unsupported,
-                "{what}: note"
-            );
-        }
-    }
-    for want in [(Route::Wide, 32), (Route::Wide, 64), (Route::Soft, 32)] {
-        assert!(kept.contains(&want), "no profile keeps {want:?}: {kept:?}");
-    }
     for (stem, p) in committed_profiles_with(DevicePolicy::default()).expect("profiles") {
         for kk in &ks {
-            let what = format!("{} on {stem} by default", kk.name);
+            let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -3632,9 +3448,8 @@ fn fused_multiply_add_routines_keep_zero_signs() {
 /// A float to integer `air.convert` converts NaN to 0, telling it by `OpIsNan` only where the entry
 /// declares `SignedZeroInfNanPreserve` for `float`, and by its bits where it does not (a device may
 /// assume there that no operand is a NaN, in `OpIsNan` and `NClamp` alike): a `fast` entry has no
-/// `OpIsNan`. The NaN is a sum's: a product's check at `±2^-126` would keep zero signs under
-/// `FloatMathsPolicy::Exact`. (AIR has no `double` conversion; `math::convert`'s unit tests read a
-/// 64-bit container's NaN by its two words.)
+/// `OpIsNan`. The NaN is a sum's. (AIR has no `double` conversion; `math::convert`'s unit tests
+/// read a 64-bit container's NaN by its two words.)
 #[test]
 fn a_convert_tells_a_nan_by_its_bits_where_the_entry_may_assume_none() {
     let float = |name: &'static str, flags: &str| {
@@ -3692,198 +3507,16 @@ fn with_float_functions(stem: &str, metal: bool) -> DeviceProfile {
         .clone()
 }
 
-/// A precise `sinpi`, `cospi`, or `tanpi` call (and a `half` one) is Metal's own form, a routine
-/// the entry calls, with no `GLSL.std.450 Sin` or `Cos`, whatever the profile's typed fact says of
-/// the device's `float` functions (its driver's deviation `MetalFloatFunctions`): Metal's are none
-/// of the instructions SPIRV-Cross emits, so no device answers them. A fast call (`air.fast_sinpi`)
-/// is the routine too without the fact; with it, the exact reduction around the device's `Sin` and
-/// `Cos`, within Apple's fast bound (the orchestrator's ruling of 2026-10-07). On two profiles that
-/// differ only in the fact; the routines' values are within their few ulp on the interpreter (which
-/// leaves a device's `Sin` and `Cos` unmodelled).
+/// An `arcp` division is the device's `OpFDiv(x, y)` itself on every profile, which MoltenVK hands
+/// Metal's compiler as the AIR's own fast `x / y` (Metal's compiler does not treat `x * (1.0 / y)`
+/// the same way: case 24c263bb's `(a * 255) / a` was 255 on Metal and 254 as `x` times the
+/// device's `OpFDiv(1, y)`). Where the device's `float` division is Metal's (its driver's
+/// deviation `MetalFloatFunctions`) and Metal compiles the entry with fast math (it declares no
+/// `SignedZeroInfNanPreserve`), the quotient is Metal's own and records no note; elsewhere it
+/// records `DeviceArithmetic`. The interpreter's `OpFDiv` is correctly rounded: `RN(1e10 / 3)` is
+/// `0x4f46aea1`.
 #[test]
-fn pi_scaled_functions_call_metals_routines_but_a_fast_call_on_metals_device() {
-    let fast_inputs = |s: String| s.replace("fadd float", "fadd fast float");
-    let kernel = |name: &'static str, body: String| Kernel {
-        name,
-        body,
-        float: true,
-        want: None,
-        needs: &[],
-        note: None,
-    };
-    let x = of("x", 0.3);
-    let ks = [
-        kernel(
-            "pi_sinpi_precise_entry",
-            format!("{x}  %r = call float @air.sinpi.f32(float %x)\n"),
-        ),
-        kernel(
-            "pi_cospi_precise_entry",
-            format!("{x}  %r = call float @air.cospi.f32(float %x)\n"),
-        ),
-        kernel(
-            "pi_tanpi_precise_entry",
-            format!("{x}  %r = call float @air.tanpi.f32(float %x)\n"),
-        ),
-        kernel(
-            "pi_sinpi_fast_entry",
-            fast_inputs(format!(
-                "{x}  %r = call fast float @air.fast_sinpi.f32(float %x)\n"
-            )),
-        ),
-        kernel(
-            "pi_half_sinpi_fast_entry",
-            fast_inputs(format!(
-                "{x}  %h = fptrunc float %x to half\n  %s = call fast half @air.sinpi.f16(half %h)\n  %r = fpext half %s to float\n"
-            )),
-        ),
-    ];
-    // The `half` call's operand is 0.3 rounded to `half`, so its answer is within a `half` ulp
-    // (2^13 `float` ulps) of the `float` one.
-    let pi03 = std::f64::consts::PI * f64::from(0.3f32);
-    let exact = [
-        (pi03.sin(), 3.0),
-        (pi03.cos(), 3.0),
-        (pi03.tan(), 5.0),
-        (pi03.sin(), 3.0),
-        (pi03.sin(), 8192.0),
-    ];
-    let text = module(&ks).replace(
-        DECLS,
-        &format!(
-            "{DECLS}declare float @air.sinpi.f32(float)\ndeclare float @air.cospi.f32(float)\ndeclare float @air.tanpi.f32(float)\ndeclare float @air.fast_sinpi.f32(float)\ndeclare half @air.sinpi.f16(half)\n"
-        ),
-    );
-    let Some(bitcode) = assemble("pi_scaled", &text) else {
-        return;
-    };
-    // `GLSL.std.450 Sin` and `Cos` are instructions 13 and 14 of the set.
-    let sin_cos = |words: &[u32]| {
-        count_ops(words, |w| {
-            w[0] & 0xFFFF == crate::spv::Op::ExtInst as u32
-                && w.len() > 4
-                && (w[4] == 13 || w[4] == 14)
-        })
-    };
-    for metal in [true, false] {
-        let p = with_float_functions("moltenvk-m3", metal);
-        for (kk, (v, tolerance)) in ks.iter().zip(exact) {
-            let what = format!("{} with the fact {metal}", kk.name);
-            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let calls = count_op(&words, crate::spv::Op::FunctionCall);
-            if metal && kk.name == "pi_sinpi_fast_entry" {
-                assert_eq!(calls, 0, "{what}: calls a routine");
-                assert!(sin_cos(&words) >= 2, "{what}: no device Sin and Cos");
-                // The device's `Sin` and `Cos` are not the interpreter's to model.
-                continue;
-            }
-            assert!(calls >= 1, "{what}: does not call the routine");
-            assert_eq!(sin_cos(&words), 0, "{what}: a device Sin or Cos");
-            let got = f64::from(f32::from_bits(interpret(&bitcode, kk.name, &p)));
-            let ulp = f64::from(f32::EPSILON) * 2f64.powi(v.abs().log2().floor() as i32);
-            assert!(
-                (got - v).abs() <= tolerance * ulp,
-                "{what}: {got} against {v} ({} ulp)",
-                (got - v).abs() / ulp
-            );
-        }
-    }
-}
-
-/// The fast reciprocal that an `arcp` division, `air.fast_tanh`, and `air.fast_fmod` divide by is
-/// chosen by the profile's typed fact alone. Where the device's `float` functions and division are
-/// Metal's own (its driver's deviation `MetalFloatFunctions`), it is the device's `OpFDiv(1, y)`:
-/// Metal's fast reciprocal where Metal compiles the module with fast math, and `RN(1 / y)` where
-/// the module turns it off. Elsewhere, on a profile with `OpFmaKHR`, it is `RN(1 / y)` refined from
-/// that estimate by four more `OpFmaKHR`, counted outside the math library's routines of one
-/// operand (`fast::tanh`'s `exp2` is a routine without the fact, whose exact products are
-/// `OpFmaKHR` too). The test uses two `moltenvk-m3` profiles that differ only in the fact. The
-/// division's and `fmod`'s values are the interpreter's on both: at these operands the device's
-/// reciprocal and `RN(1 / y)` agree.
-#[test]
-fn fast_division_follows_the_metal_float_functions_fact() {
-    let kernel = |name: &'static str, body: String, want: Option<f32>| Kernel {
-        name,
-        body,
-        float: true,
-        want: want.map(f32::to_bits),
-        needs: &[],
-        note: None,
-    };
-    let (x, y) = (of("x", 1e10), of("y", 3.0));
-    let ks = [
-        kernel(
-            "fast_division_arcp",
-            format!("{x}{y}  %r = fdiv arcp float %x, %y\n"),
-            Some(1e10f32 * (1.0f32 / 3.0)),
-        ),
-        kernel(
-            "fast_division_tanh",
-            format!(
-                "{}  %r = call fast float @air.fast_tanh.f32(float %x)\n",
-                of("x", 0.5)
-            ),
-            None,
-        ),
-        kernel(
-            "fast_division_fmod",
-            format!("{x}{y}  %r = call fast float @air.fast_fmod.f32(float %x, float %y)\n"),
-            Some(-512.0),
-        ),
-    ];
-    let text = module(&ks).replace(
-        DECLS,
-        &format!(
-            "{DECLS}declare float @air.fast_tanh.f32(float)\ndeclare float @air.fast_fmod.f32(float, float)\n"
-        ),
-    );
-    let Some(bitcode) = assemble("fast-division-fact", &text) else {
-        return;
-    };
-    for kk in &ks {
-        let mut khr = [0usize; 2];
-        for (i, metal) in [true, false].into_iter().enumerate() {
-            let p = with_float_functions("moltenvk-m3", metal);
-            let what = format!("{} with the fact {metal}", kk.name);
-            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert!(
-                a.precision.contains(&PrecisionNote::DeviceArithmetic),
-                "{what}: {:?}",
-                a.precision
-            );
-            khr[i] = count_op(&without_math_routines(&words), crate::spv::Op::FmaKHR);
-            // `fast::tanh`'s `exp2` is the device's, which the interpreter leaves unmodelled.
-            if kk.want.is_some() {
-                let got = interpret(&bitcode, kk.name, &p);
-                assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
-            }
-        }
-        // The refinement's four `OpFmaKHR`, and nothing else, tell the two apart.
-        assert_eq!(
-            khr[1],
-            khr[0] + 4,
-            "{}: OpFmaKHR with the fact and without",
-            kk.name
-        );
-    }
-}
-
-/// Where the device's `float` division is Metal's (its driver's deviation `MetalFloatFunctions`)
-/// and Metal compiles the entry with fast math (it declares no `SignedZeroInfNanPreserve`), an
-/// `arcp` division is the device's `OpFDiv(x, y)` itself, which MoltenVK hands Metal's compiler as
-/// the AIR's own fast `x / y`. Metal's compiler does not treat `x * (1.0 / y)` the same way: case
-/// 24c263bb's `(a * 255) / a` was 255 on Metal and 254 as `x` times the device's `OpFDiv(1, y)`. In
-/// an entry that declares the mode, and on a profile without the fact, the
-/// quotient stays `x` times the profile's reciprocal, a call of the fast division's routine. The
-/// interpreter's `OpFDiv` is correctly rounded, so `1e10 / 3` tells the forms apart: `RN(1e10 / 3)`
-/// is `0x4f46aea1` and `1e10 · RN(1 / 3)` is `0x4f46aea2`. The device's quotient, Metal's own,
-/// records no note; the routine's records `DeviceArithmetic`.
-#[test]
-fn a_fast_division_is_the_devices_in_a_fast_math_entry_where_division_is_metals() {
+fn a_fast_division_is_the_device_s_quotient() {
     // The fast-math entries' opaque inputs are `fast` too, so nothing there needs preservation.
     let fast_inputs = |s: String| s.replace("fadd float", "fadd fast float");
     let (x, y) = (of("x", 1e10), of("y", 3.0));
@@ -3929,7 +3562,7 @@ fn a_fast_division_is_the_devices_in_a_fast_math_entry_where_division_is_metals(
                 !fast_math,
                 "{what}: SignedZeroInfNanPreserve"
             );
-            // Metal's own quotient in a fast entry records no note; the routine's does.
+            // Metal's own quotient in a fast entry records no note; the device's elsewhere does.
             let device = metal && fast_math;
             assert_eq!(
                 a.precision.contains(&PrecisionNote::DeviceArithmetic),
@@ -3937,339 +3570,18 @@ fn a_fast_division_is_the_devices_in_a_fast_math_entry_where_division_is_metals(
                 "{what}: {:?}",
                 a.precision
             );
-            // The device's form is the entry's one `OpFDiv`, and the module defines no routine;
-            // the other is one call of the routine, which holds the reciprocal's `OpFDiv`.
+            // The entry's one `OpFDiv`, and the module defines no routine.
             let form = (
                 count_op(&words, crate::spv::Op::Function),
                 count_op(&words, crate::spv::Op::FunctionCall),
                 count_op(&words, crate::spv::Op::FDiv),
             );
-            assert_eq!(form, if device { (1, 0, 1) } else { (2, 1, 1) }, "{what}");
+            assert_eq!(form, (1, 0, 1), "{what}");
             let got = interpret(&bitcode, kk.name, &p);
-            let want: u32 = if device { 0x4F46_AEA1 } else { 0x4F46_AEA2 };
-            assert_eq!(got, want, "{what}: {got:#x}");
+            assert_eq!(got, 0x4F46_AEA1, "{what}: {got:#x}");
         }
     }
 }
-
-/// On a profile whose `float` functions are Metal's own (`moltenvk-m3` states it), a call in the
-/// math mode Metal compiles the entry in is the device's instruction, and a call in the other mode
-/// (`precise::atan` in a fast-math entry, `fast::atan` or `fast::acos` in an entry that keeps NaNs)
-/// calls the translation's routine; `atan2` is the device's in either, since MoltenVK's is always
-/// `precise::atan2`. The same description without the fact takes the routine for every call, as
-/// `lavapipe` does: the fact flips the emission. `exp10`, which no instruction is, is Metal's
-/// composition of the device's `exp2` with the fact and its routine without, and `fast::rsqrt`, the
-/// device's everywhere, is the same word for word with and without the fact. Precise `sin`, `sqrt`,
-/// `rsqrt`, and `fmod`, whose fast calls are their own functions, are the device's only in an entry
-/// that keeps NaNs; `fast::rsqrt` is the device's everywhere; `fast::sin` and `fast::cos` are the
-/// device's in either mode where its functions are Metal's (and elsewhere call the routine that
-/// answers past `π`), and so is `fast::tan`'s formula of them in an entry that keeps NaNs, whose
-/// quotient calls the fast division's routine on every profile. A `half` `atan` calls its own
-/// form's routine on every profile, and so does a precise `sinpi`
-/// (`pi_scaled_functions_call_metals_routines_but_a_fast_call_on_metals_device`). A routine's value
-/// is within an ulp of the exact one on the interpreter (a correctly rounded root within half of
-/// one, `fmod` exact, `fast::atan` Metal's own word), and the plan's estimate bounds the module's
-/// words.
-#[test]
-fn math_library_routines_follow_the_device_fact_and_the_entry_mode() {
-    let fast_inputs = |s: String| s.replace("fadd float", "fadd fast float");
-    let kernel = |name: &'static str, body: String| Kernel {
-        name,
-        body,
-        float: true,
-        want: None,
-        needs: &[],
-        note: None,
-    };
-    let x = of("x", 0.5);
-    let yx = format!("{}{}", of("y", 0.5), of("x", 0.75));
-    let ks = [
-        kernel(
-            "libm_atan_precise_entry",
-            format!("{x}  %r = call float @air.atan.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_fast_atan_fast_entry",
-            fast_inputs(format!(
-                "{x}  %r = call fast float @air.fast_atan.f32(float %x)\n"
-            )),
-        ),
-        kernel(
-            "libm_fast_atan_precise_entry",
-            format!("{x}  %r = call fast float @air.fast_atan.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_atan_fast_entry",
-            fast_inputs(format!(
-                "{x}  %r = call fast float @air.atan.f32(float %x)\n"
-            )),
-        ),
-        kernel(
-            "libm_asin_precise_entry",
-            format!("{x}  %r = call float @air.asin.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_fast_acos_precise_entry",
-            format!("{x}  %r = call fast float @air.fast_acos.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_atan2_fast_entry",
-            fast_inputs(format!(
-                "{yx}  %r = call fast float @air.atan2.f32(float %y, float %x)\n"
-            )),
-        ),
-        kernel(
-            "libm_exp10_precise_entry",
-            format!("{x}  %r = call float @air.exp10.f32(float %x)\n"),
-        ),
-        // A `half` function is precise in both modes: the device's only in an entry that keeps
-        // NaNs (the widenings carry no flags and need nothing preserved).
-        kernel(
-            "libm_half_atan_fast_entry",
-            fast_inputs(format!(
-                "{x}  %h = fptrunc float %x to half\n  %s = call fast half @air.atan.f16(half %h)\n  %r = fpext half %s to float\n"
-            )),
-        ),
-        kernel(
-            "libm_half_atan_precise_entry",
-            format!(
-                "{x}  %h = fptrunc float %x to half\n  %s = call half @air.atan.f16(half %h)\n  %r = fpext half %s to float\n"
-            ),
-        ),
-        kernel(
-            "libm_sin_precise_entry",
-            format!("{x}  %r = call float @air.sin.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_sin_fast_entry",
-            fast_inputs(format!("{x}  %r = call fast float @air.sin.f32(float %x)\n")),
-        ),
-        kernel(
-            "libm_sincos_precise_entry",
-            format!(
-                "  %c = alloca float, align 4\n{x}  %s = call float @air.sincos.f32(float %x, ptr %c)\n  %cv = load float, ptr %c, align 4\n  %r = fadd float %s, %cv\n"
-            ),
-        ),
-        // `fast::sincos`: Metal's fast functions, the device's where its functions are Metal's in
-        // either mode, and elsewhere the device's inside `[-π, π]` and the routine past it.
-        kernel(
-            "libm_fast_sincos_fast_entry",
-            fast_inputs(format!(
-                "  %c = alloca float, align 4\n{x}  %s = call fast float @air.fast_sincos.f32(float %x, ptr %c)\n  %cv = load float, ptr %c, align 4\n  %r = fadd fast float %s, %cv\n"
-            )),
-        ),
-        // `fast::tan`, not the precise routine: Apple's formula of the fast functions, or the
-        // device's `Tan` where it is Metal's fast one.
-        kernel(
-            "libm_fast_tan_fast_entry",
-            fast_inputs(format!(
-                "{x}  %r = call fast float @air.fast_tan.f32(float %x)\n"
-            )),
-        ),
-        kernel(
-            "libm_sinpi_precise_entry",
-            format!(
-                "{}  %r = call float @air.sinpi.f32(float %x)\n",
-                of("x", 0.3)
-            ),
-        ),
-        kernel(
-            "libm_sqrt_precise_entry",
-            format!(
-                "{}  %r = call float @air.sqrt.f32(float %x)\n",
-                of("x", 2.0)
-            ),
-        ),
-        kernel(
-            "libm_sqrt_fast_entry",
-            fast_inputs(format!(
-                "{}  %r = call fast float @air.sqrt.f32(float %x)\n",
-                of("x", 2.0)
-            )),
-        ),
-        kernel(
-            "libm_rsqrt_fast_entry",
-            fast_inputs(format!(
-                "{}  %r = call fast float @air.rsqrt.f32(float %x)\n",
-                of("x", 2.0)
-            )),
-        ),
-        // `fast::rsqrt`: Metal's fast function, the device's within its bound.
-        kernel(
-            "libm_fast_rsqrt_fast_entry",
-            fast_inputs(format!(
-                "{}  %r = call fast float @air.fast_rsqrt.f32(float %x)\n",
-                of("x", 2.0)
-            )),
-        ),
-        kernel(
-            "libm_fast_sin_precise_entry",
-            format!("{x}  %r = call fast float @air.fast_sin.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_fast_sin_past_pi_fast_entry",
-            fast_inputs(format!(
-                "{}  %r = call fast float @air.fast_sin.f32(float %x)\n",
-                of("x", 4.0)
-            )),
-        ),
-        kernel(
-            "libm_fast_tan_precise_entry",
-            format!("{x}  %r = call fast float @air.fast_tan.f32(float %x)\n"),
-        ),
-        kernel(
-            "libm_fmod_fast_entry",
-            fast_inputs(format!(
-                "{}{}  %r = call fast float @air.fmod.f32(float %x, float %y)\n",
-                of("x", 7.5),
-                of("y", 2.0)
-            )),
-        ),
-    ];
-    // Per kernel: the exact value (`None`: not measured here), its tolerance in `float` ulps (a
-    // `half` ulp is 2^13 of them), and its routine (`Mode(m)`: a device function, whose routine
-    // `moltenvk-m3` calls when `m`, `sinpi`'s on every profile; `Never`: no routine, the same
-    // module on both sides of the fact; `Divides`: `fast::tan`'s formula in an entry that keeps
-    // NaNs, which calls the fast division's routine on every profile, and the fast sine's and
-    // cosine's routines only without the fact).
-    #[derive(Clone, Copy)]
-    enum Routine {
-        Mode(bool),
-        Never,
-        Divides,
-    }
-    let sin_pi_03 = (std::f64::consts::PI * f64::from(0.3f32)).sin();
-    // Metal's fast `atan` of 0.5, its own word: 1.83 ulp above the exact value.
-    let fast_atan_half = f64::from(f32::from_bits(0x3EED_633A));
-    let expect: [(Option<f64>, f64, Routine); 24] = [
-        (Some(0.5f64.atan()), 1.0, Routine::Mode(false)),
-        (Some(fast_atan_half), 0.0, Routine::Mode(false)),
-        (Some(fast_atan_half), 0.0, Routine::Mode(true)),
-        (Some(0.5f64.atan()), 1.0, Routine::Mode(true)),
-        (Some(0.5f64.asin()), 1.0, Routine::Mode(false)),
-        (Some(0.5f64.acos()), 1.0, Routine::Mode(true)),
-        // Metal's precise `atan2` is its own form, 1.31 ulp from the exact value here.
-        (Some(0.5f64.atan2(0.75)), 2.0, Routine::Mode(false)),
-        (Some(10f64.powf(0.5)), 1.0, Routine::Mode(false)),
-        // A `half` `atan` is Metal's own `half` form's routine on every profile.
-        (Some(0.5f64.atan()), 4096.0, Routine::Mode(true)),
-        (Some(0.5f64.atan()), 4096.0, Routine::Mode(true)),
-        (Some(0.5f64.sin()), 1.0, Routine::Mode(false)),
-        (Some(0.5f64.sin()), 1.0, Routine::Mode(true)),
-        (Some(0.5f64.sin() + 0.5f64.cos()), 2.0, Routine::Mode(false)),
-        (None, 0.0, Routine::Mode(false)),
-        (None, 0.0, Routine::Mode(false)),
-        // Metal's own form's routine on every profile.
-        (Some(sin_pi_03), 3.0, Routine::Mode(true)),
-        (Some(2f64.sqrt()), 0.5, Routine::Mode(false)),
-        (Some(2f64.sqrt()), 0.5, Routine::Mode(true)),
-        (Some(1.0 / 2f64.sqrt()), 0.5, Routine::Mode(true)),
-        (None, 0.0, Routine::Never),
-        (None, 0.0, Routine::Mode(false)),
-        (Some(4f64.sin()), 1.0, Routine::Mode(false)),
-        (None, 0.0, Routine::Divides),
-        (Some(1.5), 0.0, Routine::Mode(true)),
-    ];
-    let text = module(&ks).replace(
-        DECLS,
-        &format!(
-            "{DECLS}declare float @air.atan.f32(float)\ndeclare float @air.fast_atan.f32(float)\ndeclare float @air.asin.f32(float)\ndeclare float @air.fast_acos.f32(float)\ndeclare float @air.atan2.f32(float, float)\ndeclare float @air.exp10.f32(float)\ndeclare half @air.atan.f16(half)\ndeclare float @air.fast_sincos.f32(float, ptr)\ndeclare float @air.fast_tan.f32(float)\ndeclare float @air.fast_sin.f32(float)\ndeclare float @air.sinpi.f32(float)\ndeclare float @air.sqrt.f32(float)\ndeclare float @air.rsqrt.f32(float)\ndeclare float @air.fast_rsqrt.f32(float)\ndeclare float @air.fmod.f32(float, float)\n"
-        ),
-    );
-    let Some(bitcode) = assemble("libm", &text) else {
-        return;
-    };
-    let stated = profile("moltenvk-m3", exact_maths()).expect("profile");
-    assert_eq!(
-        stated.fields().float_functions,
-        with_float_functions("moltenvk-m3", true)
-            .fields()
-            .float_functions
-    );
-    let profiles = [
-        ("moltenvk-m3", stated),
-        (
-            "moltenvk-m3 without the fact",
-            with_float_functions("moltenvk-m3", false),
-        ),
-        (
-            "lavapipe",
-            profile("lavapipe", exact_maths()).expect("profile"),
-        ),
-    ];
-    let mut composition: Vec<(&str, usize, Vec<u32>)> = Vec::new();
-    for (column, (label, p)) in profiles.iter().enumerate() {
-        for (kk, (exact, tolerance, routine)) in ks.iter().zip(expect) {
-            let what = format!("{} on {label}", kk.name);
-            let a = compile(&bitcode, kk.name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let plan = plan_bitcode(
-                &bitcode,
-                EntryRef::Name(kk.name),
-                &FunctionConstantValues::defaults(),
-                p,
-                &LowerInputs::new(),
-                &mut meter(),
-            )
-            .unwrap_or_else(|e| panic!("{what}: plan: {e}"));
-            assert!(
-                plan.estimate.words >= a.module.words.len() as u64,
-                "{what}: estimate {} < emitted {}",
-                plan.estimate.words,
-                a.module.words.len()
-            );
-            // The fact is the device's: with it, Metal's mode rule; without it, every routine.
-            let metal = column == 0;
-            let calls = match routine {
-                Routine::Mode(on_metal) => !metal || on_metal,
-                Routine::Divides => true,
-                Routine::Never => false,
-            };
-            assert_eq!(
-                count_op(&words, crate::spv::Op::FunctionCall) > 0,
-                calls,
-                "{what}: calls a routine"
-            );
-            if matches!(routine, Routine::Divides) {
-                // The division's call; and the sine's and cosine's where they are routines, with
-                // the fused step's from inside them where the profile has no `OpFmaKHR`.
-                let n = count_op(&words, crate::spv::Op::FunctionCall);
-                if metal {
-                    assert_eq!(n, 1, "{what}: calls");
-                } else {
-                    assert!(n >= 3, "{what}: {n} calls");
-                }
-            }
-            if matches!(routine, Routine::Never) {
-                composition.push((kk.name, column, a.module.words.clone()));
-            }
-            match exact {
-                Some(v) if calls => {
-                    let got = f64::from(f32::from_bits(interpret(&bitcode, kk.name, p)));
-                    let ulp = f64::from(f32::EPSILON) * 2f64.powi(v.abs().log2().floor() as i32);
-                    assert!(
-                        (got - v).abs() <= tolerance * ulp,
-                        "{what}: {got} against {v} ({} ulp)",
-                        (got - v).abs() / ulp
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-    // A composition's module is the same on both sides of the fact.
-    for (name, column, words) in &composition {
-        if *column == 0 {
-            let without = composition
-                .iter()
-                .find(|(n, c, _)| n == name && *c == 1)
-                .expect("the module without the fact");
-            assert!(words == &without.2, "{name} changes with the fact");
-        }
-    }
-}
-
-// ---- Metal's NaN ----
 
 /// `%x` = an opaque `float` with bits `b` (any pattern, NaNs included): `llvm.umin` of a constant
 /// and `-1`, bitcast.
@@ -4427,17 +3739,20 @@ fn the_canonical_nan_follows_the_device_fact() {
 
 // ---- Metal's float denormals ----
 
-/// Metal reads an `f32` denormal operand of `+ - *`, a comparison, `sqrt` and `ldexp` as the zero
-/// of its sign and flushes a denormal result, and `floor` and `ceil` read their operand so. Where
-/// the profile takes its driver's measured deviation `MetalFloatDenormals` the device's own reading
-/// is left to it and the module requires the fact; elsewhere the module flushes them itself, so the
-/// interpreter, which keeps denormals as lavapipe does, gives Metal's answer. `floor` and `ceil`
-/// are flushed whatever the fact: no device measured reads their operand as Metal does; and `ldexp`
-/// is Metal's whatever the fact, computed on the operand's bits for every exponent. Flipping the
-/// fact flips that and nothing else; neither side notes `DeviceDenormals`. The operands are bits
-/// (`llvm.umin` of constants), so each kernel's float operation is its only one.
+/// Metal reads an `f32` denormal operand of `+ - *`, a comparison, `sqrt`, `floor`, `ceil` and
+/// `ldexp` as the zero of its sign and flushes a denormal result. The module leaves the reading to
+/// the device: where the profile takes its driver's measured deviation `MetalFloatDenormals` it
+/// requires the fact for `+ - *`, the comparison and `sqrt`, which then read them as Metal does;
+/// elsewhere they are the device's, noted `DeviceDenormals` (`sqrt`, the device's maths function,
+/// off Metal's own functions notes them beside its precision on either). `floor` and `ceil` are
+/// the device's
+/// whatever the fact, noted: no device measured reads their operand as Metal does. `ldexp` is
+/// Metal's whatever the fact, computed on the operand's bits for every exponent. Flipping the fact
+/// changes the requirement and the note, never the module. The interpreter keeps denormals as
+/// lavapipe does. The operands are bits (`llvm.umin` of constants), so each kernel's float
+/// operation is its only one.
 #[test]
-fn float_denormals_follow_the_device_fact() {
+fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
     // The kernel's float `%r` from `body`, Metal's word, and the word of a device that keeps
     // denormals (the interpreter, where the module leaves them to the device).
     let float = |name: &'static str, body: String, metal: u32| Kernel {
@@ -4507,7 +3822,7 @@ fn float_denormals_follow_the_device_fact() {
                 ),
                 0x8000_0000,
             ),
-            0x8000_0000,
+            (-1.0f32).to_bits(),
         ),
         (
             float(
@@ -4515,7 +3830,7 @@ fn float_denormals_follow_the_device_fact() {
                 format!("{}  %r = call float @air.ceil.f32(float %x)\n", ob("x", 1)),
                 0,
             ),
-            0,
+            1.0f32.to_bits(),
         ),
         (
             float(
@@ -4571,28 +3886,30 @@ fn float_denormals_follow_the_device_fact() {
                 let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let (_, words) =
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                let own = matches!(
-                    kk.name,
-                    "den_floor" | "den_ceil" | "den_ldexp" | "den_ldexp_tiny"
-                );
-                let left = fact && !own;
+                let bits = matches!(kk.name, "den_ldexp" | "den_ldexp_tiny");
+                let never = matches!(kk.name, "den_floor" | "den_ceil");
+                // The device's `Sqrt`, a maths function off Metal's own functions, records its
+                // denormals with its precision.
+                let function = kk.name == "den_sqrt"
+                    && p.fields().float_functions != crate::device::profile::FloatFunctions::Metal;
                 assert_eq!(
                     a.requirements
                         .properties
                         .contains(&crate::device::requirements::VkProperty::MetalFloatDenormals),
-                    left,
+                    fact && !bits && !never,
                     "{what}"
                 );
-                assert!(
-                    !a.precision.contains(&PrecisionNote::DeviceDenormals),
+                assert_eq!(
+                    a.precision.contains(&PrecisionNote::DeviceDenormals),
+                    never || function || (!fact && !bits),
                     "{what}: {:?}",
                     a.precision
                 );
                 let got = interpret(&bitcode, kk.name, &p);
-                let want = if left {
-                    *device
-                } else {
+                let want = if bits {
                     kk.want.expect("Metal's word")
+                } else {
+                    *device
                 };
                 assert_eq!(got, want, "{what}: {got:#x} != {want:#x}");
                 per.push(words);
@@ -4600,13 +3917,8 @@ fn float_denormals_follow_the_device_fact() {
             emitted.push(per);
         }
         for (i, kk) in ks.iter().enumerate() {
-            let own = matches!(
-                kk.name,
-                "den_floor" | "den_ceil" | "den_ldexp" | "den_ldexp_tiny"
-            );
             assert_eq!(
-                emitted[0][i] == emitted[1][i],
-                own,
+                emitted[0][i], emitted[1][i],
                 "{} on {stem}: the module with and without the fact",
                 kk.name
             );
@@ -4627,10 +3939,8 @@ fn float_denormals_follow_the_device_fact() {
 /// `sincos` is its `sin` and `cos` word for word (cases 7b283404 and f6524207, every pair): precise
 /// `sin` and `cos` without fast-math flags answer the canonical NaN, so each result selects it
 /// where the device fact does not leave it to the device, and the call notes no
-/// `DeviceNanEncoding`. The cosine is stored, so it is selected even where the sine is not read. On
-/// `lavapipe`, whose sine and cosine are the translation's routines, the interpreter runs both
-/// results: each is `0x7FC00000` for an operand NaN with a payload and the sign bit, which the
-/// routines alone pass on (NVIDIA answered `0x7FFFFFFF`).
+/// `DeviceNanEncoding`. The cosine is stored, so it is selected even where the sine is not read.
+/// (The interpreter does not model `Sin`; the shape is the module's.)
 #[test]
 fn sincos_answers_the_nan_of_sin_and_cos() {
     let kernel = |name: &'static str, read: &str| {
@@ -4673,10 +3983,6 @@ fn sincos_answers_the_nan_of_sin_and_cos() {
                 );
                 let (is_nan, bits) = nan_tests(&words);
                 tests.push(is_nan + bits);
-                if stem == "lavapipe" && !fact {
-                    let got = interpret(&bitcode, kk.name, &p);
-                    assert_eq!(got, 0x7FC0_0000, "{what}: {got:#x}");
-                }
             }
             assert_eq!(tests[1], tests[0] + selects, "{} on {stem}", kk.name);
         }
@@ -4685,9 +3991,7 @@ fn sincos_answers_the_nan_of_sin_and_cos() {
 
 /// A result whose every use drops its NaN's bits (a float comparison, or arithmetic that answers
 /// the canonical NaN itself) needs no select, so a chain of `float` arithmetic tests once, at its
-/// end, and a result only compared tests never. The chain has no division: the precise division
-/// routine answers the canonical NaN through bit comparisons of its own, which the count would read
-/// as the model's tests.
+/// end, and a result only compared tests never.
 #[test]
 fn a_nan_is_selected_only_where_its_bits_are_observed() {
     let xyz = format!(
@@ -5430,13 +4734,16 @@ fn half_fmod_answers_metals_zero_remainder_on_every_profile() {
 }
 
 /// Class I: Metal's `mix(x, y, t)` on `float` and `half` is `fma(t, y, fma(-t, x, x))`, with and
-/// without fast-math flags, on every profile: no `FMix` is emitted, and the interpreter answers
-/// Metal's recorded words (`nan_functions`: `mix(inf, 1, 0)` is the canonical NaN, `mix(-0, -0, 0)`
-/// is `+0`; `nan_half`: `mix(-0.3, 0.7, 0.2)` is `0xAE68`, where the blend gives `0xAE66`). The
-/// driver's deviation `MetalCanonicalNans` is not taken, so a device that leaves the NaN to
-/// `OpFmaKHR` (MoltenVK's, whose arithmetic answers Metal's) shows the select here too.
+/// without fast-math flags. On a profile whose `float` functions are Metal's (moltenvk-m3), and on
+/// `half` where its fused multiply-add is the measured 16-bit one, the module keeps that form: no
+/// `FMix` is emitted, and the interpreter answers Metal's recorded words (`nan_functions`:
+/// `mix(inf, 1, 0)` is the canonical NaN, `mix(-0, -0, 0)` is `+0`; `nan_half`:
+/// `mix(-0.3, 0.7, 0.2)` is `0xAE68`, where the blend gives `0xAE66`). The driver's deviation
+/// `MetalCanonicalNans` is not taken, so a device that leaves the NaN to `OpFmaKHR` (MoltenVK's,
+/// whose arithmetic answers Metal's) shows the select here too. Every other profile takes the
+/// device's `FMix`, noted `NativeMix`.
 #[test]
-fn mix_is_metals_fused_form_on_every_profile() {
+fn mix_is_metals_fused_form_on_moltenvk_and_the_devices_fmix_elsewhere() {
     let three = |a: u32, b: u32, c: u32| format!("{}{}{}", ob("x", a), ob("y", b), ob("z", c));
     let halves = |a: u16, b: u16, c: u16| format!("{}{}{}", oh("hx", a), oh("hy", b), oh("hz", c));
     let ks = [
@@ -5498,11 +4805,22 @@ fn mix_is_metals_fused_form_on_every_profile() {
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
         let p = profile_with_canonical_nans(stem, false);
+        let metal = p.fields().float_functions == FloatFunctions::Metal;
+        let f16 = crate::lower::arith::fma::half_route(&p) == crate::lower::arith::fma::Route::F16;
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let chain = metal || (kk.name.starts_with("half_") && f16);
+            if !chain {
+                assert!(
+                    blend(&words) > 0 && a.precision.contains(&PrecisionNote::NativeMix),
+                    "{what}: FMix, {:?}",
+                    a.precision
+                );
+                continue;
+            }
             assert_eq!(blend(&words), 0, "{what}");
             let got = interpret(&bitcode, kk.name, &p);
             assert_eq!(Some(got), kk.want, "{what}: {got:#x}");

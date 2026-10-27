@@ -2018,18 +2018,16 @@ degradations! {
         VisibilityCountPerColor = "visibility-count-per-color", Precision,
             "the result is Metal's count multiplied by the colors the draw writes; a `Boolean` \
              result is Metal's";
-        /// A device whose policy takes native device maths (`FloatMathsPolicy::Native`, the
-        /// default) where its float functions are not Metal's own (not MoltenVK,
+        /// A device whose float functions are not Metal's own (not MoltenVK,
         /// `DriverDeviation::MetalFloatFunctions`): Metal flushes a `float` product or fused
         /// multiply-add whose exact value lies below `2^-126` to the zero of its sign, deciding
         /// tininess before rounding, and the device rounds before it decides (measured on RADV,
         /// ANV, NVIDIA and lavapipe, whether they flush denormals or keep them), so the device's
         /// multiply and fused multiply-add answer `2^-126` there (`device/float_tininess.rs`).
-        /// Announced once, as the device is made; the payload names the device and its policy.
+        /// Announced once, as the device is made; the payload names the device.
         FloatTininessAfterRounding = "float-tininess-after-rounding", Precision,
             "a `float` product or fused multiply-add whose exact value lies within half a unit \
-             below `2^-126` answers `2^-126` of its sign where Metal answers the zero of its sign; \
-             `FloatMathsPolicy::Exact` computes Metal's";
+             below `2^-126` answers `2^-126` of its sign where Metal answers the zero of its sign";
         /// An entry of the device's shader cache directory was not written: the directory, a
         /// temporary file in it or the rename over the entry failed, on the device's cache thread
         /// or on the thread that handed the entry over past the queue's bound
@@ -2113,29 +2111,23 @@ degradations! {
         /// selection, anisotropy, cube maps, 3D textures, gathers, comparisons and offsets are
         /// not measured.
         DeviceSampling = "device-sampling";
-        /// Class: native device maths. The device's `GLSL.std.450` instruction answers a `float`
-        /// or `half` math-library call where Metal's answer would be computed by a routine
-        /// (`FloatMathsPolicy::Native`, the default on a device whose functions are not Metal's
-        /// own; `FloatMathsPolicy::Exact` keeps Metal's), and the device's `Sqrt` answers
-        /// `fast::sqrt` where Metal's `x · rsqrt(x)` would be computed
-        /// (`RoundingOrderPolicy::Native`, the default). Recorded bound: Vulkan's precision table
-        /// for the instruction: `Exp2` and `Exp` 3 + 2·|x| ulp; `Log2` and `Log` 3 ulp outside
-        /// `[0.5, 2]`, `2^-21` absolute inside; `Pow` from `Exp2(y · Log2(x))`; `Sqrt` from `1 /
-        /// InverseSqrt`; `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in `[-π, π]`; `Tan`
-        /// from `Sin / Cos`; `Asin`, `Acos`, `Atan` and `Atan2` 4096 ulp.
+        /// Class: native device maths. The device's `GLSL.std.450` instruction answers a `float` or
+        /// `half` math-library call that is not Metal's own function on the device, and the
+        /// device's `Sqrt` answers `fast::sqrt`, Metal's `x · rsqrt(x)`. Recorded bound: Vulkan's
+        /// precision table for the instruction: `Exp2` and `Exp` 3 + 2·|x| ulp; `Log2` and `Log` 3
+        /// ulp outside `[0.5, 2]`, `2^-21` absolute inside; `Pow` from `Exp2(y · Log2(x))`; `Sqrt`
+        /// from `1 / InverseSqrt`; `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in
+        /// `[-π, π]`; `Tan` from `Sin / Cos`; `Asin`, `Acos`, `Atan` and `Atan2` 4096 ulp.
         NativeTranscendentals = "native-transcendentals";
         /// Class: native device maths. The device's `OpFDiv` answers a precise or fast `float` or
-        /// `half` division where Metal's correctly rounded quotient or `x · RN(1 / y)` would be
-        /// computed (`FloatMathsPolicy::Native`, the default; `Exact` keeps Metal's). Recorded
-        /// bound: 2.5 ulp of the quotient (a precise division's operands past a divisor of
-        /// `2^126` scaled into Vulkan's range exactly); a `half` quotient within one unit in its
-        /// last place.
+        /// `half` division, where Metal's is its correctly rounded quotient or its `x` times its
+        /// fast reciprocal. Recorded bound: 2.5 ulp of the quotient (a precise division's operands
+        /// past a divisor of `2^126` scaled into Vulkan's range exactly); a `half` quotient within
+        /// one unit in its last place.
         NativeDivision = "native-division";
         /// Class: native device maths. The device's `GLSL.std.450 Fma` answers a `half` fused
-        /// multiply-add on a device whose 16-bit `Fma` is not measured to be Metal's and that has
-        /// no 16-bit `OpFmaKHR` under the 16-bit float controls, on every policy, or a `float` one
-        /// on a device without `OpFmaKHR`, where the correctly rounded routine would
-        /// (`FloatMathsPolicy::Native`, the default; `Exact` keeps Metal's). Recorded bound: a `half` result within one unit in its last place of Metal's; a
+        /// multiply-add, or a `float` one on a device without `OpFmaKHR`, where Metal's rounds
+        /// once. Recorded bound: a `half` result within one unit in its last place of Metal's; a
         /// `float` one within half a unit in the last place of the product plus half a unit in
         /// the last place of the result.
         NativeFma = "native-fma";
@@ -2182,19 +2174,17 @@ degradations! {
         /// second), and an `f32` denormal beside a zero or another denormal compared by its value
         /// where the device keeps denormals (Metal compares it as a zero and answers the second).
         NativeMinMax = "native-min-max";
-        /// Class: native device maths. The device's `OpDot` answers Metal's `dot` on `float`, or
-        /// on `half` where its fused multiply-add is not the measured 16-bit one (summed in
-        /// `float`, rounded once to `half`), where Metal's fused chain of its products would be
-        /// computed (`RoundingOrderPolicy::Native`, the default; `Exact` keeps Metal's). Recorded
+        /// Class: native device maths. The device's `OpDot` answers Metal's `dot` on `float`, or on
+        /// `half` where its fused multiply-add is not the measured 16-bit one (summed in `float`,
+        /// rounded once to `half`), where Metal's is the fused chain of its products. Recorded
         /// bound: a `float` `dot` of `n` lanes within `(3n - 1) * 2^-24 * sum |a_i * b_i|` of
         /// Metal's chain, plus `n * 2^-126` where a product is an `f32` denormal the device keeps;
         /// a `half` one within `(n + 3) * 2^-11 * sum |a_i * b_i| + (n + 2) * 2^-25`.
         NativeDot = "native-dot";
         /// Class: native device maths. The device's `FMix` answers Metal's `mix(x, y, t)` on
         /// `float`, or on `half` where its fused multiply-add is not the measured 16-bit one
-        /// (computed in `float`, rounded once to `half`), where Metal's
-        /// `fma(t, y, fma(-t, x, x))` would be computed (`RoundingOrderPolicy::Native`, the
-        /// default; `Exact` keeps Metal's). Recorded bound: a `float` result within `2^-21 * (|x *
+        /// (computed in `float`, rounded once to `half`), where Metal's is
+        /// `fma(t, y, fma(-t, x, x))`. Recorded bound: a `float` result within `2^-21 * (|x *
         /// (1 - t)| + |y * t|)` of Metal's; a `half` one within `3 * 2^-10 * (|x * (1 - t)| + |y *
         /// t|) + 2^-23`.
         NativeMix = "native-mix";
@@ -2629,17 +2619,13 @@ pub(crate) fn dropped_exact_forms(
     dependencies.iter().find_map(|d| match d.fact {
         metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit {
             sampling,
-            float_maths,
             texel_conversion,
             nan_and_min_max,
-            rounding_order,
         } => Some(
             [
                 (sampling, "exact sampling"),
-                (float_maths, "exact float maths"),
                 (texel_conversion, "exact texel conversion"),
                 (nan_and_min_max, "exact NaN and minimum and maximum"),
-                (rounding_order, "exact rounding order"),
             ]
             .into_iter()
             .filter_map(|(dropped, name)| dropped.then_some(name))

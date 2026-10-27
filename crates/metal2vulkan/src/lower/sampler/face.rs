@@ -67,9 +67,7 @@
 //! majors, and lies above it on 204 and below on 4, by one ulp or two (the lanes tell those apart
 //! from `RN(1 / |m_a|)`, not from each other), each a major whose reciprocal lies within about 0.2
 //! ulp of a rounding midpoint; the shader's own `1.0f / m_a` and `precise::divide` are `RN(1 /
-//! |m_a|)` on all of them. It is Metal's fast reciprocal, whose model (`libm::Fun::Recip`) reads
-//! Metal's texel on 1,992 of those 2,001 lanes, on the M3 Max and the M4 alike; no exact form of it
-//! is known.
+//! |m_a|)` on all of them. It is Metal's fast reciprocal; no exact form of it is known.
 //!
 //! **A repeating face axis** ([`FaceWrap`]). Metal reads every other address mode of a cube's
 //! sampler as clamping, but `repeat` on a face axis whose size is not a power of two wraps that
@@ -87,12 +85,12 @@
 //! So a nearest sample through a constexpr normalized sampler that reads the base level, on a
 //! device without `VkProperty::MetalSampler`, hands the device the direction whose major component
 //! is `±1` and whose minor components are the centres of the texels Metal's position names with
-//! `r` Metal's reciprocal's model (`libm::Fun::Recip`, or the device's `1 / |m_a|` where that is
-//! Metal's) and the fused multiply-add, wrapped on a repeating face axis ([`FaceWrap`]): each
-//! `(2i + 1) / n - 1`, oriented as Vulkan's face table orients it, which every device reads at the
-//! face coordinate `(i + 1/2) / n`, half a texel from either edge. Where the model misses Apple's
-//! reciprocal (by one ulp, on about 0.3 % of significands) and `X` lies within about `n * 2^-23` of
-//! a texel edge, Metal reads the next texel, which the module records
+//! `r` the device's `1 / |m_a|` (Metal's own where the device's functions are Metal's in a
+//! fast-math entry, else `PrecisionNote::NativeDivision`) and the fused multiply-add, wrapped on a
+//! repeating face axis ([`FaceWrap`]): each `(2i + 1) / n - 1`, oriented as Vulkan's face table
+//! orients it, which every device reads at the face coordinate `(i + 1/2) / n`, half a texel from
+//! either edge. Where that reciprocal misses Apple's and `X` lies within about `n * 2^-23` of a
+//! texel edge, Metal reads the next texel, which the module records
 //! (`PrecisionNote::CubeFaceReciprocal`). A linear sample that Metal's filter answers takes the
 //! same position (`position`) and reads its taps by fetches, across a face's edges through
 //! `define_fold` (`linear::cube`), under the same note, and so does a cube gather (a depth cube's
@@ -113,13 +111,11 @@
 use crate::error::Error;
 use crate::lower::arith::fma::{self, Fma};
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
-use crate::lower::arith::libm;
-use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::metal::sampler::SamplerWord;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
-use crate::spirv::error::{BResult, BuildError, TypeRule};
+use crate::spirv::error::BResult;
 use crate::spirv::ids::{FuncId, Value as SValue};
 use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, Type as SType, UnOp};
 
@@ -287,15 +283,11 @@ pub(super) fn metal_ties(fb: &mut FunctionBuilder<'_>, p: SValue) -> BResult<SVa
 /// (`Snap::words` adds those): its 70 instructions and 6 constants, at most 6 words each.
 pub const SNAP_WORDS: u32 = 480;
 
-/// The routines `snapped` computes Metal's face position with: Metal's reciprocal
-/// (`libm::Fun::Recip`) by its function `recip`, or by the device's `1 / y` where that is Metal's
-/// (`None`), and the correctly rounded fused multiply-add of `fma`, by its function `fma_routine`
-/// where its route has one.
+/// What `snapped` computes Metal's face position with: the device's reciprocal `1 / y`, and the
+/// fused multiply-add `fma`.
 #[derive(Clone, Copy, Debug)]
 pub struct SnapRoutines {
-    pub recip: Option<FuncId>,
     pub fma: Fma,
-    pub fma_routine: Option<FuncId>,
 }
 
 /// The `float` scalar form the routines take.
@@ -304,44 +296,23 @@ pub(super) const SCALAR: Form = Form {
     lanes: 1,
 };
 
-/// The routines Metal's face position takes on a profile ([`SnapRoutines`] before the module
-/// declares them): Metal's reciprocal, which the arith family plans and declares with the math
-/// library's routines (`libm::Fun::Recip`), and the fused multiply-add `fma`.
+/// What Metal's face position takes on a profile ([`SnapRoutines`] as emission takes it): the
+/// fused multiply-add `fma`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FaceRoutines {
     pub fma: Fma,
 }
 
 impl FaceRoutines {
-    /// The census words a position adds beside its own: the reciprocal's use (its routine's
-    /// call) and the two fused multiply-adds'.
+    /// The census words a position adds beside its own: the reciprocal's division and the two
+    /// fused multiply-adds'.
     pub(super) fn use_words(self) -> u32 {
-        libm::use_words(1, 1) + 2 * self.fma.words()
+        16 + 2 * self.fma.words()
     }
 
-    /// The declared routines, as emission calls them.
-    pub(super) fn declared(self, cx: &mut EmitCx<'_>) -> BResult<SnapRoutines> {
-        let recip = match crate::lower::arith::lib(cx).device(libm::Fun::Recip) {
-            true => None,
-            false => match cx.decl.families.arith.libm.get(&libm::Fun::Recip) {
-                Some(id) => Some(*id),
-                None => return Err(cx.fail("a cube position whose reciprocal is not declared")),
-            },
-        };
-        let fma_routine = match self.fma.routine() {
-            Some(r) => match cx.decl.families.arith.fmas.get(&r) {
-                Some(id) => Some(*id),
-                None => {
-                    return Err(cx.fail("a cube position whose fused multiply-add is not declared"))
-                }
-            },
-            None => None,
-        };
-        Ok(SnapRoutines {
-            recip,
-            fma: self.fma,
-            fma_routine,
-        })
+    /// The routines as emission takes them.
+    pub(super) fn declared(self) -> SnapRoutines {
+        SnapRoutines { fma: self.fma }
     }
 }
 
@@ -431,44 +402,35 @@ fn wrapping(
     }
 }
 
-/// The routines of a sample that takes Metal's face position ([`snapped`], [`position`]): Metal's
-/// reciprocal (`libm::Fun::Recip`) and the profile's correctly rounded fused multiply-add, whose
-/// module-scope routines the arith family declares. The reciprocal's model is Apple's texture
-/// unit's on most majors, not all (module docs), which the module records
-/// (`PrecisionNote::CubeFaceReciprocal`).
+/// What a sample that takes Metal's face position takes ([`snapped`], [`position`]): the
+/// device's reciprocal and the profile's fused multiply-add. The device's reciprocal is Apple's
+/// texture unit's on most majors at best, not all (module docs), which the module records
+/// (`PrecisionNote::CubeFaceReciprocal`), and the device's division within Vulkan's bound, but
+/// where the device's functions are Metal's in an entry Metal compiles with fast math
+/// (`PrecisionNote::NativeDivision`).
 pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<FaceRoutines, Error> {
     // The sum `1 + sc * r` ([`texel_x`]) is computed between the sample's image and its use, which
-    // stay in one block, so it takes no branch: `OpFmaKHR` unchecked ([`Fma::unchecked`]), which is
-    // Metal's here. Its exact value is zero or at least `2^-48` in magnitude: a product near `-1`
-    // is an integer below `2^48` times a power of two of at least `2^-48`, so the sum is a
-    // multiple of that power (or, for a power above 1, at least 1).
-    let Some(fma) = Fma::on(cx.profile, SCALAR).map(Fma::unchecked) else {
+    // stay in one block, so it takes no branch.
+    let Some(fma) = Fma::on(cx.profile, SCALAR) else {
         return Err(cx.invariant("a cube position without a float fused multiply-add"));
     };
-    cx.families.arith.libm_uses.insert(libm::Fun::Recip);
     cx.families.arith.take_fma(fma);
     cx.precision.insert(PrecisionNote::CubeFaceReciprocal);
-    // Native device maths: the reciprocal is the device's `1 / |m_a|`.
-    if cx.profile.fields().float_functions == crate::device::profile::FloatFunctions::Native {
+    if cx.profile.fields().float_functions == crate::device::profile::FloatFunctions::Metal {
+        cx.families
+            .arith
+            .unless_metal_fast
+            .insert(PrecisionNote::NativeDivision);
+    } else {
         cx.precision.insert(PrecisionNote::NativeDivision);
     }
     Ok(FaceRoutines { fma })
 }
 
-/// Metal's reciprocal of the major magnitude `ma` (a `float`): the call of its routine, or the
-/// device's `1 / ma` (`one` is `1.0`) where that is Metal's ([`SnapRoutines::recip`]).
-fn reciprocal(
-    fb: &mut FunctionBuilder<'_>,
-    one: SValue,
-    ma: SValue,
-    routines: SnapRoutines,
-) -> BResult<SValue> {
-    match routines.recip {
-        Some(f) => fb
-            .call(f, &[ma])?
-            .ok_or(BuildError::Type(TypeRule::FunctionSignature)),
-        None => fb.binary(BinOp::FDiv, one, ma),
-    }
+/// The reciprocal of the major magnitude `ma` (a `float`): the device's `1 / ma` (`one` is
+/// `1.0`).
+fn reciprocal(fb: &mut FunctionBuilder<'_>, one: SValue, ma: SValue) -> BResult<SValue> {
+    fb.binary(BinOp::FDiv, one, ma)
 }
 
 /// A cube direction `p` (three floats, `metal_ties`'s) handed to the device so that a nearest
@@ -493,7 +455,7 @@ pub(super) fn snapped(
     let fr = frame(fb, p)?;
     let (wrap_s, wrap_t) = wrapping(fb, n, Wraps::Axes(wrap))?;
     // Metal's reciprocal of `|ma|`, its texture unit's on most majors (module docs).
-    let r = reciprocal(fb, one, fr.ma, routines)?;
+    let r = reciprocal(fb, one, fr.ma)?;
     // The centre of Metal's texel on one face axis, as the minor component handed on.
     let centre = |fb: &mut FunctionBuilder<'_>,
                   (flip, c): (SValue, SValue),
@@ -552,7 +514,7 @@ pub(super) fn position(
     let nf = fb.convert(ConvOp::ConvertUToF, n, f32_)?;
     let fr = frame(fb, p)?;
     let (wrap_s, wrap_t) = wrapping(fb, n, wrap)?;
-    let r = reciprocal(fb, one, fr.ma, routines)?;
+    let r = reciprocal(fb, one, fr.ma)?;
     let sc = oriented(fb, fr.flip_s, fr.c_s)?;
     let s = texel_x(fb, sc, (r, nf), (routines, wrap_s))?;
     let tc = oriented(fb, fr.flip_t, fr.c_t)?;
@@ -664,7 +626,7 @@ fn texel_x(
 ) -> BResult<SValue> {
     let one = f32_value(fb, 1.0)?;
     let half = f32_value(fb, 0.5)?;
-    let sum = fma::emit(fb, routines.fma, &[sc, r, one], routines.fma_routine)?;
+    let sum = fma::emit(fb, routines.fma, &[sc, r, one])?;
     let s = fb.binary_no_contraction(BinOp::FMul, sum, half)?;
     let s = match wrap {
         Some(w) => {

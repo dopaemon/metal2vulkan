@@ -21,8 +21,8 @@
 //! `fma(float(a), float(b), c)`, a product that is exact in `float`. Vectors of two to four lanes
 //! fuse lane-wise as scalars do.
 //!
-//! A fused pair is one correctly rounded fused multiply-add ([`super::fma`]) by the profile's
-//! route; the multiply (and its `fpext`) has no value of its own. An addition the rule leaves
+//! A fused pair is one fused multiply-add ([`super::fma`]) by the profile's route; the multiply
+//! (and its `fpext`) has no value of its own. An addition the rule leaves
 //! unfused whose operand is a `contract` multiply is `NoContraction`, so that no device fuses what
 //! Metal keeps apart. Where the rule cannot be read from the measured shapes, the pair stays two
 //! roundings and the plan notes `PrecisionNote::FastMathRewrites`: a product in another block than
@@ -102,14 +102,12 @@ pub struct Link {
     pub negated: bool,
 }
 
-/// A link of [`ArithStrategy::Fused`]: [`Link`] in value IDs, with the flushes of its factors
-/// (bits 0 and 1) and of its value the module makes itself ([`denormal::Flush`]).
+/// A link of [`ArithStrategy::Fused`]: [`Link`] in value IDs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FusedLink {
     pub a: ValueId,
     pub b: ValueId,
     pub negate: bool,
-    pub flush: denormal::Flush,
 }
 
 /// The contraction plan of a function.
@@ -410,26 +408,16 @@ pub(super) fn select(
     reads.extend(fusion.inner.iter().flat_map(|l| [l.a, l.b]));
     super::check_operands(cx, &reads)?;
     cx.lowered_repr(Value::Inst(at), inst.ty)?;
-    // `OpFmaKHR` is the device's at denormals and NaNs; the routines are Metal's. Its
-    // denormals are Metal's where the device reads them so, else the module flushes them. Metal
-    // answers a fused pair's NaN as a written `fma`'s (the probe `e98b103f`'s `a * b + c` lanes
-    // under fast math, `float` and `half`): `OpFmaKHR` answers the device's `float` NaN and a
-    // `half` result's rounding the device's `half` NaN on every route, so Metal's is selected.
+    // The device's `float` instruction is the device's at denormals and NaNs: its denormals are
+    // Metal's where the device reads them so, else the device's own ([`super::leave_denormals`]).
+    // Metal answers a fused pair's NaN as a written `fma`'s (the probe `e98b103f`'s `a * b + c`
+    // lanes under fast math, `float` and `half`): the device's `float` instruction answers the
+    // device's `float` NaN and a `half` result's rounding the device's `half` NaN on every route,
+    // so Metal's is selected.
     let khr = fma.route.device_float();
-    // A chain's links flush their factors and values as the outer pair does; `OpFmaKHR` checked
-    // ([`Fma::checked`]) answers no denormal, so only its factors and addend are read.
-    let flush_of = |cx: &mut SelectCx<'_>, operands: &[Value]| {
-        if khr {
-            let flush = super::fused_flush(cx, f, operands);
-            denormal::Flush {
-                result: flush.result && !fma.checked(),
-                ..flush
-            }
-        } else {
-            denormal::Flush::NONE
-        }
-    };
-    let flush = flush_of(cx, &[fusion.a, fusion.b, fusion.c]);
+    if khr {
+        super::leave_denormals(cx, f, denormal::Covered::Deviation);
+    }
     let nan = match f.float_fmt() {
         Some(FloatFmt::Half) => nan::function_answer(FloatFn::Fma, false, false, FloatFmt::Half),
         _ => khr.then_some(nan::NanAnswer::Canonical),
@@ -452,7 +440,6 @@ pub(super) fn select(
             a: id(cx, link.a)?,
             b: id(cx, link.b)?,
             negate: link.negated,
-            flush: flush_of(cx, &[link.a, link.b]),
         });
     }
     let s = ArithStrategy::Fused {
@@ -461,7 +448,6 @@ pub(super) fn select(
         b: id(cx, fusion.b)?,
         c: id(cx, fusion.c)?,
         negate: fusion.negate,
-        flush,
         inner: inner.into_boxed_slice(),
     };
     Ok(Some(super::with_nan(cx, at, s, nan, f)))

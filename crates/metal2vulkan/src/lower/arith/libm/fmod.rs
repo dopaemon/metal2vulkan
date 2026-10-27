@@ -19,18 +19,13 @@
 //! **Denormal operands**, as Metal reads them (case 087758cb): a denormal dividend as itself
 //! (`fmod(2^-149, -1) = 2^-149`, `fmod(2^-127, 8) = 2^-127`) and a denormal divisor as a zero
 //! (`fmod(2, 2^-149)` and `fmod(-6588397.5, 2^-149)` are NaN), decided on the divisor's exponent
-//! field, so the answer is Metal's whatever the device's denormal mode. The reading is per
-//! operand, so it lives here rather than in the per-operation table ([`denormal::operand`], which
-//! has no `fmod` row).
+//! field, so the answer is Metal's whatever the device's denormal mode.
 
 use crate::lower::arith::libm::E;
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, MemAccess, Type, UnOp};
-
-#[cfg(doc)]
-use crate::lower::arith::denormal;
 
 /// The significand `M` and the biased exponent `E` (at least 1) of the magnitude bits `a` of a
 /// finite `float`.
@@ -115,7 +110,7 @@ pub(crate) fn fmod(e: &mut E<'_, '_>, x: Value, y: Value) -> BResult<Value> {
     let domain = e.iop(BinOp::LogicalOr, x_nonfinite, y_zero)?;
     let no_nan = e.fb.unary(UnOp::LogicalNot, any_nan)?;
     let domain = e.iop(BinOp::LogicalAnd, domain, no_nan)?;
-    let metal = e.metal_nan(None)?;
+    let metal = e.metal_nan()?;
     let nan = e.sel(domain, metal, nan)?;
     e.sel(nan_lane, nan, rem)
 }

@@ -1146,15 +1146,14 @@ pub(crate) const MOLTENVK_ARGUMENT_BUFFERS_READ: [u32; 2] = [10401, 10402];
 /// driver lets no device turn its internal pipeline cache off and that cache is not Metal's own
 /// (MoltenVK's);
 /// `moltenvk-argument-buffers-unread` on a MoltenVK whose argument-buffer state the runtime does
-/// not read; and `float-tininess-after-rounding` where the device's policy takes native device
-/// maths and its profile's float functions are not Metal's own (MoltenVK's).
+/// not read; and `float-tininess-after-rounding` where its profile's float functions are not
+/// Metal's own (MoltenVK's).
 pub fn creation_kinds(device: &Device) -> BTreeSet<Degradation> {
     let mut kinds = BTreeSet::new();
     let compile = device.compile_device();
-    if compile.policy().float_maths == metal2vulkan::device::FloatMathsPolicy::Native
-        && !compile
-            .profile()
-            .takes_driver_deviation(metal2vulkan::error::DriverDeviation::MetalFloatFunctions)
+    if !compile
+        .profile()
+        .takes_driver_deviation(metal2vulkan::error::DriverDeviation::MetalFloatFunctions)
     {
         kinds.insert(Degradation::FloatTininessAfterRounding);
     }

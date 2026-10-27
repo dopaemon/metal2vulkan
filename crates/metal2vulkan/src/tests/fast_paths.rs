@@ -7,10 +7,9 @@
 //! classed, and so reaches the ledger.
 
 use crate::device::{
-    BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, FloatMathsPolicy,
-    HeapCompressionPolicy, HostPageTexturePolicy, NanMinMaxPolicy, RenderLoweringPolicy,
-    RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, Unorm8LinearFilterPolicy,
-    VertexNormalizedPolicy, YCbCrFilterPolicy,
+    BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, HeapCompressionPolicy,
+    HostPageTexturePolicy, NanMinMaxPolicy, RenderLoweringPolicy, SamplingPolicy,
+    TexelConversionPolicy, Unorm8LinearFilterPolicy, VertexNormalizedPolicy, YCbCrFilterPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -63,11 +62,9 @@ fn choices() -> Vec<Choice> {
         unorm8_linear_filter: _,
         sampling: _,
         ycbcr_filter: _,
-        float_maths: _,
         texel_conversion: _,
         vertex_normalized: _,
         nan_and_min_max: _,
-        rounding_order: _,
         // The runtime's: the texels of a carried texture's decoded twin, a heap's compressed
         // texture's image, when the host sees a command buffer complete, how a batch begins after
         // the earlier ones of its queue, where a render encoder's calls are lowered, and what holds
@@ -83,11 +80,9 @@ fn choices() -> Vec<Choice> {
         choice!(p.unorm8_linear_filter: Unorm8LinearFilterPolicy { Exact, DeviceWithinOneCode }),
         choice!(p.sampling: SamplingPolicy { NativeDevice, Exact }),
         choice!(p.ycbcr_filter: YCbCrFilterPolicy { Device, Exact }),
-        choice!(p.float_maths: FloatMathsPolicy { Native, Exact }),
         choice!(p.texel_conversion: TexelConversionPolicy { Device, Exact }),
         choice!(p.vertex_normalized: VertexNormalizedPolicy { Device, Exact }),
         choice!(p.nan_and_min_max: NanMinMaxPolicy { Native, Exact }),
-        choice!(p.rounding_order: RoundingOrderPolicy { Native, Exact }),
         choice!(p.decoded_texels: DecodedTexelsPolicy { Compact, Exact }),
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
         choice!(p.completion: CompletionPolicy { Grouped, Exact }),
@@ -131,13 +126,8 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DeviceSampling,
             DeviceTexelConversion,
             HalfTexelConversion,
-            NativeTranscendentals,
-            NativeDivision,
-            NativeFma,
             NativeNanEncoding,
             NativeMinMax,
-            NativeDot,
-            NativeMix,
         ],
         NotBuilt: [
             ExtendedRangeBlendSource,
@@ -146,6 +136,11 @@ fn notes() -> Vec<(&'static str, Ledger)> {
         ],
         OptIn: [DeviceUnorm8LinearFilter],
         DeviceGap: [
+            NativeTranscendentals,
+            NativeDivision,
+            NativeFma,
+            NativeDot,
+            NativeMix,
             DeviceDenormals,
             DeviceTexelDenormals,
             RestrictedDepthRange,

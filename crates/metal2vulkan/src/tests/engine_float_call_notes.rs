@@ -19,6 +19,7 @@ use crate::air::ir::{BinOp, FastMath};
 use crate::device::profile::FloatFunctions;
 use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
+use crate::error::DriverDeviation;
 use crate::lower::arith::fma::{self, Route};
 use crate::lower::arith::libm::Mode;
 use crate::lower::arith::{denormal, float_binop_notes, float_call_notes, FloatFmt};
@@ -301,7 +302,7 @@ fn one_profile_per_class() -> BTreeMap<NoteClass, (String, DeviceProfile)> {
     let routes: BTreeSet<Route> = out.keys().map(|(route, _, _)| *route).collect();
     assert_eq!(
         routes,
-        BTreeSet::from(fma::FLOAT_ROUTES),
+        BTreeSet::from([Route::Khr, Route::Native]),
         "every float route is some committed profile's"
     );
     assert!(
@@ -364,19 +365,21 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
     assert!(compared > 0);
 }
 
-/// The binary operators' notes beside the functions': a `half` or `bfloat` remainder, and a
-/// division other than Metal's precise one, is the device's arithmetic, and no operator leaves
-/// the device its denormals or its NaN: `+ - *` answer Metal's, and so does the `float` remainder,
-/// Metal's composition measured on the M3 Max, or with every flag its `fast::fmod`, whose notes it
-/// records. Metal's precise division (an `fdiv` on `float` without `arcp`, or on `half` under every
-/// flag set) records nothing: the shared routine computes Metal's quotient. Metal's fast division
-/// (an `fdiv` on `float` with `arcp`) answers Metal's denormals and NaNs itself, so it records the
-/// device's arithmetic (its reciprocal) alone, and where the profile's `float` functions are
-/// Metal's, not in an entry Metal compiles with fast math, whose quotient is Metal's own.
+/// The binary operators' notes beside the functions': a remainder and a division are the device's
+/// arithmetic, and a `float` operator leaves the device its denormals where the profile does not
+/// take `DriverDeviation::MetalFloatDenormals`, and a remainder and a division on every profile.
+/// Metal's precise division (an `fdiv` on `float` without `arcp`, or on `half` under every flag
+/// set) is the device's `OpFDiv`, noted `NativeDivision`. A `float` remainder without every flag is
+/// the device's `OpFRem`, and with every flag Metal's `fast::fmod`, whose notes it records. Metal's
+/// fast division (an `fdiv` on `float` with `arcp`) is the device's `OpFDiv` too, and records the
+/// device's arithmetic, its division and its denormals, but where the profile's `float` functions
+/// are Metal's, in an entry Metal compiles with fast math, whose quotient is Metal's own. No
+/// operator leaves the device its NaN here (the policy keeps Metal's).
 #[test]
 fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() {
     for (class, (stem, p)) in one_profile_per_class() {
         let (_, metal_functions, _) = class;
+        let flushes = p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals);
         for (_, _, _, fmt) in ELEMS {
             for op in BinOp::ALL {
                 for fmf in [FastMath::NONE, FastMath::ARCP, every_flag()] {
@@ -386,37 +389,40 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
                     for mode in [Mode::Fast, Mode::Precise] {
                         let metal = metal_functions.then_some(mode);
                         let notes = notes.clone().in_entry(metal);
+                        let single = fmt == FloatFmt::F32;
                         let precise = op == BinOp::FDiv
-                            && (fmt == FloatFmt::Half
-                                || (fmt == FloatFmt::F32 && !fmf.contains(FastMath::ARCP)));
+                            && (fmt == FloatFmt::Half || (single && !fmf.contains(FastMath::ARCP)));
                         let what = format!("{op:?} on {fmt:?} under {fmf:?} on {stem}, {metal:?}");
+                        assert!(!notes.contains(&PrecisionNote::DeviceNanEncoding), "{what}");
                         if precise {
-                            assert!(notes.is_empty(), "{what}: {notes:?}");
-                            continue;
-                        }
-                        // A `float` remainder is Metal's, measured on the M3 Max: exact without
-                        // every flag, `fast::fmod` with them, whose notes it records.
-                        if op == BinOp::FRem && fmt == FloatFmt::F32 {
-                            let want = if fmf == every_flag() {
-                                let Some(AirIntrinsic::Math(fmod)) =
-                                    AirIntrinsic::parse("air.fast_fmod.f32")
-                                else {
-                                    panic!("air.fast_fmod.f32 does not parse");
-                                };
-                                float_call_notes(fmod, fmf, &p)
-                                    .expect("fast fmod is a float function")
-                                    .in_entry(metal)
-                            } else {
-                                BTreeSet::new()
-                            };
+                            let want: BTreeSet<_> = [PrecisionNote::NativeDivision]
+                                .into_iter()
+                                .chain(single.then_some(PrecisionNote::DeviceDenormals))
+                                .collect();
                             assert_eq!(notes, want, "{what}");
                             continue;
                         }
-                        if op == BinOp::FDiv && fmt == FloatFmt::F32 {
+                        if op == BinOp::FRem && single && fmf == every_flag() {
+                            let Some(AirIntrinsic::Math(fmod)) =
+                                AirIntrinsic::parse("air.fast_fmod.f32")
+                            else {
+                                panic!("air.fast_fmod.f32 does not parse");
+                            };
+                            let want = float_call_notes(fmod, fmf, &p)
+                                .expect("fast fmod is a float function")
+                                .in_entry(metal);
+                            assert_eq!(notes, want, "{what}");
+                            continue;
+                        }
+                        if op == BinOp::FDiv && single {
                             let want = if metal == Some(Mode::Fast) {
                                 BTreeSet::new()
                             } else {
-                                BTreeSet::from([PrecisionNote::DeviceArithmetic])
+                                BTreeSet::from([
+                                    PrecisionNote::DeviceArithmetic,
+                                    PrecisionNote::NativeDivision,
+                                    PrecisionNote::DeviceDenormals,
+                                ])
                             };
                             assert_eq!(notes, want, "{what}");
                             continue;
@@ -426,8 +432,11 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
                             matches!(op, BinOp::FDiv | BinOp::FRem),
                             "{what}"
                         );
-                        assert!(!notes.contains(&PrecisionNote::DeviceDenormals), "{what}");
-                        assert!(!notes.contains(&PrecisionNote::DeviceNanEncoding), "{what}");
+                        assert_eq!(
+                            notes.contains(&PrecisionNote::DeviceDenormals),
+                            single && (op == BinOp::FRem || !flushes),
+                            "{what}"
+                        );
                     }
                 }
             }
@@ -435,31 +444,25 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
     }
 }
 
-/// Metal's precise `sqrt`, `rsqrt`, and `fmod`, on `float` and `half`, answer the one right value
-/// (`libm::Fun::correctly_rounded`: correctly rounded and exact by MSL Tables 8.1 and 8.3, and at
-/// every `half` operand), which the product computes on every device: they record neither precision
-/// note on any profile class, in either mode, with or without flags. A function Apple bounds by
-/// ulps keeps its note where the translation's routine computes it: precise `exp` on a profile
-/// whose functions are the device's.
+/// Metal's precise `fmod`, on `float` and `half`, answers the one right value
+/// (`libm::Fun::correctly_rounded`: exact by MSL Tables 8.1 and 8.3), which its routine computes
+/// on every device: it records neither precision note on any profile class, in either mode, with
+/// or without flags. Precise `sqrt` and `rsqrt`, which Metal documents correctly rounded, are the
+/// device's `Sqrt` and `InverseSqrt`: off Metal's own functions they record the device's precision
+/// (`NativeTranscendentals`), as precise `exp`, which Apple bounds by ulps, does.
 #[test]
-fn metals_correctly_rounded_functions_record_no_precision_note() {
+fn precise_fmod_records_no_precision_note_and_the_roots_the_devices() {
     let function_notes = [
         PrecisionNote::DeviceArithmetic,
         PrecisionNote::DeviceTranscendentals,
+        PrecisionNote::NativeTranscendentals,
     ];
     let parse = |name: &str| match AirIntrinsic::parse(name) {
         Some(AirIntrinsic::Math(call)) => call,
         _ => panic!("{name} is a math call"),
     };
     for ((_, metal_functions, _), (stem, p)) in one_profile_per_class() {
-        for name in [
-            "air.sqrt.f32",
-            "air.rsqrt.f32",
-            "air.fmod.f32",
-            "air.sqrt.f16",
-            "air.rsqrt.f16",
-            "air.fmod.f16",
-        ] {
+        for name in ["air.fmod.f32", "air.fmod.f16"] {
             for fmf in [FastMath::NONE, every_flag()] {
                 for math in [EntryMath::Fast, EntryMath::Precise] {
                     let notes = PrecisionNote::of_math_call(parse(name), fmf, &p, math)
@@ -472,17 +475,25 @@ fn metals_correctly_rounded_functions_record_no_precision_note() {
             }
         }
         if !metal_functions {
-            let notes = PrecisionNote::of_math_call(
-                parse("air.exp.f32"),
-                FastMath::NONE,
-                &p,
-                EntryMath::Precise,
-            )
-            .expect("exp is a float function");
-            assert!(
-                notes.contains(&PrecisionNote::DeviceTranscendentals),
-                "exp on {stem}: {notes:?}"
-            );
+            for name in [
+                "air.sqrt.f32",
+                "air.rsqrt.f32",
+                "air.sqrt.f16",
+                "air.rsqrt.f16",
+                "air.exp.f32",
+            ] {
+                let notes = PrecisionNote::of_math_call(
+                    parse(name),
+                    FastMath::NONE,
+                    &p,
+                    EntryMath::Precise,
+                )
+                .unwrap_or_else(|| panic!("{name} is a float function"));
+                assert!(
+                    notes.contains(&PrecisionNote::NativeTranscendentals),
+                    "{name} on {stem}: {notes:?}"
+                );
+            }
         }
     }
 }
@@ -534,9 +545,9 @@ fn call_kernel(name: &str, symbol: &str, arity: usize, fmf: FastMath) -> Kernel 
 /// function, `fast::atan2` among them; an entry Metal compiles without fast math (a division
 /// without `nnan` and `ninf`, a call without flags) still records them, and `fast::sinpi`, the
 /// device's near-equivalent, records its note in either. `mix` and `fast::sinpi` record no
-/// `DeviceDenormals` there and require the measured fact. Off MoltenVK, Metal's fused `mix` reads
-/// its denormals as Metal's does on every route, and requires the fact exactly
-/// where `OpFmaKHR` reads them so.
+/// `DeviceDenormals` there and require the measured fact. Off MoltenVK `mix` is the device's
+/// `FMix`, with or without Metal's denormals: noted `NativeMix` and `DeviceDenormals`, requiring
+/// no fact.
 #[test]
 fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
     let every = every_flag();
@@ -654,9 +665,8 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
             "mix_fast on {stem}: {mix:?}, requires the fact: {requires}"
         );
     }
-    // Without Metal's functions, with or without Metal's denormals, `mix` reads its denormals as
-    // Metal's does, the fact required where `OpFmaKHR` reads them so, and the fast division keeps
-    // its reciprocal's note.
+    // Without Metal's functions, with or without Metal's denormals, `mix` is the device's `FMix`,
+    // and the fast division keeps its note.
     for denormals in [true, false] {
         let Some((stem, p)) = profiles.iter().find(|(_, p)| {
             let (_, metal, flushes) = note_class(p);
@@ -665,9 +675,10 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
             panic!("no committed profile of the device's functions, Metal's denormals {denormals}");
         };
         let (mix, requires) = notes_of(p, "mix_fast");
-        let khr = note_class(p).0 == Route::Khr;
         assert!(
-            !mix.contains(&PrecisionNote::DeviceDenormals) && requires == (khr && denormals),
+            mix.contains(&PrecisionNote::NativeMix)
+                && mix.contains(&PrecisionNote::DeviceDenormals)
+                && !requires,
             "mix_fast on {stem}: {mix:?}, requires the fact: {requires}"
         );
         let (fast, _) = notes_of(p, "fdiv_fast");

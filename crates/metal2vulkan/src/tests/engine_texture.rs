@@ -1032,11 +1032,9 @@ fn nil_census(bc: &[u8], name: &str, p: &DeviceProfile, stem: &str) -> NilCensus
         all.clone().count(),
         all.map(|s| u64::from(s.words())).sum::<u64>(),
     );
-    // The arm's `fast::sin` calls the math library's routines where the device's functions are
-    // not Metal's and the maths are exact (`FloatMathsPolicy::Exact`; the test takes it, as native
-    // device maths calls no routine): shared routines, whose words the census counts once under
-    // their own names, with no uses. So the census words are the strategies' words and those
-    // routines', partitioned: the arm's leave their names, and none is counted twice or dropped.
+    // A shared routine's words the census counts once under its own name, with no uses. So the
+    // census words are the strategies' words and the shared routines', partitioned: the arm's
+    // leave their names, and none is counted twice or dropped.
     let mut routines: BTreeMap<String, u64> = BTreeMap::new();
     for (n, w) in crate::lower::arith::routine_words(&plan.families.arith) {
         *routines.entry(n.to_owned()).or_default() += w;

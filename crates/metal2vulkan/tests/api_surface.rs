@@ -227,11 +227,9 @@ surface! {
         enum Unorm8LinearFilterPolicy N;
         enum SamplingPolicy N;
         enum YCbCrFilterPolicy N;
-        enum FloatMathsPolicy N;
         enum TexelConversionPolicy N;
         enum VertexNormalizedPolicy N;
         enum NanMinMaxPolicy N;
-        enum RoundingOrderPolicy N;
         enum DecodedTexelsPolicy N;
         enum HeapCompressionPolicy N;
         enum CompletionPolicy N;
@@ -1048,9 +1046,7 @@ surface! {
 
 use metal2vulkan::bind::{BindState, BoundBuffer, Dispatch, DrawCall, StageTable};
 use metal2vulkan::cache::{Hash256, PipelineArtifact, PipelineKey};
-use metal2vulkan::device::{
-    Device, DeviceDescription, DevicePolicy, FloatMathsPolicy, FloatWidth, NanMinMaxPolicy,
-};
+use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, FloatWidth, NanMinMaxPolicy};
 use metal2vulkan::library::{CompiledFunction, Library};
 use metal2vulkan::metal::{PixelFormat, VertexFormat};
 use metal2vulkan::pipeline::{
@@ -1338,13 +1334,13 @@ fn content_digests_name_what_a_pipeline_says_not_its_build() {
 }
 
 /// The precision contract is public: a fast `float` division records the device's arithmetic,
-/// Metal's precise division records the device's division and NaN where the policy takes both
-/// (`NativeDivision`, `NativeNanEncoding`, native device maths), the division alone under
-/// `NanMinMaxPolicy::Exact` and nothing under `FloatMathsPolicy::Exact`, an integer operator has no
-/// notes, and a fast `float` `tanh`, which the crate computes with a division of its own, records
-/// the device's arithmetic, on a profile whose `float` functions are the device's (lavapipe's); on
-/// one whose functions are Metal's own (MoltenVK's), both are Metal's own in a fast-math entry and
-/// record nothing there, and the division records its note in an entry that keeps NaNs.
+/// Metal's precise division records the device's division, its denormals and its NaN where the
+/// policy takes the device's NaN (`NativeDivision`, `DeviceDenormals`, `NativeNanEncoding`), the
+/// division and its denormals under `NanMinMaxPolicy::Exact`, an integer operator has no notes, and
+/// a fast `float` `tanh`, which the crate computes with a division of its own, records the device's
+/// arithmetic, on a profile whose `float` functions are the device's (lavapipe's); on one whose
+/// functions are Metal's own (MoltenVK's), both are Metal's own in a fast-math entry and record
+/// nothing there, and the division records its note in an entry that keeps NaNs.
 #[test]
 fn the_precision_contract_names_each_float_operations_notes() {
     use metal2vulkan_air::intrinsics::AirIntrinsic;
@@ -1366,26 +1362,26 @@ fn the_precision_contract_names_each_float_operations_notes() {
         .expect("a float operator")
         .contains(&PrecisionNote::DeviceArithmetic));
     let mut policy = DevicePolicy::default();
-    policy.float_maths = FloatMathsPolicy::Native;
     policy.nan_and_min_max = NanMinMaxPolicy::Native;
     let native = device_under("lavapipe", policy);
     policy.nan_and_min_max = NanMinMaxPolicy::Exact;
     let metal_nans = device_under("lavapipe", policy);
-    policy.float_maths = FloatMathsPolicy::Exact;
-    let exact = device_under("lavapipe", policy);
     for (p, notes) in [
         (
             native.profile(),
             BTreeSet::from([
+                PrecisionNote::DeviceDenormals,
                 PrecisionNote::NativeDivision,
                 PrecisionNote::NativeNanEncoding,
             ]),
         ),
         (
             metal_nans.profile(),
-            BTreeSet::from([PrecisionNote::NativeDivision]),
+            BTreeSet::from([
+                PrecisionNote::DeviceDenormals,
+                PrecisionNote::NativeDivision,
+            ]),
         ),
-        (exact.profile(), BTreeSet::new()),
     ] {
         assert_eq!(
             PrecisionNote::of_float_operator(
