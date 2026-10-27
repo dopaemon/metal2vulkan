@@ -29,7 +29,8 @@
 //!   where it ran before, so a lock the program holds across the creation, which the sink takes
 //!   again, does not deadlock against the full join. A messenger the program registered itself on
 //!   an adopted instance is not the runtime's: the driver calls it on the thread that makes the
-//!   call, the runtime's here.
+//!   call, the runtime's here. An asking thread that itself holds its call's messages (a
+//!   self-check's, [`holding`]) keeps those its runtime thread held, for the self-check to read.
 //! - **The exit guard.** The thread is one of the runtime's (`exit_guard::spawn_scoped`) and makes
 //!   the call inside a section of its own. Where the host starts no thread, or once the process is
 //!   exiting (the guard closed), the asking thread makes the call itself, as before.
@@ -265,22 +266,27 @@ pub(super) fn held(sink: &MessageSink, message: &DebugMessage) -> bool {
 }
 
 /// `call`, with this thread holding the sink messages the driver raises in it ([`held`]): its
-/// result, and the messages in the order raised.
-fn holding<R>(call: impl FnOnce() -> R) -> (R, Vec<(MessageSink, DebugMessage)>) {
-    /// Stops holding however `call` ends.
-    struct Clear;
-    impl Drop for Clear {
+/// result, and the messages in the order raised, whichever thread made the driver call
+/// ([`at_user_initiated`] holds a relayed call's messages here). A thread of the runtime's making
+/// a call for an asking thread holds them for it; a self-check holds its own driver call's, whose
+/// failure is the answer it asked for (`pipeline::objects::takes_multi_variable_dynamic`). A
+/// holding inside another keeps the outer one's messages as they were.
+pub(crate) fn holding<R>(call: impl FnOnce() -> R) -> (R, Vec<(MessageSink, DebugMessage)>) {
+    type Messages = Option<Vec<(MessageSink, DebugMessage)>>;
+    /// Puts the outer holding back however `call` ends.
+    struct Restore(Messages);
+    impl Drop for Restore {
         fn drop(&mut self) {
-            let _ = HELD.try_with(|held| held.borrow_mut().take());
+            let outer = self.0.take();
+            let _ = HELD.try_with(|held| *held.borrow_mut() = outer);
         }
     }
-    HELD.with(|held| *held.borrow_mut() = Some(Vec::new()));
-    let clear = Clear;
+    let restore = Restore(HELD.with(|held| held.borrow_mut().replace(Vec::new())));
     let made = call();
     let messages = HELD
         .with(|held| held.borrow_mut().take())
         .unwrap_or_default();
-    drop(clear);
+    drop(restore);
     (made, messages)
 }
 
@@ -318,9 +324,12 @@ pub(super) fn at_user_initiated<R: Send>(call: impl FnOnce() -> R + Send) -> R {
     match (made, asked) {
         (Some(((made, withheld), messages)), _) => {
             crate::driver_facts::withheld_for_here(withheld);
-            // The program's sink, on the asking thread, in the order the driver raised them.
+            // The program's sink, on the asking thread, in the order the driver raised them:
+            // held again where this thread holds its call's own ([`holding`]).
             for (sink, message) in messages {
-                sink.deliver(&message);
+                if !held(&sink, &message) {
+                    sink.deliver(&message);
+                }
             }
             made
         }

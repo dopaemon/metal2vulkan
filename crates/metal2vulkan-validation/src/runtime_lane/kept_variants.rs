@@ -340,11 +340,16 @@ fn the_least_recently_released_variants_go_first() {
     on_device(|device, _| {
         let mut states = 0;
         let mut kernels = Vec::new();
-        for (_, case) in cases {
-            let Ok(case) = case else {
-                continue;
+        for (name, case) in cases {
+            let case = match case {
+                Ok(case) => case,
+                Err(error) => {
+                    eprintln!("KEPT skipped {name}: {error}");
+                    continue;
+                }
             };
-            if pipeline_state(device, &case).is_err() {
+            if let Err(error) = pipeline_state(device, &case) {
+                eprintln!("KEPT skipped {name}: {error}");
                 continue;
             }
             states += 1;

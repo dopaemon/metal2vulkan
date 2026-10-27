@@ -1297,7 +1297,10 @@ fn tiling_refusal(error: &Error) -> Option<LinearNeed> {
 /// the footprint **and** makes the texture, so the refusal is this crate's open gap and the
 /// `HEAPTEX shared no image` lines name every format and descriptor it covers. Every such format
 /// answers in all four swept usages, counted from that table, so one that stops answering fails
-/// rather than passing as a query and a call that both refuse.
+/// rather than passing as a query and a call that both refuse. An ASTC texture on a device that
+/// holds it in a carrier with a decoded twin (lavapipe) answers Metal's model of its blocks and is
+/// refused its making, `NotImplemented(DecodedHeapTexture)`: the twin would decode what the heap's
+/// bytes held. `HEAPTEX shared decoded` lines name each.
 #[test]
 fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
     on_device(|device| {
@@ -1326,6 +1329,7 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
         let mut changed_again = Vec::new();
         let mut gaps = Vec::new();
         let mut no_image = Vec::new();
+        let mut decoded = Vec::new();
         let mut check = |what: String, mut descriptor: TextureDescriptor| {
             descriptor.resource_options = options;
             let query = device.heap_texture_size_and_align(&descriptor);
@@ -1426,6 +1430,19 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
                     }
                     no_image.push(format!("{what}: {answer:?}"));
                 }
+                // An ASTC texture on a device that holds it in a carrier with a decoded twin, which
+                // would decode what the heap's bytes held: the query answers Metal's model of its
+                // blocks and the making is refused, the runtime's gap.
+                (Ok(answer), Err(Error::NotImplemented(RuntimeGap::DecodedHeapTexture))) => {
+                    let pf = descriptor.pixel_format;
+                    assert!(
+                        !super::astc_textures::decodes_astc(device, pf),
+                        "{what}: refused as a decoded heap texture on a device that decodes it"
+                    );
+                    let metal = device.metal_heap_texture_size_and_align(&descriptor);
+                    assert_eq!(metal, Ok(Some(answer)), "{what}: Metal's model");
+                    decoded.push(format!("{what}: {answer:?}"));
+                }
                 (Ok(answer), Err(error)) => panic!("{what}: answered {answer:?}, made {error:?}"),
                 (Err(error), Ok(_)) => panic!("{what}: refused {error:?} by the query alone"),
                 (Err(query), Err(call)) => {
@@ -1478,6 +1495,9 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
         for line in &no_image {
             eprintln!("HEAPTEX shared no image {line}");
         }
+        for line in &decoded {
+            eprintln!("HEAPTEX shared decoded {line}");
+        }
         eprintln!(
             "HEAPTEX shared on {}: {made} made ({round_trips} round trips, {} second reads \
              differ, {} staging queue submissions), {} refused for linear tiling, {} answered a \
@@ -1501,13 +1521,14 @@ fn shared_heap_textures_are_made_or_refused_for_linear_tiling() {
             gaps.is_empty(),
             "colour textures refused as gaps: {gaps:#?}"
         );
-        // Every format whose footprint its own structure decides, Metal's `NoTexture` shape
-        // aside, answered that footprint in all four swept usages. The count comes from the
-        // product's own table rather than a number here, so a footprint that stops answering
-        // fails this instead of passing quietly as a query and a call that both refuse.
+        // Every format whose footprint its own structure decides answered that footprint in all
+        // four swept usages, the packed 10-bit pair's `NoTexture` 0 bytes at 16 among them (the
+        // arm above). The count comes from the product's own table rather than a number here, so
+        // a footprint that stops answering fails this instead of passing quietly as a query and a
+        // call that both refuse.
         let answering = PixelFormat::ALL
             .iter()
-            .filter(|&&pf| footprint(pf).is_some_and(|shape| shape != Footprint::NoTexture))
+            .filter(|&&pf| footprint(pf).is_some())
             .count();
         assert_eq!(
             no_image.len(),

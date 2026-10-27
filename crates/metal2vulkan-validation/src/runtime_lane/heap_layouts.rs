@@ -990,7 +990,9 @@ fn fnv(bytes: &[u8]) -> u64 {
 /// reads each level back from the CPU's writes of those bytes. Counted tiled, with no layout
 /// notice. A device whose image of the format holds other bytes than its blocks (a format it
 /// decodes) announces `heap-texture-untiled-layout` instead (each row's notice: the device asks
-/// for each, `DeviceOptions::announce_each`).
+/// for each, `DeviceOptions::announce_each`). An ASTC texture on a device without ASTC, whose
+/// carrier's decoded twin would decode what the heap's bytes held, answers Metal's size and is
+/// refused its making (`NotImplemented(DecodedHeapTexture)`), its `HEAPLAYOUT` line saying so.
 #[test]
 fn a_host_heap_s_block_compressed_texture_lies_as_metal_lays_it_out() {
     let each = |options: &mut DeviceOptions| options.announce_each = HEAP_LAYOUTS.into();
@@ -1008,15 +1010,13 @@ fn block_rows_lie_as_metal_lays_them_out(device: &Device, messages: &Messages) {
             return;
         };
         let descriptor = row.descriptor();
-        // A format the device has no image of is refused before any layout, and an ASTC texture
-        // on a device without ASTC (`RuntimeGap::DecodedHeapTexture`); an ETC2 or EAC texture on a
-        // device without them lies in a carrier of the same blocks (`etc.rs`).
+        // A format the device has no image of is refused before any layout; an ASTC texture on a
+        // device without ASTC is answered Metal's model of its blocks and refused its making
+        // (`RuntimeGap::DecodedHeapTexture`, below); an ETC2 or EAC texture on a device without
+        // them lies in a carrier of the same blocks (`etc.rs`).
         let answer = match device.heap_texture_size_and_align(&descriptor) {
             Ok(answer) => answer,
-            Err(
-                error @ (Error::Unsupported(_)
-                | Error::NotImplemented(RuntimeGap::DecodedHeapTexture)),
-            ) => {
+            Err(error @ Error::Unsupported(_)) => {
                 eprintln!("HEAPLAYOUT {what}: refused {error:?}");
                 continue;
             }
@@ -1031,7 +1031,10 @@ fn block_rows_lie_as_metal_lays_them_out(device: &Device, messages: &Messages) {
         let before = device.work_counts();
         let texture = match heap.new_texture_at_offset(&descriptor, OFFSET) {
             Ok(texture) => texture,
-            Err(error @ Error::Unsupported(_)) => {
+            Err(
+                error @ (Error::Unsupported(_)
+                | Error::NotImplemented(RuntimeGap::DecodedHeapTexture)),
+            ) => {
                 eprintln!("HEAPLAYOUT {what}: refused {error:?}");
                 continue;
             }

@@ -1344,6 +1344,11 @@ fn dynamic_numbers(
 /// module with one variable per unit view the device's storage views can declare, so any plan's
 /// binding is a subset of it (`bind::DynamicViewsModule`), and destroying it. A creation that
 /// fails, for any reason, answers no, which is what every device answered before it was asked.
+/// What the driver reports inside that failed creation is its answer to the runtime's own
+/// question and names none of the program's work (MoltenVK 1.4.2 reports the Metal it could not
+/// compile and the failed pipeline as two errors), so the sink is handed one informational line
+/// carrying those messages ([`SELF_CHECK_REFUSED`]) in place of the driver's errors; a creation
+/// that succeeds hands on whatever the driver reported in it, as any other making does.
 ///
 /// The check proves the driver **compiles** the shape. A driver that compiled it and then applied
 /// the dynamic offset to one of its variables alone would still be wrong, and none is measured to
@@ -1400,14 +1405,21 @@ fn multi_variable_dynamic_creates(device: &Device) -> Result<bool, Error> {
             .layout(layout);
         // SAFETY: every pointer in `info` outlives the call; no pipeline cache, since the
         // self-check's pipeline is never made again.
-        let created =
-            unsafe { raw.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) };
+        let (created, heard) = crate::device::holding(|| unsafe {
+            raw.create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
+        });
         match created {
             Ok(made) => {
                 pipeline = made.first().copied().unwrap_or(vk::Pipeline::null());
+                for (sink, message) in &heard {
+                    sink.deliver(message);
+                }
                 Ok(true)
             }
-            Err(_) => Ok(false),
+            Err((_, result)) => {
+                refused_self_check(result, &heard);
+                Ok(false)
+            }
         }
     })();
     // SAFETY: nothing uses the objects: no command recorded them, and the pipeline, where it was
@@ -1419,6 +1431,31 @@ fn multi_variable_dynamic_creates(device: &Device) -> Result<bool, Error> {
         release::object(raw, shader);
     }
     made
+}
+
+/// The id name of the informational line a device hands its sink where the driver did not make
+/// the self-check's pipeline of [`takes_multi_variable_dynamic`]: the driver's result and the
+/// messages it reported inside that creation, which the sink is not handed as the driver's own.
+pub(crate) const SELF_CHECK_REFUSED: &str = "metal2vulkan-self-check-refused";
+
+/// Tell the sink that heard the driver's messages `heard` inside the self-check's creation,
+/// informationally, that the driver did not make its pipeline ([`SELF_CHECK_REFUSED`]): its
+/// `result`, and those messages, by id name and text, in the order the driver raised them. A
+/// creation that reported nothing says nothing, as before.
+fn refused_self_check(result: vk::Result, heard: &[(crate::MessageSink, crate::DebugMessage)]) {
+    let Some((sink, _)) = heard.first() else {
+        return;
+    };
+    let mut text = format!(
+        "the device does not take a set-0 buffer binding of several variables as a dynamic \
+         descriptor: vkCreateComputePipelines of the self-check module answered {result:?}, \
+         reporting {} message(s) of its own",
+        heard.len()
+    );
+    for (_, message) in heard {
+        text.push_str(&format!("\n{}: {}", message.id_name, message.text));
+    }
+    crate::driver_facts::inform_through(Some(sink), SELF_CHECK_REFUSED, text);
 }
 
 /// The device's answer of [`takes_multi_variable_dynamic`], for the check that the restriction is

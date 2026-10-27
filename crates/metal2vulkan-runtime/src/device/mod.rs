@@ -31,6 +31,7 @@ mod staging;
 pub(super) mod submit;
 
 pub use adopt::RawDevice;
+pub(crate) use compiles::holding;
 pub use create::{
     DebugMessage, DeviceOptions, LayerSetting, LayerSettingValue, MessageKind, MessageSeverity,
     MessageSink,

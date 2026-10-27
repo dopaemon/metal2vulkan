@@ -102,11 +102,31 @@ pub(super) const DELAYED_DEALLOCATORS: [Degradation; 1] = [Degradation::HostDeal
 /// single-sample colour images bound to memory lie as Metal lays a heap texture out
 /// (`DriverFact::ColorImagesLieAsMetalHeapTextures`), or whose route is another than the
 /// optimal image bound there (`texture/heap.rs`, `Device::device_heap_layout`).
-fn heap_texture_kinds(device: &Device, descriptor: &TextureDescriptor) -> BTreeSet<Degradation> {
+///
+/// A texture the device made as a shadow of its elements in Metal's tiles in the heap's bytes
+/// (`tiled`: it moved `WorkCounts::heap_textures_tiled`, the route `texture/heap.rs` takes where
+/// the image it would bind there is itself a shadow or keeps a layout Metal does not, and the
+/// device moves the tiles) lies as Metal lays it out at Metal's answer: it announces that shadow
+/// (`shadowed-texture`) and no route or layout of an image bound there. The lavapipe of the Linux
+/// gate's container takes that route for a `Private` heap's texture.
+fn heap_texture_kinds(
+    device: &Device,
+    descriptor: &TextureDescriptor,
+    tiled: bool,
+) -> BTreeSet<Degradation> {
     let answer = device.heap_texture_size_and_align(descriptor).unwrap();
     let metal = device
         .metal_heap_texture_size_and_align(descriptor)
         .unwrap();
+    if tiled {
+        return forced(&[
+            (
+                Degradation::HeapTextureLargerThanMetal,
+                metal.is_some_and(|metal| answer != metal),
+            ),
+            (Degradation::ShadowedTexture, true),
+        ]);
+    }
     let facts = &device.properties().driver_facts;
     let hides = facts.contains(&DriverFact::CompressedImagesHideAliasedWrites);
     let format = direct_format(descriptor.pixel_format).expect("a direct format");
@@ -618,9 +638,12 @@ fn a_texture_made_in_a_used_heap_after_a_dispatch_is_reached() {
         let mut descriptor = texture_descriptor(&sampling.literal, sampling.usage).unwrap();
         descriptor.resource_options = ResourceOptions::private();
         let mut first = sampling.forced(device);
-        first.extend(heap_texture_kinds(device, &descriptor));
+        let unplaced = descriptor;
         descriptor.placement = IdPlacement::At(id);
+        let made = device.work_counts().heap_textures_tiled;
         let late = heap.new_texture(&descriptor).unwrap();
+        let tiled = device.work_counts().heap_textures_tiled > made;
+        first.extend(heap_texture_kinds(device, &unplaced, tiled));
         let upload = sampling.queue.command_buffer().unwrap();
         sampling.upload(device, &upload, &late);
         upload.commit().unwrap();
@@ -981,6 +1004,7 @@ fn a_heap_s_token_drops_at_its_release_whatever_keeps_its_textures_images() {
         let texture = sampling.texture();
         let mut d = texture_descriptor(&sampling.literal, sampling.usage).unwrap();
         d.resource_options = ResourceOptions::private();
+        let made = device.work_counts().heap_textures_tiled;
         for heap_type in [HeapType::Automatic, HeapType::Placement] {
             for case in ["through its ID", "first move"] {
                 let dropped = Arc::new(AtomicBool::new(false));
@@ -1025,8 +1049,14 @@ fn a_heap_s_token_drops_at_its_release_whatever_keeps_its_textures_images() {
                 assert_eq!(&output, expected, "{what}");
             }
         }
+        let tiled = device.work_counts().heap_textures_tiled > made;
         let mut first = sampling.forced(device);
-        first.extend(heap_texture_kinds(device, &d));
+        first.extend(heap_texture_kinds(device, &d, tiled));
+        // A shadow is announced as its ID's holder once: the command that reaches it through its
+        // ID alone binds the heap set holding it, neither naming it nor making it resident.
+        if tiled {
+            first.insert(UNNAMED_SHADOWS[0]);
+        }
         assert_made_once(messages, &[], &first);
     });
 }

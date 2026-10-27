@@ -1037,9 +1037,12 @@ pub(super) const COLLIDING_ROWS: [Degradation; 1] = [Degradation::CollidingSurfa
 /// bytes being unmeasured, and announces nothing; and the same plane at 32 bytes a row, whose GPU
 /// rows lie 32 apart and share nothing, is made announcing no kind of its own. Each runs over an
 /// ordinary buffer standing for the surface and a no-copy one, and the second plane announces
-/// nothing, a device announcing each kind once. The texture's reads
-/// here are the CPU's own rows: every blit of such a plane is refused, the shadow's two copy
-/// regions each way being the only form that holds the sharing, so a kernel is the only writer
+/// nothing, a device announcing each kind once. The CPU reads and writes the plane's own rows.
+/// A blit out of the plane into a buffer is served, announcing nothing of its own: it reads each
+/// row at its own GPU row, a shared byte once for each row that holds it
+/// ([`a_blit_out_of_a_plane_whose_gpu_rows_share_bytes_reads_each_row_at_its_own_pitch`] holds
+/// its bytes over more shapes). A blit into it stays refused, a write having to settle which row
+/// leaves the shared bytes where Metal settles it no one way, so a kernel is the only GPU writer
 /// the plane takes.
 #[test]
 fn an_iosurface_plane_whose_gpu_rows_share_bytes_is_announced() {
@@ -1102,21 +1105,42 @@ fn an_iosurface_plane_whose_gpu_rows_share_bytes_is_announced() {
                 .unwrap();
             held.write(0, &written);
             held.check(&format!("{kind:?}: replace_region"));
-            // A blit addresses the GPU's rows as bytes, which no row copy holds.
+            // A blit out of the plane reads each buffer row at its own GPU row, 16 apart here.
             let out = buffer_with(&device, &vec![0xee; n]).unwrap();
+            blit(&device, |e| {
+                e.copy_from_texture_to_buffer(
+                    &shared,
+                    0,
+                    0,
+                    origin([0, 0]),
+                    size([w, h]),
+                    &out,
+                    0,
+                    row,
+                    row * h,
+                    BlitOption::None,
+                )
+                .unwrap_or_else(|e| panic!("{kind:?}: a blit out of rows that share bytes: {e}"))
+            });
+            assert_eq!(
+                read_buffer(&out, 0, n as u64).unwrap(),
+                gather(&held.model, &gpu_rows(0, row, row, h)),
+                "{kind:?}: a blit's read of rows that share bytes"
+            );
+            // A blit into the plane writes the GPU's rows as bytes, which no row copy holds.
             let mut gap = None;
             blit(&device, |e| {
                 gap = e
-                    .copy_from_texture_to_buffer(
-                        &shared,
-                        0,
-                        0,
-                        origin([0, 0]),
-                        size([w, h]),
+                    .copy_from_buffer_to_texture(
                         &out,
                         0,
                         row,
                         row * h,
+                        size([w, h]),
+                        &shared,
+                        0,
+                        0,
+                        origin([0, 0]),
                         BlitOption::None,
                     )
                     .err();
@@ -1124,7 +1148,7 @@ fn an_iosurface_plane_whose_gpu_rows_share_bytes_is_announced() {
             assert_eq!(
                 gap,
                 Some(Error::NotImplemented(RuntimeGap::OverlappingSurfaceRows)),
-                "{kind:?}: a blit of rows that share bytes"
+                "{kind:?}: a blit into rows that share bytes"
             );
             // The plane of the first buffer kind announces [`COLLIDING_ROWS`]; the second's
             // announces nothing, a device announcing each kind once. Both are the set a step

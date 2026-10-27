@@ -596,7 +596,10 @@ fn set_mode(dir: &Path, mode: u32) {
 /// The directory is made writable for the device to open (`Directory::open` checks that it takes
 /// a write and fails the creation otherwise, which is the one shader-cache error there is), and
 /// unwritable afterwards, which is the state a full disk or a directory someone else locked down
-/// leaves. Unix only: it turns on the directory's mode bits.
+/// leaves. Unix only: it turns on the directory's mode bits. A process the mode bits do not bind
+/// (one running as root, as in the Linux gate's container) writes into the directory all the
+/// same, so nothing is refused there: the test checks that with a file of its own first, and where
+/// the write goes through it says so (`CACHE-UNWRITABLE`) and holds nothing.
 #[cfg(unix)]
 #[test]
 fn an_entry_that_cannot_be_written_is_announced_and_ends_nothing() {
@@ -609,6 +612,17 @@ fn an_entry_that_cannot_be_written_is_announced_and_ends_nothing() {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let build = build_dir(cache.path());
         set_mode(&build, READ_ONLY_DIR);
+        let probe = build.join("cache-unwritable-probe");
+        if std::fs::write(&probe, b"probe").is_ok() {
+            std::fs::remove_file(&probe).unwrap();
+            set_mode(&build, 0o700);
+            eprintln!(
+                "CACHE-UNWRITABLE: this process wrote into a directory of mode {READ_ONLY_DIR:o} \
+                 (the mode bits do not bind it, as they do not bind root), so no entry can be \
+                 refused here; the test did not run"
+            );
+            return;
+        }
         let made = pipeline_state(&device, &case);
         let state = match made {
             Ok(state) => state,

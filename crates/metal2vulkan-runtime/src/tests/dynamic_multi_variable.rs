@@ -16,7 +16,9 @@
 //! - and the sets its dispatches take are the ones the variant's own choice calls for
 //!   (`ComputePipelineState::set_zero_choice`): where it pushes set 0 every dispatch pushes, where
 //!   it made the store sink's binding dynamic every dispatch after the first binds its
-//!   predecessor's set, and otherwise each allocates and writes its own.
+//!   predecessor's set, and otherwise each allocates and writes its own;
+//! - and a self-check the driver refuses reaches the device's sink as at most one informational
+//!   line, never as the driver's errors of the runtime's own question.
 //!
 //! The device's answer is read where it bounds that choice -- a device that does not take such a
 //! binding has none of them dynamic -- and never as the expectation itself. The two come apart: a
@@ -32,14 +34,17 @@
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`).
 
+use crate::pipeline::objects::SELF_CHECK_REFUSED;
 use crate::pipeline::SetZeroChoice;
 use crate::{
-    Device, DeviceKind, DeviceOptions, PipelineOptions, ResourceOptions, ShaderCacheOptions, Size,
+    DebugMessage, Device, DeviceKind, DeviceOptions, MessageSeverity, MessageSink, PipelineOptions,
+    ResourceOptions, ShaderCacheOptions, Size,
 };
 use metal2vulkan::device::VkExtension;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 struct Scratch(PathBuf);
 
@@ -74,6 +79,11 @@ enum Pushing {
 }
 
 fn device(cache: &Path, pushing: Pushing) -> Device {
+    device_with(cache, pushing, None)
+}
+
+/// [`device`], its messages handed to `messages`.
+fn device_with(cache: &Path, pushing: Pushing, messages: Option<MessageSink>) -> Device {
     let withheld: BTreeSet<VkExtension> = match pushing {
         Pushing::Withheld => [VkExtension::KhrPushDescriptor].into_iter().collect(),
         Pushing::Enabled => BTreeSet::new(),
@@ -92,6 +102,7 @@ fn device(cache: &Path, pushing: Pushing) -> Device {
             directory: Some(cache.to_owned()),
             ..ShaderCacheOptions::default()
         },
+        messages,
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
@@ -352,6 +363,60 @@ fn a_four_variable_kernel_without_the_push_command_follows_its_budget() {
              `VK_KHR_push_descriptor` withheld, so this test reached none of the choice it holds"
         );
         ran.holds_the_choice(answer, dispatches, "encoders_plain, no push");
+    }
+}
+
+/// The self-check's failed creation is the device's answer to the runtime's own question, not a
+/// fault of the program's work: a device whose answer is no hands its sink none of the errors the
+/// driver reported inside that creation, but at most one informational line carrying them
+/// (`objects::SELF_CHECK_REFUSED`, none where the driver reported nothing); a device whose answer
+/// is yes hands it no such line. MoltenVK 1.4.2 on an Apple M3 Max reports two errors there (the
+/// Metal it could not compile, and the pipeline), which reached the sink as errors before, failing
+/// every validation lane that made a kernel of such a binding. The `DYNMULTI` line says what the
+/// device answered and what its sink heard.
+#[test]
+fn a_refused_self_check_reaches_the_sink_as_one_informational_line() {
+    let heard: Arc<Mutex<Vec<DebugMessage>>> = Arc::default();
+    let sink = {
+        let heard = heard.clone();
+        MessageSink::new(move |message| heard.lock().unwrap().push(message.clone()))
+    };
+    let scratch = Scratch::new();
+    let answer = {
+        let device = device_with(&scratch.0, Pushing::Enabled, Some(sink));
+        // What the device's making reported is not the self-check's.
+        heard.lock().unwrap().clear();
+        crate::pipeline::objects::asks_multi_variable_dynamic(&device)
+    };
+    let heard = heard.lock().unwrap().clone();
+    let refused: Vec<_> = (heard.iter())
+        .filter(|message| message.id_name == SELF_CHECK_REFUSED)
+        .collect();
+    eprintln!(
+        "DYNMULTI the device answered {answer}; its sink heard {} message(s), {} of them \
+         `{SELF_CHECK_REFUSED}`: {:?}",
+        heard.len(),
+        refused.len(),
+        refused.first().map(|message| &message.text)
+    );
+    let errors: Vec<_> = (heard.iter())
+        .filter(|message| message.severity == MessageSeverity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "the self-check's creation reached the sink as errors: {errors:#?}"
+    );
+    match answer {
+        true => assert!(
+            refused.is_empty(),
+            "a device that answered yes: {refused:#?}"
+        ),
+        false => assert!(
+            refused.len() <= 1
+                && (refused.iter()).all(|message| message.severity == MessageSeverity::Info),
+            "a device that answered no hands its sink at most one informational line: \
+             {refused:#?}"
+        ),
     }
 }
 

@@ -661,14 +661,14 @@ fn astc_textures_the_runtime_does_not_hold_are_refused() {
         let written = texture(device, pf, usage);
         let mut descriptor = TextureDescriptor::texture_2d(pf, SIDE.into(), SIDE.into(), false);
         descriptor.resource_options = ResourceOptions::shared();
-        // Its heap size query is refused alike.
-        let answer = device.heap_texture_size_and_align(&descriptor).map(drop);
+        // Its heap size query answers Metal's model of the texture's blocks, which no image of
+        // the device decides (`Device::heap_texture_size_and_align`), while the making's refusal
+        // stands.
+        let answer = device.heap_texture_size_and_align(&descriptor);
+        let metal = device.metal_heap_texture_size_and_align(&descriptor);
         assert!(
-            matches!(
-                answer,
-                Err(Error::NotImplemented(RuntimeGap::DecodedHeapTexture))
-            ),
-            "{answer:?}"
+            matches!((&answer, &metal), (Ok(a), Ok(Some(m))) if a == m && a.size > 0),
+            "the size query answered {answer:?}, Metal's model {metal:?}"
         );
         let heap_descriptor =
             HeapDescriptor::new(HeapType::Placement, 1 << 16, ResourceOptions::shared());
