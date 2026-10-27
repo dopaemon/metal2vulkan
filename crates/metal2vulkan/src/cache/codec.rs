@@ -824,7 +824,7 @@ codec_enum! {
     ImageDim { D1, D2, D3, Cube, Buffer }
     SampledType { Float, Sint, Uint, Uint64 }
     ImageAccess { Sampled, Storage }
-    StorageFormatClass { NotStorage, Unknown, Format(f0), HalfBits }
+    StorageFormatClass { NotStorage, Unknown, Format(f0) }
     HandleClass { Image(f0), Sampler { compare, integer, cube_gradient }, FunctionTable }
     SyntheticBinding {
         ArgumentTable, ExecutionStatus, RootTable, HandleTable, ConstantBlob, TessellationFactors, Imageblock,
@@ -1263,7 +1263,6 @@ codec_enum! {
         HeapCrossClassNeutral { stage, class, every_member },
         AnisotropicSampler { slot },
         StorageTextureIntegerChannels { slot },
-        HeapHalfTexelWrites { stage, packed },
         MovableStorageWrites { early_variant },
         SynthesizedGeometry { weights, layer, viewport },
         ObjectThreadgroupArena { static_bytes, payload },

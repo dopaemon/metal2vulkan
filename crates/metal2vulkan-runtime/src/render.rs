@@ -8515,7 +8515,6 @@ impl RenderLowering {
         };
         // The formats the draw binds, which a specialized notice names.
         let formats = |slot| tables.bound_format(slot);
-        device.degrade_half_texel_writes(&variant.pipeline().dependencies);
         (variant.objects()).degrade_bound_formats(&variant.pipeline().stages, Some(&formats));
         // A variant whose notes test no bound value is quiet at every draw, and kept as none
         // (`Device::tests_bound_values`).

@@ -912,8 +912,6 @@ fn from_image(
         StorageImageClass::AlphaInRed => alpha_in_red(fb, x, true)?,
         // A `YCbCrWrite` slot is only written (`StorageImageClass::YCbCrWrite`).
         StorageImageClass::YCbCrWrite => x,
-        // A half-float texel's bits, through its unsigned integer alias: Metal's read, whole.
-        StorageImageClass::HalfBits => return half_bits_texel(fb, decl, form, x),
         // An `RGB9E5Float` word, through its `R32_UINT` alias, decoded exactly.
         StorageImageClass::SharedExponentBits => return shared_exponent_texel(fb, form, x),
     };
@@ -1652,7 +1650,6 @@ pub fn to_image(
             ))
         }
         StorageImageClass::YCbCrWrite => ycbcr_write_texel(fb, form, x)?,
-        StorageImageClass::HalfBits => half_bits(fb, form, x)?,
         StorageImageClass::SharedExponentBits => shared_exponent_word(fb, form, x)?,
     };
     match decl.x_channel && form.lanes == 4 {
@@ -1711,79 +1708,6 @@ fn ycbcr_write_texel(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -
     words.push(u32s(fb, 1, 1)?);
     let ty = vec(fb, u, 4)?;
     fb.composite_construct(ty, &words)
-}
-
-/// The held texel (`form`, a `half` or `float` result) of a `HalfBits` slot's image texel `x` (a
-/// `uvec4`: each channel of its format a half's bits, a channel it lacks the integer the device's
-/// read gives, 0 or alpha 1, and Metal's out-of-bounds texel's likewise): each channel's half
-/// widened exactly (`narrow::from_bits`), Metal's `half` read of the half stored, a NaN's sign
-/// and payload kept, a `float` result's too, where Metal's `float` read of a half NaN is
-/// `0x7fc00000` (the M3 Max: every NaN, fast and safe math; `PrecisionNote::DeviceNanEncoding`); a
-/// lane the format lacks its integer converted (0.0, alpha 1.0).
-fn half_bits_texel(
-    fb: &mut FunctionBuilder<'_>,
-    decl: &ImageDecl,
-    form: TexelForm,
-    x: SValue,
-) -> BResult<SValue> {
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
-    let channels = match decl.format {
-        crate::spv::ImageFormat::R16ui => 1,
-        crate::spv::ImageFormat::Rg16ui => 2,
-        _ => 4,
-    };
-    let half = Form {
-        held: Held::Float(FloatFmt::Half),
-        lanes: 4,
-    };
-    let mut v = narrow::from_bits(fb, half, x)?;
-    let f32_ = f32_ty(fb)?;
-    for lane in channels..4u32 {
-        let word = fb.composite_extract(x, &[lane])?;
-        let constant = fb.convert(ConvOp::ConvertUToF, word, f32_)?;
-        v = fb.composite_insert(constant, v, &[lane])?;
-    }
-    // An RGBX texel reads alpha 1 (`RGBX16Float`).
-    if decl.x_channel {
-        let one = f32s(fb, 1, 1.0)?;
-        v = fb.composite_insert(one, v, &[3])?;
-    }
-    match form.lanes {
-        1 => fb.composite_extract(v, &[0]),
-        _ => Ok(v),
-    }
-}
-
-/// The `uvec` a `HalfBits` slot stores for held texel `x` (`f32` lanes of `form`): each lane's
-/// half bits in its low 16 bits (`narrow::to_bits`, exact for every half, a NaN's sign and
-/// payload included). A `half` texel's lanes are halves already, widened exactly; a `float`
-/// texel's are first rounded to a half, which no conversion of the device's makes through the
-/// alias: toward zero, as Metal stores it (`color_write::small_float`: past 65504 to 65504, an
-/// infinity kept, every NaN `0x7fc00000`, whose bits are Metal's `0x7e00`). An integer texel is
-/// not one a half-float slot takes.
-fn half_bits(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResult<SValue> {
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
-    let x = match form.conv {
-        TexelConv::F32 => {
-            let f = Form {
-                held: Held::Float(FloatFmt::F32),
-                lanes: form.lanes,
-            };
-            crate::lower::arith::color_write::small_float(
-                fb,
-                f,
-                x,
-                crate::pipeline::color_writes::HALF,
-            )?
-        }
-        TexelConv::F16 => x,
-        _ => {
-            return Err(crate::spirv::error::BuildError::Type(
-                crate::spirv::error::TypeRule::FunctionSignature,
-            ))
-        }
-    };
-    crate::lower::arith::narrow::to_bits(fb, form.half(), x)
 }
 
 /// The held texel (`form`, a `half` or `float` result) of a `SharedExponentBits` slot's image texel
@@ -1943,26 +1867,14 @@ fn heap_class_among(
 }
 
 /// The estimated words of a write's conversion by storage class `class` on four lanes: an 8-bit
-/// sRGB format's codes ([`srgb_codes`]), a half-float texel's bits ([`half_bits`]), an `RGB9E5Float` word ([`shared_exponent_word`]), or a YCbCr
-/// texel's bits and mark ([`ycbcr_write_texel`]), none for the other classes' swizzles, which the
-/// write's base estimate covers.
+/// sRGB format's codes ([`srgb_codes`]), an `RGB9E5Float` word ([`shared_exponent_word`]), or a
+/// YCbCr texel's bits and mark ([`ycbcr_write_texel`]), none for the other classes' swizzles,
+/// which the write's base estimate covers.
 pub(crate) fn class_write_words(class: StorageImageClass) -> u32 {
-    use crate::lower::arith::color_write;
     match class {
         StorageImageClass::YCbCrWrite => YCBCR_WRITE_WORDS,
         StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra => SRGB_WRITE_WORDS,
         StorageImageClass::SharedExponentBits => SHARED_EXPONENT_WORDS,
-        // A `float` texel's rounding, then four lanes' bits.
-        StorageImageClass::HalfBits => {
-            let half = crate::lower::arith::legal::Form {
-                held: crate::lower::arith::legal::Held::Float(
-                    crate::lower::arith::legal::FloatFmt::Half,
-                ),
-                lanes: 1,
-            };
-            color_write::small_float_words(crate::pipeline::color_writes::HALF, 4) as u32
-                + 4 * crate::lower::arith::narrow::bits_words(half)
-        }
         _ => 0,
     }
 }
@@ -3143,79 +3055,6 @@ pub(crate) fn heap_raw_image(
     fb.load(p, MemAccess::default())
 }
 
-/// Where a `half` or `float` write through heap handle `handle` of heap group `group` stores a
-/// half-float member's bits through the group's unsigned integer twin (`HeapPlan::bits`):
-/// whether the handle's class index names one of the formats the twin holds (a `bool`,
-/// `metal::texel_format::heap_half_bits_indices`), and the twin's image at the handle's element,
-/// loaded through a `NonUniform` access chain.
-fn heap_twin(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    group: u32,
-    handle: ValueId,
-) -> BResult<(SValue, SValue)> {
-    let bits = cx
-        .plan
-        .families
-        .texture
-        .heap
-        .get(&group)
-        .and_then(|h| h.bits);
-    let Some((class, _)) = bits else {
-        return Err(cx.fail(format!("heap group {group} has no unsigned twin")));
-    };
-    let Some(g) = cx.decl.families.texture.heap.get(&class).copied() else {
-        return Err(cx.fail(format!("heap class {class:?} is not declared")));
-    };
-    let indices = crate::metal::texel_format::heap_half_bits_indices();
-    let is_bits = heap_class_among(cx, fb, handle, &indices)?;
-    let h = cx.operand(fb, handle)?;
-    let element = heap_element_index(cx, fb, h)?;
-    let ptr = fb.module().global_value(g)?;
-    let p = fb.access_chain_non_uniform(ptr, element)?;
-    let img = fb.load(p, MemAccess::default())?;
-    Ok((is_bits, img))
-}
-
-/// The words [`heap_twin`]'s class test emits, at most: the field's shift and mask, and per
-/// member class the twin holds its constant, comparison and union.
-pub(crate) fn heap_bits_words() -> u32 {
-    let n = crate::metal::texel_format::heap_half_bits_indices().len() as u32;
-    20 + 14 * n
-}
-
-/// A half-float member's write through the heap's unsigned integer twin: where the handle names
-/// one, its texel's bits through the twin's image, else the float class's.
-#[derive(Clone, Copy)]
-struct TwinWrite {
-    is_bits: SValue,
-    img: SValue,
-    bits: SValue,
-}
-
-/// Write `texel` to `img` at `at`, or where `twin` names a member the twin holds, its bits
-/// through the twin's image.
-fn store(
-    fb: &mut FunctionBuilder<'_>,
-    (img, at, texel): (SValue, SValue, SValue),
-    mem: TexelMemory,
-    twin: Option<TwinWrite>,
-) -> BResult<()> {
-    let Some(t) = twin else {
-        return fb.write(img, at, texel, &ImageOperands::default(), mem);
-    };
-    let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-        fb.write(t.img, at, t.bits, &ImageOperands::default(), mem)?;
-        Ok(ArmEnd::FallThrough(Vec::new()))
-    });
-    let other: ArmFn<'_, ()> = Box::new(move |fb, _| {
-        fb.write(img, at, texel, &ImageOperands::default(), mem)?;
-        Ok(ArmEnd::FallThrough(Vec::new()))
-    });
-    fb.if_(&mut (), t.is_bits, then, Some(other))?;
-    Ok(())
-}
-
 /// The table an extended-range texel of `form` converts through: the module's for an `_sRGB`
 /// form (`ArithPlan::extended_range_srgb`), the form's own for a padded `_sRGB` one
 /// (`ArithPlan::padded_srgb`), none for a linear one.
@@ -3285,19 +3124,6 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, false)?,
         _ => texel,
     };
-    // A half-float member's bits through the group's unsigned integer twin, where the handle's
-    // class names one: its image is the float element's, viewed through its integer alias.
-    let twin = match (w.heap_bits, w.image) {
-        (true, ImageRef::Heap { group, handle }) => {
-            let (is_bits, twin_img) = heap_twin(cx, fb, group, handle)?;
-            Some(TwinWrite {
-                is_bits,
-                img: twin_img,
-                bits: half_bits(fb, w.texel, v)?,
-            })
-        }
-        _ => None,
-    };
     let mem = texel_memory(cx, fb, &w.image)?;
     // A write to a sparse texture is dropped.
     let kept = sparse_writes_kept(cx, fb, &w.image)?;
@@ -3308,7 +3134,7 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
             cond = fb.binary(BinOp::LogicalAnd, cond, c)?;
         }
         let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            store(fb, (img, coord, texel), mem, twin)?;
+            fb.write(img, coord, texel, &ImageOperands::default(), mem)?;
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
         fb.if_(&mut (), cond, then, None)?;
@@ -3317,12 +3143,12 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
     if !w.guard {
         // A write through the null heap element, or at a level the texture lacks, is dropped.
         let cond = match (live, within) {
-            (None, None) => return store(fb, (img, coord, texel), mem, twin),
+            (None, None) => return fb.write(img, coord, texel, &ImageOperands::default(), mem),
             (Some(c), None) | (None, Some(c)) => c,
             (Some(a), Some(b)) => fb.binary(BinOp::LogicalAnd, a, b)?,
         };
         let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            store(fb, (img, coord, texel), mem, twin)?;
+            fb.write(img, coord, texel, &ImageOperands::default(), mem)?;
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
         fb.if_(&mut (), cond, then, None)?;
@@ -3339,7 +3165,7 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         inb = fb.binary(BinOp::LogicalAnd, inb, within)?;
     }
     let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-        store(fb, (img, coord, texel), mem, twin)?;
+        fb.write(img, coord, texel, &ImageOperands::default(), mem)?;
         Ok(ArmEnd::FallThrough(Vec::new()))
     });
     fb.if_(&mut (), inb, then, None)?;
@@ -3461,12 +3287,6 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
     let dims = coord_len(&decl);
     let s = *s;
     let mem = texel_memory(cx, fb, &s.image)?;
-    // Whether the handle names a member the unsigned integer twin holds, and the twin's image,
-    // read once, outside the loop.
-    let twin = match (s.heap_bits, s.image) {
-        (true, ImageRef::Heap { group, handle }) => Some(heap_twin(cx, fb, group, handle)?),
-        _ => None,
-    };
     let body: LoopFn<'_, EmitCx<'c>> = Box::new(move |fb, cx, lc| {
         let k = fb.load(counter, MemAccess::default())?;
         let done = fb.binary(BinOp::UGreaterThanEqual, k, n)?;
@@ -3482,31 +3302,14 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
         let cell = imageblock::cell_offset(cx, fb, x, y, s.cell_bytes)?;
         let field = u32s(fb, 1, s.field)?;
         let off = fb.binary(BinOp::IAdd, cell, field)?;
-        let (texel, twin) = match s.bits {
-            Some(leaf) => {
-                let v = imageblock::load(cx, fb, leaf, s.contained, off)?;
-                (cell_bits(fb, &decl, s.texel.lanes, v)?, None)
-            }
-            None => {
-                let v = imageblock::load(cx, fb, s.leaf, s.contained, off)?;
-                let held = slice_texel(fb, s.texel, v)?;
-                let form = TexelForm {
-                    conv: s.texel.conv,
-                    lanes: 4,
-                };
-                let test = NanTest::for_modes(&cx.plan.families.arith.modes);
-                let texel = to_image(fb, &decl, form, held, cx.decl.families.arith.srgb, test)?;
-                let twin = match twin {
-                    Some((is_bits, img)) => Some(TwinWrite {
-                        is_bits,
-                        img,
-                        bits: half_bits(fb, form, held)?,
-                    }),
-                    None => None,
-                };
-                (texel, twin)
-            }
+        let v = imageblock::load(cx, fb, s.leaf, s.contained, off)?;
+        let held = slice_texel(fb, s.texel, v)?;
+        let form = TexelForm {
+            conv: s.texel.conv,
+            lanes: 4,
         };
+        let test = NanTest::for_modes(&cx.plan.families.arith.modes);
+        let texel = to_image(fb, &decl, form, held, cx.decl.families.arith.srgb, test)?;
         let ty = vec(fb, u, dims)?;
         let delta = if dims == 2 {
             fb.composite_construct(ty, &[x, y])?
@@ -3518,10 +3321,10 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
         if !s.guard {
             // A level the texture lacks drops the slice, as the null heap element does.
             let Some(within) = within else {
-                return store(fb, (img, at, texel), mem, twin);
+                return fb.write(img, at, texel, &ImageOperands::default(), mem);
             };
             let then: ArmFn<'_, EmitCx<'c>> = Box::new(move |fb, _| {
-                store(fb, (img, at, texel), mem, twin)?;
+                fb.write(img, at, texel, &ImageOperands::default(), mem)?;
                 Ok(ArmEnd::FallThrough(Vec::new()))
             });
             fb.if_(cx, within, then, None)?;
@@ -3534,7 +3337,7 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
             inb = fb.binary(BinOp::LogicalAnd, inb, within)?;
         }
         let then: ArmFn<'_, EmitCx<'c>> = Box::new(move |fb, _| {
-            store(fb, (img, at, texel), mem, twin)?;
+            fb.write(img, at, texel, &ImageOperands::default(), mem)?;
             Ok(ArmEnd::FallThrough(Vec::new()))
         });
         fb.if_(cx, inb, then, None)?;
@@ -3554,27 +3357,6 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
         fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)?;
     }
     Ok(())
-}
-
-/// The `HalfBits` image texel of a `half` slice's cell bits `v` (`lanes` 16-bit lanes, each
-/// zero-extended in a `u32`): the lanes, a 0 (the half `+0.0`) for each lane the element lacks,
-/// and RGBX's green in the fourth channel, the texel [`to_image`] makes of the cell's widened
-/// halves.
-fn cell_bits(
-    fb: &mut FunctionBuilder<'_>,
-    decl: &ImageDecl,
-    lanes: u8,
-    v: SValue,
-) -> BResult<SValue> {
-    let form = TexelForm {
-        conv: TexelConv::I16 { signed: false },
-        lanes,
-    };
-    let x = slice_texel(fb, form, v)?;
-    match decl.x_channel {
-        true => x_channel_write(fb, x),
-        false => Ok(x),
-    }
 }
 
 /// A cooperative slice's first cell and step: the invocation's index in the threadgroup and the

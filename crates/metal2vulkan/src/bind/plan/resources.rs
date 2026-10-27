@@ -59,8 +59,8 @@ use crate::error::{BindError, Capability, Error, Feature, LowerFamily, Unsupport
 use crate::metal::bicubic::{texels as bicubic_texels, BicubicTexels};
 use crate::metal::format::{
     accessed_without_format, aspects, direct_format, is_depth_stencil, sampled_type, srgb_raw_twin,
-    storage_choice_viewed, texel_buffer_alpha_in_red, vk_format, writes_dropped,
-    ycbcr_writes_stored, ExtendedRange, FormatMapping, StorageUse,
+    storage_choice, texel_buffer_alpha_in_red, vk_format, writes_dropped, ycbcr_writes_stored,
+    ExtendedRange, FormatMapping, StorageUse,
 };
 use crate::metal::sampler::{
     check_border_view, check_sampler, opaque_black_reads_transparent, vk_filtering,
@@ -982,18 +982,10 @@ impl ResourcePlanner<'_> {
                 vk::Format::R32G32B32A32_UINT,
             )),
             Some(
-                bound @ (TextureShape::Texture { pixel_format, .. }
-                | TextureShape::Buffer { pixel_format, .. }),
+                TextureShape::Texture { pixel_format, .. }
+                | TextureShape::Buffer { pixel_format, .. },
             ) if accessed => {
-                let aliased = !matches!(
-                    bound,
-                    TextureShape::Texture {
-                        own_format_views: true,
-                        ..
-                    }
-                );
-                let c = storage_choice_viewed(pixel_format, use_, self.profile, aliased)
-                    .map_err(bind_error)?;
+                let c = storage_choice(pixel_format, use_, self.profile).map_err(bind_error)?;
                 let view = direct_format(pixel_format)
                     .ok_or_else(|| internal("a storage texture without a format"))?;
                 Some((c, view))
@@ -1013,22 +1005,13 @@ impl ResourcePlanner<'_> {
             }
             other => other,
         };
-        // A half-float texture the function only writes through its unsigned integer alias
-        // (`StorageImageClass::HalfBits`), and an `RGB9E5Float` texture through `R32_UINT`
-        // (`StorageImageClass::SharedExponentBits`): the slot is declared of the alias's numeric
-        // type, as its neutral is.
+        // An `RGB9E5Float` texture through `R32_UINT` (`StorageImageClass::SharedExponentBits`):
+        // the slot is declared of the alias's numeric type, as its neutral is.
         let base = match choice {
-            Some((c, _))
-                if matches!(
-                    c.class,
-                    StorageImageClass::HalfBits | StorageImageClass::SharedExponentBits
-                ) =>
-            {
-                ImageHandleClass {
-                    sampled_type: SampledType::Uint,
-                    ..base
-                }
-            }
+            Some((c, _)) if c.class == StorageImageClass::SharedExponentBits => ImageHandleClass {
+                sampled_type: SampledType::Uint,
+                ..base
+            },
             _ => base,
         };
         let mut variant = choice

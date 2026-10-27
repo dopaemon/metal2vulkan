@@ -24,7 +24,7 @@ use crate::bind::neutral::numeric_type;
 use crate::device::enables::format_exposure_gap;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
-use crate::error::{Capability, DescriptorError, DriverDeviation, Error, Feature, Unsupported};
+use crate::error::{Capability, DescriptorError, Error, Feature, Unsupported};
 use crate::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
@@ -2017,19 +2017,6 @@ pub(crate) fn integer_channels_word(pf: PixelFormat) -> u32 {
         })
 }
 
-/// Whether the device's conversion decides the NaN a `half` texel written to a texture of pixel
-/// format `pf` stores, once the write hands it the half widened: 16-bit float channels
-/// (`metal::texel_format::half_channels`, whose store `DriverDeviation::MetalHalfTexelWrites`
-/// states Metal's) and a packed small float's (`RG11B10Float`, `RGB9E5Float`). A 32-bit float
-/// channel stores its bits, and a normalized or integer one no NaN.
-pub fn half_write_nans_converted(pf: PixelFormat) -> bool {
-    use crate::vk::NumericFormat as N;
-    crate::metal::texel_format::half_channels(pf)
-        || direct_format(pf).and_then(|f| f.block()).is_some_and(|b| {
-            b.packed_bits.is_some() && matches!(b.color, Some(N::Ufloat | N::Sfloat))
-        })
-}
-
 /// The class of pixel format `pf` (`metal::texel_format::TexelFormat`'s word, as its `half`
 /// conversion takes it): the value a specialized note's test of
 /// `SpecKey::BoundTexelFormat` reads for a texture of `pf` bound at its slot
@@ -2908,24 +2895,11 @@ pub(crate) fn storage_choice(
     use_: StorageUse,
     profile: &DeviceProfile,
 ) -> Result<StorageImageChoice, Error> {
-    storage_choice_viewed(pf, use_, profile, true)
-}
-
-/// [`storage_choice`] of a texture whose image takes views in other formats only where
-/// `aliased`: an image viewed in its own format alone (a wrapped one made without
-/// `MUTABLE_FORMAT`) takes no half-float alias (`StorageImageClass::HalfBits`) and keeps its
-/// format's own choice, as before.
-pub(crate) fn storage_choice_viewed(
-    pf: PixelFormat,
-    use_: StorageUse,
-    profile: &DeviceProfile,
-    aliased: bool,
-) -> Result<StorageImageChoice, Error> {
     let x = x_channel(pf);
     if x && use_.texel_buffer {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
-    let mut choice = held_storage_choice(pf, use_, profile, aliased)?;
+    let mut choice = held_storage_choice(pf, use_, profile)?;
     choice.x_channel = x;
     Ok(choice)
 }
@@ -2935,7 +2909,6 @@ fn held_storage_choice(
     pf: PixelFormat,
     use_: StorageUse,
     profile: &DeviceProfile,
-    aliased: bool,
 ) -> Result<StorageImageChoice, Error> {
     use vk::Format as F;
     let (aspects, candidates) = candidates(pf)?;
@@ -2999,14 +2972,6 @@ fn held_storage_choice(
     // alias, whose encode the shader applies before it moves green into the fourth lane.
     let srgb_x =
         x_channel(pf) && use_.write && matches!(alias, Some((_, StorageImageClass::SrgbEncode)));
-    // A half-float texture the function only writes, on a device not measured to store a written
-    // half's NaN as its bits: viewed through its unsigned integer alias, through which the shader
-    // writes the bits Metal stores (`StorageImageClass::HalfBits`).
-    if let Some(view) = half_bits_view(pf, use_, profile).filter(|_| aliased) {
-        let mut choice = StorageImageChoice::new(view, StorageImageClass::HalfBits);
-        choice.alias = Some(AliasView::new(image));
-        return Ok(choice);
-    }
     // Vulkan's conversion to a shared-exponent texel rounds each mantissa half up, where Metal
     // truncates it: an `RGB9E5Float` write takes its word alias, whose encode is Metal's, even on a
     // device that stores the format.
@@ -3048,65 +3013,10 @@ fn held_storage_choice(
     Err(Unsupported::needs_any_of(Feature::Format, alternatives).into())
 }
 
-/// The unsigned integer alias through which a function that writes a half-float texture of `pf`
-/// (`R16Float`, `RG16Float`, `RGBA16Float`, `RGBX16Float`: every format of 16-bit float
-/// channels, `metal::texel_format::half_channels`), and may read it, stores the bits Metal stores
-/// (`StorageImageClass::HalfBits`), on a device not measured to store a written `half`'s NaN as
-/// its bits (`DriverDeviation::MetalHalfTexelWrites`; there the format's own view serves, as
-/// before): `R16_UINT`, `R16G16_UINT` or `R16G16B16A16_UINT`, where the device stores it for
-/// `use_` and the shader can declare it by its SPIR-V image format. `None` elsewhere, where the
-/// format's own choice stands. `RGBX16Float`'s image is `RGBA16Float`'s: its RGBX conversion moves
-/// green's bits into the fourth lane after the class's (`StorageImageChoice:: x_channel`), and its
-/// read takes alpha 1.
-fn half_bits_view(
-    pf: PixelFormat,
-    use_: StorageUse,
-    profile: &DeviceProfile,
-) -> Option<vk::Format> {
-    use vk::Format as F;
-    let view = match pf {
-        PixelFormat::R16Float => F::R16_UINT,
-        PixelFormat::RG16Float => F::R16G16_UINT,
-        PixelFormat::RGBA16Float | PixelFormat::RGBX16Float => F::R16G16B16A16_UINT,
-        _ => return None,
-    };
-    if !use_.write || profile.takes_driver_deviation(DriverDeviation::MetalHalfTexelWrites) {
-        return None;
-    }
-    let declared = spirv_image_format(view)?;
-    let declarable = !crate::spirv::requirements::extended_format(declared)
-        || profile.fields().images.storage_extended_formats;
-    (declarable && profile.supports_format(view, use_.usage())).then_some(view)
-}
-
-/// The unsigned integer alias through which a heap's twin (`StorageFormatClass::HalfBits`, a
-/// formatless declaration) holds a written half-float texture of `pf` on `profile`:
-/// [`half_bits_view`]'s for a write, where the device writes it without a format. `None` for
-/// every other format, and on a device of `DriverDeviation::MetalHalfTexelWrites`.
-pub(crate) fn heap_half_bits_view(pf: PixelFormat, profile: &DeviceProfile) -> Option<vk::Format> {
-    let use_ = StorageUse::texture(false, true);
-    let view = half_bits_view(pf, use_, profile)?;
-    without_format_gaps(view, use_, profile)
-        .is_empty()
-        .then_some(view)
-}
-
-/// Whether a function's `half` and `float` writes through a heap handle store a half-float
-/// member's bits through the heap's unsigned integer twin on `profile`
-/// (`StorageFormatClass::HalfBits`): every format of
-/// `metal::texel_format::HALF_BITS_FORMATS` has its alias there ([`heap_half_bits_view`]), so
-/// the twin's indices (`heap_half_bits_indices`) name only members it holds.
-pub(crate) fn heap_half_bits(profile: &DeviceProfile) -> bool {
-    crate::metal::texel_format::HALF_BITS_FORMATS
-        .iter()
-        .all(|&pf| heap_half_bits_view(pf, profile).is_some())
-}
-
 /// The formats a storage binding views a texture of `pf` as on `profile`, for any use: the
 /// read-and-write choice's ([`storage_image_choice`]: its alias view's format, else the direct
-/// format) and a written-only one's (a half-float texture's unsigned integer alias on a device
-/// not measured to store a written `half`'s NaN as its bits). A texture's image lists each among
-/// its view formats. Empty where the device stores no texture of `pf`.
+/// format) and a written-only one's where it differs. A texture's image lists each among its view
+/// formats. Empty where the device stores no texture of `pf`.
 pub fn storage_view_formats(pf: PixelFormat, profile: &DeviceProfile) -> Vec<vk::Format> {
     let mut formats = Vec::new();
     for use_ in [

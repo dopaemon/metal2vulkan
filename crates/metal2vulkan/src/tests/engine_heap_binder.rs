@@ -182,8 +182,7 @@ fn heap_writes(plan: &BindingPlan) -> Vec<&WriteSource> {
 /// other numeric types beside a sampled class (the unsigned integer twin a float read or query
 /// declares, and the classes a read or query of a member of another numeric class reads it
 /// through), where the array is the one whose neutral at element 0 is of numeric type `own`: a
-/// sampled one, or where there is none a storage one (beside the unsigned integer twin a half-float
-/// write declares for a storage class).
+/// sampled one, or where there is none a storage one.
 fn heap_writes_of(plan: &BindingPlan, own: SampledType) -> Vec<&WriteSource> {
     let heap: Vec<_> = plan.descriptors.iter().filter(|d| d.set == 1).collect();
     let numeric = |binding: u32, storage: bool| {
@@ -922,8 +921,7 @@ fn a_depth_member_is_held_by_the_float_class_through_its_depth_view() {
     };
     let plan = pipe.plan(&dev, &state.shape()).expect("plan");
     let heap = &pipe.layout.sets[1].bindings;
-    let twin = crate::metal::format::heap_half_bits(dev.profile());
-    assert_eq!(heap.len(), 2 + usize::from(twin));
+    assert_eq!(heap.len(), 2);
     for b in heap {
         let BindingSource::Heap(HandleClass::Image(class)) = b.source else {
             panic!("{:?}", b.source);
@@ -943,10 +941,6 @@ fn a_depth_member_is_held_by_the_float_class_through_its_depth_view() {
             })
             .collect();
         match class.access {
-            // The twin holds half-float members alone: every element its neutral.
-            _ if class.format == crate::pipeline::sym::StorageFormatClass::HalfBits => {
-                assert_eq!(views, vec![None, None, None]);
-            }
             ImageAccess::Sampled => {
                 assert_eq!(class.sampled_type, SampledType::Float);
                 assert!(!class.depth_compare);

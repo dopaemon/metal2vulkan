@@ -1148,7 +1148,6 @@ impl TextureFacts {
             swizzle: self.swizzle,
             address_modes: self.address_modes,
             offset_base_axes: self.offset_base_axes(),
-            own_format_views: self.own_format_views,
             ycbcr_in_place: self.ycbcr_in_place.is_some(),
         }
     }
@@ -1362,13 +1361,6 @@ pub struct TextureFacts {
     /// (`SpecKey::OffsetBaseAxes`, [`TextureFacts::offset_base_axes`]).
     #[cfg_attr(feature = "serde", serde(default))]
     pub parent_base_size: [u32; 3],
-    /// The texture's image is viewed in its own format alone: a wrapped image made without
-    /// `MUTABLE_FORMAT` (`false` for every texture the runtime makes). A storage slot that only
-    /// writes such a half-float texture is bound through the format's own view, with the class
-    /// it took previously (its `half` NaNs the device's, announced), not the unsigned integer alias
-    /// (`StorageImageClass::HalfBits`) the image cannot take.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub own_format_views: bool,
     /// The texture's two planes, where a function reads them in place
     /// ([`YCbCrInPlace`](crate::bind::YCbCrInPlace), the runtime's extension): a two-plane YCbCr
     /// texture of a converted 4:2:0 format whose planes the consumer views as one texel buffer.
@@ -1396,7 +1388,6 @@ impl TextureFacts {
             address_modes: metal::sampler::AddressModeMap::IDENTITY,
             parent_relative_level: 0,
             parent_base_size: [0; 3],
-            own_format_views: false,
             ycbcr_in_place: None,
         }
     }
@@ -1990,11 +1981,6 @@ pub enum TextureShape {
         /// rule specializes on them (`SpecKey::OffsetBaseAxes`).
         #[cfg_attr(feature = "serde", serde(default))]
         offset_base_axes: u8,
-        /// The texture's image is viewed in its own format alone
-        /// ([`TextureFacts::own_format_views`]): a storage slot takes no alias view of it that
-        /// another choice serves.
-        #[cfg_attr(feature = "serde", serde(default))]
-        own_format_views: bool,
         /// The texture's planes are read in place where a slot's function reads them so
         /// ([`TextureFacts::ycbcr_in_place`]): such a slot takes its in-place variant
         /// (`VariantKey::ycbcr_in_place`).

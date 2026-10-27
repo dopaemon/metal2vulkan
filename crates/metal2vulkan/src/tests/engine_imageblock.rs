@@ -1054,15 +1054,14 @@ const HALF_PATTERNS: [u16; 20] = [
     0x0400, 0x7BFF, 0xFBFF, 0x3C00, 0xC000, 0x5555, 0x1234, 0xBEEF,
 ];
 
-/// A `half` slice written to an `RGBA16Float` texture through its unsigned integer alias
-/// (`StorageImageClass::HalfBits`) copies each cell's half bits as they are, in the shared form
-/// (the guard local id 0 after the barrier) and the writing invocation's (another invocation's
-/// guard): each texel's channels are the cell's halves, NaN payloads, signaling NaNs and
-/// denormals included, and nothing above their 16 bits.
+/// A `half` slice written to an `RGBA16Float` texture hands the device each cell's halves widened
+/// exactly, in the shared form (the guard local id 0 after the barrier) and the writing
+/// invocation's (another invocation's guard): each texel's channels are the cell's halves'
+/// widenings (the interpreter keeps `f32` texels), signaling NaNs and denormals included, and a
+/// NaN for each NaN, whose stored bits are the device's conversion's.
 #[test]
-fn a_half_slice_to_half_bits_copies_the_cells_bits() {
-    use crate::lower::strategy::Strategy;
-    use crate::lower::texture::TextureStrategy;
+fn a_half_slice_hands_the_device_the_cells_halves() {
+    use crate::lower::arith::narrow::f32_of_half_bits;
     let lane = |i: usize, l: usize| HALF_PATTERNS[(i * 4 + l) % HALF_PATTERNS.len()];
     let mut src = Vec::new();
     for i in 0..16 {
@@ -1083,30 +1082,12 @@ fn a_half_slice_to_half_bits_copies_the_cells_bits() {
                 continue;
             };
             let class = inputs.storage_images[&kernel_texture(0)].class;
+            assert_eq!(class, StorageImageClass::Identity, "{name} {stem}");
             let (plan, m) = match typed_module_with(&bc, "half_slice", &p, &inputs) {
                 Ok(x) => x,
                 Err(Error::NeedsInput(_) | Error::Unsupported(_)) => continue,
                 Err(e) => panic!("{name} {stem}: {e}"),
             };
-            let bits: Vec<bool> = plan
-                .strategy
-                .iter()
-                .flatten()
-                .filter_map(|s| match s {
-                    Strategy::Texture(TextureStrategy::ImageblockSlice(s)) => {
-                        Some(s.bits.is_some())
-                    }
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                bits,
-                [class == StorageImageClass::HalfBits],
-                "{name} {stem}: {class:?}"
-            );
-            if class != StorageImageClass::HalfBits {
-                continue;
-            }
             assert_eq!(
                 plan.families.texture.cooperative.is_empty(),
                 name == "writer",
@@ -1122,12 +1103,20 @@ fn a_half_slice_to_half_bits_copies_the_cells_bits() {
             for y in 0..4u32 {
                 for x in 0..4u32 {
                     let i = (y * 4 + x) as usize;
-                    let want = [0, 1, 2, 3].map(|l| u32::from(lane(i, l)));
-                    assert_eq!(texel(&imgs[0], 0, x, y), want, "{name} {stem} ({x}, {y})");
+                    let got = texel(&imgs[0], 0, x, y);
+                    for (l, &t) in got.iter().enumerate() {
+                        let h = lane(i, l);
+                        let what = format!("{name} {stem} ({x}, {y}) lane {l} {h:#06x}: {t:#x}");
+                        if h & 0x7C00 == 0x7C00 && h & 0x3FF != 0 {
+                            assert!(f32::from_bits(t).is_nan(), "{what}");
+                        } else {
+                            assert_eq!(t, f32_of_half_bits(u32::from(h)), "{what}");
+                        }
+                    }
                 }
             }
             ran += 1;
         }
     }
-    assert!(ran > 0, "no profile writes half bits");
+    assert!(ran > 0, "no profile writes a half slice");
 }

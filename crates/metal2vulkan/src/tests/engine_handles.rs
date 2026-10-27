@@ -840,11 +840,8 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
             .filter(|(op, at)| *op == OP_DECORATE && w[at + 2] == DECORATION_VOLATILE)
             .map(|(_, at)| w[at + 1])
             .collect();
-        // The written float storage class's unsigned integer twin, where the profile writes a
-        // half's bits through one, is a second array, volatile with it.
         let arrays = image_arrays(&a);
-        let twin = usize::from(crate::metal::format::heap_half_bits(&p));
-        assert_eq!(arrays.len(), 1 + twin, "one class, one array, and its twin");
+        assert_eq!(arrays.len(), 1, "one class, one array");
         let want = if volatile { arrays } else { Vec::new() };
         assert_eq!(volatile_ids, want, "{volatile}");
     }
@@ -1300,27 +1297,17 @@ fn assert_binder_classes(a: &FunctionArtifact, p: &DeviceProfile, stem: &str) {
 /// integer twin (its members of a form a heap reads held there raw, `HeapPlan::raw`), and its
 /// reads and queries the class of each other numeric type (a member of another numeric class
 /// read in its own, `HeapPlan::cross`).
-///
-/// And the unsigned integer twin of a written float storage group (`StorageFormatClass::HalfBits`),
-/// beside the formatless float storage class of its shape.
 fn siblings(a: &FunctionArtifact) -> usize {
     let images = heap_image_classes(a);
     images
         .iter()
         .filter(|c| {
-            let sampled = c.access == ImageAccess::Sampled
+            c.access == ImageAccess::Sampled
                 && matches!(c.sampled_type, SampledType::Sint | SampledType::Uint)
                 && images.contains(&ImageHandleClass {
                     sampled_type: SampledType::Float,
                     ..**c
-                });
-            let twin = c.format == crate::pipeline::sym::StorageFormatClass::HalfBits
-                && images.contains(&ImageHandleClass {
-                    sampled_type: SampledType::Float,
-                    format: crate::pipeline::sym::StorageFormatClass::Unknown,
-                    ..**c
-                });
-            sampled || twin
+                })
         })
         .count()
 }
@@ -1652,8 +1639,8 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 // Both loads call the module's one search function, so its 16 steps (one
                 // `OpULessThanEqual` each: of the `u64` ids with `shaderInt64`, else of the low
                 // words) and its read of the table's length are emitted once. The module was
-                // about 3,500 words with a search per load; it is 1,520 with `u64` ids and 2,202
-                // with word ids.
+                // about 3,500 words with a search per load; it is within 1,600 with `u64` ids
+                // and 2,300 with word ids, the bounds below.
                 // The write's normalized channels are the device's conversion: noted where the
                 // profile is not measured to store Metal's codes, or where it stores a texture
                 // of a 1-bit alpha, which it rounds otherwise.
@@ -1673,16 +1660,15 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 assert_eq!(count(&a, OP_FUNCTION_CALL), 2, "{stem}");
                 assert_eq!(count(&a, OP_ULESS_THAN_EQUAL), 16, "{stem}");
                 assert_eq!(count(&a, OP_ARRAY_LENGTH), 1, "{stem}");
-                // And a half-float member's bits through the unsigned integer twin, where the
-                // profile takes it.
-                let bits = match crate::metal::format::heap_half_bits(&p) {
-                    true => crate::lower::texture::heap_bits_write_words() as usize,
-                    false => 0,
-                };
-                let bound = bits + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
+                // And an `A8Unorm` member's alpha moved into red where the device holds such a
+                // texture so (`metal::format::alpha_in_red`): the class index's read and the
+                // conversion.
+                let a8 = crate::metal::format::alpha_in_red(crate::metal::PixelFormat::A8Unorm, &p);
+                let alpha = if a8 { 100 } else { 0 };
+                let bound = alpha + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
                 assert!(
                     a.module.words.len() <= bound,
-                    "{stem}: {} words over {bound} (bits {bits})",
+                    "{stem}: {} words over {bound} (alpha in red {a8})",
                     a.module.words.len()
                 );
                 assert_eq!(uses(&a, "texture.write.heap"), 1, "{stem}");
@@ -1740,25 +1726,17 @@ declare void @air.write_texture_2d.{elem}(ptr addrspace(1), <2 x i32>, {ty}, i32
     )
 }
 
-/// A `half` (or `float`) texel written through an argument buffer's texture, on a profile where
-/// every half-float format has its unsigned integer alias and the device is not measured to store
-/// a written `half`'s NaN as its bits (`metal::format::heap_half_bits`), declares the float
-/// storage group's unsigned integer twin (`StorageFormatClass::HalfBits`) beside it and states
-/// `RuntimeFact::HeapHalfTexelWrites` for the members the twin does not hold: a `half` write's fact
-/// counts packed small floats too, a `float` write's is stated only where the device's conversion
-/// of a NaN to a half-float texel is not measured to be Metal's
-/// (`DriverDeviation::MetalHalfStorageNans`).
-/// Elsewhere the module declares one class. Every such write records
-/// `PrecisionNote::DeviceNanEncoding`: the heap may hold a 32-bit or packed small float texture,
-/// whose NaN is the device's.
+/// A `half` (or `float`) texel written through an argument buffer's texture is the device's write
+/// on every committed profile: the module declares the one formatless float storage class, and
+/// records `PrecisionNote::DeviceNanEncoding`, since the heap may hold a half-float, 32-bit or
+/// packed small float texture, whose stored NaN is the device's.
 #[test]
-fn a_heap_texel_write_stores_half_bits_through_the_unsigned_twin() {
-    use crate::error::DriverDeviation;
+fn a_heap_texel_write_is_the_devices_write() {
     for float in [false, true] {
         let Some(bc) = assemble("heap_texel_write", &heap_texel_write_kernel(float)) else {
             return;
         };
-        let mut twins = 0;
+        let mut compiled = 0;
         for (stem, p) in committed_profiles().expect("profiles") {
             let what = format!("{stem} float {float}");
             let a = match compile(&bc, "heap_texel_write", &p) {
@@ -1771,29 +1749,18 @@ fn a_heap_texel_write_stores_half_bits_through_the_unsigned_twin() {
             };
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             assert_binder_classes(&a, &p, &what);
-            let twin = crate::metal::format::heap_half_bits(&p);
-            let declared = heap_image_classes(&a)
-                .iter()
-                .any(|c| c.format == crate::pipeline::sym::StorageFormatClass::HalfBits);
-            assert_eq!(declared, twin, "{what}");
-            let noted = a.precision.contains(&PrecisionNote::DeviceNanEncoding);
-            let fact = |packed| {
-                a.facts.contains(&RuntimeFact::HeapHalfTexelWrites {
-                    stage: Stage::Kernel,
-                    packed,
-                })
-            };
-            assert!(noted, "{what}: {:?}", a.precision);
-            if twin {
-                twins += 1;
-                let float_fact = !p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
-                assert_eq!(fact(true), !float, "{what}");
-                assert_eq!(fact(false), float && float_fact, "{what}");
-            } else {
-                assert!(!fact(true) && !fact(false), "{what}");
-            }
+            let classes = heap_image_classes(&a);
+            assert_eq!(classes.len(), 1, "{what}: {classes:?}");
+            assert_eq!(classes[0].access, ImageAccess::Storage, "{what}");
+            assert_eq!(classes[0].sampled_type, SampledType::Float, "{what}");
+            assert!(
+                a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                "{what}: {:?}",
+                a.precision
+            );
+            compiled += 1;
         }
-        assert!(twins > 0, "no committed profile takes the twin");
+        assert!(compiled > 0, "no committed profile writes through a heap");
     }
 }
 
@@ -2023,8 +1990,7 @@ fn an_argument_buffer_depth_texture_reads_through_the_float_class() {
                 assert_eq!(uses(&a, "access.handle.lookup"), 2, "{stem}");
                 assert_eq!(uses(&a, heap_read(&p)), 1, "{stem}");
                 assert_eq!(uses(&a, "texture.write.heap"), 1, "{stem}");
-                let twin = usize::from(crate::metal::format::heap_half_bits(&p));
-                assert_eq!(bindings_of(&t, is_heap).len(), 2 + twin, "{stem}");
+                assert_eq!(bindings_of(&t, is_heap).len(), 2, "{stem}");
                 let classes: Vec<_> = a
                     .interface
                     .descriptors
@@ -2485,16 +2451,8 @@ fn an_imageblock_slice_writes_an_argument_buffer_texture() {
                 1,
                 "{name} on {stem}"
             );
-            // The written float storage class, and its unsigned integer twin where the profile
-            // writes a half's bits through one.
-            let (twins, classes): (Vec<_>, Vec<_>) = heap_image_classes(&a)
-                .into_iter()
-                .partition(|c| c.format == crate::pipeline::sym::StorageFormatClass::HalfBits);
-            assert_eq!(
-                twins.len(),
-                usize::from(crate::metal::format::heap_half_bits(&p)),
-                "{name} on {stem}: {twins:?}"
-            );
+            // The written float storage class alone.
+            let classes = heap_image_classes(&a);
             assert_eq!(classes.len(), 1, "{name} on {stem}: {classes:?}");
             let c = classes[0];
             assert_eq!(

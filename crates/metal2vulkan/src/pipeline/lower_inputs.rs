@@ -1418,24 +1418,12 @@ pub enum StorageImageClass {
     /// Metal's do (probe `a8`, an M3 Max under macOS 27.0.1: kernel writes of `float` and `half`
     /// texels and `read_write` access).
     AlphaInRed,
-    /// A half-float image (`R16Float`, `RG16Float`, `RGBA16Float`) written by a device not
     /// A 4:4:4 two-plane YCbCr texture a slot only writes, through an `R32G32B32A32_UINT` image
     /// of the texture's own (the consumer's write shadow): the shader writes each texel as the
     /// bits of its red, green and blue `float` channels (a `half` texel's widened exactly) and a
     /// 1, the mark of a written texel, which the consumer then encodes into the planes as Metal
     /// stores it (`bind::ycbcr_write`). The slot is declared `Rgba32ui`; it has no reads.
     YCbCrWrite,
-    /// A half-float image (`R16Float`, `RG16Float`, `RGBA16Float`) a slot writes, and may read,
-    /// on a device not measured to store a written `half`'s NaN as its bits
-    /// (`DriverDeviation::MetalHalfTexelWrites`), viewed through its unsigned integer alias of
-    /// the same channels (`R16_UINT`, `R16G16_UINT`, `R16G16B16A16_UINT`): the shader writes each
-    /// channel's half bits, a `half` texel's own (a NaN's sign and payload kept, as Metal stores
-    /// them) and a `float` texel's rounded toward zero to the half Metal stores (a finite value
-    /// past 65504 to 65504, an infinity kept, every NaN `0x7e00`), which every device stores
-    /// exactly; a read widens each channel's half exactly, a `float` read's NaN `0x7fc00000`, as
-    /// Metal reads them. The slot is declared of the alias's unsigned integer format; it takes no
-    /// atomic.
-    HalfBits,
     /// An `RGB9E5Float` image a slot writes, and may read, viewed through its `R32_UINT` alias, on
     /// every device (one that stores the format rounds each mantissa half up, as Vulkan's
     /// conversion states, where Metal truncates it): the shader writes each texel as the word Metal

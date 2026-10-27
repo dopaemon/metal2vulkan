@@ -225,9 +225,8 @@ pub use graphics::{
     TessellationDispatch, TessellationRecords,
 };
 pub use heap::{
-    handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form,
-    heap_write_nans_converted, HeapElement, HeapElements, HeapSource, HANDLE_ENTRY_BYTES,
-    HANDLE_TABLE_CAPACITY, NEUTRAL_HEAP_ELEMENT,
+    handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form, HeapElement,
+    HeapElements, HeapSource, HANDLE_ENTRY_BYTES, HANDLE_TABLE_CAPACITY, NEUTRAL_HEAP_ELEMENT,
 };
 pub use index_bounds::{
     index_bounds_fill_module, index_bounds_fill_run_module, index_bounds_plan_module,

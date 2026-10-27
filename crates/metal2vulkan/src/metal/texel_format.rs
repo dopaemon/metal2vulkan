@@ -696,13 +696,6 @@ pub fn reads_unswizzled(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> boo
 /// class looks up in its own copy of this table. The binder and the function come from one build,
 /// whose `SEMANTICS_VERSION` changes with any class.
 ///
-/// After them, from the own-view base, the classes of `R16Float`, `RG16Float` and `RGBA16Float`
-/// again ([`HALF_BITS_FORMATS`]' order): the index of an unswizzled writable texture of one of them
-/// whose image takes no view in another format (`TextureFacts::own_format_views`), so a write
-/// through a heap handle reaches it through the float class, not the unsigned integer twin that
-/// holds its `half` bits elsewhere ([`heap_half_bits_indices`]). Every routine that reads the class
-/// takes it as the class of the same value, and a read of another numeric class as an own class's.
-///
 /// After them, from [`heap_extended_base`], one [`TexelFormat::OTHER`] per form of
 /// `ExtendedRange::HEAP_READ` in its order: the index of a heap texture of that form, whose texels
 /// a function decodes from its raw codes where the index names it, and which every routine that
@@ -723,8 +716,6 @@ pub fn heap_classes() -> &'static [u32] {
 /// markers, and the classes of the formats no read of another class takes.
 struct HeapLayout {
     classes: Vec<u32>,
-    /// Where the own-view half-float classes start, past the sorted own ones.
-    own_view: u32,
     extended: u32,
     numeric: u32,
     own_only: u32,
@@ -745,8 +736,6 @@ fn heap_layout() -> &'static HeapLayout {
         let of = |pf: PixelFormat| heap_class(pf, TextureSwizzleChannels::DEFAULT).0;
         let mut classes = sorted(PixelFormat::ALL.iter().map(|&pf| of(pf)).collect());
         let index = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
-        let own_view = index(classes.len());
-        classes.extend(HALF_BITS_FORMATS.iter().map(|&pf| of(pf)));
         let extended = index(classes.len());
         classes.extend(
             crate::metal::format::ExtendedRange::HEAP_READ
@@ -765,7 +754,6 @@ fn heap_layout() -> &'static HeapLayout {
         ));
         HeapLayout {
             classes,
-            own_view,
             extended,
             numeric,
             own_only,
@@ -810,39 +798,6 @@ pub fn heap_numeric(pf: PixelFormat) -> Option<crate::pipeline::sym::SampledType
         Some(t @ (SampledType::Sint | SampledType::Uint)) if crosses_classes(pf) => Some(t),
         _ => None,
     }
-}
-
-/// The half-float formats whose texture a heap's unsigned integer twin
-/// (`StorageFormatClass::HalfBits`) holds through its unsigned integer alias, in the own-view
-/// classes' order ([`heap_classes`]). `RGBX16Float` is not among them: no heap storage class
-/// holds an RGBX texture (`bind::heap`'s storage elements), whose conversion a formatless
-/// declaration cannot make per element.
-pub const HALF_BITS_FORMATS: [PixelFormat; 3] = [
-    PixelFormat::R16Float,
-    PixelFormat::RG16Float,
-    PixelFormat::RGBA16Float,
-];
-
-/// The indices in [`heap_classes`] of [`HALF_BITS_FORMATS`]' own classes: a write through a heap
-/// handle carrying one stores the `half` bits through the unsigned integer twin, where the module
-/// declares one (`HeapPlan::bits`). A texture of such a format whose image takes no view in
-/// another format carries the class's own-view index instead ([`heap_own_view_index`]).
-pub fn heap_half_bits_indices() -> Vec<u32> {
-    HALF_BITS_FORMATS
-        .iter()
-        .map(|&pf| heap_class_index(pf, TextureSwizzleChannels::DEFAULT))
-        .collect()
-}
-
-/// The own-view index in [`heap_classes`] of a texture of `pf` made with `swizzle` whose image
-/// takes no view in another format: for an unswizzled one of [`HALF_BITS_FORMATS`], its class's
-/// own-view entry, which holds the same class as [`heap_class_index`]'s but is none of
-/// [`heap_half_bits_indices`] (a swizzle that reads as none keeps it, [`reads_unswizzled`]);
-/// `None` for every other texture, whose index is its own.
-pub fn heap_own_view_index(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> Option<u32> {
-    let k = HALF_BITS_FORMATS.iter().position(|&f| f == pf)?;
-    let k = u32::try_from(k).ok()?;
-    reads_unswizzled(pf, swizzle).then_some(heap_layout().own_view + k)
 }
 
 /// The index in [`heap_classes`] of `A8Unorm`'s class, which no other format's texture carries:
@@ -890,7 +845,7 @@ pub fn heap_class_index(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> u32
         return base + k;
     }
     let (from, own) = match crosses_classes(pf) {
-        true => (0, &layout.classes[..layout.own_view as usize]),
+        true => (0, &layout.classes[..layout.extended as usize]),
         false => (layout.own_only, &layout.classes[layout.own_only as usize..]),
     };
     let class = heap_class(pf, swizzle).0;
@@ -1372,16 +1327,7 @@ mod tests {
         let classes = heap_classes();
         let base = heap_extended_base() as usize;
         assert_eq!(classes.first(), Some(&TexelFormat::OTHER.0));
-        let own_view = heap_layout().own_view as usize;
-        assert_eq!(own_view + HALF_BITS_FORMATS.len(), base);
-        assert!(classes[..own_view].windows(2).all(|w| w[0] < w[1]));
-        for (k, &pf) in HALF_BITS_FORMATS.iter().enumerate() {
-            let own = heap_class_index(pf, TextureSwizzleChannels::DEFAULT) as usize;
-            assert!(own < own_view, "{pf:?}");
-            let viewed = heap_own_view_index(pf, TextureSwizzleChannels::DEFAULT);
-            assert_eq!(viewed, Some((own_view + k) as u32), "{pf:?}");
-            assert_eq!(classes[own_view + k], classes[own], "{pf:?}");
-        }
+        assert!(classes[..base].windows(2).all(|w| w[0] < w[1]));
         let numeric = heap_numeric_base() as usize;
         assert_eq!(numeric, base + ExtendedRange::HEAP_READ.len());
         let own_only = heap_layout().own_only as usize;
@@ -1487,10 +1433,6 @@ mod tests {
     /// The heap classes of the half-float family without a packed field are the unswizzled
     /// half-float formats' and no other format's: `RGBX16Float`'s too, `RGBA16Float`'s texels with
     /// three channels.
-    ///
-    /// The own-view entries of `R16Float`, `RG16Float` and `RGBA16Float` are half classes too, and
-    /// the twin's indices are exactly those formats' own: no other format's texture, swizzled or
-    /// not, carries one, and none carries an own-view index.
     #[test]
     fn a_heap_write_finds_the_half_formats_by_index() {
         use crate::metal::bicubic::BicubicTexels;
@@ -1508,28 +1450,10 @@ mod tests {
             PixelFormat::RGBA16Float,
             PixelFormat::RGBX16Float,
         ];
-        assert_eq!(
-            half.len(),
-            wanted.len() + HALF_BITS_FORMATS.len(),
-            "{half:?}"
-        );
-        let bits = heap_half_bits_indices();
-        let swizzle = TextureSwizzleChannels::new(
-            crate::metal::TextureSwizzle::Blue,
-            crate::metal::TextureSwizzle::Green,
-            crate::metal::TextureSwizzle::Red,
-            crate::metal::TextureSwizzle::Alpha,
-        );
+        assert_eq!(half.len(), wanted.len(), "{half:?}");
         for &pf in PixelFormat::ALL {
             let i = heap_class_index(pf, TextureSwizzleChannels::DEFAULT);
             assert_eq!(half.contains(&i), wanted.contains(&pf), "{pf:?}");
-            assert_eq!(bits.contains(&i), HALF_BITS_FORMATS.contains(&pf), "{pf:?}");
-            assert!(!bits.contains(&heap_class_index(pf, swizzle)), "{pf:?}");
-            let viewed = heap_own_view_index(pf, TextureSwizzleChannels::DEFAULT);
-            assert_eq!(viewed.is_some(), HALF_BITS_FORMATS.contains(&pf), "{pf:?}");
-            if let Some(v) = viewed {
-                assert!(half.contains(&v) && !bits.contains(&v), "{pf:?}");
-            }
         }
     }
 

@@ -473,7 +473,6 @@ surface! {
         fn handle_entry_flags;
         fn heap_element;
         fn heap_raw_form;
-        fn heap_write_nans_converted;
         enum HeapElement N;
         const HANDLE_ENTRY_BYTES;
         const HANDLE_TABLE_CAPACITY;
@@ -920,7 +919,6 @@ surface! {
         fn padded_words;
         fn extended_range_blend;
         fn x_channel;
-        fn half_write_nans_converted;
         fn bound_texel_format;
         struct YCbCrFormat N;
         enum ChromaSubsampling N;

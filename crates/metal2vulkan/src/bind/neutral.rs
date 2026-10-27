@@ -69,9 +69,6 @@ impl NeutralResource {
         let format = match (storage, class.format) {
             (false, StorageFormatClass::NotStorage) => None,
             (true, StorageFormatClass::Unknown) => Some(storage_neutral(class.sampled_type)),
-            (true, StorageFormatClass::HalfBits) if class.sampled_type == SampledType::Uint => {
-                Some(storage_neutral(class.sampled_type))
-            }
             (true, StorageFormatClass::Format(f)) if serves(f, class.sampled_type) => Some(f),
             _ => return None,
         };
@@ -182,12 +179,9 @@ pub(crate) fn numeric_type(format: vk::Format) -> Option<SampledType> {
 /// dimension, arrayed-ness, and sample count SPIR-V allows, each numeric type, depth comparison for
 /// float 2D and cube images, sampled or storage with each storage format class the profile
 /// supports. Cube arrays need `imageCubeArray`, multisampled storage images
-/// `shaderStorageImageMultisample`. And the unsigned integer twin of a float storage heap group
-/// (`StorageFormatClass::HalfBits`) of each shape a heap writes, where a heap write stores a
-/// half-float member's bits through it (`metal::format::heap_half_bits`).
+/// `shaderStorageImageMultisample`.
 pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
     let f = profile.fields();
-    let half_bits = crate::metal::format::heap_half_bits(profile);
     let types = [SampledType::Float, SampledType::Sint, SampledType::Uint];
     let shapes = [
         (ImageDim::D1, false, false),
@@ -251,16 +245,6 @@ pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
                     let format = StorageFormatClass::Format(format);
                     out.push(class(ty, false, ImageAccess::Storage, format));
                 }
-            }
-            // A float storage heap group's unsigned integer twin, of the shapes a heap writes.
-            let written = !multisampled && !matches!(dim, ImageDim::Cube | ImageDim::Buffer);
-            if ty == SampledType::Uint && written && half_bits {
-                out.push(class(
-                    ty,
-                    false,
-                    ImageAccess::Storage,
-                    StorageFormatClass::HalfBits,
-                ));
             }
         }
     }

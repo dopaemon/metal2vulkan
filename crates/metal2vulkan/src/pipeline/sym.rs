@@ -212,13 +212,6 @@ pub enum StorageFormatClass {
     Unknown,
     /// A storage image declared with this format.
     Format(vk::Format),
-    /// An unsigned integer storage image declared with format `Unknown`, of the half-float
-    /// textures a heap holds through their unsigned integer aliases (`R16_UINT`, `R16G16_UINT`,
-    /// `R16G16B16A16_UINT`): a float storage heap group's twin, through which a function writes
-    /// such a member's `half` bits where its handle's class names one, on a device not measured
-    /// to store a written `half`'s NaN as its bits. Apart from the formatless unsigned class, so
-    /// an unsigned group never reaches a half-float texture.
-    HalfBits,
 }
 
 /// The image part of a [`HandleClass`].

@@ -91,7 +91,6 @@ fn compatibility_is_type_samples_numeric_type_and_depth() {
     let tex = |texture_type, pixel_format, sample_count| TextureShape::Texture {
         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
         offset_base_axes: 0,
-        own_format_views: false,
         ycbcr_in_place: false,
         texture_type,
         pixel_format,
@@ -162,7 +161,6 @@ fn a_ulong_slot_binds_only_rg32uint_textures() {
     let tex = |pixel_format| TextureShape::Texture {
         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
         offset_base_axes: 0,
-        own_format_views: false,
         ycbcr_in_place: false,
         texture_type: TextureType::Type2D,
         pixel_format,
@@ -256,7 +254,6 @@ fn a_numeric_slot_binds_either_integer_type() {
             TextureShape::Texture {
                 address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
                 offset_base_axes: 0,
-                own_format_views: false,
                 ycbcr_in_place: false,
                 texture_type: TextureType::Type2D,
                 pixel_format,
@@ -624,7 +621,6 @@ fn an_immutable_linear_sampler_needs_a_filterable_view() {
                 TextureShape::Texture {
                     address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
                     offset_base_axes: 0,
-                    own_format_views: false,
                     ycbcr_in_place: false,
                     texture_type: TextureType::Type2D,
                     pixel_format: pf,
@@ -725,7 +721,6 @@ fn a_linear_compare_sampler_needs_no_filterable_view() {
                     TextureShape::Texture {
                         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
                         offset_base_axes: 0,
-                        own_format_views: false,
                         ycbcr_in_place: false,
                         texture_type: TextureType::Type2D,
                         pixel_format: pf,
@@ -820,7 +815,6 @@ fn bicubic_texels_follow_the_bound_format() {
                 TextureShape::Texture {
                     address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
                     offset_base_axes: 0,
-                    own_format_views: false,
                     ycbcr_in_place: false,
                     texture_type: TextureType::Type2D,
                     pixel_format: pf,
@@ -915,7 +909,6 @@ fn an_explicit_cube_gradient_binding_takes_an_anisotropic_sampler_isotropically(
                     TextureShape::Texture {
                         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
                         offset_base_axes: 0,
-                        own_format_views: false,
                         ycbcr_in_place: false,
                         texture_type: TextureType::Cube,
                         pixel_format: PixelFormat::RGBA8Unorm,
@@ -1124,7 +1117,6 @@ fn texel_format_follows_the_bound_format() {
         Some(TextureShape::Texture {
             address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
             offset_base_axes: 0,
-            own_format_views: false,
             ycbcr_in_place: false,
             texture_type: TextureType::Type2D,
             pixel_format,
@@ -1308,7 +1300,6 @@ fn a_separate_pair_takes_the_combined_pairs_checks() {
                     TextureShape::Texture {
                         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
                         offset_base_axes: 0,
-                        own_format_views: false,
                         ycbcr_in_place: false,
                         texture_type: TextureType::Type2D,
                         pixel_format: pf,

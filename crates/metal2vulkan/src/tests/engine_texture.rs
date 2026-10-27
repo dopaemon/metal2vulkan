@@ -428,9 +428,8 @@ const OP_IS_NAN: u16 = 156;
 /// with it (a choice of a class rounding to `half` is a 16-bit float format's, declared or not;
 /// such a device's own choice declares no format, so the test declares one there too);
 /// bound in `RGBA8Unorm` it records none. Where the choice declares no format and no class, the
-/// write records the note. A choice of the `RGBA16Float` texture's unsigned integer alias
-/// (`StorageImageClass::HalfBits`, on a profile without the deviation) writes the half's bits and
-/// records nothing; so does `RGBX16Float`'s, whose image is `RGBA16Float`'s.
+/// write records the note. A choice declaring `RGBA16Float` on every profile records the note or
+/// requires the property as the profile's deviation says.
 #[test]
 fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_s() {
     use crate::device::requirements::VkProperty;
@@ -439,7 +438,7 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
         return;
     };
     let slot = texture_slot(0);
-    let (mut float, mut formatless, mut measured, mut aliased) = (0, 0, 0, 0);
+    let (mut float, mut formatless, mut measured, mut device) = (0, 0, 0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         let keeps = p.takes_driver_deviation(DriverDeviation::MetalHalfTexelWrites);
         let compiled = |pf: PixelFormat| {
@@ -454,7 +453,6 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
                     ok(a, &p, &format!("{stem} {pf:?}")),
                     choice.vk_format == crate::vk::Format::UNDEFINED
                         && choice.class == StorageImageClass::Identity,
-                    choice.class == StorageImageClass::HalfBits,
                 )),
             }
         };
@@ -466,7 +464,7 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
             PixelFormat::RGBX16Float,
             PixelFormat::RGBA32Float,
         ] {
-            let Some((a, undeclared, bits)) = compiled(pf) else {
+            let Some((a, undeclared)) = compiled(pf) else {
                 continue;
             };
             let what = format!("{stem}: {pf:?}: tests {}, noted {}", tests(&a), noted(&a));
@@ -476,17 +474,6 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
                 continue;
             }
             match pf {
-                // Through the unsigned integer alias the half's bits are written as they are:
-                // no note, no measured property.
-                PixelFormat::RGBA16Float | PixelFormat::RGBX16Float if bits => {
-                    assert!(!keeps && !noted(&a), "{what}");
-                    let relied = &a.requirements.properties;
-                    assert!(
-                        !relied.contains(&VkProperty::MetalHalfTexelWrites),
-                        "{what}"
-                    );
-                    aliased += 1;
-                }
                 PixelFormat::RGBA16Float | PixelFormat::RGBX16Float => {
                     assert_eq!(noted(&a), !keeps, "{what}");
                     assert_eq!(
@@ -506,8 +493,9 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
             }
         }
         // A device of the deviation writes a half-float texture without a format, so its
-        // committed choice declares none; one that declares `RGBA16Float` stores Metal's NaN.
-        if keeps {
+        // committed choice declares none; one that declares `RGBA16Float` stores Metal's NaN there,
+        // and the device's elsewhere.
+        {
             let declared = crate::pipeline::lower_inputs::StorageImageChoice::new(
                 crate::vk::Format::R16G16B16A16_SFLOAT,
                 StorageImageClass::Identity,
@@ -519,23 +507,24 @@ fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_
                 Err(Error::NeedsInput(_) | Error::Unsupported(_)) => {}
                 a => {
                     let a = ok(a, &p, &what);
-                    assert!(!noted(&a), "{what}");
-                    assert!(
+                    assert_eq!(noted(&a), !keeps, "{what}");
+                    assert_eq!(
                         a.requirements
                             .properties
                             .contains(&VkProperty::MetalHalfTexelWrites),
+                        keeps,
                         "{what}"
                     );
-                    measured += 1;
+                    measured += usize::from(keeps);
+                    device += usize::from(!keeps);
                 }
             }
         }
     }
     assert!(
-        float > 0 && formatless > 0 && measured > 0 && aliased > 0,
+        float > 0 && formatless > 0 && measured > 0 && device > 0,
         "the committed profiles cover a declared float format ({float}), a formatless choice \
-         ({formatless}), the measured deviation ({measured}) and the half-float alias \
-         ({aliased})"
+         ({formatless}), the measured deviation ({measured}) and the device's NaN ({device})"
     );
 }
 

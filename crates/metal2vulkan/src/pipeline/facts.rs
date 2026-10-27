@@ -701,18 +701,6 @@ pub enum RuntimeFact {
     /// where a Vulkan write of a value the channel cannot represent is undefined. The binder
     /// writes `metal::format::integer_channels_word` of the bound format, and 0 for a neutral.
     StorageTextureIntegerChannels { slot: SlotRef },
-    /// The `stage` function writes `half` texels (where `packed`), or `float` ones, through heap
-    /// handles on a device not measured to store a written `half`'s NaN as its bits
-    /// (`DriverDeviation::MetalHalfTexelWrites`), and stores each half-float member's bits
-    /// through its group's unsigned integer twin (`StorageFormatClass::HalfBits`), which every
-    /// device stores exactly. A member the twin does not hold stores the device's conversion of a
-    /// NaN, not Metal's: a half-float texture that is swizzled or whose image takes no view in
-    /// another format, and where `packed` a packed small float one (`RG11B10Float`,
-    /// `RGB9E5Float`); `bind::heap_write_nans_converted` names such a texture, which the consumer
-    /// announces `PrecisionNote::DeviceNanEncoding` for at a draw or dispatch whose heap holds
-    /// one. The module records that note for these writes too: a 32-bit or packed small float
-    /// member's NaN is the device's.
-    HeapHalfTexelWrites { stage: Stage, packed: bool },
     /// The render pipeline draws through synthesized geometry stages, one per topology class, of
     /// which a draw runs its class's (`RenderPipeline::runs_stage`): its fragment function reads
     /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` (`weights`), or its

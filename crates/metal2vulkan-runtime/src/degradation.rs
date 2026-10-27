@@ -3183,53 +3183,6 @@ impl Device {
         });
     }
 
-    /// Announce `PrecisionNote::DeviceNanEncoding` at a draw or dispatch of a pipeline of
-    /// `dependencies` whose writes through heap handles store half-float members' bits through
-    /// the unsigned integer twin (`RuntimeFact::HeapHalfTexelWrites`), where the device's heap
-    /// holds a live texture such a write stores the device's conversion of a NaN in
-    /// (`heap_sets::NanResidue`: a half-float texture the twin does not hold, and for a `half`
-    /// write a packed small float one). Every texture the device holds is at its resource ID for
-    /// every command (`heap_sets.rs`), so any of them may be one the function's handles name.
-    pub(crate) fn degrade_half_texel_writes(
-        &self,
-        dependencies: &[metal2vulkan::pipeline::RuntimeDependency],
-    ) {
-        use metal2vulkan::pipeline::RuntimeFact;
-        let residue = &self.shared().heap_nan_residue;
-        let Some((stage, packed)) = dependencies
-            .iter()
-            .filter_map(|d| match d.fact {
-                RuntimeFact::HeapHalfTexelWrites { stage, packed } => Some((stage, packed)),
-                _ => None,
-            })
-            .find(|&(_, packed)| residue.holds(packed))
-        else {
-            return;
-        };
-        if !self
-            .shared()
-            .announced
-            .pending(Degradation::DeviceNanEncoding)
-        {
-            return;
-        }
-        let packed = match packed {
-            true => " or a packed small float (`RG11B10Float`, `RGB9E5Float`) texture",
-            false => "",
-        };
-        self.degrade(Degradation::DeviceNanEncoding, || {
-            (
-                format!("the {stage:?} function of a pipeline state"),
-                format!(
-                    "it writes texels through argument-buffer textures, and the device holds a \
-                     half-float texture whose `half` bits its unsigned integer view cannot \
-                     store (swizzled, or a wrapped image made without `MUTABLE_FORMAT`){packed}, \
-                     whose NaNs the device stores as it converts them, not as Metal does"
-                ),
-            )
-        });
-    }
-
     /// Announce the specialized notes of `stages` (a variant's) that hold under `specialization`,
     /// the one a `VkPipeline` of the variant is made with, `at` its making or a bind
     /// ([`Occurrence`]): the notes the bound formats and samplers leave on an arm that is not

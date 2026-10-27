@@ -2548,7 +2548,6 @@ fn record(
             });
         }
     }
-    device.degrade_half_texel_writes(&variant.pipeline().dependencies);
     objects.degrade_bound_formats(
         std::slice::from_ref(&variant.pipeline().stage),
         Some(formats),

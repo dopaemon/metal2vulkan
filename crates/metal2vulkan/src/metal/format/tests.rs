@@ -1928,47 +1928,36 @@ fn storage_choices_on_committed_profiles_are_declarable() {
     }
 }
 
-/// A half-float storage texture a function writes takes `Identity` on every committed profile: the
-/// device converts each value and NaN (`lower::texture`'s `half_storage_facts` records what it
-/// relies on or notes); so do a read-only use and another float format. On a profile not measured
-/// to store a written `half`'s NaN as its bits (`DriverDeviation::MetalHalfTexelWrites`), a written
-/// use takes the unsigned integer alias (`StorageImageClass::HalfBits`) wherever the alias serves
-/// it, an image of its own format alone `Identity`.
+/// A half-float storage texture takes `Identity` on every committed profile, for every use, written
+/// or read, image or texel buffer: the device converts each value and NaN (`lower::texture`'s
+/// `half_storage_facts` and `half_write_nans` record what it relies on or notes). So does another
+/// float format.
 #[test]
-fn half_float_storage_writes_take_their_measured_class() {
-    let mut seen = BTreeSet::new();
+fn half_float_storage_takes_its_own_format() {
+    let mut seen = 0;
     for (stem, dev) in committed_devices() {
         let p = dev.profile();
-        let want = StorageImageClass::Identity;
         for pf in [
             PixelFormat::R16Float,
             PixelFormat::RG16Float,
             PixelFormat::RGBA16Float,
             PixelFormat::RGBX16Float,
         ] {
-            let use_ = StorageUse::READ_WRITE_TEXTURE;
-            let Ok(choice) = storage_choice_viewed(pf, use_, p, false) else {
-                continue;
-            };
-            assert_eq!(choice.class, want, "{stem} {pf:?}");
-            seen.insert(want);
-            let bits = |use_| match half_bits_view(pf, use_, p) {
-                Some(_) => StorageImageClass::HalfBits,
-                None => want,
-            };
-            let aliased = storage_choice(pf, use_, p).expect("a choice");
-            assert_eq!(aliased.class, bits(use_), "{stem} {pf:?} aliased");
-            seen.insert(aliased.class);
-            let buffer_use = StorageUse::texel_buffer(false, true);
-            if let Ok(buffer) = storage_choice(pf, buffer_use, p) {
-                assert_eq!(buffer.class, bits(buffer_use), "{stem} {pf:?} texel buffer");
-            }
-            if let Ok(read) = storage_choice(pf, StorageUse::texture(true, false), p) {
-                assert_eq!(
-                    read.class,
-                    StorageImageClass::Identity,
-                    "{stem} {pf:?} read"
-                );
+            for use_ in [
+                StorageUse::READ_WRITE_TEXTURE,
+                StorageUse::texture(false, true),
+                StorageUse::texture(true, false),
+                StorageUse::texel_buffer(false, true),
+            ] {
+                if let Ok(choice) = storage_choice(pf, use_, p) {
+                    assert_eq!(
+                        choice.class,
+                        StorageImageClass::Identity,
+                        "{stem} {pf:?} {use_:?}"
+                    );
+                    assert_eq!(choice.alias, None, "{stem} {pf:?} {use_:?}");
+                    seen += 1;
+                }
             }
         }
         if let Ok(choice) =
@@ -1981,7 +1970,7 @@ fn half_float_storage_writes_take_their_measured_class() {
             );
         }
     }
-    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(seen > 0, "no committed profile stores a half-float texture");
 }
 
 /// A `BGR10A2Unorm` storage texture or texture buffer is stored through its own `A2R10G10B10`

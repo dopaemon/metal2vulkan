@@ -1113,7 +1113,6 @@ impl RenderLowering {
                 .objects()
                 .tested_formats(&|slot| tables.bound_format(slot))
         });
-        device.degrade_half_texel_writes(&variant.pipeline().dependencies);
         device.degrade_bound_formats(
             std::slice::from_ref(&variant.pipeline().stage),
             Some(&|slot| tables.bound_format(slot)),

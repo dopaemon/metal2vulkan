@@ -809,8 +809,7 @@ pub enum PrecisionNote {
     /// pixel fetch of a `half` texel: Metal hands back the texel's own NaN, sign and payload, and
     /// Vulkan states no encoding for a 16-bit float texel's decode (MoltenVK answers the canonical
     /// NaN for every one); on a device that rounds a `half` through its conversion under the float
-    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Also recorded by
-    /// a `float` read of a 16-bit float texture through its unsigned integer alias. Also recorded
+    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Also recorded
     /// by a `half` texel's write to a storage texture that may hold a float format, a slot whose
     /// storage choice declares none or a heap element: Metal stores a 16-bit float texel's NaN as
     /// the half's own bits and a 32-bit or packed small float one's as its canonical NaN, and the

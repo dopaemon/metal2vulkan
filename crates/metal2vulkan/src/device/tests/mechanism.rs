@@ -238,10 +238,6 @@ fn every_fact() -> Vec<RuntimeFact> {
                 index: 0,
             },
         },
-        RuntimeFact::HeapHalfTexelWrites {
-            stage: Stage::Kernel,
-            packed: true,
-        },
         RuntimeFact::MovableStorageWrites {
             early_variant: true,
         },
@@ -350,7 +346,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::HeapCrossClassNeutral { .. } => 79,
         RuntimeFact::AnisotropicSampler { .. } => 80,
         RuntimeFact::StorageTextureIntegerChannels { .. } => 81,
-        RuntimeFact::HeapHalfTexelWrites { .. } => 82,
         RuntimeFact::MovableStorageWrites { .. } => 83,
         RuntimeFact::SynthesizedGeometry { .. } => 84,
         RuntimeFact::ObjectThreadgroupArena { .. } => 85,
@@ -358,7 +353,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::ReplayBindings => 88,
         RuntimeFact::MergedDraws => 89,
         RuntimeFact::QuadPrimitiveIds => 90,
-        RuntimeFact::RotatedWeights => 91,
+        RuntimeFact::RotatedWeights => 82,
         RuntimeFact::PrivateList => 86,
         RuntimeFact::MeshLastFirst => 71,
         RuntimeFact::YCbCrInPlace { .. } => 65,
@@ -369,7 +364,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..92).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..91).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -494,8 +489,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                     crate::device::profile::BufferAccess::Addressed => Mechanism::PushConstant,
                     _ => Mechanism::SyntheticBinding,
                 },
-                RuntimeFact::HeapNumericType { .. }
-                | RuntimeFact::HeapHalfTexelWrites { .. } => Mechanism::BinderView,
+                RuntimeFact::HeapNumericType { .. } => Mechanism::BinderView,
                 RuntimeFact::StageInRegion
                 | RuntimeFact::StageInStride { .. }
                 | RuntimeFact::StorageTextureLevels { .. }

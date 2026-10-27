@@ -432,10 +432,6 @@ pub struct Write {
     pub cross: Option<CrossWrite>,
     /// How an integer texel's lanes are saturated to the bound format's channels ([`int_range`]).
     pub saturate: IntRange,
-    /// A `half` or `float` written through a heap handle stores a half-float member's bits
-    /// through the group's unsigned integer twin where the handle's class names one
-    /// ([`heap_bits`], `emit::heap_bits`).
-    pub heap_bits: bool,
 }
 
 /// A write's declared texel and the bound format of a texture of another numeric class
@@ -830,11 +826,6 @@ impl TextureStrategy {
                     }
                     + if w.cross.is_some() { 48 } else { 0 }
                     + w.saturate.words()
-                    + if w.heap_bits {
-                        heap_bits_write_words()
-                    } else {
-                        0
-                    }
             }
             TextureStrategy::Atomic(a) => a.words(),
             TextureStrategy::Query(q) => {
@@ -1285,21 +1276,6 @@ pub fn declare(
         let g = heap_array(mb, plan.stage, class, decl)?;
         d.heap.insert(class, g);
     }
-    // The unsigned integer twins the writes of half-float members store their bits through,
-    // each declared once; a group of the float class decorates it as the float class.
-    for h in plan.families.texture.heap.values() {
-        let Some((class, decl)) = h.bits else {
-            continue;
-        };
-        if d.heap.contains_key(&class) {
-            continue;
-        }
-        let g = heap_array(mb, plan.stage, class, decl)?;
-        if h.volatile && volatile_decorated(plan) {
-            mb.volatile(g)?;
-        }
-        d.heap.insert(class, g);
-    }
     // The classes of other numeric types the reads and queries of a member of another class
     // read it through, each declared once.
     for (class, decl) in plan
@@ -1356,13 +1332,6 @@ fn declare_heap_classes(mb: &mut ModuleBuilder) -> BResult<GlobalId> {
         parts: parts.into(),
     })?;
     mb.plain_global(crate::spirv::ir::StorageClass::Private, arr, Some(init))
-}
-
-/// The words a heap texture's `half` or `float` write adds where it stores a half-float member's
-/// bits through the unsigned integer twin, at most: the test of the class index, the bits, the
-/// twin's access chain and load, and the branch between the two writes.
-pub(crate) fn heap_bits_write_words() -> u32 {
-    emit::heap_bits_words() + emit::class_write_words(StorageImageClass::HalfBits) + 96
 }
 
 /// The words [`heap_texel_class`] emits, at most: the field's shift and mask, the clamp into the
@@ -2172,40 +2141,32 @@ pub fn routine_words(
 pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 
 /// What a `float` write to texture `image` (of storage class `class`) relies on or records where it
-/// may reach a half-float image ([`may_store_half`]), which the device converts whole. Its rounding of each channel to
-/// `half` (Metal rounds toward zero, a finite value past 65504 to 65504) is Metal's where the
-/// profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires its property), else
-/// the device's (`PrecisionNote::DeviceColorConversion`), but for a half-float member a heap's
-/// unsigned integer twin holds (`heap_bits`), whose bits the shader writes. Its NaN is Metal's
+/// may reach a half-float image ([`may_store_half`]), which the device converts whole. Its rounding
+/// of each channel to `half` (Metal rounds toward zero, a finite value past 65504 to 65504) is
+/// Metal's where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires
+/// its property), else the device's (`PrecisionNote::DeviceColorConversion`). Its NaN is Metal's
 /// `0x7e00` where the profile takes `DriverDeviation::MetalHalfStorageNans` (the module requires its
-/// property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`), but for a
-/// member the twin holds, which stores Metal's (the runtime announces the note where the heap holds
-/// a half-float texture the twin does not: `RuntimeFact::HeapHalfTexelWrites`). A write that may
-/// reach a packed small float image, a heap write's or a slot's whose choice declares such a format
+/// property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`). A write that
+/// may reach a packed small float image, a heap write's or a slot's whose choice declares such a format
 /// or none ([`small_float_storage`]), stores its NaN as the device converts it too: Metal stores
 /// every NaN there as its canonical one, and RADV and NVIDIA keep another NaN's payload bits.
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     class: StorageImageClass,
-    heap_bits: bool,
 ) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
     if class == StorageImageClass::Identity && may_store_half(cx, image)? {
-        let rounds = cx
+        if cx
             .profile
-            .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
-        match (heap_bits, rounds) {
-            (true, _) => {}
-            (false, true) => {
-                cx.families
-                    .texture
-                    .storage_properties
-                    .insert(VkProperty::MetalHalfStorageWrites);
-            }
-            (false, false) => {
-                cx.precision.insert(PrecisionNote::DeviceColorConversion);
-            }
+            .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
+        {
+            cx.families
+                .texture
+                .storage_properties
+                .insert(VkProperty::MetalHalfStorageWrites);
+        } else {
+            cx.precision.insert(PrecisionNote::DeviceColorConversion);
         }
         if cx
             .profile
@@ -2215,8 +2176,6 @@ pub(super) fn half_storage_facts(
                 .texture
                 .storage_properties
                 .insert(VkProperty::MetalHalfStorageNans);
-        } else if heap_bits {
-            heap_half_texel_writes(cx, false);
         } else {
             cx.precision.insert(PrecisionNote::DeviceNanEncoding);
         }
@@ -2255,16 +2214,9 @@ fn small_float_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error
 /// The write records `PrecisionNote::DeviceNanEncoding` where the stored NaN stays the device's:
 /// a 16-bit float channel's on a profile without `DriverDeviation::MetalHalfTexelWrites`, a 32-bit
 /// or packed small float channel's, a slot's whose choice declares no format, a texel buffer's
-/// declaring none, and a heap element's, which may be a 32-bit float texture's (where the group's
-/// unsigned integer twin holds its half-float members too, which states
-/// `RuntimeFact::HeapHalfTexelWrites`). A normalized or integer channel stores no NaN; nor does a
-/// slot whose choice writes the half's bits through the texture's unsigned integer alias
-/// (`StorageImageClass::HalfBits`), which every device stores exactly.
-pub(super) fn half_write_nans(
-    cx: &mut SelectCx<'_>,
-    image: ImageRef,
-    heap_bits: bool,
-) -> Result<(), Error> {
+/// declaring none, and a heap element's, which may be any of them. A normalized or integer channel
+/// stores no NaN.
+pub(super) fn half_write_nans(cx: &mut SelectCx<'_>, image: ImageRef) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
     use crate::vk::NumericFormat as N;
     // Whether the stored NaN is exact (`Exact`), a 16-bit float channel's (`Sixteen`, Metal's on
@@ -2286,18 +2238,11 @@ pub(super) fn half_write_nans(
         }
     };
     let stored = match image {
-        ImageRef::Heap { .. } => {
-            if heap_bits {
-                heap_half_texel_writes(cx, true);
-            }
-            Stored::Device
-        }
+        ImageRef::Heap { .. } => Stored::Device,
         ImageRef::Slot(index) => {
             let slot = slot_of(cx, index)?.slot;
             match cx.inputs.storage_images.get(&slot) {
                 Some(c) => match c.class {
-                    // The half's own bits, written through the unsigned integer alias.
-                    StorageImageClass::HalfBits => Stored::Exact,
                     StorageImageClass::Identity => declared(c.vk_format),
                     _ => Stored::Exact,
                 },
@@ -2323,38 +2268,6 @@ pub(super) fn half_write_nans(
     Ok(())
 }
 
-/// Whether a `half` or `float` write (`texel`) to texture `image` of shape `shape` stores a
-/// half-float member's bits through its heap group's unsigned integer twin (`HeapPlan::bits`,
-/// `emit::heap_bits`): a heap write of one sample, not to a cube or texture buffer, neither an
-/// extended-range encode nor another class's (`encoded`), on a device where every half-float
-/// format has the unsigned integer alias the twin holds it through
-/// (`metal::format::heap_half_bits`: a device not measured to store a written `half`'s NaN as its
-/// bits, `DriverDeviation::MetalHalfTexelWrites`). Marks the group's writes, and the handle
-/// carries its class index, which names a member the twin holds
-/// (`metal::texel_format::heap_half_bits_indices`).
-pub(super) fn heap_bits(
-    cx: &mut SelectCx<'_>,
-    image: ImageRef,
-    shape: ImageShape,
-    (texel, encoded): (TexelConv, bool),
-) -> bool {
-    let ImageRef::Heap { group, .. } = image else {
-        return false;
-    };
-    let applies = matches!(texel, TexelConv::F32 | TexelConv::F16)
-        && !encoded
-        && !shape.ms
-        && !matches!(shape.dim, ImageDim::Buffer | ImageDim::Cube)
-        && crate::metal::format::heap_half_bits(cx.profile);
-    if applies {
-        if let Some(h) = cx.families.texture.heap.get_mut(&group) {
-            h.writes_bits = true;
-        }
-        cx.families.access.heap_class_index = true;
-    }
-    applies
-}
-
 /// Whether a storage read or write of a `float` or `half` texel (`texel`) through heap handle
 /// `image` of shape `shape` converts an `A8Unorm` member's texels: a heap access, not to a texture
 /// buffer (no heap class holds one), on a device that holds such a texture's alpha in
@@ -2377,18 +2290,6 @@ pub(super) fn heap_alpha_in_red(
         cx.families.access.heap_class_index = true;
     }
     applies
-}
-
-/// Record that the stage's `half` (`packed`) or `float` writes through heap handles store
-/// half-float members' bits through the unsigned integer twin, and leave the device's conversion
-/// of a NaN to the members it does not hold (`RuntimeFact::HeapHalfTexelWrites`), which the
-/// runtime announces where the heap holds one.
-fn heap_half_texel_writes(cx: &mut SelectCx<'_>, packed: bool) {
-    cx.facts
-        .insert(crate::pipeline::facts::RuntimeFact::HeapHalfTexelWrites {
-            stage: cx.stage,
-            packed,
-        });
 }
 
 /// What a `float` (or `half`, held widened) texel's write in form `texel` to texture `image` of
@@ -3103,24 +3004,12 @@ fn select_read_as(
             storage_class(cx, image)?,
             StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra
         );
-    // A storage slot's half-float texels, through its unsigned integer alias, widened exactly
-    // (the slot's planning declares it): Metal's read, a NaN's included. So is an `RGB9E5Float`
-    // slot's word through its `R32_UINT` alias, decoded exactly.
-    let half_bits = storage
+    // An `RGB9E5Float` slot's word through its `R32_UINT` alias, decoded exactly (the slot's
+    // planning declares it).
+    let words = storage
         && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
-        && matches!(
-            storage_class(cx, image)?,
-            StorageImageClass::HalfBits | StorageImageClass::SharedExponentBits
-        );
-    // A `float` read of a half-float texel's own bits widens a NaN with its sign and payload, where
-    // Metal reads every half NaN as `0x7fc00000`.
-    if texel.conv == TexelConv::F32
-        && half_bits
-        && storage_class(cx, image)? == StorageImageClass::HalfBits
-    {
-        cx.precision.insert(PrecisionNote::DeviceNanEncoding);
-    }
-    let exact = raw || srgb_codes || half_bits;
+        && storage_class(cx, image)? == StorageImageClass::SharedExponentBits;
+    let exact = raw || srgb_codes || words;
     // An extended-range texel is decoded exactly to `f32`, which a `half` result rounds to
     // nearest even, as Metal answers. A read is one texel.
     if texel.conv == TexelConv::F16 && !exact && extended.is_none() {
@@ -3377,15 +3266,11 @@ fn select_write(
     mode_rounded_write(cx, image, texel, extended.is_some())?;
     // Its alpha in red where the class is `A8Unorm`'s and the device holds such a texture so.
     let heap_alpha_red = heap_alpha_in_red(cx, image, shape, texel.conv);
-    // A half-float member's bits through the group's unsigned integer twin, where the handle's
-    // class names one.
-    let encoded = extended.is_some() || cross.is_some();
-    let heap_bits = heap_bits(cx, image, shape, (texel.conv, encoded));
     if texel.conv == TexelConv::F32 {
-        half_storage_facts(cx, image, class, heap_bits)?;
+        half_storage_facts(cx, image, class)?;
     }
     if texel.conv == TexelConv::F16 && extended.is_none() {
-        half_write_nans(cx, image, heap_bits)?;
+        half_write_nans(cx, image)?;
     }
     // A `half` texel's too, held widened: Metal stores its value by the same rule.
     if matches!(texel.conv, TexelConv::F32 | TexelConv::F16) && extended.is_none() {
@@ -3418,7 +3303,6 @@ fn select_write(
         swizzle,
         cross,
         saturate,
-        heap_bits,
     }))
 }
 

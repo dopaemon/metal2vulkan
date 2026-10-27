@@ -57,7 +57,7 @@ use super::address::{ObjectsToken, RangeToken};
 use super::address_map::AddressModeMap;
 use super::attachment_stand_in::KeptBacking;
 use super::attributes::PurgeableState;
-use super::binding_view::{binding_view, texture_facts, views_as, VkView};
+use super::binding_view::{binding_view, texture_facts, VkView};
 use super::buffer::{Buffer, CallerMemory, HostPages, MemoryHold, NotedTexture};
 use super::buffer_texture::{Texels, TexelsHome};
 use super::churn_counts::{Owned, Recycled};
@@ -133,7 +133,7 @@ use metal2vulkan::error::{
     Capability, Feature, LinearNeed, RuntimeDriverDefect, SparseNeed, Unsupported,
 };
 use metal2vulkan::metal::format::{
-    aspects, is_depth_stencil, storage_view_formats, ycbcr_format, ClearRoute, ExtendedRange,
+    aspects, is_depth_stencil, ycbcr_format, ClearRoute, ExtendedRange,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::vk::{
@@ -4575,17 +4575,6 @@ impl Texture {
         facts.sparse = self.is_sparse();
         // A two-plane YCbCr texture whose planes a function may read in place.
         facts.ycbcr_in_place = self.0.planes_in_place.map(|p| p.words);
-        // A wrapped image made without `MUTABLE_FORMAT` takes no view in a storage binding's
-        // other formats (a half-float texture's unsigned integer alias): its storage slots keep
-        // its own format's view. A texture whose storage binding takes the usage shadow binds
-        // the shadow, made with them.
-        facts.own_format_views = !self.needs_usage_shadow(true)
-            && self.image().is_ok_and(|image| {
-                let profile = self.device().compile_device().profile();
-                storage_view_formats(record.pixel_format, profile)
-                    .iter()
-                    .any(|&format| !views_as(image.plan(), format, false))
-            });
         facts
     }
 

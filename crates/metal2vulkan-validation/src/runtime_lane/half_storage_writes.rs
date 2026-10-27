@@ -19,11 +19,8 @@
 //! stored as another NaN is counted apart, not as a failure, where the device announces
 //! `device-nan-encoding` (the recorded near-equivalent).
 //!
-//! The product writes through the storage choice's class (`metal::format::storage_choice`):
-//! as computed, the device's conversion rounding every value and storing every NaN; or, on a device
-//! not measured to store a written `half`'s NaN as its bits, as the bits the shader rounds toward
-//! zero, through the texture's unsigned integer alias (`StorageImageClass::HalfBits`). A case is
-//! held to Metal's rounding where the device is measured to make it
+//! The product writes as computed, the device's conversion rounding every value and storing every
+//! NaN. A case is held to Metal's rounding where the device is measured to make it
 //! (`DriverDeviation::MetalHalfStorageWrites`: RADV, ANV, NVIDIA's measured GPUs, lavapipe from
 //! Mesa 26.0.8 through 26.2.4 and MoltenVK), the measurement of the deviation on that device;
 //! elsewhere the module records the device's conversion (`PrecisionNote::DeviceColorConversion`),

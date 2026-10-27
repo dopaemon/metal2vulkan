@@ -733,9 +733,7 @@ fn plan_held(
                 Some(_) => choice.vk_format,
                 None => format,
             });
-            // And a written-only binding's view: a half-float texture's unsigned integer alias,
-            // through which a slot that only writes it stores Metal's bits where the device does
-            // not store a written half's NaN as its bits.
+            // And a written-only binding's view, where its choice differs.
             views.extend(storage_view_formats(pf, profile));
             // A `ulong` atomic updates Metal's `ulong` texture (`RG32Uint`) through an
             // `R64_UINT` view of the same bytes: a texture made for atomics takes it where the
@@ -918,9 +916,7 @@ pub(super) fn view_formats(
             out.push(m.format);
         }
     }
-    // A storage binding's views, the read-and-write choice's and a written-only one's (a
-    // half-float texture's unsigned integer alias where the device does not store a written
-    // half's NaN as its bits).
+    // A storage binding's views, the read-and-write choice's and a written-only one's.
     if usage.contains(ImageUsageFlags::STORAGE) {
         out.extend(storage_view_formats(pf, profile));
     }

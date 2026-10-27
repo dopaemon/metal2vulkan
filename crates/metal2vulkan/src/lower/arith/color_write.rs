@@ -200,17 +200,6 @@ fn normalized(fb: &mut FunctionBuilder<'_>, s: Form, v: Value, k: u32) -> BResul
     fb.binary(BinOp::FMul, c, r)
 }
 
-/// An upper estimate of the SPIR-V words of [`small_float`] by `rule` on `lanes` lanes: one
-/// channel's, and each of its constants (at most 18) as a vector of `lanes`.
-pub fn small_float_words(rule: ChannelWrite, lanes: u8) -> u64 {
-    let composites = if lanes > 1 {
-        18 * (3 + u64::from(lanes))
-    } else {
-        0
-    };
-    channel_words(rule) + composites + 16
-}
-
 /// `x` (`f32` lanes of form `f`) each rounded by the small-float rule `rule`
 /// ([`ChannelWrite::FloatTowardZero`] or [`ChannelWrite::FloatNearestEven`]), every lane by the
 /// same instructions on the whole vector; another rule is malformed.

@@ -121,7 +121,7 @@ use metal2vulkan::pipeline::{
 };
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 /// The heap's set number.
@@ -231,55 +231,10 @@ struct Placed {
     generation: u64,
     serial: u64,
     flags: u32,
-    /// Whether a heap write stores the device's conversion of a NaN in it ([`NanResidue::of`]).
-    residue: [bool; 2],
     /// The key of the buffer whose bytes its images and texel views lie in
     /// (`Texture::bytes_key`), whose rebind or detach writes its elements again ([`renew_over`]).
     bytes: Option<ResourceKey>,
     texture: Weak<TextureShared>,
-}
-
-/// The live textures the device's heap holds in which a `float` or `half` write through a heap
-/// handle of a function that states `RuntimeFact::HeapHalfTexelWrites` stores the device's
-/// conversion of a NaN, not Metal's (`bind::heap_write_nans_converted`): those of every such
-/// function (a half-float texture its unsigned integer twin does not hold), and those of one
-/// whose `half` writes reach packed small floats too. Counted as they are placed and cleared, so
-/// a draw or dispatch reads them without the `heaps` lock (`Device::degrade_half_texel_writes`).
-#[derive(Default)]
-pub(super) struct NanResidue {
-    /// By `packed`: `false` counts the textures every such write converts, `true` those a `half`
-    /// write converts.
-    counts: [AtomicUsize; 2],
-}
-
-impl NanResidue {
-    /// Of a texture of `facts`: whether a write under `HeapHalfTexelWrites { packed }` converts
-    /// its NaN, by `packed`.
-    fn of(facts: &metal2vulkan::bind::TextureFacts) -> [bool; 2] {
-        [false, true].map(|packed| metal2vulkan::bind::heap_write_nans_converted(facts, packed))
-    }
-
-    fn add(&self, residue: [bool; 2]) {
-        for (count, held) in self.counts.iter().zip(residue) {
-            if held {
-                count.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    fn remove(&self, residue: [bool; 2]) {
-        for (count, held) in self.counts.iter().zip(residue) {
-            if held {
-                count.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    /// Whether the heap holds a texture whose NaN a write under
-    /// `HeapHalfTexelWrites { packed }` converts.
-    pub(super) fn holds(&self, packed: bool) -> bool {
-        self.counts[usize::from(packed)].load(Ordering::Relaxed) > 0
-    }
 }
 
 /// Images retired while command buffers that may read them run (the module docs): each waits
@@ -533,13 +488,12 @@ impl DeviceHeaps {
         held.push(texture.clone());
         let facts = texture.facts();
         let flags = handle_entry_flags(&facts);
-        let residue = NanResidue::of(&facts);
         let bytes = texture.bytes_key();
         // The neutral's entry until every set holds the texture.
         if let Some(table) = &self.table {
             table.put(id, id, 0, 0);
         }
-        self.unplace(device, id);
+        self.unplace(id);
         for entry in self.sets.values_mut() {
             let (writes, shadow) = texture_writes(device, &entry.images, id, &texture, notes)?;
             entry.write(device, writes)?;
@@ -548,14 +502,12 @@ impl DeviceHeaps {
         if let Some(table) = &self.table {
             table.put(id, id, id as u32, flags);
         }
-        device.shared().heap_nan_residue.add(residue);
         self.textures.insert(
             id,
             Placed {
                 generation,
                 serial,
                 flags,
-                residue,
                 bytes,
                 texture: weak,
             },
@@ -564,17 +516,15 @@ impl DeviceHeaps {
         Ok(())
     }
 
-    /// Forget the texture placed at ID `id`, and its count in the device's [`NanResidue`].
-    fn unplace(&mut self, device: &Device, id: u64) {
-        if let Some(placed) = self.textures.remove(&id) {
-            device.shared().heap_nan_residue.remove(placed.residue);
-        }
+    /// Forget the texture placed at ID `id`.
+    fn unplace(&mut self, id: u64) {
+        self.textures.remove(&id);
     }
 
     /// Clear ID `id`: the neutral's entry, no element of it kept for a version made later, and
     /// the neutral at it in each version a command buffer has yet to commit (the module docs).
     fn clear(&mut self, device: &Device, id: u64) -> Result<(), Error> {
-        self.unplace(device, id);
+        self.unplace(id);
         for entry in self.sets.values_mut() {
             entry.shadows.remove(&id);
         }

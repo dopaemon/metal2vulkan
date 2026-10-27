@@ -155,7 +155,7 @@ use crate::pipeline::layout::{BindingSource, DescriptorBinding, PipelineLayout};
 use crate::pipeline::lower_inputs::StorageImageClass;
 use crate::pipeline::sym::{
     CombinedSampler, HandleClass, ImageAccess, ImageDim, ImageHandleClass, SampledType, SamplerRef,
-    SlotClass, SlotRef, Stage, StorageFormatClass, SyntheticBinding,
+    SlotClass, SlotRef, Stage, SyntheticBinding,
 };
 use crate::vk;
 
@@ -271,14 +271,6 @@ pub(crate) fn fit(shape: &TextureShape, class: &ImageHandleClass) -> Fit {
         && (!class.depth_compare || is_depth_stencil(pixel_format))
         && usage.intersects(needs)
         && !(storage && is_depth_stencil(pixel_format));
-    // A float storage group's unsigned integer twin holds exactly the half-float members whose
-    // handles name it ([`half_bits_held`]); every other texture is another class's.
-    if class.format == StorageFormatClass::HalfBits {
-        return match shaped && half_bits_held(shape) {
-            true => Fit::Holds,
-            false => Fit::No,
-        };
-    }
     // A resident texture of a format the table holds no representation of (ASTC's 4x2 and 8x4
     // footprints) fits no class: its element is the neutral, and nothing is refused, since the heap
     // does not know which of its textures the function reads.
@@ -295,56 +287,6 @@ pub(crate) fn fit(shape: &TextureShape, class: &ImageHandleClass) -> Fit {
         Some(_) => Fit::NumericType,
         None => Fit::No,
     }
-}
-
-/// Whether a member of facts `shape` is a texture whose `half` bits a heap write stores through
-/// the unsigned integer twin (`StorageFormatClass::HalfBits`): a texture of
-/// `metal::texel_format::HALF_BITS_FORMATS` that reads unswizzled and whose image takes views in
-/// other formats, whose handle carries its own class (one of `heap_half_bits_indices`). One whose
-/// image takes no view in another format (`TextureFacts::own_format_views`) carries its own-view
-/// index ([`handle_entry_flags`]) and is written through the float class, as before.
-fn half_bits_held(shape: &TextureShape) -> bool {
-    match *shape {
-        TextureShape::Texture {
-            pixel_format,
-            swizzle,
-            own_format_views,
-            ..
-        } => {
-            !own_format_views
-                && crate::metal::texel_format::HALF_BITS_FORMATS.contains(&pixel_format)
-                && crate::metal::texel_format::reads_unswizzled(pixel_format, swizzle)
-        }
-        TextureShape::Buffer { .. } => false,
-    }
-}
-
-/// Whether a write through a heap handle of a function that states
-/// `RuntimeFact::HeapHalfTexelWrites { packed, .. }` stores the device's conversion of a NaN in a
-/// texture of `facts`, not Metal's: a writable (`ShaderWrite` or `BlockWritesOnly`) texture of
-/// `R16Float`, `RG16Float` or `RGBA16Float` that the unsigned integer twin does not hold (a
-/// swizzled one, or one whose image takes no view in another format,
-/// [`TextureFacts::own_format_views`]), and where `packed` a writable `RG11B10Float` or
-/// `RGB9E5Float` one, whose canonical NaN the device converts. Every other texture stores
-/// Metal's answer or is no storage member. A consumer announces
-/// `PrecisionNote::DeviceNanEncoding` at a draw or dispatch of such a function whose heap holds
-/// such a texture.
-pub fn heap_write_nans_converted(facts: &TextureFacts, packed: bool) -> bool {
-    let shape = facts.shape();
-    let TextureShape::Texture {
-        pixel_format,
-        usage,
-        ..
-    } = shape
-    else {
-        return false;
-    };
-    let writable = usage
-        .intersects(metal::TextureUsage::SHADER_WRITE | metal::TextureUsage::BLOCK_WRITES_ONLY);
-    let half = crate::metal::texel_format::HALF_BITS_FORMATS.contains(&pixel_format);
-    let small = !crate::metal::texel_format::half_channels(pixel_format)
-        && crate::metal::format::half_write_nans_converted(pixel_format);
-    writable && ((half && !half_bits_held(&shape)) || (packed && small))
 }
 
 /// Whether a member of facts `shape` is a texture a heap reads by its raw texels: an unswizzled,
@@ -408,24 +350,6 @@ fn member_view(
             Feature::ArgumentBufferTextures,
         )));
     }
-    // The twin holds the member through its unsigned integer alias, which the device writes
-    // without a format.
-    if class.format == StorageFormatClass::HalfBits {
-        let Some(format) = crate::metal::format::heap_half_bits_view(pixel_format, profile) else {
-            return Err(BindError::Unsupported(Unsupported::not_implemented(
-                Feature::ArgumentBufferTextures,
-            )));
-        };
-        return Ok(ImageViewDesc {
-            view_type: view_type(class)?,
-            format,
-            aspect: vk::ImageAspectFlags::COLOR,
-            layout,
-            components: vk::ComponentMapping::IDENTITY,
-            level: None,
-            shader_swizzle: false,
-        });
-    }
     if class.access == ImageAccess::Storage {
         // The class does not say which accesses the function makes, so the member serves
         // every access the device lets a heap make.
@@ -433,13 +357,8 @@ fn member_view(
         let c = storage_choice(pixel_format, use_, profile).map_err(bind_error)?;
         // The class's one formatless declaration cannot convert per element: a member is viewed
         // through its own format.
-        let per_element = matches!(
-            c.class,
-            StorageImageClass::Identity | StorageImageClass::HalfBits
-        );
-        // A half-float member's writes are the device's conversion's, as an `Identity` member's:
-        // the alias a slot only written takes (`StorageImageClass::HalfBits`) is a slot's alone.
-        let aliased = c.alias.is_some() && c.class != StorageImageClass::HalfBits;
+        let per_element = c.class == StorageImageClass::Identity;
+        let aliased = c.alias.is_some();
         // An `A8Unorm` texture held in red (`StorageImageClass::AlphaInRed`): its `R8_UNORM`
         // image, whose texels a heap access converts where the handle carries `A8Unorm`'s class
         // (`metal::texel_format::heap_alpha_in_red_index`), which a swizzle that moves its alpha
@@ -537,11 +456,7 @@ pub fn heap_element(
 /// out-of-bounds alpha of 1; bits 16 to 28 the index of the texture's texel class
 /// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
 /// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; every other
-/// bit 0. A writable half-float texture whose image takes no view in another format
-/// ([`TextureFacts::own_format_views`]) carries its class's own-view index
-/// (`metal::texel_format::heap_own_view_index`), so a heap write reaches it through the float
-/// class and not the unsigned integer twin, which cannot view it. A caller passes the word
-/// through as is.
+/// bit 0. A caller passes the word through as is.
 pub fn handle_entry_flags(facts: &TextureFacts) -> u32 {
     entry_flags(&facts.shape())
 }
@@ -554,21 +469,7 @@ fn entry_flags(shape: &TextureShape) -> u32 {
         Some(true) => FLAG_OUT_OF_BOUNDS_ALPHA_ONE,
         _ => 0,
     };
-    let own_view = match *shape {
-        TextureShape::Texture {
-            usage,
-            own_format_views: true,
-            ..
-        } if usage.intersects(
-            metal::TextureUsage::SHADER_WRITE | metal::TextureUsage::BLOCK_WRITES_ONLY,
-        ) =>
-        {
-            crate::metal::texel_format::heap_own_view_index(pixel_format, swizzle)
-        }
-        _ => None,
-    };
-    let index = own_view
-        .unwrap_or_else(|| crate::metal::texel_format::heap_class_index(pixel_format, swizzle));
+    let index = crate::metal::texel_format::heap_class_index(pixel_format, swizzle);
     let class = index << FLAG_TEXEL_CLASS.trailing_zeros();
     alpha | (class & FLAG_TEXEL_CLASS)
 }

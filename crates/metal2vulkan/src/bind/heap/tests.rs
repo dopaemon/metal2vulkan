@@ -33,7 +33,6 @@ fn shape(ty: TextureType, pf: PixelFormat, samples: u32, usage: TextureUsage) ->
     TextureShape::Texture {
         address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
         offset_base_axes: 0,
-        own_format_views: false,
         ycbcr_in_place: false,
         texture_type: ty,
         pixel_format: pf,
@@ -1451,89 +1450,4 @@ fn a_heap_member_a_mode_two_write_would_round_is_refused() {
         }
     }
     assert!(checked > 0, "no profile holds a format the check refuses");
-}
-
-/// On a profile where a heap write stores half-float members' bits through the unsigned integer
-/// twin (`metal::format::heap_half_bits`), the twin class is a heap class and holds exactly the
-/// writable, unswizzled `R16Float`, `RG16Float` and `RGBA16Float` textures whose image takes
-/// views in other formats, each through its unsigned integer alias; one whose image takes no
-/// other view carries its class's own-view index, the neutral in the twin, and is a texture a
-/// heap write converts (`heap_write_nans_converted`), as a packed small float is for a `half`
-/// write. Elsewhere no twin class exists.
-#[test]
-fn a_half_float_member_is_held_through_its_alias_in_the_unsigned_twin() {
-    use crate::metal::texel_format::{heap_class_index, heap_own_view_index, HALF_BITS_FORMATS};
-    use crate::metal::TextureSwizzleChannels as Swizzle;
-    let mut twins = 0;
-    for (stem, p) in &committed_profiles().expect("profiles") {
-        let twin = ImageHandleClass {
-            format: StorageFormatClass::HalfBits,
-            ..class(
-                ImageDim::D2,
-                false,
-                false,
-                SampledType::Uint,
-                ImageAccess::Storage,
-            )
-        };
-        let declared = heap_classes(p).contains(&HandleClass::Image(twin));
-        assert_eq!(declared, crate::metal::format::heap_half_bits(p), "{stem}");
-        if !declared {
-            continue;
-        }
-        twins += 1;
-        let layout = vk::ImageLayout::GENERAL;
-        let element = |facts: &TextureFacts| {
-            heap_element(p, &HandleClass::Image(twin), facts, layout).expect("an element")
-        };
-        let facts = |pf: PixelFormat, usage: TextureUsage, own: bool| {
-            let mut f = TextureFacts::new(TextureType::Type2D, pf);
-            f.usage = usage;
-            f.own_format_views = own;
-            f
-        };
-        let aliases = [
-            vk::Format::R16_UINT,
-            vk::Format::R16G16_UINT,
-            vk::Format::R16G16B16A16_UINT,
-        ];
-        for (&pf, alias) in HALF_BITS_FORMATS.iter().zip(aliases) {
-            let held = facts(pf, WRITE, false);
-            match element(&held) {
-                HeapElement::View(v) => assert_eq!(v.format, alias, "{stem} {pf:?}"),
-                other => panic!("{stem} {pf:?}: {other:?}"),
-            }
-            let flags = handle_entry_flags(&held) >> FLAG_TEXEL_CLASS.trailing_zeros();
-            let own = heap_class_index(pf, Swizzle::DEFAULT);
-            assert_eq!(flags, own, "{stem} {pf:?}");
-            assert!(!heap_write_nans_converted(&held, true), "{stem} {pf:?}");
-            // An image of its own format's views alone: the float class's, announced.
-            let wrapped = facts(pf, WRITE, true);
-            assert_eq!(element(&wrapped), HeapElement::Neutral, "{stem} {pf:?}");
-            let flags = handle_entry_flags(&wrapped) >> FLAG_TEXEL_CLASS.trailing_zeros();
-            assert_eq!(
-                Some(flags),
-                heap_own_view_index(pf, Swizzle::DEFAULT),
-                "{stem} {pf:?}"
-            );
-            assert!(heap_write_nans_converted(&wrapped, false), "{stem} {pf:?}");
-            // Not writable: no storage member, nothing converted.
-            let read = facts(pf, READ, false);
-            assert_eq!(element(&read), HeapElement::Neutral, "{stem} {pf:?}");
-            assert!(!heap_write_nans_converted(&read, true), "{stem} {pf:?}");
-        }
-        for pf in [
-            PixelFormat::RGBX16Float,
-            PixelFormat::RGBA32Float,
-            PixelFormat::RGBA16Uint,
-            PixelFormat::RG11B10Float,
-        ] {
-            let f = facts(pf, WRITE, false);
-            assert_eq!(element(&f), HeapElement::Neutral, "{stem} {pf:?}");
-            let small = pf == PixelFormat::RG11B10Float;
-            assert!(!heap_write_nans_converted(&f, false), "{stem} {pf:?}");
-            assert_eq!(heap_write_nans_converted(&f, true), small, "{stem} {pf:?}");
-        }
-    }
-    assert!(twins > 0, "no committed profile takes the twin");
 }

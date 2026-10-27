@@ -251,9 +251,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // Keyed by the slots bound to a sampler whose word states anisotropy, where the
         // function's samples take Metal's anisotropic filter, emulated.
         RuntimeFact::AnisotropicSampler { .. } => Mechanism::Variant,
-        // The binder holds each half-float member the twin takes there; the consumer announces
-        // a member it does not take where its heap holds one.
-        RuntimeFact::HeapHalfTexelWrites { .. } => Mechanism::BinderView,
         // The pipeline's own stages, which every draw of its class runs; the consumer announces
         // them.
         RuntimeFact::SynthesizedGeometry { .. } => Mechanism::None,

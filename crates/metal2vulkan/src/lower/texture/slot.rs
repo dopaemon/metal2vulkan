@@ -386,14 +386,6 @@ pub struct HeapPlan {
     /// set by [`finish`] for a sampled color group of one sample. The binder holds each member in
     /// the class of its own numeric type, and the neutral in the others.
     pub cross: std::collections::BTreeMap<TexelClass, (ImageHandleClass, ImageDecl)>,
-    /// Its `half` or `float` writes store a half-float member's bits through the unsigned integer
-    /// twin where the handle's class index names one (`Write::heap_bits`); set by `select_write`.
-    pub writes_bits: bool,
-    /// The twin of a written float storage group ([`HeapPlan::writes_bits`]): the formatless
-    /// unsigned integer storage class of its shape that holds half-float members through their
-    /// unsigned integer aliases (`StorageFormatClass::HalfBits`), and its declaration; set by
-    /// [`finish`]. The binder holds each such member there too, at the same element.
-    pub bits: Option<(ImageHandleClass, ImageDecl)>,
 }
 
 impl HeapPlan {
@@ -415,8 +407,6 @@ impl HeapPlan {
             cross_queries: false,
             uncrossed: false,
             cross: Default::default(),
-            writes_bits: false,
-            bits: None,
         }
     }
 
@@ -783,13 +773,12 @@ fn storage_format(
     }
     // The converting classes exist for 8-bit UNORM color formats, half and small float ones and
     // 1-bit alpha ones only. A YCbCr write slot's `float` texels are stored as their bits in an
-    // unsigned integer image, whose class `declare_slot` gives it., as a half-float slot only
-    // written stores its half bits in its unsigned integer alias.
+    // unsigned integer image, whose class `declare_slot` gives it, as an `RGB9E5Float` slot
+    // stores its words in its `R32_UINT` alias.
     let converting = !matches!(
         choice.class,
         StorageImageClass::Identity
             | StorageImageClass::YCbCrWrite
-            | StorageImageClass::HalfBits
             | StorageImageClass::SharedExponentBits
     );
     if converting && texel != TexelClass::Float {
@@ -1060,17 +1049,16 @@ fn declare_slot(
     if ycbcr_write && (s.uses.read || s.uses.atomic || !float) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
-    // A slot that reads and writes a half-float texture through its unsigned integer alias
-    // holds each texel's half bits there (`StorageImageClass::HalfBits`): a `float` slot's reads
+    // A slot that reads and writes an `RGB9E5Float` texture through its `R32_UINT` alias holds
+    // each texel's word there (`StorageImageClass::SharedExponentBits`): a `float` slot's reads
     // and writes, as the binder chooses it (`metal::format::storage_choice`); no atomic.
-    let half_bits = storage
-        && cx.inputs.storage_images.get(&s.slot).is_some_and(|c| {
-            matches!(
-                c.class,
-                StorageImageClass::HalfBits | StorageImageClass::SharedExponentBits
-            )
-        });
-    if half_bits && (s.uses.atomic || !float) {
+    let words = storage
+        && cx
+            .inputs
+            .storage_images
+            .get(&s.slot)
+            .is_some_and(|c| c.class == StorageImageClass::SharedExponentBits);
+    if words && (s.uses.atomic || !float) {
         return Err(Unsupported::not_representable(Feature::Format).into());
     }
     // A texture of another class, read in its own (`LoweringInputs::cross_class`), only where
@@ -1081,7 +1069,7 @@ fn declare_slot(
     }
     let texel = match extended {
         Some(_) => TexelClass::Uint,
-        None if ycbcr_write || half_bits => TexelClass::Uint,
+        None if ycbcr_write || words => TexelClass::Uint,
         None => image_class(cx.inputs, s),
     };
     if shape.depth && storage {
@@ -1336,21 +1324,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             let sampled_float = class.access == ImageAccess::Sampled
                 && class.sampled_type == SampledType::Float
                 && !class.depth_compare;
-            // The unsigned integer twin of a float storage group whose writes store half bits.
-            let storage_float = class.access == ImageAccess::Storage
-                && class.sampled_type == SampledType::Float
-                && !class.multisampled;
-            h.bits = (h.writes_bits && storage_float).then_some((
-                ImageHandleClass {
-                    sampled_type: SampledType::Uint,
-                    format: StorageFormatClass::HalfBits,
-                    ..class
-                },
-                ImageDecl {
-                    texel: TexelClass::Uint,
-                    ..decl
-                },
-            ));
             h.raw = (h.reads_raw && sampled_float).then_some((
                 ImageHandleClass {
                     sampled_type: SampledType::Uint,

@@ -57,7 +57,7 @@ use super::function_table::TableShared;
 use super::generated_commands::Commands;
 use super::gpu_pools::GpuPools;
 use super::gpu_time::{self, FromHost, Timing};
-use super::heap_sets::{DeviceHeaps, NanResidue};
+use super::heap_sets::DeviceHeaps;
 use super::host_memory::Importer;
 use super::interop::Interop;
 use super::loader_word::LoaderWord;
@@ -261,9 +261,6 @@ pub(super) struct DeviceShared {
     /// The heap sets and the texture table every command buffer shares (`heap_sets.rs`). Its
     /// lock is taken before `resource_ids`', never under it.
     pub(super) heaps: Mutex<DeviceHeaps>,
-    /// The live textures the heap holds whose NaN a heap write of a half-float twin's function
-    /// converts (`heap_sets::NanResidue`), read at draws and dispatches without `heaps`.
-    pub(super) heap_nan_residue: NanResidue,
     /// The live visible-function tables, by resource ID: an argument buffer can name each, for
     /// a dispatch of the state that made it (`function_table.rs`).
     pub(super) function_tables: Mutex<BTreeMap<u64, Weak<TableShared>>>,
@@ -1726,7 +1723,6 @@ impl Device {
             sampler_count: SamplerCount::new(limits.max_sampler_allocation_count),
             sampler_sets: Mutex::default(),
             heaps: Mutex::default(),
-            heap_nan_residue: NanResidue::default(),
             function_tables: Mutex::default(),
             internal: Mutex::new(None),
             internal_done: OwnTimeline::default(),

@@ -3500,7 +3500,6 @@ field	metal2vulkan::bind::TessellationScanModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::TextureFacts.address_modes	pub address_modes: metal::sampler::AddressModeMap
 field	metal2vulkan::bind::TextureFacts.array_length	pub array_length: u32
 field	metal2vulkan::bind::TextureFacts.mipmap_level_count	pub mipmap_level_count: u32
-field	metal2vulkan::bind::TextureFacts.own_format_views	pub own_format_views: bool
 field	metal2vulkan::bind::TextureFacts.parent_base_size	pub parent_base_size: [u32; 3]
 field	metal2vulkan::bind::TextureFacts.parent_relative_level	pub parent_relative_level: u32
 field	metal2vulkan::bind::TextureFacts.pixel_format	pub pixel_format: metal::PixelFormat
@@ -4576,7 +4575,6 @@ fn	metal2vulkan::bind::handle_entry_flags	pub fn handle_entry_flags(facts: &Text
 fn	metal2vulkan::bind::heap_classes	pub fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass>
 fn	metal2vulkan::bind::heap_element	pub fn heap_element(profile: &DeviceProfile, class: &HandleClass, facts: &TextureFacts, layout: vk::ImageLayout) -> Result<HeapElement, BindError>
 fn	metal2vulkan::bind::heap_raw_form	pub fn heap_raw_form(facts: &TextureFacts) -> Option<crate::metal::format::ExtendedRange>
-fn	metal2vulkan::bind::heap_write_nans_converted	pub fn heap_write_nans_converted(facts: &TextureFacts, packed: bool) -> bool
 fn	metal2vulkan::bind::index_bounds_fill_module	pub fn index_bounds_fill_module(device: &Device) -> Result<IndexBoundsFillModule, Error>
 fn	metal2vulkan::bind::index_bounds_fill_run_module	pub fn index_bounds_fill_run_module(device: &Device) -> Result<IndexBoundsFillModule, Error>
 fn	metal2vulkan::bind::index_bounds_plan_module	pub fn index_bounds_plan_module(device: &Device) -> Result<IndexBoundsPlanModule, Error>
@@ -4642,7 +4640,6 @@ fn	metal2vulkan::metal::format::direct_format	pub fn direct_format(pf: PixelForm
 fn	metal2vulkan::metal::format::explicit_imageblock_sample_length	pub fn explicit_imageblock_sample_length(data_size: u32, alignment: u32, colors: u32) -> Option<u32>
 fn	metal2vulkan::metal::format::extended_range_blend	pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<(), Unsupported>
 fn	metal2vulkan::metal::format::footprint	pub fn footprint(pf: PixelFormat) -> Option<Footprint>
-fn	metal2vulkan::metal::format::half_write_nans_converted	pub fn half_write_nans_converted(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::image_type	pub fn image_type(ty: TextureType) -> Option<(vk::ImageType, vk::ImageCreateFlags)>
 fn	metal2vulkan::metal::format::image_view_type	pub fn image_view_type(ty: TextureType) -> Option<vk::ImageViewType>
 fn	metal2vulkan::metal::format::imageblock_sample_length	pub fn imageblock_sample_length(formats: &[Option<PixelFormat>]) -> Option<u32>
@@ -12231,7 +12228,7 @@ variant	metal2vulkan::bind::TessellationRecords::Pool	Pool
 variant	metal2vulkan::bind::TexelWords::ColorPlane	ColorPlane
 variant	metal2vulkan::bind::TexelWords::Raw	Raw
 variant	metal2vulkan::bind::TextureShape::Buffer	Buffer { pixel_format: metal::PixelFormat,  swizzle: metal::TextureSwizzleChannels }
-variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  own_format_views: bool,  ycbcr_in_place: bool }
+variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  ycbcr_in_place: bool }
 variant	metal2vulkan::bind::TileMapError::Region	Region { level: u32, slice: u32, origin: [u32; 3], size: [u32; 3] }
 variant	metal2vulkan::bind::TileMapError::Shape	Shape
 variant	metal2vulkan::bind::TileMapError::TextureType	TextureType { texture_type: TextureType }
@@ -13650,7 +13647,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::FragmentImageblock	FragmentImageblo
 variant	metal2vulkan::pipeline::RuntimeFact::FramebufferFetch	FramebufferFetch { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::FunctionTableRange	FunctionTableRange { addressed: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapCrossClassNeutral	HeapCrossClassNeutral { stage: Stage, class: ImageHandleClass, every_member: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::HeapHalfTexelWrites	HeapHalfTexelWrites { stage: Stage, packed: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapNumericType	HeapNumericType { class: ImageHandleClass }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapRawSamples	HeapRawSamples { stage: Stage, sampler: Option<u32> }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapWriteRounding	HeapWriteRounding { stage: Stage, halves: bool }
@@ -13779,11 +13775,9 @@ variant	metal2vulkan::pipeline::StandInView::SamplePlanes	SamplePlanes { layers:
 variant	metal2vulkan::pipeline::StorageAttachmentView::Attachment	Attachment
 variant	metal2vulkan::pipeline::StorageAttachmentView::SamplePlanes	SamplePlanes { layers: u32 }
 variant	metal2vulkan::pipeline::StorageFormatClass::Format	Format(vk::Format)
-variant	metal2vulkan::pipeline::StorageFormatClass::HalfBits	HalfBits
 variant	metal2vulkan::pipeline::StorageFormatClass::NotStorage	NotStorage
 variant	metal2vulkan::pipeline::StorageFormatClass::Unknown	Unknown
 variant	metal2vulkan::pipeline::StorageImageClass::AlphaInRed	AlphaInRed
-variant	metal2vulkan::pipeline::StorageImageClass::HalfBits	HalfBits
 variant	metal2vulkan::pipeline::StorageImageClass::Identity	Identity
 variant	metal2vulkan::pipeline::StorageImageClass::RotateArgb	RotateArgb
 variant	metal2vulkan::pipeline::StorageImageClass::SharedExponentBits	SharedExponentBits
