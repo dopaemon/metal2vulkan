@@ -215,28 +215,24 @@ impl Case for SrgbFetch {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The notice set alone, never a texel: how a venue reaches the attachment is a route, and
-        // each route announces itself -- a scratch image through the pixel interlock (MoltenVK),
-        // a shader colour conversion through an input attachment (lavapipe). Both are performance
-        // notices. Every byte compares exactly, which is the owner's rule for this family.
+        // a route that costs more announces itself -- a scratch image through the pixel interlock
+        // (MoltenVK), a performance notice. Every byte compares exactly, which is the owner's rule
+        // for this family.
         //
         // A third route the same pass takes on lavapipe: an attachment it does not store back is
         // Vulkan's `DONT_CARE` where the driver is measured to leave the earlier texels there,
         // announced as `dont-care-store`. Measured on both rows of this module and on neither row
         // of `super::fetch_ordered`, so it is named here and not there. It says nothing about the
         // texels either -- every byte still compares exactly.
-        [
-            Degradation::FetchThroughScratch,
-            Degradation::ShaderColorConversion,
-            Degradation::DontCareStore,
-        ]
-        .iter()
-        .map(|notice| crate::replay::notice_allowance(notice.code()))
-        .chain([
-            // The buffer each pass reads its target back through is `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-        ])
-        .collect()
+        [Degradation::FetchThroughScratch, Degradation::DontCareStore]
+            .iter()
+            .map(|notice| crate::replay::notice_allowance(notice.code()))
+            .chain([
+                // The buffer each pass reads its target back through is `Shared`
+                // ([`crate::replay::shared_memory_notice`]).
+                crate::replay::shared_memory_notice(),
+            ])
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

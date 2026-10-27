@@ -1048,10 +1048,9 @@ fn a_notice_we_announce_and_metal_does_not_is_divergent_until_it_is_named() {
 #[test]
 fn a_declared_notice_does_not_excuse_an_undeclared_one() {
     let declared = Degradation::CarriedDecodedTwin;
-    let undeclared = [
-        Degradation::DeviceTexelConversion,
-        Degradation::NativeDivision,
-    ];
+    // Neither is one of the device's native answers, which the suite declares for every case
+    // ([`crate::replay::NATIVE_NOTES`]).
+    let undeclared = [Degradation::DecodedBlockTwin, Degradation::ShaderResolve];
     let bytes = words(&[1, 2]);
     let case = WordsCase {
         allowances: vec![crate::replay::notice_allowance(declared.code())],
@@ -1101,6 +1100,119 @@ fn a_declared_notice_does_not_excuse_an_undeclared_one() {
         "{}",
         replayed.verdict
     );
+}
+
+/// The device's own native answers are declared by the suite for every case: a run that announces
+/// one, with every value Metal's, is announced and not divergent, though the case names nothing,
+/// and the standing declaration is not counted as the case's own, so the native notes the run did
+/// not announce are not reported as allowances that never fired.
+#[test]
+fn a_native_note_is_declared_for_every_case() {
+    let native = Degradation::NativeFma;
+    let bytes = words(&[1, 2]);
+    let case = WordsCase::new("words", 2);
+    let recording = recording_of(&case, case.transcript(bytes.clone(), "Completed", &[]), 3);
+    let mut side = StubSide::new(bytes).announcing(&[native]);
+    let replayed = replay_against(&case, &mut side, &recording).unwrap();
+    assert!(
+        matches!(replayed.verdict, Verdict::Announced { .. }),
+        "{}",
+        replayed.verdict
+    );
+    assert_eq!(replayed.allowances.named, 0);
+    assert_eq!(replayed.allowances.unfired, Vec::new());
+}
+
+/// The standing declaration is of the notice and of nothing else. A value the device's answer
+/// moved is still a divergence, at its own site, where the case names no tolerance; and a notice
+/// outside the native set is still the case's to declare, whatever native notes fired beside it.
+#[test]
+fn a_native_note_declares_no_value_and_excuses_no_other_notice() {
+    let native = Degradation::NativeNanEncoding;
+    let other = Degradation::CarriedDecodedTwin;
+    let case = WordsCase::new("words", 2);
+    let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
+    let mut side = StubSide::new(words(&[1, 7])).announcing(&[native, other]);
+    let replayed = replay_against(&case, &mut side, &recording).unwrap();
+    let Verdict::Divergent { found, .. } = &replayed.verdict else {
+        panic!("not divergent: {}", replayed.verdict);
+    };
+    let undeclared: Vec<&str> = found
+        .iter()
+        .filter_map(|divergence| match &divergence.kind {
+            DivergenceKind::UndeclaredNotice { code } => Some(code.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(undeclared, vec![other.code()], "{found:?}");
+    assert!(
+        found
+            .iter()
+            .any(|divergence| divergence.path.starts_with("case/output")),
+        "the moved word is a divergence of its own: {found:?}"
+    );
+    // The notices site itself passes on the native note's declaration: the one notice row is the
+    // undeclared code's, with no second row for the set or the counts.
+    assert!(
+        !found
+            .iter()
+            .any(|divergence| divergence.path.starts_with("case/notices/")),
+        "{found:?}"
+    );
+}
+
+/// A native note the run did not announce is no loosening the case names: a case that names
+/// nothing and announces one other notice reads that notice as undeclared and its notices site as
+/// differing, and is not told that it loosens the site with a declaration nothing justified.
+#[test]
+fn an_unannounced_native_note_is_no_unjustified_loosening() {
+    let other = Degradation::CarriedDecodedTwin;
+    let case = WordsCase::new("words", 2);
+    let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
+    let mut side = StubSide::new(words(&[1, 2])).announcing(&[other]);
+    let replayed = replay_against(&case, &mut side, &recording).unwrap();
+    let Verdict::Divergent { found, .. } = &replayed.verdict else {
+        panic!("not divergent: {}", replayed.verdict);
+    };
+    assert!(
+        found
+            .iter()
+            .any(|divergence| matches!(divergence.kind, DivergenceKind::UndeclaredNotice { .. })),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|divergence| divergence.path.starts_with("case/notices/")),
+        "the notices site differs as if nothing declared it: {found:?}"
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|divergence| matches!(divergence.kind, DivergenceKind::Unjustified { .. })),
+        "{found:?}"
+    );
+}
+
+/// The standing set is closed over the native-maths class by construction: every kind whose code
+/// says it is the device's native form is in it, so a native note a later change adds cannot be
+/// left for every case to declare. Each member is a precision kind, held once.
+#[test]
+fn the_native_notes_hold_every_native_kind_once() {
+    use crate::replay::NATIVE_NOTES;
+    for kind in Degradation::ALL {
+        if kind.code().starts_with("metal2vulkan-degrade-native-") {
+            assert!(NATIVE_NOTES.contains(kind), "{kind:?} is missing");
+        }
+    }
+    for (at, kind) in NATIVE_NOTES.iter().enumerate() {
+        assert_eq!(
+            kind.category(),
+            metal2vulkan_runtime::DegradationCategory::Precision,
+            "{kind:?}"
+        );
+        assert!(!NATIVE_NOTES[..at].contains(kind), "{kind:?} twice");
+    }
 }
 
 /// A case that names two notices separately must see **both** fire. Before the subset check the
@@ -5172,9 +5284,9 @@ fn the_runtime_side_forwards_every_field_of_a_pipeline_spec() {
 /// would record a difference without saying what it was waiting on. The notices site used to print
 /// "Metal recorded AnnouncedNothing, we observed a value", which names nothing a reader can act on.
 ///
-/// It is a divergence and not a tolerance on purpose: where the product's own degrade note says
-/// validation derives no explanation from it, loosening the site here would be this suite
-/// overruling the product's stated contract.
+/// It is a divergence and not a tolerance on purpose: a notice the case does not declare, outside
+/// the device's native answers the suite declares for every case ([`crate::replay::NATIVE_NOTES`]),
+/// is a difference nobody is accounting for.
 #[test]
 fn a_divergence_that_is_a_notice_names_the_notice_each_side_announced() {
     use crate::known_gaps::{against, Expectation, Expects, KnownGap};

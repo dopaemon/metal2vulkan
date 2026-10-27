@@ -211,26 +211,19 @@ impl Case for WidePoints {
         // case reads `announced` on lavapipe and `exact` on MoltenVK. No other notice fired for
         // this case on either venue, and a tolerance no run justifies is not carried.
         //
-        // The same device also converts the float the fragment writes to the normalized colour
-        // attachment in the shader (`shader-color-conversion`, lavapipe). Declared, not loosened:
-        // every coverage still compares exactly.
-        //
         // The positions and the read-back are `Shared`, and a device with no unified memory keeps
         // a `Shared` allocation in system memory because that is the only memory both sides can
         // reach (`shared-in-system-memory`). That is the venue's memory model, not this case's
         // point.
-        [
-            Degradation::DevicePointSize,
-            Degradation::ShaderColorConversion,
-        ]
-        .into_iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .chain([
-            // The positions and the read-back are `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
-        ])
-        .collect()
+        [Degradation::DevicePointSize]
+            .into_iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
+            .chain([
+                // The positions and the read-back are `Shared`
+                // ([`crate::replay::shared_memory_notice`]).
+                crate::replay::shared_memory_notice(),
+            ])
+            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

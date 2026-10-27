@@ -212,15 +212,14 @@ impl Case for FetchOrdered {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Two, and both loosen the **notice set** alone: how a venue reaches the attachment is a
-        // route, and each route announces itself. Reading it through the pixel interlock may mean
-        // rendering the pass into a scratch image (`fetch-through-scratch`, MoltenVK here), and
-        // reading it through an input attachment may mean converting the colour in the shader
-        // (`shader-color-conversion`, lavapipe here). Both are performance notices, so neither says
-        // anything about the texels -- every byte still compares exactly, which is the owner's rule
-        // for this family: if Metal allows it we must allow it, so a byte that differs is a bug and
-        // a refusal is a bug, and neither gets a tolerance here. A venue announces one of the two,
-        // so the other is reported as having fired on no venue of that run, which is honest.
+        // Both loosen the **notice set** alone: how a venue reaches the attachment is a route,
+        // and a route that costs more announces itself. Reading it through the pixel interlock may
+        // mean rendering the pass into a scratch image (`fetch-through-scratch`, MoltenVK here), a
+        // performance notice, so it says nothing about the texels -- every byte still compares
+        // exactly, which is the owner's rule for this family: if Metal allows it we must allow it,
+        // so a byte that differs is a bug and a refusal is a bug, and neither gets a tolerance
+        // here. A venue that reads through an input attachment announces no route at all, so the
+        // declaration is reported as having fired on no venue of that run, which is honest.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -233,14 +232,9 @@ impl Case for FetchOrdered {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                [
-                    Degradation::FetchThroughScratch,
-                    Degradation::ShaderColorConversion,
-                ]
-                .iter()
-                .map(|notice| crate::replay::notice_allowance(notice.code())),
-            )
+            .chain([crate::replay::notice_allowance(
+                Degradation::FetchThroughScratch.code(),
+            )])
             .collect()
     }
 

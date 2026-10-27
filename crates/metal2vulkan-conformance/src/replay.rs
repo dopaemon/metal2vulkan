@@ -356,3 +356,95 @@ pub fn notice_allowance(code: &str) -> crate::allowance::Allowance {
 pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
 }
+
+/// The notices that state **the device's own answer** to an arithmetic or value question, which the
+/// suite holds declared at the notices site for every case ([`native_note_declarations`]).
+///
+/// **Why the suite declares them and no case does.** The owner's rule (AGENTS.md, rule 1) makes the
+/// GPU's native arithmetic the contract: where the device has a native form of an operation, that
+/// form is the only one the runtime builds, and the artifact records a note where it can differ
+/// from Metal's. So such a notice says what the device is, not what a case did wrong, and it fires
+/// in almost every case that does arithmetic, converts a texel or samples. A case naming each one
+/// would state one rule of the suite's a thousand times, and two statements of one rule drift
+/// apart.
+///
+/// **Which notes, and from where.** A kind is here where its documentation (the `PrecisionNote`'s
+/// in the translator, or the runtime's own `Degradation`'s) says the answer is the device's own
+/// native form of an operation rule 1 names, and that no other form is built:
+///
+/// - **maths**: the native-maths class (`native-transcendentals`, `native-division`,
+///   `native-fma`, `native-dot`, `native-mix`, `native-min-max`, `native-nan-encoding`), the
+///   device's functions and precision bounds (`device-transcendentals`, `device-arithmetic`), the
+///   device's denormals and NaN bits (`device-denormals`, `device-nan-encoding`), and the device's
+///   rounding of a tiny product (`float-tininess-after-rounding`);
+/// - **rounding**: the native-half class (`native-half-conversion`, `native-half-quantize`), and
+///   the device's own depth conversion and depth test (`unorm-depth-rounding`, `depth-denormals`,
+///   `signed-depth-test`);
+/// - **texel, vertex and colour conversions**: `device-texel-conversion`,
+///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
+///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
+/// - **sampling and filtering**: `device-sampling`, `device-sample-level`, and Metal's own sampler
+///   filtering a two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`,
+///   `ycbcr-filter-not-exact`);
+/// - **resolves**: `device-rounded-resolve`.
+///
+/// **What is not here**, and stays each case's to declare: a note of what the device **lacks**
+/// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
+/// `restricted-depth-range`), of an emulation's own precision (`decoded-texel-precision`,
+/// `grad-from-bias`, `pixel-sampler-scaling`, `bicubic-filter-arithmetic`), of a Metal form not
+/// measured or not built (`blended-write-rounding`, `unmeasured-resolve`, `device-interpolation`,
+/// `reduction-order`), of the freedom the AIR's own flags give (`fast-math-rewrites`), and every
+/// performance or validity notice.
+///
+/// **It declares the notice, and nothing about a value.** Each entry loosens the notices site
+/// alone, exactly as a case's own [`notice_allowance`] does, so every value of every case still
+/// compares field by field. A value the device's answer moves is still a divergence at its own
+/// site: where the note says validation derives no tolerance from it, as nearly every one of these
+/// does, the suite loosens no value by it either, and the site is a `known-gaps.tsv` row that says
+/// what differs and whose answer it is.
+pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
+    use metal2vulkan_runtime::Degradation as D;
+    &[
+        D::NativeTranscendentals,
+        D::NativeDivision,
+        D::NativeFma,
+        D::NativeDot,
+        D::NativeMix,
+        D::NativeMinMax,
+        D::NativeNanEncoding,
+        D::DeviceTranscendentals,
+        D::DeviceArithmetic,
+        D::DeviceDenormals,
+        D::DeviceNanEncoding,
+        D::FloatTininessAfterRounding,
+        D::NativeHalfConversion,
+        D::NativeHalfQuantize,
+        D::UnormDepthRounding,
+        D::DepthDenormals,
+        D::SignedDepthTest,
+        D::DeviceTexelConversion,
+        D::HalfTexelConversion,
+        D::SrgbTexelDecode,
+        D::DeviceVertexConversion,
+        D::DeviceColorConversion,
+        D::DeviceSampling,
+        D::DeviceSampleLevel,
+        D::HalfSampleFilter,
+        D::FloatSampleFilter,
+        D::YCbCrFilterNotExact,
+        D::DeviceRoundedResolve,
+    ]
+};
+
+/// The suite's standing declarations: one [`notice_allowance`] per [`NATIVE_NOTES`] kind, which
+/// [`crate::compare::compare_run`] holds beside every case's own allowances.
+///
+/// They are checked by the same rules as a case's declaration — each covers the notices site
+/// alone, and justifies a difference there only where its own code was announced — but they are
+/// not the case's: they never count among the allowances a case named, so a native note a case's
+/// run did not announce is not reported as an allowance that never fired.
+pub fn native_note_declarations() -> impl Iterator<Item = crate::allowance::Allowance> {
+    NATIVE_NOTES
+        .iter()
+        .map(|kind| notice_allowance(kind.code()))
+}

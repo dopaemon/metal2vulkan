@@ -486,13 +486,6 @@ impl BlendInteraction {
         }
     }
 
-    /// Whether our side may round the store into the attachment **in the shader**, which is the
-    /// shape `Degradation::ShaderColorConversion` is about: a normalized attachment is converted,
-    /// a float one is stored as it stands.
-    fn converts_in_the_shader(&self) -> bool {
-        !matches!(self.format(), PixelFormat::RGBA32Float)
-    }
-
     /// The bytes one texel of the case's format takes.
     fn texel(&self) -> u32 {
         match self.format() {
@@ -869,24 +862,13 @@ impl Case for BlendInteraction {
         // venue's memory model for the `Shared` buffer every row reads its texels back through
         // (`crate::replay::shared_memory_notice`).
         //
-        // `shader-color-conversion` is only the rows whose attachment is **normalized**, which is
-        // where our side may round the conversion in the shader: the two 8-bit format rows. The
-        // mask row and the 32-bit float row store a float channel, so nothing is converted and the
-        // notice cannot fire for them.
-        //
         // Measured on the RTX 5080 Laptop (615.71.09) and on llvmpipe (Mesa 26.2.4): all four rows
-        // announced the first two, and `blend-interaction-format-unorm8` and `-format-srgb8` the
-        // third, each with the case declaring none (replay-nvidia.log, replay-llvmpipe.log).
-        let mut named = vec![
+        // announced both, each with the case declaring none (replay-nvidia.log,
+        // replay-llvmpipe.log).
+        vec![
             crate::replay::notice_allowance(Degradation::DeviceColorConversion.code()),
             crate::replay::shared_memory_notice(),
-        ];
-        if self.converts_in_the_shader() {
-            named.push(crate::replay::notice_allowance(
-                Degradation::ShaderColorConversion.code(),
-            ));
-        }
-        named
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1466,14 +1448,8 @@ mod tests {
                     case.name()
                 );
             }
-            // The device's conversion and the venue's memory model for every row, and the
-            // shader's conversion for the two whose attachment is normalized.
-            assert_eq!(
-                case.allowances().len(),
-                2 + usize::from(case.converts_in_the_shader()),
-                "{}",
-                case.name()
-            );
+            // The device's conversion and the venue's memory model, for every row.
+            assert_eq!(case.allowances().len(), 2, "{}", case.name());
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();
             let stated: BTreeSet<&str> = inputs.iter().map(|input| input.name.as_str()).collect();

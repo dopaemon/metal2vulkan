@@ -22,13 +22,10 @@
 //! choice: the tile-store family's masked draw can only be compared under a notice, and a mask is
 //! too ordinary a piece of state to be checked only where a notice is in the way.
 //!
-//! The one site that is loosened is the notices site, by `shader-color-conversion`: a device whose
-//! own float-to-normalized conversion is not Metal's has the fragment function round each stored
-//! channel itself (`metal2vulkan::pipeline::color_writes`), which it announces. Which device does
-//! that is the device's answer and not the case's — lavapipe announces it, MoltenVK on an Apple
-//! GPU does not — and it changes no texel here, because white converts to `0xff` either way. The
-//! case of a mask of no channel does not announce it at all: with nothing stored there is no
-//! conversion to round, which is itself a small confirmation that the mask reached the pipeline.
+//! The one site that is loosened is the notices site, by the venue's memory notice alone: the
+//! device's own float-to-normalized conversion is a native note the suite declares for every case
+//! ([`crate::replay::NATIVE_NOTES`]), and it changes no texel here, because white converts to
+//! `0xff` either way.
 //!
 //! The mask of every channel is the control. Without it a side that quietly stopped drawing at all
 //! would pass both of the other two, and the family would prove nothing.
@@ -60,19 +57,17 @@
 //!
 //! Nothing here can fault a GPU: one 4 by 4 target a case, one triangle, no loop.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
     ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, TargetSpec,
 };
-use crate::replay::NOTICES_SITE;
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 /// The owned fixture whose vertex function is Metal's fullscreen triangle at the depth a vertex
 /// buffer holds, and whose fragment function returns white. The tile-store family's fixture.
@@ -196,10 +191,7 @@ impl Case for ColorWriteMaskCase {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The texels are not loosened: `RGBA8Unorm` codes survive Metal's store, so which channels
-        // the mask kept is an exact answer on every device or it is a bug. The notices site is,
-        // by the one notice a draw that stores a converted channel may announce, because which
-        // device rounds the conversion in the shader is the device's answer and not the case's and
-        // it moves no texel here.
+        // the mask kept is an exact answer on every device or it is a bug.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -211,14 +203,7 @@ impl Case for ColorWriteMaskCase {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![
-            crate::replay::shared_memory_notice(),
-            Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(Degradation::ShaderColorConversion),
-            ),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -345,8 +330,11 @@ mod tests {
     //! recording was taken with a different pipeline, and the test says which case.
 
     use super::*;
+    use crate::allowance::Justification;
     use crate::recording::Recording;
+    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
+    use metal2vulkan_runtime::Degradation;
 
     /// The texel Metal leaves under `mask`: `0xff` in each channel it names, the prefill byte in
     /// each it does not.
@@ -487,11 +475,9 @@ mod tests {
                 );
                 match &allowance.justified_by {
                     // The venue's own memory notice, which every row of the family declares
-                    // because every row reads its answer back through a `Shared` buffer, and the
-                    // one notice a converted channel may carry.
+                    // because every row reads its answer back through a `Shared` buffer.
                     Justification::Degradation(code) => assert!(
-                        code == Degradation::SharedInSystemMemory.code()
-                            || code == Degradation::ShaderColorConversion.code(),
+                        code == Degradation::SharedInSystemMemory.code(),
                         "{}: an unexpected notice {code}",
                         case.name()
                     ),

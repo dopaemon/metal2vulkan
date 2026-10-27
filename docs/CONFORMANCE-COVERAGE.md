@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 298 |
+| ledger rows (a case whose gap is recorded) | 841 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2307,18 +2307,34 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
 | `argb8-targets-subtract-one-minus-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Metal's… |
-| `blend-sweep-operations` | Metal stores a NEGATIVE zero where we store a positive one: the first differing element is Metal 0x80000000 against our 0x0, and all four of the site's elements… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
+| `blend-sweep-operations` | Metal stores a negative zero where we store a positive one: the first differing element is Metal 0x80000000 against our 0x0, and all four of the site's elements… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
@@ -2328,33 +2344,33 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-r32f` | A blend whose factor reads the blend colour, at the same product rounding as this family's other divergent sites and not yet fitted to a rule there. What is mea… |
-| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
@@ -2364,36 +2380,37 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
@@ -2404,62 +2421,92 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. The cause is established and is not half precision: Meta… |
-| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code, with its sign, its payload and its signalling bit kept (verified: this case's… |
-| `sampler-mip-linear` | Metal's `lodMinClamp` of `FLT_MAX` holds a linear-mip sample at the LAST level: lane 0 answers 2001, the level-2 value, which is the row this case's own recorde… |
-| `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-r16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-r16f` | The `float` widening of the `half` this case reads from a 16-bit float texel's NaN: Metal widens every `half` NaN to its canonical `0x7FC00000`, and ours is thi… |
+| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-rg16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-rg16f` | The `float` widening of the `half` this case reads from a 16-bit float texel's NaN: Metal widens every `half` NaN to its canonical `0x7FC00000`, and ours is thi… |
+| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-rgba16f` | Metal's `half` result of a 16-bit float texel hands back the texel's own NaN code -- sign, payload and signalling bit kept (this case's committed recording of p… |
+| `half-texel-nans-rgba16f` | The `float` widening of the `half` this case reads from a 16-bit float texel's NaN: Metal widens every `half` NaN to its canonical `0x7FC00000`, and ours is thi… |
+| `vertex-format-float4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-float4` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
-| `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
-| `vertex-format-instance-step` | This is NOT a rounding difference and it is not the narrow-float NaN gap of the sibling rows in the same case. Metal's `float4` fetch of an `MTLVertexFormatFloa… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-float4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-half4` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: Metal rounds it to `half` (an `f32` denormal to zero, a value past the `half`'s range to infinity), and ours k… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: Metal rounds it to `half` (an `f32` denormal to zero, a value past the `half`'s range to infinity), and ours k… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: Metal rounds it to `half` (an `f32` denormal to zero, a value past the `half`'s range to infinity), and ours k… |
+| `vertex-format-half4` | A `float` attribute the function reads as `half`: Metal rounds it to `half` (an `f32` denormal to zero, a value past the `half`'s range to infinity), and ours k… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-half4` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-half4` | A normalized attribute the function reads as `half`: Metal rounds the field's value to `half`, and ours hands on the device's `float` conversion unrounded (Meta… |
+| `vertex-format-instance-step` | This is NOT a rounding difference and it is not the narrow-float NaN rows of the same case. Metal's `float4` fetch of an `MTLVertexFormatFloatRGB9E5` attribute … |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
 | `vertex-format-instance-step` | Metal converts a normalized vertex field as `c / (2^b - 1)`, correctly rounded, and this device's fixed-function vertex input is one ULP high: at the first diff… |
+| `vertex-format-instance-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `compute-threadgroup-simd-scratch` | Metal's compute pipeline state answers `staticThreadgroupMemoryLength` 24576 -- the fixture's own 24 KiB `threadgroup` array -- and we answer 32768 on this venu… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
@@ -2500,4 +2547,500 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sparse-mapping-move-past-the-destinations-row` | Plain Metal reads back only a FRACTION of a sparse tile a move rebound, and we read the whole of it. Measured on this M3 Max (macOS 27.0.1, build 26A434) from t… |
 | `sparse-mapping-move-past-the-destinations-row` | Plain Metal reads back only a FRACTION of a sparse tile a move rebound, and we read the whole of it. Measured on this M3 Max (macOS 27.0.1, build 26A434) from t… |
 | `sparse-mapping-move-of-a-clipped-source` | Plain Metal reads back only a FRACTION of a sparse tile a move rebound, and we read the whole of it. Measured on this M3 Max (macOS 27.0.1, build 26A434) from t… |
+| `argb8-targets-unblended` | An unblended colour write into an 8-bit unorm attachment (`RGBA8Unorm`, and `ARGB8Unorm` through its byte rotation, which moves by the same count): Metal's stor… |
+| `argb8-targets-unblended` | An unblended colour write into an 8-bit unorm attachment (`RGBA8Unorm`, and `ARGB8Unorm` through its byte rotation, which moves by the same count): Metal's stor… |
+| `argb8-targets-unblended-red-alpha` | An unblended colour write into an 8-bit unorm attachment (`RGBA8Unorm`, and `ARGB8Unorm` through its byte rotation, which moves by the same count): Metal's stor… |
+| `argb8-targets-unblended-red-alpha` | An unblended colour write into an 8-bit unorm attachment (`RGBA8Unorm`, and `ARGB8Unorm` through its byte rotation, which moves by the same count): Metal's stor… |
+| `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `buffer-depth-samples-d16-54-4` | A read or sample of a `Depth16Unorm` texel through the device's conversion: codes read one `f32` ulp low (Metal 0x3B808081 against our 0x3B808080 at the first, … |
+| `chroma-pair-texel-reads-bgrg422` | A read of a chroma-pair (4:2:2) texel: the digest of the site's output differs, so the report gives no count or bound here. The case reads through the device's … |
+| `chroma-pair-texel-reads-gbgr422` | A read of a chroma-pair (4:2:2) texel: the digest of the site's output differs, so the report gives no count or bound here. The case reads through the device's … |
+| `chroma-pair-texel-samples-bgrg422` | A sample of a chroma-pair (4:2:2) texture: the digest of the site's output differs, so the report gives no count or bound here. The case reads through the devic… |
+| `chroma-pair-texel-samples-gbgr422` | A sample of a chroma-pair (4:2:2) texture: the digest of the site's output differs, so the report gives no count or bound here. The case reads through the devic… |
+| `compute-inline-bytes` | A texel the kernel reads through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing element is Metal 0x...C1 against … |
+| `compute-plural-texture-and-sampler-binding` | A texel the kernel reads through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing element is Metal 0x...C1 against … |
+| `depth16-texel-reads` | A read or sample of a `Depth16Unorm` texel through the device's conversion: codes read one `f32` ulp low (Metal 0x3B808081 against our 0x3B808080 at the first, … |
+| `depth16-texel-reads` | A read or sample of a `Depth16Unorm` texel through the device's conversion: codes read one `f32` ulp low (Metal 0x3B808081 against our 0x3B808080 at the first, … |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-a1bgr5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-a1bgr5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-abgr4unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-abgr4unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-b5g6r5unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-b5g6r5unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `extended-swizzles-bgr5a1unorm` | A linear sample of a packed 16-bit unorm texture through a swizzled view, by the device's own filter: the site's largest difference is a few thousand `f32` ulps… |
+| `extended-swizzles-bgr5a1unorm` | A read, nearest sample or gather (`rf`, `sn`, `g0` to `g3`) of a packed 16-bit unorm texel through a swizzled view and the device's own conversion: the site's e… |
+| `fetch-ordered-bgra8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-bgra8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-bgra8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-bgra8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-bgra8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-bgra8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-rgba8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-rgba8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-rgba8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `half-read-nans-r16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
+| `half-read-nans-r16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
+| `half-read-nans-rg16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
+| `half-read-nans-rg16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
+| `half-read-nans-rgba16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
+| `half-read-nans-rgba16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
+| `half-storage-writes-r16f-held` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-r16f-read-write` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-r16f-write` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-rg16f-held` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-rg16f-read-write` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-rg16f-write` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-rgba16f-held` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-rgba16f-read-write` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-storage-writes-rgba16f-write` | A NaN the function writes to a 16-bit float storage texture: Metal stores its canonical `0x7E00` for every one, and ours stores this device's negative quiet NaN… |
+| `half-texel-nans-r32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-r32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-r32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-r32f` | The `float` widening of the `half` this case reads from a 32-bit float texel's NaN: Metal widens every `half` NaN to its canonical `0x7FC00000`, and ours is thi… |
+| `half-texel-nans-rg32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-rg32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-rg32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-rg32f` | The `float` widening of the `half` this case reads from a 32-bit float texel's NaN: Metal widens every `half` NaN to its canonical `0x7FC00000`, and ours is thi… |
+| `half-texel-nans-rgba32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-rgba32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-rgba32f` | A `half` read, sample or read-through-sample of a 32-bit float texel's NaN: Metal answers its canonical positive `0x7E00`, and ours this device's negative quiet… |
+| `half-texel-nans-rgba32f` | The `float` widening of the `half` this case reads from a 32-bit float texel's NaN: Metal widens every `half` NaN to its canonical `0x7FC00000`, and ours is thi… |
+| `half-write-nans-r16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, and ours stores the quiet NaN `0x7E00` (the first differing element … |
+| `half-write-nans-r32f` | A `half` NaN written to a 32-bit float storage texture: Metal stores its canonical `0x7FC00000`, and ours stores the device's widening of the `half`, which keep… |
+| `half-write-nans-rg16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, and ours stores the quiet NaN `0x7E00` (the first differing element … |
+| `half-write-nans-rg32f` | A `half` NaN written to a 32-bit float storage texture: Metal stores its canonical `0x7FC00000`, and ours stores the device's widening of the `half`, which keep… |
+| `half-write-nans-rgba16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, and ours stores the quiet NaN `0x7E00` (the first differing element … |
+| `half-write-nans-rgba32f` | A `half` NaN written to a 32-bit float storage texture: Metal stores its canonical `0x7FC00000`, and ours stores the device's widening of the `half`, which keep… |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
+| `math-frexp-ilogb-half` | `frexp` of a signalling `half` NaN: Metal's mantissa is the operand's own bits (0x7C01), and ours is the device's quiet NaN of the same payload (0x7E01). `nativ… |
+| `math-frexp-ilogb-half` | `frexp` of a signalling `half` NaN: Metal's mantissa is the operand's own bits (0x7C01), and ours is the device's quiet NaN of the same payload (0x7E01). `nativ… |
+| `nearest-sample-positions` | A nearest sample at coordinates on texel boundaries under repeat and mirrored repeat: where the elements differ, ours reads the neighbouring texel (Metal 88 aga… |
+| `nearest-sample-positions` | A nearest sample at coordinates on texel boundaries under repeat and mirrored repeat: where the elements differ, ours reads the neighbouring texel (Metal 88 aga… |
+| `norm-storage-codes-rgb10a2unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgb10a2unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgb10a2unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgb10a2unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba16unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8snorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
+| `pass-bytes-half-tanh-regimes` | Each word holds two `half` results of `tanh` over its regimes, which the device computes by its own functions and rounds to `half` by its own conversion (`nativ… |
+| `pass-bytes-srgb-decode-all-bytes` | Each word holds two `half` results of an sRGB decode of a byte, and they differ by at most one `half` ulp in each half (the site's largest difference, 0x0001000… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
+| `read-write-tier-held` | A read of the round-tripped `A8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Metal… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGR10A2Unorm` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a text… |
+| `read-write-tier-held` | A read of the round-tripped `BGRA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `BGRA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | A read of the round-tripped `R8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Metal… |
+| `read-write-tier-held` | A read of the round-tripped `RG8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Meta… |
+| `read-write-tier-held` | A read of the round-tripped `RGBA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-held` | Metal round-trips a read-write texel of `RGBA8Unorm_sRGB` -- one of the `beyond` formats no read-write tier names but this Metal reads and writes -- through a t… |
+| `read-write-tier-round-trip-float` | A read of a `BGR10A2Unorm` texel through the device's conversion: its 10-bit codes read one `f32` ulp low at the site's largest difference. This device converts… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped `BGRA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped `RG8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Meta… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped `RGBA8Unorm` texels through the device's conversion: an 8-bit code's value is one `f32` ulp off at the site's largest difference (Me… |
+| `render-then-sample-magnified-linear` | A linear magnified sample of a rendered 8-bit target: codes a step apart at the site's largest difference. The sample is the device's filter (`device-sampling`,… |
+| `sample-positions-default-4x` | A 4x resolve of an 8-bit unorm channel: Metal's average is 1 and the device's 0, one code below. `device-rounded-resolve`'s recorded bound (every unorm channel … |
+| `sampler-axis-border-opaque-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-white` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-white` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-white` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-white` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-white` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-opaque-white` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-transparent-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-transparent-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-transparent-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-transparent-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-transparent-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-border-transparent-black` | A linear sample of a 3D texture under a clamp-to-border axis, through the device's own sampler and texel conversion: the site's largest difference, 0.00147, is … |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: the filter's weights diff… |
+| `sampler-axis-mode-triples` | A sample of a 3D texture whose texels hold small whole numbers, under the three axes' address modes, through the device's own sampler: at some of the site's coo… |
+| `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
+| `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
+| `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
+| `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
+| `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
+| `sampler-border-colours` | At the site's coordinates near the edge of the case's 3D texture, Metal's sample reads a texel (0.1255, code 32, at the first differing element) where the devic… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: the filter's weights differ… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
+| `sampler-r-address-modes` | A sample of a 3D texture whose texels hold small whole numbers, under the `r` axis's address mode, through the device's own sampler: at some of the site's coord… |
+| `swizzled-storage-made-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-made-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `swizzled-storage-rgba8unorm` | A swizzled read of an `RGBA8Unorm` storage texture's texel through the device's own conversion: an 8-bit code's value is one `f32` ulp high (the first differing… |
+| `texel-swizzles-rgba8unorm` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-rgba8unorm` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-rgba8unorm` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-rgba8unorm` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `texel-swizzles-views` | A swizzled read of an `RGBA8Unorm` texel through the device's own conversion, its value doubled after the read: an 8-bit code's value is one `f32` ulp high (the… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `vertex-format-constant-step` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 

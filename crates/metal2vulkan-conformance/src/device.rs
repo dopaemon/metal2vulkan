@@ -1,7 +1,8 @@
 //! Opening a runtime device for the suite, and collecting the notices it announces.
 //!
-//! The device is made with explicit options and no environment: exact answers, a shader cache
-//! directory this run owns and removes, and a message sink that keeps the degrade-notice codes the
+//! The device is made with explicit options and no environment: the accurate form of each of the
+//! runtime's speed-for-accuracy switches ([`Policy::Exact`]), a shader cache directory this run owns
+//! and removes, and a message sink that keeps the degrade-notice codes the
 //! device delivered. A warm cache never stands in for a translation the suite compares, and a
 //! notice is never lost: it is the thing that justifies a loosened field.
 //!
@@ -254,9 +255,17 @@ fn loader() -> Option<PathBuf> {
 /// `Default` is what a consumer gets, and comparing a case under both is how the suite says
 /// whether a difference is the policy's or the implementation's. The owner's rule keeps both forms
 /// and asks for tests of both settings, so the command can select either.
+///
+/// **Neither touches arithmetic.** The device's native arithmetic and value answers are the
+/// contract under both (AGENTS.md, rule 1): no switch emulates Metal's bits where the device has a
+/// native form, so the notes that state the device's own answer fire alike under either policy
+/// ([`crate::replay::NATIVE_NOTES`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Policy {
-    /// `DevicePolicy::exact_answers()`: the accurate form of every choice.
+    /// `DevicePolicy::exact_answers()`: the accurate form of each of the runtime's
+    /// speed-for-accuracy switches, which are all it selects — `heap_compression`
+    /// `Uncompressed`, `completion` `Exact`, `batch_order` `Exact`, `render_lowering` `AtCall` and
+    /// `host_page_textures` `Shadow`.
     Exact,
     /// The runtime's own defaults: the fast form of every choice, which is what a consumer runs.
     Default,
@@ -284,7 +293,7 @@ pub fn options_under(policy: Policy, notices: &Notices, cache: &ScratchCache) ->
     options
 }
 
-/// The suite's device options: exact answers, the cache this run owns, and `notices`' sink.
+/// The suite's device options: [`Policy::Exact`], the cache this run owns, and `notices`' sink.
 pub fn options(notices: &Notices, cache: &ScratchCache) -> DeviceOptions {
     options_under(Policy::Exact, notices, cache)
 }
@@ -302,7 +311,7 @@ pub fn open_under(
         .map_err(|error| format!("the runtime made no {venues:?} device: {error}"))
 }
 
-/// The runtime's default device among the physical devices `venues` names, with exact answers.
+/// The runtime's default device among the physical devices `venues` names, under [`Policy::Exact`].
 pub fn open(venues: Venues, notices: &Notices, cache: &ScratchCache) -> Result<Device, String> {
     open_under(venues, Policy::Exact, notices, cache)
 }

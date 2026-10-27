@@ -26,6 +26,10 @@
 //! is stated. The same check also marks a declaration **used** where its own code was announced,
 //! because the walk marked only the first covering allowance and a case's second declaration could
 //! therefore never fire.
+//!
+//! The one set of notices no case names is the device's own native answers
+//! ([`crate::replay::NATIVE_NOTES`]): the suite declares them at the notices site for every case,
+//! under the same rules, and they declare nothing about a value.
 
 use crate::allowance::{Allowance, Loosening, Offered, Unjustified};
 use crate::diff::{Divergence, DivergenceKind, ElementAt, GapAt, LineAt, Side};
@@ -257,16 +261,28 @@ pub fn compare_run(
             found.note_bad(&allowance.path, why);
         }
     }
-    let mut fired = vec![false; allowances.len()];
+    // The suite's standing declarations of the device's native answers follow the case's own
+    // ([`crate::replay::NATIVE_NOTES`]). They are held to the same rules at the notices site, and
+    // they come after the case's, so a site the case loosens names the case's justification first.
+    // They are not the case's: the count of what it named, and of what never fired, reads the
+    // case's own alone.
+    let every: Vec<Allowance> = allowances
+        .iter()
+        .cloned()
+        .chain(crate::replay::native_note_declarations())
+        .collect();
+    let mut fired = vec![false; every.len()];
     // The complement of the walk at the notices site, and the suite's central claim rests on it:
-    // every notice our side announced must be one the case names, and a declaration fires on its
-    // own code. Without it a case that declared any single notice could not fail at that site at
-    // all, and its second declaration could never fire (see [`notice_declarations`]).
-    for undeclared in notice_declarations(ours, allowances, &mut fired) {
+    // every notice our side announced must be one the case names or the suite declares, and a
+    // declaration fires on its own code. Without it a case that declared any single notice could
+    // not fail at that site at all, and its second declaration could never fire (see
+    // [`notice_declarations`]).
+    for undeclared in notice_declarations(ours, &every, &mut fired) {
         found.divergences.push(undeclared);
     }
     let mut walk = Walk {
-        allowances,
+        allowances: &every,
+        named: allowances.len(),
         offered,
         stopped,
         device_gaps: &ours.device_gaps,
@@ -393,7 +409,12 @@ fn refused(metal: &Value, ours: &Value) -> bool {
 
 /// The comparison's state as it descends.
 struct Walk<'a> {
+    /// The case's own allowances, then the suite's native-note declarations
+    /// ([`crate::replay::native_note_declarations`]).
     allowances: &'a [Allowance],
+    /// How many of [`Walk::allowances`] are the case's own: only those can be a loosening the
+    /// case names and the run cannot justify.
+    named: usize,
     /// What the run and its recording offer to justify a difference.
     offered: Offered<'a>,
     /// Whether the run stopped before the end: a site only Metal reached is then no divergence.
@@ -901,15 +922,19 @@ impl Walk<'_> {
                     held = Some((at, allowance));
                     break;
                 }
-                Some(why) => {
+                // A native-note declaration the run did not announce is no loosening of the
+                // case's: the site then differs as if the declaration were absent.
+                Some(why) if at < self.named => {
                     first_unjustified = first_unjustified.or(Some((allowance, why)));
                 }
+                Some(_) => {}
             }
         }
         let Some((at, allowance)) = held else {
-            let (allowance, why) = first_unjustified.expect("a covering allowance");
-            let path = allowance.path.clone();
-            self.found.note_bad(&path, why);
+            if let Some((allowance, why)) = first_unjustified {
+                let path = allowance.path.clone();
+                self.found.note_bad(&path, why);
+            }
             return false;
         };
         self.fired[at] = true;

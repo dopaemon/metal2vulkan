@@ -14,9 +14,11 @@
 //! Metal's own API validation layer, in a child of this command ([`metal2vulkan_conformance::validated`]).
 //!
 //! With no case named, the whole case set is selected. `--cpu` replays on a CPU Vulkan
-//! implementation (lavapipe), which is how the no-Metal leg is proven. A replay holds the runtime
-//! to exact answers by default; `--default-policy` replays under the runtime's own defaults, the
-//! fast form of every speed-for-accuracy choice, which is what a consumer runs. Comparing a case
+//! implementation (lavapipe), which is how the no-Metal leg is proven. A replay takes the accurate
+//! form of each of the runtime's speed-for-accuracy switches by default
+//! (`DevicePolicy::exact_answers()`, which selects no arithmetic: the device's native arithmetic is
+//! the contract under either policy); `--default-policy` replays under the runtime's own defaults,
+//! the fast form of every speed-for-accuracy choice, which is what a consumer runs. Comparing a case
 //! under both is how the suite says whether a difference is the policy's or the implementation's.
 //!
 //! The command's exit status is 0 only where the selection holds no surprise: no unrecorded case,

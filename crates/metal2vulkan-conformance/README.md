@@ -22,6 +22,29 @@ whose notice this run did not announce is the other direction, and is reported a
 allowance rather than failed — a notice is announced once per device per kind, so which of a case's
 notices its own run provokes depends on what ran before it in the same process.
 
+**The one set of notices no case names is the device's own arithmetic.** The owner's rule
+(AGENTS.md, rule 1) makes the GPU's native arithmetic and value answers the contract — `float` and
+`half` maths, NaN bits, denormals, minimum and maximum, rounding, texel, vertex and colour
+conversions, sampling and filtering, resolves. Where the device has a native form it is the only form the
+runtime builds, and the note that says so fires in nearly every case that computes, converts or
+samples. So the suite declares those notes itself, at the notices site, for every case:
+`replay::NATIVE_NOTES` lists them, chosen from the notes' own documentation (the translator's
+`PrecisionNote` and the runtime's `Degradation`), with the rule for what is in it and what is not.
+They are held to a case declaration's rules — the notices site alone, justified only where the code
+was announced — and they never count among the allowances a case named, so a native note a run did
+not announce is not an allowance that never fired. A note of what the device **lacks**, of an
+emulation's own precision, or of a Metal form not measured or not built is not in the set, and a
+case that provokes one still names it.
+
+**They declare nothing about a value.** Every value still compares field by field, and comparison
+is never widened for the whole suite. A value the device's native answer moves is a divergence at
+its own site. Nearly every note of the set says in its own documentation that validation derives no
+tolerance from it, and the suite loosens no value by such a note either: that would be the suite
+overruling the product's stated contract. So the site is a `known-gaps.tsv` row, scoped to the
+venue whose device answers so, that says what differs, whose answer it is, and whether the note's
+recorded bound covers it. A tolerance justified by a note is for a note whose documentation gives a
+bound validation may hold, and is never wider than that bound.
+
 A site where plain Metal answered a call and we returned a typed error is a **refusal**, and no
 allowance can make it anything else: it counts in its own verdict and is never compliant.
 
@@ -35,10 +58,13 @@ Metal never came back from the call, which is its own verdict. A refusal that ar
 mismatch instead is a bug of the suite's rather than a finding about Metal; it went unseen four
 ways in this round, and each way lost both the refused count and the ledger row.
 
-A replay holds the runtime to exact answers. `conformance replay --default-policy` replays under
-the runtime's own defaults instead — the fast form of every speed-for-accuracy choice, which is
-what a consumer runs — so the suite can say whether a difference is the policy's or the
-implementation's.
+A replay takes the accurate form of each of the runtime's speed-for-accuracy switches
+(`DevicePolicy::exact_answers()`: `heap_compression` `Uncompressed`, `completion` `Exact`,
+`batch_order` `Exact`, `render_lowering` `AtCall`, `host_page_textures` `Shadow`); no switch touches
+arithmetic, which is the device's native answer under either policy. `conformance replay
+--default-policy` replays under the runtime's own defaults instead — the fast form of every
+speed-for-accuracy choice, which is what a consumer runs — so the suite can say whether a
+difference is the policy's or the implementation's.
 
 A refusal the **venue** honestly cannot answer is not a gap of ours and reads `lacks-feature`
 instead. That fact rides in the failure's own recorded value, beside the typed error, so it reaches
@@ -125,12 +151,10 @@ numbers-only.
 reconstructs a site or an answer by hand or with a parser — the step where one stream in this round
 nearly committed a row for a site that does not exist.
 
-Where the difference **is** a notice — our side announces a degrade code and Metal announces nothing, every other field
-bit-exact — the row's answer names what each side announced, because that is the whole difference
-and a row that did not name it would record a gap without saying what it waits on. Such a site is a
-divergence and not a tolerance: where the product's own degrade note says validation derives no
-explanation from it, loosening the site here would be this suite overruling the product's stated
-contract. A case that both diverges and refuses holds its refused sites in the `Divergent` verdict alongside
+Where the difference **is** a notice — our side announces a degrade code the case does not declare
+and the suite's native set does not hold, Metal announces nothing, every other field bit-exact — the
+row's answer names what each side announced, because that is the whole difference and a row that
+did not name it would record a gap without saying what it waits on. A case that both diverges and refuses holds its refused sites in the `Divergent` verdict alongside
 the differences, so neither row can go unchecked behind the other: a divergence never launders a
 refusal.
 

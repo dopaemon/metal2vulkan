@@ -454,10 +454,6 @@ impl Case for HostPageWrite {
         // and for neither writable row (replay-nvidia.log, replay-llvmpipe.log). So it is declared
         // from `Row::read_only`, which is the bit it is about.
         //
-        // `shader-color-conversion` is the two **drawing** rows': they store into a normalized
-        // colour attachment, which our side may round in the shader. Announced by both on both
-        // drivers; neither kernel row stores a colour.
-        //
         // `shared-in-system-memory` is every row's and belongs to the venue, not to this family:
         // each row reads its pages back through a `Shared` buffer
         // (`crate::replay::shared_memory_notice`). Announced by all four on the 5080.
@@ -470,9 +466,6 @@ impl Case for HostPageWrite {
         if matches!(self.row.shape, Shape::Visibility) {
             named.push(crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::FastMathRewrites.code(),
-            ));
-            named.push(crate::replay::notice_allowance(
-                metal2vulkan_runtime::Degradation::ShaderColorConversion.code(),
             ));
         }
         if self.row.read_only {

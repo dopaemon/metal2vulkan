@@ -238,16 +238,10 @@ impl Case for TopologyClassCase {
         // asymmetry is itself a small confirmation that the notice is the arithmetic's and not the
         // topology class's.
         //
-        // Two more are declared for both cases, and both belong to the venue rather than to a
-        // topology class: a device whose own conversion of a float written to a normalized colour
-        // attachment is not Metal's converts it in the shader instead (`shader-color-conversion`,
-        // measured on llvmpipe and on the RTX 5080), and the positions and the read-back are
-        // `Shared` ([`crate::replay::shared_memory_notice`], measured on the 5080). Neither
-        // loosens a texel.
-        let mut allowances: Vec<Allowance> = vec![
-            crate::replay::notice_allowance(Degradation::ShaderColorConversion.code()),
-            crate::replay::shared_memory_notice(),
-        ];
+        // One more is declared for both cases, and it belongs to the venue rather than to a
+        // topology class: the positions and the read-back are `Shared`
+        // ([`crate::replay::shared_memory_notice`], measured on the 5080). It loosens no texel.
+        let mut allowances: Vec<Allowance> = vec![crate::replay::shared_memory_notice()];
         // And the point-size function's case alone declares what a device without
         // `shaderPointSize`'s guarantee announces for the size it writes: measured on llvmpipe for
         // that row and for neither the plain row nor any venue whose driver is Metal. It is the
@@ -556,7 +550,7 @@ mod tests {
             );
             assert_eq!(
                 case.allowances().len(),
-                2 + usize::from(writes_point_size(&case.subject)) + usize::from(names_fast_math),
+                1 + usize::from(writes_point_size(&case.subject)) + usize::from(names_fast_math),
                 "{}: an unexpected number of declarations",
                 case.name()
             );

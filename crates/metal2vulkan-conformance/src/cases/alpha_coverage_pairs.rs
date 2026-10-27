@@ -221,8 +221,7 @@ impl Row {
 /// What a **four-sample** row with an alpha output and `alphaToCoverage` **on** announced: the
 /// coverage of a clipped edge split per sample (`clipped-coverage-split`), the device's own
 /// conversion into the attachment (`device-color-conversion`), the sample outputs written in a
-/// loop (`looped-sample-outputs`), the conversion rounded in the shader
-/// (`shader-color-conversion`) and the resolve done by a draw rather than the store
+/// loop (`looped-sample-outputs`) and the resolve done by a draw rather than the store
 /// (`shader-resolve`).
 ///
 /// Measured on the RTX 5080 Laptop (615.71.09) for all eight such rows, each divergent on the
@@ -231,7 +230,6 @@ const A2C_ON_MULTISAMPLE: &[Degradation] = &[
     Degradation::ClippedCoverageSplit,
     Degradation::DeviceColorConversion,
     Degradation::LoopedSampleOutputs,
-    Degradation::ShaderColorConversion,
     Degradation::ShaderResolve,
 ];
 
@@ -240,28 +238,22 @@ const A2C_ON_MULTISAMPLE: &[Degradation] = &[
 const A2C_OFF_MULTISAMPLE: &[Degradation] = &[
     Degradation::ClippedCoverageSplit,
     Degradation::LoopedSampleOutputs,
-    Degradation::ShaderColorConversion,
     Degradation::ShaderResolve,
 ];
 
 /// A four-sample row whose fragment writes **no alpha**: nothing narrows the coverage, so neither
-/// the split nor the looped outputs fire, and what is left is the shader's conversion and the
-/// resolve. Measured on the 5080 and on llvmpipe for both such rows.
-const NO_ALPHA_MULTISAMPLE: &[Degradation] = &[
-    Degradation::ShaderColorConversion,
-    Degradation::ShaderResolve,
-];
+/// the split nor the looped outputs fire, and what is left is the resolve. Measured on the 5080 and
+/// on llvmpipe for both such rows.
+const NO_ALPHA_MULTISAMPLE: &[Degradation] = &[Degradation::ShaderResolve];
 
 /// A single-sample row with an alpha the device converts: no resolve, no sample loop. Measured on
 /// the 5080 and on llvmpipe for `a2c-on-1-alpha-50`.
-const SINGLE_CONVERTED: &[Degradation] = &[
-    Degradation::DeviceColorConversion,
-    Degradation::ShaderColorConversion,
-];
+const SINGLE_CONVERTED: &[Degradation] = &[Degradation::DeviceColorConversion];
 
-/// A single-sample row our side converts in the shader and the device does not. Measured on the
-/// 5080 and on llvmpipe for `a2c-off-1-alpha-50` and `a2one-on-1-mask-no-alpha`.
-const SINGLE_IN_THE_SHADER: &[Degradation] = &[Degradation::ShaderColorConversion];
+/// A single-sample row whose store announces nothing but the device's own arithmetic, which the
+/// suite declares for every case ([`crate::replay::NATIVE_NOTES`]): `a2c-off-1-alpha-50` and
+/// `a2one-on-1-mask-no-alpha`.
+const SINGLE_PLAIN: &[Degradation] = &[];
 
 /// A single-sample **blended** row: the blend's factors read the source alpha, so what reaches the
 /// attachment is the device's own conversion and not one our side rounded. Measured on the 5080
@@ -306,7 +298,7 @@ const ROWS: &[Row] = &[
     Row {
         name: "a2c-off-1-alpha-50",
         samples: 1,
-        notices: SINGLE_IN_THE_SHADER,
+        notices: SINGLE_PLAIN,
         ..Row::sweep("a2c-off-1-alpha-50", false, 0.5)
     },
     // The write-mask cross: the coverage must not move, and only the stored alpha may.
@@ -373,7 +365,7 @@ const ROWS: &[Row] = &[
         write_mask: ColorWriteMask::RED
             .union(ColorWriteMask::GREEN)
             .union(ColorWriteMask::BLUE),
-        notices: SINGLE_IN_THE_SHADER,
+        notices: SINGLE_PLAIN,
         ..Row::sweep("a2one-on-1-mask-no-alpha", false, 0.5)
     },
 ];

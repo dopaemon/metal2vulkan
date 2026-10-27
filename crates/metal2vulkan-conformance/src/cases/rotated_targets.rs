@@ -50,7 +50,6 @@ use crate::render::{
 };
 use crate::transcript::{Node, Observed, Sites, Value};
 use metal2vulkan::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, VERTEX,
@@ -486,35 +485,22 @@ impl Case for RotatedTarget {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One allowance, and it loosens **no texel**: it names the notice this venue announces.
+        // One allowance, and it loosens **no texel**: the notice the venue's own memory model
+        // provokes. The buffer each case reads its target back through is `Shared`, which a
+        // device with no unified memory keeps in system memory because that is the only memory
+        // both sides can reach.
         //
-        // Metal has no notices at all, so a recording's notice set is empty and any notice of ours
-        // has to be declared by its code or the case cannot be read on the venue that announces it.
-        // Which code depends on the state, not on the device: a state that blends keeps the
-        // device's own conversion of the channels it blends
-        // (`PrecisionNote::DeviceColorConversion`), and an unblended one has the fragment round
-        // each output by Metal's rule itself (`ShaderColorConversion`). So the case names the one
-        // its own blend implies, and a venue that announces neither (MoltenVK on this M3 Max, where
-        // every byte of both legs matched) leaves it unfired, which the report says and the suite
-        // documents as a venue-specific allowance doing its job.
+        // Every state stores through the device's own conversion of the channels it writes, blended
+        // or not (`PrecisionNote::DeviceColorConversion`), a native note the suite declares for
+        // every case ([`crate::replay::NATIVE_NOTES`]), so the case names no notice of its own.
         //
         // **No tolerance on any texel, deliberately.** On lavapipe the blended states store a code
         // one apart from Metal's, and that is exactly the shape `DeviceColorConversion` describes
         // -- but the note's own definition ends "validation derives no tolerance and no explanation
         // from it: a difference stays a mismatch for review". Loosening a texel here would be this
-        // suite overruling that, so the twelve blended states stay divergent on lavapipe and are a
-        // per-venue divergence to carry, not a tolerance to write. The two unblended states, whose
-        // texels match bit for bit there, read announced.
-        // Beside it, the notice the venue's own memory model provokes: the buffer each case
-        // reads its target back through is `Shared`, which a device with no unified memory keeps
-        // in system memory because that is the only memory both sides can reach.
-        vec![
-            crate::replay::notice_allowance(match self.state.blend {
-                None => Degradation::ShaderColorConversion.code(),
-                Some(_) => Degradation::DeviceColorConversion.code(),
-            }),
-            crate::replay::shared_memory_notice(),
-        ]
+        // suite overruling that, so the blended states stay divergent on lavapipe and are a
+        // per-venue divergence to carry, not a tolerance to write.
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
