@@ -667,8 +667,9 @@ fn argb8_storage_slots_rotate_their_bytes() {
 /// toward zero where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module
 /// requires its property), else the device's own (`PrecisionNote::DeviceColorConversion`); the
 /// NaN is Metal's `0x7e00` where it takes `DriverDeviation::MetalHalfStorageNans` (MoltenVK's: the
-/// module requires its property), else the device's (`PrecisionNote::DeviceNanEncoding`). A
-/// formatless slot may also reach a packed small float image, whose NaN is the device's on every
+/// module requires its property), else the device's (`PrecisionNote::DeviceNanEncoding`); a
+/// formatless slot's notes hold under the format bound there (`tests::engine_half_storage_notes`).
+/// A formatless slot may also reach a packed small float image, whose NaN is the device's on every
 /// profile (noted too), or a normalized one, whose conversion is the device's on every profile
 /// (noted too). The held lanes cover every tie between neighbouring halves and its
 /// neighbours, past the largest, the infinities and NaNs.

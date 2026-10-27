@@ -816,7 +816,11 @@ pub enum PrecisionNote {
     /// device converts the half widened. Also recorded by a `float` write to a storage texture that
     /// may hold a half-float or packed small float format, and by a `float` color output written as
     /// computed to such an attachment, where the device is not measured to store Metal's NaN there:
-    /// Metal stores every NaN as its canonical one, and RADV and NVIDIA keep a NaN's payload bits.
+    /// Metal stores every NaN as its canonical one, and RADV and NVIDIA keep a NaN's payload bits
+    /// (lavapipe stores `0xffc00000` as `0xfe00`, ANV every NaN). Where the write's texture slot is
+    /// declared without a format, the note is recorded under the format bound there (a
+    /// [`SpecializedNote`] of `SpecKey::BoundTexelFormat`), which the runtime announces at a draw
+    /// or dispatch that binds such a texture.
     /// Also recorded by a fixed-function vertex attribute of a float format narrower than 32 bits
     /// that the function reads as `float`: Metal widens its NaN to `0x7fc00000`, and the device's
     /// widening need not. Also recorded by a 16-bit float attachment's blend

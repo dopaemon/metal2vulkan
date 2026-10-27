@@ -299,7 +299,7 @@ pub(super) fn select(
     let guard = slot::write_guard(cx, false);
     let class = super::storage_class(cx, image)?;
     if conv == TexelConv::F32 {
-        super::half_storage_facts(cx, image, class)?;
+        super::half_storage_facts(cx, image, class, m)?;
     }
     if matches!(conv, TexelConv::F32 | TexelConv::F16) {
         super::norm_storage_facts(cx, image, t.image, TexelForm { conv, lanes })?;

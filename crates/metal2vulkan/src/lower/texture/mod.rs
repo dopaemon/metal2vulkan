@@ -2142,16 +2142,23 @@ pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 /// its property), else the device's (`PrecisionNote::DeviceColorConversion`). Its NaN is Metal's
 /// `0x7e00` where the profile takes `DriverDeviation::MetalHalfStorageNans` (the module requires its
 /// property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`). A write that
-/// may reach a packed small float image, a heap write's or a slot's whose choice declares such a format
-/// or none ([`small_float_storage`]), stores its NaN as the device converts it too: Metal stores
-/// every NaN there as its canonical one, and RADV and NVIDIA keep another NaN's payload bits.
+/// may reach a packed small float image ([`small_float_storage`]) stores its NaN as the device
+/// converts it too: Metal stores every NaN there as its canonical one, and RADV and NVIDIA keep
+/// another NaN's payload bits. A slot declared without a format records each note under the format
+/// bound there (`m` charged for the clauses), which the runtime announces at a draw or dispatch
+/// that binds such a texture.
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     class: StorageImageClass,
+    m: &mut Meter,
 ) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
-    if class == StorageImageClass::Identity && may_store_half(cx, image)? {
+    let half = match class {
+        StorageImageClass::Identity => may_store_half(cx, image)?,
+        _ => Vec::new(),
+    };
+    if !half.is_empty() {
         if cx
             .profile
             .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
@@ -2161,7 +2168,7 @@ pub(super) fn half_storage_facts(
                 .storage_properties
                 .insert(VkProperty::MetalHalfStorageWrites);
         } else {
-            cx.precision.insert(PrecisionNote::DeviceColorConversion);
+            cx.note_when(PrecisionNote::DeviceColorConversion, half.clone(), m)?;
         }
         if cx
             .profile
@@ -2172,29 +2179,53 @@ pub(super) fn half_storage_facts(
                 .storage_properties
                 .insert(VkProperty::MetalHalfStorageNans);
         } else {
-            cx.precision.insert(PrecisionNote::DeviceNanEncoding);
+            cx.note_when(PrecisionNote::DeviceNanEncoding, half, m)?;
         }
     }
-    if small_float_storage(cx, image)? {
-        cx.precision.insert(PrecisionNote::DeviceNanEncoding);
-    }
-    Ok(())
+    let small = small_float_storage(cx, image)?;
+    cx.note_when(PrecisionNote::DeviceNanEncoding, small, m)
 }
 
-/// Whether a write to texture `image` may store into a packed small float format
-/// (`RG11B10Float`, `RGB9E5Float`'s alias excepted: its word is Metal's): a heap element, whose
-/// handle may name one, or a slot whose storage choice declares such a format or none.
-fn small_float_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
-    use crate::vk::Format as F;
+/// Where a write to texture `image` may store into a packed small float format (`RG11B10Float`;
+/// `RGB9E5Float` is written through its word alias, whose word is Metal's), as the clauses of
+/// [`stored_where`]: a heap element's, whose handle may name one, a slot's whose storage choice
+/// declares one, and a slot's declared without a format where the texture bound there is of the
+/// small floats' class (`metal::texel_format::PackedTexels::SmallFloat`).
+fn small_float_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>, Error> {
+    use crate::metal::texel_format::{PackedTexels, TexelFormat};
+    let small = PackedTexels::SmallFloat.class().0;
+    stored_where(
+        cx,
+        image,
+        |f| f == crate::vk::Format::B10G11R11_UFLOAT_PACK32,
+        |index| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, small),
+    )
+}
+
+/// Where a write to texture `image` left to the device's conversion stores into a format
+/// `declared` accepts, as clauses for [`SelectCx::note_when`]: always (one clause of no test) for
+/// a heap element, whose handle may name any format; for a slot whose storage choice declares a
+/// format, always where `declared` accepts it, else never (no clause); and for a slot declared
+/// without a format (a formatless choice, or a variant that states no choice, which
+/// `slot::storage_format` declares formatless), where the format bound there passes `bound`'s
+/// test of its class (`NoteOn::Bound`), which the runtime reads at each draw or dispatch.
+fn stored_where(
+    cx: &SelectCx<'_>,
+    image: ImageRef,
+    declared: impl Fn(crate::vk::Format) -> bool,
+    bound: impl Fn(u32) -> NoteTest,
+) -> Result<Vec<NoteClause>, Error> {
     let ImageRef::Slot(index) = image else {
-        return Ok(true);
+        return Ok(vec![NoteClause::new()]);
     };
     let slot = slot_of(cx, index)?.slot;
-    Ok(cx
-        .inputs
-        .storage_images
-        .get(&slot)
-        .is_some_and(|c| matches!(c.vk_format, F::B10G11R11_UFLOAT_PACK32 | F::UNDEFINED)))
+    Ok(
+        match cx.inputs.storage_images.get(&slot).map(|c| c.vk_format) {
+            None | Some(crate::vk::Format::UNDEFINED) => vec![[bound(index)].into()],
+            Some(f) if declared(f) => vec![NoteClause::new()],
+            Some(_) => Vec::new(),
+        },
+    )
 }
 
 /// What a `half` texel's write to texture `image` records of its NaN. Metal stores a written
@@ -2456,21 +2487,22 @@ fn mode_rounded_write(
     Ok(())
 }
 
-/// Whether a write to `image` left to the device's conversion may store a half-float texel: a
-/// heap element's may, and so does a slot's whose storage choice declares a half-float format or
-/// none (a formatless declaration views a half-float texture too).
-fn may_store_half(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
+/// Where a write to `image` left to the device's conversion may store a half-float texel, as the
+/// clauses of [`stored_where`]: a heap element's may, a slot's whose storage choice declares a
+/// half-float format does, and a slot's declared without a format does where the texture bound
+/// there is of a half-float class (`BicubicTexels::HALF` without a packed field, which the small
+/// floats' class carries).
+fn may_store_half(cx: &SelectCx<'_>, image: ImageRef) -> Result<Vec<NoteClause>, Error> {
+    use crate::metal::bicubic::BicubicTexels;
+    use crate::metal::texel_format::TexelFormat;
     use crate::vk::Format as F;
-    let ImageRef::Slot(index) = image else {
-        return Ok(true);
-    };
-    let slot = slot_of(cx, index)?.slot;
-    Ok(cx.inputs.storage_images.get(&slot).is_some_and(|c| {
-        matches!(
-            c.vk_format,
-            F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT | F::UNDEFINED
-        )
-    }))
+    let mask = BicubicTexels::HALF | TexelFormat::PACKED_MASK;
+    stored_where(
+        cx,
+        image,
+        |f| matches!(f, F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT),
+        |index| NoteTest::equal(NoteOn::Bound(index), mask, BicubicTexels::HALF),
+    )
 }
 
 /// The class of texture slot `image`'s storage choice, where its variant states one, else
@@ -2755,7 +2787,7 @@ fn select_image(
         }
         TexOp::Write => {
             let (form, _) = texel.ok_or_else(refuse)?;
-            select_write(cx, ops, image, shape, form)
+            select_write(cx, ops, (image, shape, form), m)
         }
         TexOp::Atomic(op) => {
             let texel = texel.ok_or_else(refuse)?;
@@ -3194,9 +3226,8 @@ fn slot_of<'a>(cx: &'a SelectCx<'_>, index: u32) -> Result<&'a SlotPlan, Error> 
 fn select_write(
     cx: &mut SelectCx<'_>,
     ops: &Operands<'_>,
-    image: ImageRef,
-    shape: ImageShape,
-    texel: TexelForm,
+    (image, shape, texel): (ImageRef, ImageShape, TexelForm),
+    m: &mut Meter,
 ) -> Result<TextureStrategy, Error> {
     if !image_access(cx, image)?.0 {
         return Err(refuse());
@@ -3255,7 +3286,7 @@ fn select_write(
     // Its alpha in red where the class is `A8Unorm`'s and the device holds such a texture so.
     let heap_alpha_red = heap_alpha_in_red(cx, image, shape, texel.conv);
     if texel.conv == TexelConv::F32 {
-        half_storage_facts(cx, image, class)?;
+        half_storage_facts(cx, image, class, m)?;
     }
     if texel.conv == TexelConv::F16 && extended.is_none() {
         half_write_nans(cx, image)?;
