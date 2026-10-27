@@ -460,12 +460,10 @@ assoc-const	metal2vulkan::metal::sampler::SamplerWord::COMPARE_SHIFT	pub const C
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::CUBIC	pub const CUBIC: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::CUBIC_STATE	pub const CUBIC_STATE: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::FIELDS	pub const FIELDS: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::LEVELED_SNAP	pub const LEVELED_SNAP: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MAX	pub const LEVEL_MAX: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MAX_SHIFT	pub const LEVEL_MAX_SHIFT: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MIN	pub const LEVEL_MIN: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MIN_SHIFT	pub const LEVEL_MIN_SHIFT: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::LEVEL_RULE	pub const LEVEL_RULE: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LINEAR	pub const LINEAR: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LINEAR_FILTER	pub const LINEAR_FILTER: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::LINEAR_STATE	pub const LINEAR_STATE: u32
@@ -473,9 +471,6 @@ assoc-const	metal2vulkan::metal::sampler::SamplerWord::MAG_LINEAR	pub const MAG_
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIN_LINEAR	pub const MIN_LINEAR: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER	pub const MIP_FILTER: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER_SHIFT	pub const MIP_FILTER_SHIFT: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::NEAREST_BASE	pub const NEAREST_BASE: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::NEAREST_LEVEL	pub const NEAREST_LEVEL: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::NEAREST_SNAP	pub const NEAREST_SNAP: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_COORDINATES	pub const PIXEL_COORDINATES: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_GATED	pub const PIXEL_GATED: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_NEAREST	pub const PIXEL_NEAREST: u32
@@ -962,12 +957,10 @@ assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::COMPARE_SHIFT	16
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::CUBIC	1 <<30
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::CUBIC_STATE	Self::PIXEL_COORDINATES | Self::MIP_FILTER | Self::ADDRESS[0] | Self::ADDRESS[1] | Self::ADDRESS[2] | Self::BORDER | Self::REDUCTION | Self::ANISOTROPIC
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::FIELDS	(1 <<31) - 1
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LEVELED_SNAP	Self::NEAREST_SNAP | Self::LEVEL_MIN | Self::LEVEL_MAX
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MAX	0xf <<Self::LEVEL_MAX_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MAX_SHIFT	26
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MIN	0xf <<Self::LEVEL_MIN_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LEVEL_MIN_SHIFT	22
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LEVEL_RULE	Self::PIXEL_COORDINATES | Self::MIN_LINEAR | Self::MAG_LINEAR | Self::MIP_FILTER | Self::ANISOTROPIC
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LINEAR	Self::MIN_LINEAR | Self::MAG_LINEAR
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LINEAR_FILTER	Self::MIN_LINEAR | Self::MAG_LINEAR | Self::MIP_FILTER | Self::ANISOTROPIC
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::LINEAR_STATE	Self::LINEAR_FILTER | Self::PIXEL_COORDINATES | Self::ADDRESS[0] | Self::ADDRESS[1] | Self::ADDRESS[2] | Self::BORDER
@@ -975,9 +968,6 @@ assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MAG_LINEAR	1 <<2
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIN_LINEAR	1 <<1
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER	0b11 <<Self::MIP_FILTER_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER_SHIFT	3
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::NEAREST_BASE	Self::PIXEL_COORDINATES | Self::MIN_LINEAR | Self::MAG_LINEAR | Self::MIP_FILTER | Self::ANISOTROPIC
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::NEAREST_LEVEL	Self::NEAREST_BASE & !(1 <<Self::MIP_FILTER_SHIFT)
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::NEAREST_SNAP	Self::NEAREST_BASE | Self::ADDRESS[0] | Self::ADDRESS[1] | Self::ADDRESS[2]
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_COORDINATES	1 <<0
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_GATED	1 <<31
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_NEAREST	Self::PIXEL_COORDINATES | Self::MIN_LINEAR | Self::MAG_LINEAR
@@ -1450,7 +1440,6 @@ enum	metal2vulkan::device::BatchOrderPolicy	#[cfg_attr(feature = "serde", derive
 enum	metal2vulkan::device::CompletionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CompletionPolicy
 enum	metal2vulkan::device::Containment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Containment
 enum	metal2vulkan::device::ContainmentPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ContainmentPolicy
-enum	metal2vulkan::device::DecodedTexelsPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DecodedTexelsPolicy
 enum	metal2vulkan::device::DriverFact	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverFact
 enum	metal2vulkan::device::DriverWorkaround	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverWorkaround
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
@@ -1467,20 +1456,15 @@ enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(se
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
 enum	metal2vulkan::device::Robustness	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Robustness
-enum	metal2vulkan::device::SamplingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SamplingPolicy
 enum	metal2vulkan::device::SimdClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SimdClass
 enum	metal2vulkan::device::SpirvExtension	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SpirvExtension
 enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StageCreateFlag
 enum	metal2vulkan::device::SubgroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SubgroupOp
-enum	metal2vulkan::device::TexelConversionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TexelConversionPolicy
 enum	metal2vulkan::device::Tier	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Tier
-enum	metal2vulkan::device::Unorm8LinearFilterPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Unorm8LinearFilterPolicy
-enum	metal2vulkan::device::VertexNormalizedPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VertexNormalizedPolicy
 enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkExtension
 enum	metal2vulkan::device::VkFeature	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkFeature
 enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkLimit
 enum	metal2vulkan::device::VkProperty	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkProperty
-enum	metal2vulkan::device::YCbCrFilterPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrFilterPolicy
 enum	metal2vulkan::error::AbiError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AbiError
 enum	metal2vulkan::error::Attachment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Attachment
 enum	metal2vulkan::error::BindError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BindError
@@ -3662,7 +3646,6 @@ field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTr
 field	metal2vulkan::cache::VariantKey.viewport_compensation	pub viewport_compensation: Option<crate::pipeline::ViewportCompensation>
 field	metal2vulkan::cache::VariantKey.window_depth_varying	pub window_depth_varying: bool
 field	metal2vulkan::cache::VariantKey.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
-field	metal2vulkan::cache::VariantKey.ycbcr_textures	pub ycbcr_textures: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.zeroed_colors	pub zeroed_colors: BTreeMap<u32, crate::metal::PixelFormat>
 field	metal2vulkan::device::AllocationLimits.max_buffer_size	pub max_buffer_size: u64
 field	metal2vulkan::device::AllocationLimits.max_memory_allocation_size	pub max_memory_allocation_size: u64
@@ -3707,18 +3690,12 @@ field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
 field	metal2vulkan::device::DevicePolicy.batch_order	pub batch_order: BatchOrderPolicy
 field	metal2vulkan::device::DevicePolicy.completion	pub completion: CompletionPolicy
 field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
-field	metal2vulkan::device::DevicePolicy.decoded_texels	pub decoded_texels: DecodedTexelsPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
 field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
-field	metal2vulkan::device::DevicePolicy.sampling	pub sampling: SamplingPolicy
-field	metal2vulkan::device::DevicePolicy.texel_conversion	pub texel_conversion: TexelConversionPolicy
-field	metal2vulkan::device::DevicePolicy.unorm8_linear_filter	pub unorm8_linear_filter: Unorm8LinearFilterPolicy
-field	metal2vulkan::device::DevicePolicy.vertex_normalized	pub vertex_normalized: VertexNormalizedPolicy
-field	metal2vulkan::device::DevicePolicy.ycbcr_filter	pub ycbcr_filter: YCbCrFilterPolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
 field	metal2vulkan::device::DriverDiagnostic.id_name	pub id_name: &'static str
 field	metal2vulkan::device::DriverDiagnostic.text	pub text: Cow<'static, str>
@@ -4250,7 +4227,6 @@ field	metal2vulkan::pipeline::LoweringInputs.viewport_index_varying	pub viewport
 field	metal2vulkan::pipeline::LoweringInputs.window_depth_varying	pub window_depth_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.word_colors	pub word_colors: BTreeMap<u32, metal::format::WordAttachment>
 field	metal2vulkan::pipeline::LoweringInputs.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
-field	metal2vulkan::pipeline::LoweringInputs.ycbcr_textures	pub ycbcr_textures: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.zeroed_colors	pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.alpha_to_coverage	pub alpha_to_coverage: bool
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.alpha_to_one	pub alpha_to_one: bool
@@ -4967,7 +4943,6 @@ macro-member	metal2vulkan-runtime::Degradation::CopiedDrawBytes	CopiedDrawBytes 
 macro-member	metal2vulkan-runtime::Degradation::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha = "coverage-reads-rounded-alpha";
 macro-member	metal2vulkan-runtime::Degradation::CpuBlockDecode	CpuBlockDecode = "cpu-block-decode", Performance,
 macro-member	metal2vulkan-runtime::Degradation::CrossClassTextureNeutral	CrossClassTextureNeutral = "cross-class-texture-neutral", Precision,
-macro-member	metal2vulkan-runtime::Degradation::CubeFaceReciprocal	CubeFaceReciprocal = "cube-face-reciprocal";
 macro-member	metal2vulkan-runtime::Degradation::CubeGradientFootprint	CubeGradientFootprint = "cube-gradient-footprint";
 macro-member	metal2vulkan-runtime::Degradation::DecodedBlockTwin	DecodedBlockTwin = "decoded-block-twin", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DecodedTexelPrecision	DecodedTexelPrecision = "decoded-texel-precision", Precision,
@@ -4978,8 +4953,6 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceAnisotropicFilter	DeviceAn
 macro-member	metal2vulkan-runtime::Degradation::DeviceArithmetic	DeviceArithmetic = "device-arithmetic";
 macro-member	metal2vulkan-runtime::Degradation::DeviceColorConversion	DeviceColorConversion = "device-color-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals = "device-denormals";
-macro-member	metal2vulkan-runtime::Degradation::DeviceDepthComparison	DeviceDepthComparison = "device-depth-comparison";
-macro-member	metal2vulkan-runtime::Degradation::DeviceGatherFootprint	DeviceGatherFootprint = "device-gather-footprint";
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncoding = "device-nan-encoding";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
@@ -4989,9 +4962,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceSampleLevel	DeviceSampleLe
 macro-member	metal2vulkan-runtime::Degradation::DeviceSampling	DeviceSampling = "device-sampling";
 macro-member	metal2vulkan-runtime::Degradation::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan = "device-signed-zero-inf-nan";
 macro-member	metal2vulkan-runtime::Degradation::DeviceTexelConversion	DeviceTexelConversion = "device-texel-conversion";
-macro-member	metal2vulkan-runtime::Degradation::DeviceTexelDenormals	DeviceTexelDenormals = "device-texel-denormals";
 macro-member	metal2vulkan-runtime::Degradation::DeviceTranscendentals	DeviceTranscendentals = "device-transcendentals";
-macro-member	metal2vulkan-runtime::Degradation::DeviceUnorm8LinearFilter	DeviceUnorm8LinearFilter = "device-unorm8-linear-filter";
 macro-member	metal2vulkan-runtime::Degradation::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores = "discard-drops-simdgroup-stores";
 macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTiles = "dont-care-load-tiles", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStandIn	DontCareStandIn = "dont-care-stand-in", Performance,
@@ -5003,7 +4974,6 @@ macro-member	metal2vulkan-runtime::Degradation::EmulatedSimdgroups	EmulatedSimdg
 macro-member	metal2vulkan-runtime::Degradation::EmulatedSparseTexture	EmulatedSparseTexture = "emulated-sparse-texture", Performance,
 macro-member	metal2vulkan-runtime::Degradation::EmulatedTessellationDraws	EmulatedTessellationDraws = "emulated-tessellation-draws", Performance,
 macro-member	metal2vulkan-runtime::Degradation::EncodedUseRebound	EncodedUseRebound = "encoded-use-rebound", Precision,
-macro-member	metal2vulkan-runtime::Degradation::ExactFormsOverCompilerLimit	ExactFormsOverCompilerLimit = "exact-forms-over-compiler-limit", Precision,
 macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeBitsKept	ExtendedRangeBitsKept = "extended-range-bits-kept", Precision,
 macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeBlendSource	ExtendedRangeBlendSource = "extended-range-blend-source";
 macro-member	metal2vulkan-runtime::Degradation::ExtendedRangeBlendsStoredCodes	ExtendedRangeBlendsStoredCodes = "extended-range-blends-stored-codes", Precision,
@@ -8737,10 +8707,6 @@ method	metal2vulkan::device::Device::compile_render_pipeline	pub fn compile_rend
 method	metal2vulkan::device::Device::compile_render_variant	pub fn compile_render_variant(&self, d: &RenderPipelineDescriptor, v: &VariantKey, b: &Budget) -> Result<RenderPipeline, Error>
 method	metal2vulkan::device::Device::compile_tile_pipeline	pub fn compile_tile_pipeline(&self, d: &TileRenderPipelineDescriptor, b: &Budget) -> Result<ComputePipeline, Error>
 method	metal2vulkan::device::Device::compute_pipeline_key	pub fn compute_pipeline_key(&self, d: &ComputePipelineDescriptor) -> crate::cache::PipelineKey
-method	metal2vulkan::device::Device::fit_compute_pipeline	pub fn fit_compute_pipeline(&self, d: &ComputePipelineDescriptor, inputs: &LoweringInputs, b: &Budget, pipeline: ComputePipeline) -> Result<ComputePipeline, Error>
-method	metal2vulkan::device::Device::fit_mesh_variant	pub fn fit_mesh_variant(&self, d: &MeshPipelineDescriptor, v: &VariantKey, b: &Budget, pipeline: RenderPipeline) -> Result<RenderPipeline, Error>
-method	metal2vulkan::device::Device::fit_render_variant	pub fn fit_render_variant(&self, d: &RenderPipelineDescriptor, v: &VariantKey, b: &Budget, pipeline: RenderPipeline) -> Result<RenderPipeline, Error>
-method	metal2vulkan::device::Device::fit_tile_pipeline	pub fn fit_tile_pipeline(&self, d: &TileRenderPipelineDescriptor, inputs: &LoweringInputs, b: &Budget, pipeline: ComputePipeline) -> Result<ComputePipeline, Error>
 method	metal2vulkan::device::Device::function_compile_key	pub fn function_compile_key(&self, f: &FunctionDescriptor, inp: &LoweringInputs) -> FunctionCompileKey
 method	metal2vulkan::device::Device::generated_commands	pub fn generated_commands(&self) -> Option<&GeneratedCommandsProperties>
 method	metal2vulkan::device::Device::kernel_inputs_read	pub fn kernel_inputs_read(&self, f: &FunctionDescriptor, inp: &LoweringInputs, b: &Budget, entries: &StageEntries) -> Result<LoweringInputs, Error>
@@ -8785,7 +8751,6 @@ method	metal2vulkan::device::DeviceProfile::function_storage	pub fn function_sto
 method	metal2vulkan::device::DeviceProfile::images	pub fn images(&self) -> &ImageCaps
 method	metal2vulkan::device::DeviceProfile::limits	pub fn limits(&self) -> &Limits
 method	metal2vulkan::device::DeviceProfile::link_standalone	pub fn link_standalone(&self, f: &CompiledFunction) -> Result<StandaloneModule, Error>
-method	metal2vulkan::device::DeviceProfile::module_word_bound	pub fn module_word_bound(&self) -> Option<u32>
 method	metal2vulkan::device::DeviceProfile::plan_entry	pub fn plan_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<EntryPlan, Error>, CompileReport)
 method	metal2vulkan::device::DeviceProfile::reads_ycbcr_planes_in_place	pub fn reads_ycbcr_planes_in_place(&self) -> bool
 method	metal2vulkan::device::DeviceProfile::simd_tier	pub fn simd_tier(&self, class: &SimdClass, stage: Stage) -> Result<Tier, Unsupported>
@@ -9972,14 +9937,12 @@ trait-impl	metal2vulkan::metal::TextureSwizzleChannels impl Default	impl Default
 trait-impl	metal2vulkan::metal::sampler::AddressModeMap impl Default	impl Default for AddressModeMap
 trait-impl	metal2vulkan::metal::state::DepthStencilDescriptor impl Default	impl Default for DepthStencilDescriptor
 trait-impl	metal2vulkan::metal::state::StencilDescriptor impl Default	impl Default for StencilDescriptor
-trait-impl	metal2vulkan::pipeline::ComputePipeline impl Fitted	impl Fitted for ComputePipeline
 trait-impl	metal2vulkan::pipeline::ComputePipeline impl PipelineArtifact	impl PipelineArtifact for ComputePipeline
 trait-impl	metal2vulkan::pipeline::LinkedFunction impl From<Function>	impl From<Function> for LinkedFunction
 trait-impl	metal2vulkan::pipeline::ModuleStats impl Codec	impl Codec for ModuleStats
 trait-impl	metal2vulkan::pipeline::PrivateRenderState impl Default	impl Default for PrivateRenderState
 trait-impl	metal2vulkan::pipeline::PrivateRenderState impl Eq	impl Eq for PrivateRenderState
 trait-impl	metal2vulkan::pipeline::PrivateRenderState impl PartialEq	impl PartialEq for PrivateRenderState
-trait-impl	metal2vulkan::pipeline::RenderPipeline impl Fitted	impl Fitted for RenderPipeline
 trait-impl	metal2vulkan::pipeline::RenderPipeline impl PipelineArtifact	impl PipelineArtifact for RenderPipeline
 trait-impl	metal2vulkan::pipeline::StageEntries impl std::fmt::Debug	impl std::fmt::Debug for StageEntries
 trait-impl	metal2vulkan::pipeline::StageInputDescriptor impl Default	impl Default for StageInputDescriptor
@@ -12390,8 +12353,6 @@ variant	metal2vulkan::device::Containment::On	On { robust: Robustness }
 variant	metal2vulkan::device::Containment::UnsafeOff	UnsafeOff
 variant	metal2vulkan::device::ContainmentPolicy::Contained	Contained
 variant	metal2vulkan::device::ContainmentPolicy::UnsafeOff	UnsafeOff
-variant	metal2vulkan::device::DecodedTexelsPolicy::Compact	Compact
-variant	metal2vulkan::device::DecodedTexelsPolicy::Exact	Exact
 variant	metal2vulkan::device::DriverFact::Bc6hBlockDecodeIsMetals	Bc6hBlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn
@@ -12504,8 +12465,6 @@ variant	metal2vulkan::device::ResolveMode::SampleZero	SampleZero
 variant	metal2vulkan::device::Robustness::None	None
 variant	metal2vulkan::device::Robustness::Rba	Rba
 variant	metal2vulkan::device::Robustness::Rba2	Rba2
-variant	metal2vulkan::device::SamplingPolicy::Exact	Exact
-variant	metal2vulkan::device::SamplingPolicy::NativeDevice	NativeDevice
 variant	metal2vulkan::device::SimdClass::CrossLane	CrossLane(OpBits)
 variant	metal2vulkan::device::SimdClass::LaneArithmetic	LaneArithmetic
 variant	metal2vulkan::device::SimdClass::Matrix	Matrix
@@ -12546,18 +12505,12 @@ variant	metal2vulkan::device::SubgroupOp::Quad	Quad
 variant	metal2vulkan::device::SubgroupOp::Shuffle	Shuffle
 variant	metal2vulkan::device::SubgroupOp::ShuffleRelative	ShuffleRelative
 variant	metal2vulkan::device::SubgroupOp::Vote	Vote
-variant	metal2vulkan::device::TexelConversionPolicy::Device	Device
-variant	metal2vulkan::device::TexelConversionPolicy::Exact	Exact
 variant	metal2vulkan::device::Tier::Cluster32	Cluster32
 variant	metal2vulkan::device::Tier::Direct	Direct
 variant	metal2vulkan::device::Tier::Emulated	Emulated
 variant	metal2vulkan::device::Tier::Linear	Linear
 variant	metal2vulkan::device::Tier::NoSubgroup	NoSubgroup
 variant	metal2vulkan::device::Tier::PartialFragment	PartialFragment
-variant	metal2vulkan::device::Unorm8LinearFilterPolicy::DeviceWithinOneCode	DeviceWithinOneCode
-variant	metal2vulkan::device::Unorm8LinearFilterPolicy::Exact	Exact
-variant	metal2vulkan::device::VertexNormalizedPolicy::Device	Device
-variant	metal2vulkan::device::VertexNormalizedPolicy::Exact	Exact
 variant	metal2vulkan::device::VkExtension::Ext4444Formats	Ext4444Formats
 variant	metal2vulkan::device::VkExtension::ExtAttachmentFeedbackLoopLayout	ExtAttachmentFeedbackLoopLayout
 variant	metal2vulkan::device::VkExtension::ExtBorderColorSwizzle	ExtBorderColorSwizzle
@@ -12941,8 +12894,6 @@ variant	metal2vulkan::device::VkProperty::SubgroupQuadOperationsInAllStages	Subg
 variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)
 variant	metal2vulkan::device::VkProperty::Unorm8LinearFilter	Unorm8LinearFilter
 variant	metal2vulkan::device::VkProperty::VariableSampleLocations	VariableSampleLocations
-variant	metal2vulkan::device::YCbCrFilterPolicy::Device	Device
-variant	metal2vulkan::device::YCbCrFilterPolicy::Exact	Exact
 variant	metal2vulkan::error::AbiError::BadSamplerState	BadSamplerState
 variant	metal2vulkan::error::AbiError::BadValue	BadValue
 variant	metal2vulkan::error::AbiError::ContainerMismatch	ContainerMismatch
@@ -13541,14 +13492,11 @@ variant	metal2vulkan::pipeline::PrecisionNote::ClippedCoverageSplit	ClippedCover
 variant	metal2vulkan::pipeline::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan::pipeline::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
 variant	metal2vulkan::pipeline::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
-variant	metal2vulkan::pipeline::PrecisionNote::CubeFaceReciprocal	CubeFaceReciprocal
 variant	metal2vulkan::pipeline::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceAnisotropicFilter	DeviceAnisotropicFilter
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceArithmetic	DeviceArithmetic
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceColorConversion	DeviceColorConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceDenormals	DeviceDenormals
-variant	metal2vulkan::pipeline::PrecisionNote::DeviceDepthComparison	DeviceDepthComparison
-variant	metal2vulkan::pipeline::PrecisionNote::DeviceGatherFootprint	DeviceGatherFootprint
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePointSize	DevicePointSize
@@ -13557,9 +13505,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceSampleLevel	DeviceSampleLev
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSampling	DeviceSampling
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceTexelConversion	DeviceTexelConversion
-variant	metal2vulkan::pipeline::PrecisionNote::DeviceTexelDenormals	DeviceTexelDenormals
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceTranscendentals	DeviceTranscendentals
-variant	metal2vulkan::pipeline::PrecisionNote::DeviceUnorm8LinearFilter	DeviceUnorm8LinearFilter
 variant	metal2vulkan::pipeline::PrecisionNote::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores
 variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeBlendSource	ExtendedRangeBlendSource
 variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource
@@ -13704,7 +13650,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::DeviceAddresses	DeviceAddresses { s
 variant	metal2vulkan::pipeline::RuntimeFact::DispatchGrid	DispatchGrid
 variant	metal2vulkan::pipeline::RuntimeFact::DroppedColor	DroppedColor { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::EmulatedSimdgroups	EmulatedSimdgroups
-variant	metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit	ExactFormsOverCompilerLimit { sampling: bool, texel_conversion: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ExecutionStatus	ExecutionStatus
 variant	metal2vulkan::pipeline::RuntimeFact::ExtendedRangeInputBlend	ExtendedRangeInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::FlatGrid	FlatGrid
@@ -13775,7 +13720,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::ViewportCompensation	ViewportCompen
 variant	metal2vulkan::pipeline::RuntimeFact::ViewportCount	ViewportCount
 variant	metal2vulkan::pipeline::RuntimeFact::WordInputMerge	WordInputMerge { color: u32, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::YCbCrInPlace	YCbCrInPlace { slot: SlotRef, samplers: u32 }
-variant	metal2vulkan::pipeline::RuntimeFact::YCbCrTexture	YCbCrTexture { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::ZeroedColor	ZeroedColor { color: u32, format: crate::metal::PixelFormat }
 variant	metal2vulkan::pipeline::SampledType::Float	Float
 variant	metal2vulkan::pipeline::SampledType::Sint	Sint
