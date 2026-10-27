@@ -37,7 +37,10 @@
 //!   descriptors; otherwise the same layout is used as a pooled set.
 //! - **Render state** ([`vertex`], [`graphics`]): `VertexInputState` and `GraphicsState` from the
 //!   descriptor, checked against the vertex stage's compiled fetch projection, with the fragment
-//!   stage's imageblock ([`imageblock`]) and interlocked framebuffer fetch ([`fetch`]). A mesh
+//!   stage's imageblock ([`imageblock`]) and interlocked framebuffer fetch ([`fetch`]), and the
+//!   precision notes of the formats fixed-function vertex input converts for the vertex stage
+//!   (`vertex::fixed_function_notes`), which the module, shared by every such format, cannot
+//!   record. A mesh
 //!   render pipeline has an object stage when it has an object function, its mesh stage, and a
 //!   fragment stage exactly when it rasterizes; its `GraphicsState` is a render pipeline's with the
 //!   mesh stage in the vertex stage's place, and it has no vertex input. An emulated mesh
@@ -70,7 +73,7 @@ use crate::error::{
 };
 use crate::library::FunctionArtifact;
 use crate::metal;
-use crate::pipeline::artifact::{SpecConstant, SpecializationLayout};
+use crate::pipeline::artifact::{PrecisionNote, SpecConstant, SpecializationLayout};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, MeshPipelineDescriptor, RenderPipelineDescriptor,
     TessellationDescriptor, VertexDescriptor,
@@ -265,6 +268,11 @@ pub struct Linked {
     pub layout: PipelineLayout,
     /// Empty except for a render pipeline.
     pub vertex_input: VertexInputState,
+    /// The precision notes of the vertex stage's fixed-function attributes under this pipeline's
+    /// vertex descriptor (`vertex::fixed_function_notes`), sorted: the compile API adds them to the
+    /// vertex stage's notes. Empty but for a render pipeline whose vertex input converts a
+    /// format otherwise than Metal's fetch may.
+    pub vertex_notes: Vec<PrecisionNote>,
     pub interface: PipelineInterface,
     /// `Some` exactly for a render pipeline.
     pub graphics: Option<GraphicsState>,
@@ -378,6 +386,7 @@ pub fn link(
         g.check_limits(&table.locations, p)?;
     }
     let interface = pipeline_interface(&ifaces);
+    let mut vertex_notes = Vec::new();
     let (vertex_input, graphics) = match inputs {
         LinkInputs::Render(r) => {
             let vs = ifaces.first().ok_or_else(|| missing_stage(Stage::Vertex))?;
@@ -387,19 +396,23 @@ pub fn link(
                 }
                 // A vertex function compiled in the indexed capture form pulled every attribute:
                 // its fact says so.
-                (None, None) => vertex::vertex_input_state(
-                    vs,
-                    r.vertex_descriptor.as_ref(),
-                    &r.pulled_vertex_buffers,
-                    stages.first().is_some_and(|a| {
-                        a.facts.iter().any(|f| {
-                            matches!(f, RuntimeFact::CapturedPositions { form }
-                                if form.index_type().is_some())
-                        })
-                    }),
-                    &table.locations,
-                    p,
-                )?,
+                (None, None) => {
+                    let vi = vertex::vertex_input_state(
+                        vs,
+                        r.vertex_descriptor.as_ref(),
+                        &r.pulled_vertex_buffers,
+                        stages.first().is_some_and(|a| {
+                            a.facts.iter().any(|f| {
+                                matches!(f, RuntimeFact::CapturedPositions { form }
+                                    if form.index_type().is_some())
+                            })
+                        }),
+                        &table.locations,
+                        p,
+                    )?;
+                    vertex_notes = vertex::fixed_function_notes(vs, r.vertex_descriptor.as_ref())?;
+                    vi
+                }
             };
             let ts = control.map(|(plan, offset)| plan.state(offset));
             let mut gs = render_state(r, vs, stages.get(1).copied(), &vi, ts, p)?;
@@ -453,6 +466,7 @@ pub fn link(
         table,
         layout,
         vertex_input,
+        vertex_notes,
         interface,
         graphics,
         specialization,

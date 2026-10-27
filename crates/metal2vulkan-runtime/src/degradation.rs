@@ -2103,6 +2103,15 @@ degradations! {
         /// half-float or small-float NaN in the device's encoding, where Metal answers
         /// `0x7fc00000`.
         DeviceTexelConversion = "device-texel-conversion";
+        /// Class: native vertex input. The device's fixed-function vertex input converts a
+        /// normalized vertex attribute's codes (the 8- and 16-bit normalized formats of either
+        /// sign, `UChar4Normalized_BGRA`, `Int1010102Normalized`, `UInt1010102Normalized`)
+        /// through its `UNORM` or `SNORM` vertex format, where Metal's fetch answers the code over
+        /// its maximum correctly rounded. Recorded bound: within one `f32` ulp where measured
+        /// (lavapipe's reciprocal product reads some 8-bit unsigned codes one ulp high; its 16-bit
+        /// and packed formats, RADV's unsigned ones and MoltenVK's on an Apple M3 Max Metal's);
+        /// the signed formats off MoltenVK are unmeasured.
+        DeviceVertexConversion = "device-vertex-conversion";
         /// Class: native half rounding. The device's own conversion of a `float` to 16 bits
         /// rounds the pipeline's `half` results, on a device with `shaderFloat16` whose float
         /// controls do not make that conversion Metal's `half(float)`. Recorded bound: a finite result within one

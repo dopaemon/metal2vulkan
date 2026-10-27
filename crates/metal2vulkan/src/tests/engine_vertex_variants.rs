@@ -5,24 +5,18 @@
 //! descriptor and the device decide (`pipeline::link::vertex`), and the runtime makes one
 //! `VkShaderModule` per distinct SPIR-V. So a sweep that creates one pipeline per
 //! `MTLVertexFormat` pays for as many translations as it has distinct projections and as many
-//! driver shader conversions as it has distinct modules — and the two numbers are not the same
-//! number. This module measures both over the conformance suite's own sweeps, through the owned
-//! fixture they use (`dsx_int_attributes`, whose `int_attribute_to_float4` and
-//! `int_attribute_to_half4` read attribute 0 as a `float4` and as a `half4`), and attributes every
-//! module to the input that makes it:
+//! driver shader conversions as it has distinct modules. This module measures both over the
+//! conformance suite's own sweeps, through the owned fixture they use (`dsx_int_attributes`, whose
+//! `int_attribute_to_float4` and `int_attribute_to_half4` read attribute 0 as a `float4` and as a
+//! `half4`), and attributes every module to the input that makes it:
 //!
-//! - **fixed-function input, one module.** The whole format is `VertexAttribute` state and no
-//!   instruction of the module names it, so every format the device fetches in fixed function
-//!   shares one module. A narrow-float format (`Half*`, `FloatRG11B10`) read as a 32-bit `float`
-//!   is a second translation of that module: the device's widening answers its own NaN where
-//!   Metal's fetch answers its canonical one, which the artifact notes
-//!   (`PrecisionNote::DeviceNanEncoding`), so `narrow_float` keys the projection while it changes
-//!   no instruction.
-//! - **`narrow_float` of an attribute read as `half`: nothing.** The note is recorded only for a
-//!   32-bit `float` read, so the bit changes nothing of a `half`-declared attribute's stage.
-//!   `link::vertex::narrow_float_of_f32_reads` keeps it out of the projection there, and
-//!   `a_half_read_compiles_one_module_for_the_whole_sweep` holds the projections and the modules
-//!   at the same count.
+//! - **fixed-function input, one module, one translation.** The whole format is `VertexAttribute`
+//!   state and no instruction of the module names it, so every format the device fetches in fixed
+//!   function shares one projection and one module. What the device's conversion of a format may
+//!   answer otherwise than Metal's fetch -- a normalized format's quotient, a narrow float's NaN
+//!   read as `float` -- is noted where the render pipeline links, on its vertex stage
+//!   (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`), so the notes
+//!   key no translation (`a_pipeline_notes_what_the_device_converts_from_one_translation`).
 //! - **one module per pulled format.** A format the fixed-function path cannot fetch is decoded in
 //!   the shader, and each decode is its own code. Necessary: no format of the 45-format sweep is
 //!   pulled on the suite's venue.
@@ -49,7 +43,7 @@ use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::descriptor::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
-use crate::pipeline::link::vertex::{narrow_float_of_f32_reads, vertex_fetch_projection};
+use crate::pipeline::link::vertex::vertex_fetch_projection;
 use crate::pipeline::lower_inputs::{LoweringInputs, VertexFetch, VertexFetchProjection};
 use crate::pipeline::stage_io::IoNumeric;
 use crate::pipeline::testing::{engine_dir, llvm_assemble, meter, profile, AssembleError};
@@ -128,21 +122,17 @@ fn desc(
     d
 }
 
-/// The projection of attribute 0 for `format` at slot `at` under `step`, narrowed as a compile of
-/// `entry` narrows it (`narrow_float_of_f32_reads`).
+/// The projection of attribute 0 for `format` at slot `at` under `step`.
 fn projection(
     p: &DeviceProfile,
-    entry: &str,
     format: VertexFormat,
     at: usize,
     stride: u32,
     step: VertexStepFunction,
 ) -> VertexFetchProjection {
     let attributes = BTreeMap::from([(0, IoNumeric::Float)]);
-    let mut proj = vertex_fetch_projection(Some(&desc(format, at, stride, step)), &attributes, p)
-        .expect("the sweeps' descriptors are valid");
-    narrow_float_of_f32_reads(&mut proj, |_| entry == TO_FLOAT4);
-    proj
+    vertex_fetch_projection(Some(&desc(format, at, stride, step)), &attributes, p)
+        .expect("the sweeps' descriptors are valid")
 }
 
 /// The artifact of `entry` compiled under `proj`.
@@ -188,7 +178,7 @@ fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) ->
     let mut modules = BTreeSet::new();
     let mut pulled = Vec::new();
     for (at, &format) in formats.iter().enumerate() {
-        let proj = projection(p, entry, format, at, stride, step);
+        let proj = projection(p, format, at, stride, step);
         if matches!(proj.attributes[&0], VertexFetch::Pulled { .. }) {
             pulled.push(format.name());
         }
@@ -204,8 +194,7 @@ fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) ->
 }
 
 /// `vertex-format-float4`'s own sweep under the default: the device fetches every one of the 45
-/// formats in fixed function, and the whole sweep is **one** module, translated twice -- once per
-/// `narrow_float`, which keys only the note of the device's NaN, no instruction.
+/// formats in fixed function, and the whole sweep is **one** module of one translation.
 #[test]
 fn a_float_read_compiles_one_module_for_the_whole_sweep() {
     let Some(bc) = fixture() else { return };
@@ -218,14 +207,13 @@ fn a_float_read_compiles_one_module_for_the_whole_sweep() {
     );
     assert_eq!(
         (got.projections, got.modules),
-        (2, 1),
+        (1, 1),
         "projections and modules of {} creations",
         got.creations
     );
 }
 
-/// The same sweep read as a `half4`: no NaN is noted for a `half` read, so the projection does not
-/// key a second translation of the one module.
+/// The same sweep read as a `half4`: one module of one translation too.
 #[test]
 fn a_half_read_compiles_one_module_for_the_whole_sweep() {
     let Some(bc) = fixture() else { return };
@@ -239,68 +227,107 @@ fn a_half_read_compiles_one_module_for_the_whole_sweep() {
     );
 }
 
-/// `narrow_float` is not key data of a `half`-declared attribute: the artifact compiled with the
-/// bit set is the one compiled without it, its words and notes, for every narrow-float format the
-/// device fetches in fixed function. The `float4` entry is the control: there the words are the
-/// same too, and the bit records the device's NaN (`PrecisionNote::DeviceNanEncoding`), which it
-/// alone keys.
+/// A render pipeline notes what the device's fixed-function vertex input converts, from its own
+/// vertex descriptor, on its vertex stage, while one translation of the function serves every
+/// format the device fetches. Over `vertex-format-float4`'s and `-half4`'s sweeps, a normalized
+/// format's pipeline records `PrecisionNote::DeviceVertexConversion` whatever width the function
+/// reads it at, a narrow float's records `PrecisionNote::DeviceNanEncoding` where the function
+/// reads it as a 32-bit `float` (a `half` read keeps the code's own bits), and every other
+/// fixed-function format's records neither. Every such creation of one entry keys its vertex
+/// function alike (`RenderPipelineKeys::vertex`), so a runtime translates it once, and its vertex
+/// stage is one module. The function compiled alone records neither note: its module is every
+/// format's.
 #[test]
-fn narrow_float_changes_no_instruction_but_a_float_reads_note() {
+fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
+    use crate::budget::Budget;
+    use crate::device::Device;
+    use crate::library::Library;
+    use crate::lower::stage_io::fetch::encoding;
+    use crate::pipeline::testing::description;
+    use crate::pipeline::{FunctionDescriptor, RenderPipelineDescriptor, StageSource};
     let Some(bc) = fixture() else { return };
-    let p = prof();
+    let library = Library::from_air(&bc).expect("library");
     let formats = float_readable();
     let stride = SLOT * formats.len() as u32;
-    let mut narrow = 0;
-    for (at, &format) in formats.iter().enumerate() {
-        let attributes = BTreeMap::from([(0, IoNumeric::Float)]);
-        let d = desc(format, at, stride, VertexStepFunction::PerVertex);
-        let raw = vertex_fetch_projection(Some(&d), &attributes, &p).expect("projection");
-        if raw.attributes[&0] != (VertexFetch::FixedFunction { narrow_float: true }) {
-            continue;
+    for stem in [PROFILE, "lavapipe", "amd-780m-radv"] {
+        let dev = Device::new(
+            description(stem).expect("committed description"),
+            DevicePolicy::default(),
+        )
+        .expect("device");
+        for entry in [TO_FLOAT4, TO_HALF4] {
+            let function = FunctionDescriptor::new(library.function(entry).expect("entry"));
+            let mut keys = BTreeSet::new();
+            let mut modules = BTreeSet::new();
+            let (mut converted, mut nans, mut fixed) = (0, 0, 0);
+            for (at, &format) in formats.iter().enumerate() {
+                let what = format!("{stem} {entry} {}", format.name());
+                let mut d = RenderPipelineDescriptor::new(StageSource::Function(function.clone()));
+                d.rasterization_enabled = false;
+                d.vertex_descriptor = Some(desc(format, at, stride, VertexStepFunction::PerVertex));
+                let pipeline = dev
+                    .compile_render_pipeline(&d, &Budget::standard())
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                let notes = &pipeline.stages[0].precision_notes;
+                if !pipeline.vertex_input.pulled.is_empty() {
+                    // A format the device cannot fetch: the module's decode is its own.
+                    assert!(
+                        !notes.contains(&PrecisionNote::DeviceVertexConversion),
+                        "{what}: a pulled attribute's decode is not the device's: {notes:?}"
+                    );
+                    continue;
+                }
+                fixed += 1;
+                let e = encoding(format).expect("encoding");
+                let conversion = e.is_normalized();
+                let nan = e.widens_narrow_float() && entry == TO_FLOAT4;
+                assert_eq!(
+                    (
+                        notes.contains(&PrecisionNote::DeviceVertexConversion),
+                        notes.contains(&PrecisionNote::DeviceNanEncoding)
+                    ),
+                    (conversion, nan),
+                    "{what}: {notes:?}"
+                );
+                converted += usize::from(conversion);
+                nans += usize::from(nan);
+                keys.insert(
+                    dev.render_pipeline_key(&d, &Budget::standard())
+                        .unwrap_or_else(|e| panic!("{what}: {e}"))
+                        .vertex,
+                );
+                modules.insert(pipeline.stages[0].spirv.to_vec());
+            }
+            assert_eq!(
+                (keys.len(), modules.len()),
+                (1, 1),
+                "{stem} {entry}: translations and modules of {fixed} fixed-function creations"
+            );
+            // Every normalized format, and every narrow float read as `float`, is fetched in
+            // fixed function on the three devices.
+            assert_eq!(
+                (converted, nans),
+                (19, if entry == TO_FLOAT4 { 5 } else { 0 }),
+                "{stem} {entry}: the creations noting each"
+            );
+            // The function compiled under the shared projection notes neither.
+            let p = dev.profile();
+            let proj = projection(
+                p,
+                VertexFormat::UChar4Normalized,
+                0,
+                stride,
+                VertexStepFunction::PerVertex,
+            );
+            let a = artifact(&bc, p, entry, &proj);
+            assert!(
+                !a.precision.contains(&PrecisionNote::DeviceVertexConversion)
+                    && !a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                "{stem} {entry}: {:?}",
+                a.precision
+            );
         }
-        narrow += 1;
-        let mut flat = raw.clone();
-        narrow_float_of_f32_reads(&mut flat, |_| false);
-        assert_eq!(
-            flat.attributes[&0],
-            VertexFetch::FixedFunction {
-                narrow_float: false
-            },
-            "{}: the narrowing clears the bit",
-            format.name()
-        );
-        let (half_raw, half_flat) = (
-            artifact(&bc, &p, TO_HALF4, &raw),
-            artifact(&bc, &p, TO_HALF4, &flat),
-        );
-        assert_eq!(
-            (&half_raw.module.words, &half_raw.precision),
-            (&half_flat.module.words, &half_flat.precision),
-            "{}: a `half` read compiles the same with and without `narrow_float`",
-            format.name()
-        );
-        let (float_raw, float_flat) = (
-            artifact(&bc, &p, TO_FLOAT4, &raw),
-            artifact(&bc, &p, TO_FLOAT4, &flat),
-        );
-        assert_eq!(
-            float_raw.module.words,
-            float_flat.module.words,
-            "{}: a 32-bit `float` read changes no instruction either",
-            format.name()
-        );
-        let noted = |a: &FunctionArtifact| a.precision.contains(&PrecisionNote::DeviceNanEncoding);
-        assert_eq!(
-            (noted(&float_raw), noted(&float_flat), noted(&half_raw)),
-            (true, false, false),
-            "{}: only a 32-bit `float` read with the bit notes the device's NaN",
-            format.name()
-        );
     }
-    assert_eq!(
-        narrow, 5,
-        "the narrow-float formats fetched in fixed function"
-    );
 }
 
 /// `integer-vertex-attributes`' own sweep: sixteen unnormalized 8- and 16-bit integer formats,
@@ -339,7 +366,7 @@ fn the_integer_attribute_sweep_compiles_thirty_four_modules_of_two_functions() {
         for step in [VertexStepFunction::PerVertex, VertexStepFunction::Constant] {
             for (at, &format) in FORMATS.iter().enumerate() {
                 creations += 1;
-                let proj = projection(&p, entry, format, at, stride, step);
+                let proj = projection(&p, format, at, stride, step);
                 if step == VertexStepFunction::PerVertex
                     && matches!(proj.attributes[&0], VertexFetch::Pulled { .. })
                 {
@@ -397,9 +424,8 @@ fn the_constant_step_sweep_pulls_every_format_on_a_portability_device() {
 
 /// The same sweep where a constant-step binding is available: fixed-function vertex input fetches
 /// the formats the per-vertex sweep fetches, so the constant step costs exactly what the
-/// per-vertex step costs -- **one** module over the 45 creations, translated once per
-/// `narrow_float`, which keys only the note of the device's NaN; and one translation for a `half`
-/// read, which notes none. 45 modules to 1. A format the device does not accept as a vertex buffer
+/// per-vertex step costs -- **one** module of one translation over the 45 creations, for a `float`
+/// read and a `half` one alike. 45 modules to 1. A format the device does not accept as a vertex buffer
 /// is pulled under either step and is named as such, not as a step the step function costs
 /// (`FloatRGB9E5` on the Intel profiles).
 #[test]
@@ -430,7 +456,7 @@ fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
         if got.pulled.is_empty() {
             assert_eq!(
                 (got.projections, got.modules, half.projections, half.modules),
-                (2, 1, 1, 1),
+                (1, 1, 1, 1),
                 "{stem}: projections and modules of {} creations",
                 got.creations
             );
@@ -442,7 +468,7 @@ fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
             );
             assert_eq!(
                 (got.projections, got.modules, half.projections, half.modules),
-                (3, 2, 2, 2),
+                (2, 2, 2, 2),
                 "{stem}: projections and modules of {} creations",
                 got.creations
             );
@@ -451,8 +477,7 @@ fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
 }
 
 /// `integer-vertex-attributes`' sweep where a constant-step binding is available: the step
-/// function is not key data of a fixed-function fetch and an unnormalized integer format is not
-/// narrow-float, so all 64 creations -- 16 formats, 2 entry points, 2 step functions -- share
+/// function is not key data of a fixed-function fetch, so all 64 creations -- 16 formats, 2 entry points, 2 step functions -- share
 /// **two** modules, one an entry point. 34 modules to 2.
 #[test]
 fn the_integer_attribute_sweep_compiles_two_modules_where_the_constant_step_is_fixed_function() {
@@ -486,7 +511,7 @@ fn the_integer_attribute_sweep_compiles_two_modules_where_the_constant_step_is_f
             for step in [VertexStepFunction::PerVertex, VertexStepFunction::Constant] {
                 for (at, &format) in FORMATS.iter().enumerate() {
                     creations += 1;
-                    let proj = projection(&p, entry, format, at, stride, step);
+                    let proj = projection(&p, format, at, stride, step);
                     if matches!(proj.attributes[&0], VertexFetch::Pulled { .. }) {
                         pulled += 1;
                     }

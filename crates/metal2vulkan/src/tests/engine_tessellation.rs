@@ -269,12 +269,7 @@ fn patch_attributes_need_the_vertex_descriptor() {
     }
     // An attribute the projection names fixed-function is not the evaluation shader's.
     let mut proj = projection();
-    proj.attributes.insert(
-        5,
-        VertexFetch::FixedFunction {
-            narrow_float: false,
-        },
-    );
+    proj.attributes.insert(5, VertexFetch::FixedFunction);
     assert_eq!(
         compile(&bc, "tess_triangle_points", &p, Some(proj)).map(|_| ()),
         Err(Error::InvalidDescriptor(DescriptorError::VertexAttribute {

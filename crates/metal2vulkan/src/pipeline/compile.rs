@@ -1838,15 +1838,11 @@ pub(crate) fn spec_request(
 
 /// The Metal attribute indices the specialized vertex entry `spec` reads: its `[[attribute(n)]]`
 /// parameters that survived function-constant specialization and that an instruction uses (the
-/// parameters `lower::stage_io` plans). Each with the numeric class it is declared with and
-/// whether its declared form is a 32-bit `float` (`float`, `float2`, `float3`, `float4`), which is
-/// what the projection's `VertexFetch::FixedFunction::narrow_float` may hold of it: only a 32-bit
-/// `float` read notes the device's widening's NaN (`lower::stage_io::plan`). Empty for any other
-/// stage.
+/// parameters `lower::stage_io` plans), each with the numeric class it is declared with. Empty for
+/// any other stage.
 pub(crate) fn declared_attributes(
     spec: &air::Entry,
-) -> std::collections::BTreeMap<u32, (crate::pipeline::stage_io::IoNumeric, bool)> {
-    use crate::lower::arith::FloatFmt;
+) -> std::collections::BTreeMap<u32, crate::pipeline::stage_io::IoNumeric> {
     use crate::pipeline::stage_io::IoNumeric;
     let mut out = std::collections::BTreeMap::new();
     if !matches!(spec.ep.stage, AbiStage::Vertex { .. }) {
@@ -1881,17 +1877,13 @@ pub(crate) fn declared_attributes(
                         _ => None,
                     };
                     let float = form.is_some_and(|f| f.is_float());
-                    let f32_read = form.is_some_and(|f| f.float_fmt() == Some(FloatFmt::F32));
                     out.insert(
                         index,
-                        (
-                            if float {
-                                IoNumeric::Float
-                            } else {
-                                IoNumeric::Uint
-                            },
-                            f32_read,
-                        ),
+                        if float {
+                            IoNumeric::Float
+                        } else {
+                            IoNumeric::Uint
+                        },
                     );
                 }
             }
@@ -2229,12 +2221,7 @@ fn instanced_attributes(
     let stepped: BTreeSet<u32> = projection
         .attributes
         .iter()
-        .filter(|(_, f)| {
-            matches!(
-                f,
-                crate::pipeline::lower_inputs::VertexFetch::FixedFunction { .. }
-            )
-        })
+        .filter(|(_, f)| matches!(f, crate::pipeline::lower_inputs::VertexFetch::FixedFunction))
         .filter(|(a, _)| {
             desc.attributes
                 .get(a)
@@ -2305,11 +2292,7 @@ fn lower_inputs(
             Ok(key::canonical_inputs(&out))
         }
         InputsFrom::Vertex(desc, variant, depth, primitive_id, _) => {
-            let declared = declared_attributes(spec);
-            let attributes: BTreeMap<u32, crate::pipeline::stage_io::IoNumeric> = declared
-                .iter()
-                .map(|(index, (numeric, _))| (*index, *numeric))
-                .collect();
+            let attributes = declared_attributes(spec);
             // The indexed capture form, the primitive ID's de-indexed form and the private list
             // form pull every attribute, whatever the caller's projection would fetch in fixed
             // function.
@@ -2318,20 +2301,13 @@ fn lower_inputs(
                 .is_some_and(|f| f.index_type().is_some())
                 || variant.primitive_id_indices.is_some()
                 || variant.private_list;
-            let mut projection = crate::pipeline::link::vertex::vertex_fetch_projection_for(
+            let projection = crate::pipeline::link::vertex::vertex_fetch_projection_for(
                 desc,
                 &attributes,
                 p,
                 &variant.pulled_vertex_buffers,
                 pull_every,
             )?;
-            // `narrow_float` is key data only where the entry reads the attribute as a 32-bit
-            // `float`, whose NaN the module notes; a `half`-declared attribute compiles the same
-            // either way, so the bit must not key a variant of it
-            // (`link::vertex::narrow_float_of_f32_reads`).
-            crate::pipeline::link::vertex::narrow_float_of_f32_reads(&mut projection, |a| {
-                declared.get(&a).is_some_and(|&(_, f32_read)| f32_read)
-            });
             let mut out = variant.lowering_inputs(crate::pipeline::sym::Stage::Vertex);
             out.vertex_fetch = Some(projection);
             out.max_call_stack_depth = call_stack_input(depth);

@@ -1474,18 +1474,13 @@ impl VertexFetchProjection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VertexFetch {
-    /// Fixed-function vertex input; the Vulkan format is link-time state.
-    ///
-    /// `narrow_float`: the Metal format's components are floats narrower than 32 bits (a `half`
-    /// format, or `FloatRG11B10`), which the device's vertex input widens to a `float` attribute
-    /// with a widening of its own, **and** the function reads the attribute as a 32-bit `float`.
-    /// Metal's fetch answers its canonical NaN there, so such a read records the device's NaN
-    /// (`PrecisionNote::DeviceNanEncoding`, `lower::stage_io`); a `half`-declared attribute keeps the fetched code's own bits,
-    /// as Metal's `half` attribute does, so the bit is clear for one whatever the format was
-    /// (`link::vertex::narrow_float_of_f32_reads`) and no variant of it is keyed on the format.
-    /// The attribute's own encoding is link-time state, and this bit is what the compile key
-    /// carries of it.
-    FixedFunction { narrow_float: bool },
+    /// Fixed-function vertex input. The attribute's whole format is link-time state
+    /// (`VertexInputState`): no instruction of the module names it, so every format the device
+    /// fetches in fixed function shares one module. What the device's conversion of the format
+    /// may answer otherwise than Metal's fetch (a normalized format's quotient, a narrow float's
+    /// NaN) is noted where the render pipeline links, on its vertex stage
+    /// (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`).
+    FixedFunction,
     /// Fetched in the shader from a buffer, decoding this Metal format.
     ///
     /// Everything that changes the fetch code is here: the source buffer, the attribute's

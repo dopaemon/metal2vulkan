@@ -1011,7 +1011,9 @@ assert_eq!(linked, pipeline);
 ```
 
 - A compiled function states before linking what its stage will: `stage()`, `requirements()`
-  (check it against another profile with `DeviceProfile::check`), `precision_notes()`,
+  (check it against another profile with `DeviceProfile::check`), `precision_notes()` (the
+  pipeline's stage adds those of its own state: a fragment stage's attachment writes, a vertex
+  stage's formats its fixed-function vertex input converts),
   `reconvergence()`, `required_subgroup_size()`, `requires_full_subgroups()`, `module_stats()`
   (section 3) and `writes_memory()` (stores or atomics, which a render pipeline drawn in more than
   one color group refuses).
@@ -2942,6 +2944,15 @@ bound.
   `PrecisionNote::DeviceTexelConversion`: Native device sampling (a texel conversion): the module
   hands a read, sample or gather with a `float` result the device's own conversion of the texel's
   codes, off Apple's GPUs (`VkProperty::MetalSampler` keeps Metal's value).
+- `metal2vulkan-degrade-device-vertex-conversion` (precision).
+  `PrecisionNote::DeviceVertexConversion`: Native vertex input (a conversion): a render pipeline's
+  vertex descriptor gives a normalized format (`UCharNormalized` through `Short4Normalized` of
+  either sign, `UChar4Normalized_BGRA`, `Int1010102Normalized`, `UInt1010102Normalized`) to an
+  attribute that fixed-function vertex input fetches, so the attribute is the device's `UNORM` or
+  `SNORM` conversion of its codes, where Metal's fetch answers the code over its maximum correctly
+  rounded: within one `f32` ulp where measured (lavapipe reads some 8-bit unsigned codes one ulp
+  high). Recorded on the pipeline's vertex stage, on every device; one module serves every format
+  the device fetches.
 - `metal2vulkan-degrade-native-half-conversion` (precision). `PrecisionNote::NativeHalfConversion`:
   Native half rounding (a conversion): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's

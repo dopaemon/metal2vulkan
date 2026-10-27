@@ -353,12 +353,7 @@ fn the_vertex_fetch_projection_selects_fixed_function_or_pulled() {
     // The function reads both as `float` (the one projection takes the declared classes).
     let floats = BTreeMap::from([(0, IoNumeric::Float), (1, IoNumeric::Float)]);
     let proj = vertex_fetch_projection(Some(&desc), &floats, &p).expect("projection");
-    assert_eq!(
-        proj.attributes[&0],
-        VertexFetch::FixedFunction {
-            narrow_float: false
-        }
-    );
+    assert_eq!(proj.attributes[&0], VertexFetch::FixedFunction);
     assert_eq!(
         proj.attributes[&1],
         VertexFetch::Pulled {
@@ -393,12 +388,7 @@ fn the_vertex_fetch_projection_selects_fixed_function_or_pulled() {
         )
     };
     let mut fixed = VertexFetchProjection::new();
-    fixed.attributes.insert(
-        0,
-        VertexFetch::FixedFunction {
-            narrow_float: false,
-        },
-    );
+    fixed.attributes.insert(0, VertexFetch::FixedFunction);
     let a = run(fixed).expect("fixed-function projection");
     validate(&a, &alone(&a, &p), &p);
     let a = run(proj).expect("pulled attribute");

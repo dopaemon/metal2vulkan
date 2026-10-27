@@ -494,9 +494,7 @@ fn integer_formats_feed_float_attributes() {
                     scaled,
                     crate::device::requirements::FormatUsage::VertexBuffer,
                 );
-            let entry = VertexFetch::FixedFunction {
-                narrow_float: false,
-            };
+            let entry = VertexFetch::FixedFunction;
             assert_eq!(
                 proj.attributes[&attr] == entry,
                 fixed,
@@ -1256,7 +1254,7 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
 }
 
 /// A fixed-function vertex attribute read as `float` keeps the words the device's input delivered,
-/// and one of a narrow-float format records that its NaNs are the device's.
+/// whatever its format.
 ///
 /// The owned `dsx_int_attributes` fixture's `int_attribute_to_float4` writes the one `float4`
 /// attribute it reads to `out[vid]`, so the module's answer is read bit for bit. The interpreter
@@ -1269,9 +1267,11 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
 /// reach a `float` attribute as `0x7FC00000`, payload and sign dropped. A device's widening
 /// carries the field's bits up into the payload instead (`0x7FC02000` for the `half` codes
 /// `0x7E01` and `0xFE01`, `0x7FFE0000` for an all-ones `FloatRG11B10` field, measured on RADV),
-/// which the module keeps (`PrecisionNote::DeviceNanEncoding`). Every finite, zero, subnormal and
+/// which the module keeps. Every finite, zero, subnormal and
 /// infinite word passes through, and a `Float4` attribute keeps every word, NaNs included, as
-/// Metal's fetch of a 32-bit float does.
+/// Metal's fetch of a 32-bit float does. The module is the same for every format and records
+/// nothing of it: the render pipeline's link notes a narrow float's NaN on its vertex stage
+/// (`link::vertex::fixed_function_notes`).
 #[test]
 fn a_fixed_function_vertex_attribute_keeps_the_words_the_device_delivers() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -1308,10 +1308,10 @@ fn a_fixed_function_vertex_attribute_keeps_the_words_the_device_delivers() {
         if !p.fields().leaf.vertex_stores_and_atomics {
             continue;
         }
-        for (format, narrow) in [
-            (VertexFormat::Half4, true),
-            (VertexFormat::FloatRG11B10, true),
-            (VertexFormat::Float4, false),
+        for format in [
+            VertexFormat::Half4,
+            VertexFormat::FloatRG11B10,
+            VertexFormat::Float4,
         ] {
             let mut d = VertexDescriptor::new();
             d.layouts
@@ -1322,22 +1322,18 @@ fn a_fixed_function_vertex_attribute_keeps_the_words_the_device_delivers() {
             let proj =
                 vertex_fetch_projection(Some(&d), &BTreeMap::from([(0, IoNumeric::Float)]), &p)
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
-            // The projection's own entry says whether the format is a narrow float; a format the
-            // device's vertex input cannot fetch is pulled and is the pulled fetch's own test.
-            match proj.attributes[&0] {
-                VertexFetch::FixedFunction { narrow_float } => {
-                    assert_eq!(narrow_float, narrow, "{what}: {:?}", proj.attributes[&0])
-                }
-                VertexFetch::Pulled { .. } => continue,
+            // A format the device's vertex input cannot fetch is pulled and is the pulled
+            // fetch's own test.
+            if proj.attributes[&0] != VertexFetch::FixedFunction {
+                continue;
             }
             let i = inputs(proj);
             let a = compile_inputs_of(&bc, "int_attribute_to_float4", &p, &i)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             validate(&a, &p);
-            assert_eq!(
-                a.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                narrow,
-                "{what}: {:?}",
+            assert!(
+                !a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                "{what}: the module records nothing of the format: {:?}",
                 a.precision
             );
             let (plan, m) = typed_module_with(&bc, "int_attribute_to_float4", &p, &i)

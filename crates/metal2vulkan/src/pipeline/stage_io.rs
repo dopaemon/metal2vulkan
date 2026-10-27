@@ -515,30 +515,11 @@ impl StageIo {
     /// Every vertex attribute the function reads, by attribute index, with its declared numeric
     /// class and the fetch it was compiled under: fixed function for an `Attribute` input
     /// variable, the listed fetch for a pulled one.
-    ///
-    /// A fixed-function entry's `narrow_float` is reported as the module depends on it, which is
-    /// only for an attribute read as a 32-bit `float`
-    /// (`link::vertex::narrow_float_of_f32_reads`): a `half`-declared attribute's module is the
-    /// same either way, so it reads as clear whatever the variable records, and link's
-    /// recomputation of the projection agrees with it.
     pub fn attributes(&self) -> BTreeMap<u32, (IoNumeric, VertexFetch)> {
-        let f32_reads = self.f32_attributes();
         let mut out = BTreeMap::new();
         for v in &self.inputs {
-            if let IoRole::Attribute {
-                index,
-                narrow_float,
-            } = v.role
-            {
-                out.insert(
-                    index,
-                    (
-                        v.ty.numeric,
-                        VertexFetch::FixedFunction {
-                            narrow_float: narrow_float && f32_reads.contains(&index),
-                        },
-                    ),
-                );
+            if let IoRole::Attribute { index } = v.role {
+                out.insert(index, (v.ty.numeric, VertexFetch::FixedFunction));
             }
         }
         for p in &self.pulled {
@@ -548,9 +529,9 @@ impl StageIo {
     }
 
     /// The vertex attributes the function reads in fixed function as a 32-bit `float` (`float`,
-    /// `float2`, `float3`, `float4`), which is where a narrow-float format's widening's NaN is
-    /// noted (`link::vertex::narrow_float_of_f32_reads`). A `half`-declared attribute is
-    /// not among them, and neither is a pulled attribute, whose decode the module holds whole.
+    /// `float2`, `float3`, `float4`), which is where link notes a narrow-float format's widening's
+    /// NaN (`link::vertex::fixed_function_notes`). A `half`-declared attribute is not among them,
+    /// and neither is a pulled attribute, whose decode the module holds whole.
     pub fn f32_attributes(&self) -> std::collections::BTreeSet<u32> {
         self.inputs
             .iter()
@@ -723,11 +704,9 @@ pub struct IoVariable {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IoRole {
-    /// Vertex attribute `index`, fetched by fixed-function vertex input. `narrow_float` is the
-    /// `VertexFetch::FixedFunction` bit the function was compiled under: the Metal format's
-    /// components are floats narrower than 32 bits, whose widening's NaN the function notes
-    /// where it reads the attribute as `float`.
-    Attribute { index: u32, narrow_float: bool },
+    /// Vertex attribute `index`, fetched by fixed-function vertex input, whatever its format: the
+    /// format is link-time state (`VertexFetch::FixedFunction`).
+    Attribute { index: u32 },
     /// A vertex output or fragment input matched by its AIR user key.
     Varying {
         user: AirUserKey,

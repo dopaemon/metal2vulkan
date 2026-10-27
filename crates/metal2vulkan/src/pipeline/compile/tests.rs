@@ -675,12 +675,7 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
     };
     let mut full = LoweringInputs::new();
     let mut projection = VertexFetchProjection::new();
-    projection.attributes.insert(
-        2,
-        VertexFetch::FixedFunction {
-            narrow_float: false,
-        },
-    );
+    projection.attributes.insert(2, VertexFetch::FixedFunction);
     full.vertex_fetch = Some(projection);
     full.storage_images.insert(
         slot(SlotClass::Texture, 1),
@@ -2158,7 +2153,7 @@ fn a_vertex_key_projects_the_attributes_it_reads() {
     let keys = dev
         .render_pipeline_key(&d, &Budget::standard())
         .expect("keys");
-    let mut expected = crate::pipeline::link::vertex::vertex_fetch_projection(
+    let expected = crate::pipeline::link::vertex::vertex_fetch_projection(
         d.vertex_descriptor.as_ref(),
         &{
             use crate::pipeline::stage_io::IoNumeric::{Float, Uint};
@@ -2167,9 +2162,6 @@ fn a_vertex_key_projects_the_attributes_it_reads() {
         dev.profile(),
     )
     .expect("projection");
-    // The key narrows `narrow_float` to the attributes read as a 32-bit `float`; attribute 1's
-    // `Half2` is read as a `half2`, so its bit is not key data of this entry.
-    crate::pipeline::link::vertex::narrow_float_of_f32_reads(&mut expected, |a| a == 0);
     let mut inp = LoweringInputs::new();
     inp.vertex_fetch = Some(expected);
     assert_eq!(keys.vertex, dev.function_compile_key(&fd, &inp));

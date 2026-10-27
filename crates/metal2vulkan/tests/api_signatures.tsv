@@ -4960,6 +4960,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceSampling	DeviceSampling = 
 macro-member	metal2vulkan-runtime::Degradation::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan = "device-signed-zero-inf-nan";
 macro-member	metal2vulkan-runtime::Degradation::DeviceTexelConversion	DeviceTexelConversion = "device-texel-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceTranscendentals	DeviceTranscendentals = "device-transcendentals";
+macro-member	metal2vulkan-runtime::Degradation::DeviceVertexConversion	DeviceVertexConversion = "device-vertex-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores = "discard-drops-simdgroup-stores";
 macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTiles = "dont-care-load-tiles", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStandIn	DontCareStandIn = "dont-care-stand-in", Performance,
@@ -13495,6 +13496,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceSampling	DeviceSampling
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceTexelConversion	DeviceTexelConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceTranscendentals	DeviceTranscendentals
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceVertexConversion	DeviceVertexConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores
 variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeBlendSource	ExtendedRangeBlendSource
 variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource
@@ -13814,7 +13816,7 @@ variant	metal2vulkan::pipeline::SyntheticBinding::TileMemory	TileMemory
 variant	metal2vulkan::pipeline::UniformViewChoice::Kept	Kept
 variant	metal2vulkan::pipeline::UniformViewChoice::Spare	Spare
 variant	metal2vulkan::pipeline::UniformViewChoice::Viewed	Viewed
-variant	metal2vulkan::pipeline::VertexFetch::FixedFunction	FixedFunction { narrow_float: bool }
+variant	metal2vulkan::pipeline::VertexFetch::FixedFunction	FixedFunction
 variant	metal2vulkan::pipeline::VertexFetch::Pulled	Pulled { format: metal::VertexFormat, buffer_index: u32, offset: u32, step_function: metal::VertexStepFunction, step_rate: u32 }
 variant	metal2vulkan::pipeline::VertexStride::PerBind	PerBind
 variant	metal2vulkan::pipeline::VertexStride::Static	Static(u32)

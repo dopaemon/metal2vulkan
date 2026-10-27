@@ -289,6 +289,8 @@ mod unique_identifier;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod upload_chunk_zeros;
 mod values;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod vertex_conversion_notices;
 mod view_plan;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod waiter_submits;

@@ -116,6 +116,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DeviceSampling,
             DeviceTexelConversion,
             HalfTexelConversion,
+            DeviceVertexConversion,
             RestrictedDepthRange,
             DeviceSignedZeroInfNan,
             DeviceInterpolation,

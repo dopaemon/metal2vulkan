@@ -145,6 +145,20 @@ impl Encoding {
         matches!(self, Encoding::Half { .. } | Encoding::Rg11B10Float)
     }
 
+    /// Whether each component is a code divided by its own maximum: the 8- and 16-bit
+    /// `Normalized` formats of either sign, `UChar4Normalized_BGRA` and the two
+    /// `1010102Normalized` words.
+    pub fn is_normalized(self) -> bool {
+        matches!(
+            self,
+            Encoding::Int {
+                normalized: true,
+                ..
+            } | Encoding::Bgra8Unorm
+                | Encoding::Rgb10A2 { .. }
+        )
+    }
+
     /// Whether the components are floats (every format except the unnormalized integers).
     pub fn is_float(self) -> bool {
         !matches!(

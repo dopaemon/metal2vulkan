@@ -1475,8 +1475,15 @@ fn stage_module(c: &CompiledFunction, linked: &Linked, i: usize) -> Result<Stage
         .graphics
         .as_ref()
         .is_some_and(|g| g.alpha_to_coverage);
-    let (precision_notes, rounded_colors) =
+    let (mut precision_notes, rounded_colors) =
         crate::pipeline::color_writes::pipeline_writes(a, colors, coverage);
+    // The vertex stage's notes of what the device's fixed-function input converts for this
+    // pipeline's vertex descriptor, which no module of it records.
+    if a.interface.stage == Stage::Vertex && !linked.vertex_notes.is_empty() {
+        precision_notes.extend(&linked.vertex_notes);
+        precision_notes.sort_unstable();
+        precision_notes.dedup();
+    }
     Ok(StageModule {
         stage: a.interface.vk_stage(),
         entry_point: ENTRY_NAME.to_owned(),

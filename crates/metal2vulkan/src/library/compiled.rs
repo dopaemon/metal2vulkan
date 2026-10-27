@@ -255,8 +255,11 @@ impl CompiledFunction {
         &self.0.requirements
     }
 
-    /// The near-equivalents of Metal the function's lowering recorded, as its linked stage
-    /// states them (`StageModule::precision_notes`).
+    /// The near-equivalents of Metal the function's lowering recorded. A pipeline's stage of it
+    /// states these and those the pipeline's own state adds (`StageModule::precision_notes`):
+    /// for a fragment function, its color attachments' writes; for a vertex function, the
+    /// formats the pipeline's fixed-function vertex input converts
+    /// (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`).
     pub fn precision_notes(&self) -> &[PrecisionNote] {
         &self.0.precision
     }
@@ -325,7 +328,7 @@ impl CompiledFunction {
             VertexFetch::Pulled { buffer_index, .. } => {
                 Some((input.index, AttributeFetch::Pulled { buffer_index }))
             }
-            VertexFetch::FixedFunction { .. } => None,
+            VertexFetch::FixedFunction => None,
         });
         let stage_in = io.stage_in.iter().map(|input| {
             (

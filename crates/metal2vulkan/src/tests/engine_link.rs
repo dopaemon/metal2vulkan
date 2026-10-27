@@ -592,19 +592,9 @@ fn the_projection_of_the_fixture_is_fixed_function() {
     let v = vertex_under(&bc, &vertex_descriptor(), &p).expect("vertex");
     let attrs = v.interface.io.attributes();
     assert_eq!(attrs.len(), 4);
-    // Every attribute is fixed function, and none carries `narrow_float`: attribute 1's `Half2`
-    // is the one narrow-float format, and a `float` parameter reading it would canonicalize the
-    // device's widening, but this entry reads it as a `half2`, which keeps the fetched code's own
-    // bits whatever the format was. So the bit is not part of what the module depends on
-    // (`link::vertex::narrow_float_of_f32_reads`).
+    // Every attribute is fixed function, which keeps nothing of its format.
     for (a, (_, f)) in &attrs {
-        assert_eq!(
-            *f,
-            VertexFetch::FixedFunction {
-                narrow_float: false
-            },
-            "attribute {a}"
-        );
+        assert_eq!(*f, VertexFetch::FixedFunction, "attribute {a}");
     }
 }
 

@@ -482,17 +482,9 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 });
                 return Ok(());
             }
-            // The device's fixed-function input widens a narrow-float format with a widening of
-            // its own, which may carry the field's bits up into the `float` payload; Metal's fetch
-            // answers its canonical NaN. A `float` parameter's NaN is the device's, noted; a
-            // `half` one keeps the fetched code's own bits, as Metal's `half` attribute does.
-            let narrow_float = matches!(
-                entry,
-                Some(VertexFetch::FixedFunction { narrow_float: true })
-            );
-            if narrow_float && f.float_fmt() == Some(FloatFmt::F32) {
-                cx.precision.insert(PrecisionNote::DeviceNanEncoding);
-            }
+            // Fixed-function input: the format is link-time state, and so is what the device's
+            // conversion of it may answer otherwise than Metal's fetch, which link notes on the
+            // pipeline's vertex stage (`pipeline::link::vertex::fixed_function_notes`).
             let key = VaryingKey::attribute(index);
             let sp = &mut cx.families.stage_io;
             let object = user(
@@ -506,10 +498,7 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 &mut sp.interface.inputs,
                 IoVariable {
                     key,
-                    role: IoRole::Attribute {
-                        index,
-                        narrow_float,
-                    },
+                    role: IoRole::Attribute { index },
                     ty: io_type(f),
                 },
             );

@@ -48,19 +48,11 @@ pub(super) fn io_ty(numeric: IoNumeric, components: u8) -> IoType {
     }
 }
 
-/// Vertex attribute `index` of a format that is not a narrow float.
+/// Vertex attribute `index`, fetched by fixed-function vertex input.
 pub(super) fn attr(index: u32, ty: IoType) -> IoVariable {
-    attr_of(index, ty, false)
-}
-
-/// Vertex attribute `index`, `narrow_float` as its projection entry states.
-pub(super) fn attr_of(index: u32, ty: IoType, narrow_float: bool) -> IoVariable {
     IoVariable {
         key: VaryingKey::attribute(index),
-        role: IoRole::Attribute {
-            index,
-            narrow_float,
-        },
+        role: IoRole::Attribute { index },
         ty,
     }
 }

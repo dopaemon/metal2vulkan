@@ -821,9 +821,12 @@ pub enum PrecisionNote {
     /// declared without a format, the note is recorded under the format bound there (a
     /// [`SpecializedNote`] of `SpecKey::BoundTexelFormat`), which the runtime announces at a draw
     /// or dispatch that binds such a texture.
-    /// Also recorded by a fixed-function vertex attribute of a float format narrower than 32 bits
-    /// that the function reads as `float`: Metal widens its NaN to `0x7fc00000`, and the device's
-    /// widening need not. Also recorded by a 16-bit float attachment's blend
+    /// Also recorded on a render pipeline's vertex stage where its vertex descriptor gives a float
+    /// format narrower than 32 bits (a `half` format, `FloatRG11B10`) to an attribute that
+    /// fixed-function vertex input fetches and the function reads as `float`
+    /// (`pipeline::link::vertex`): Metal widens its NaN to `0x7fc00000`, and the device's
+    /// widening need not. A pulled attribute's decode records it in the module. Also recorded by a
+    /// 16-bit float attachment's blend
     /// the function computes in the storage form, on a device not measured to store `0x7fc00000` in
     /// a 16-bit float storage image as Metal's `0x7e00` (`DriverDeviation::MetalFloatStorageNans`):
     /// the blend gives every NaN as `0x7fc00000`, and the device's store converts it (ANV stores
@@ -1532,6 +1535,26 @@ pub enum PrecisionNote {
     ///
     /// A filtered sample's value is the filter's. Validation derives no tolerance from it.
     DeviceTexelConversion,
+    /// Native vertex input (a conversion): a vertex attribute of a normalized format
+    /// (`UCharNormalized` through `Short4Normalized` of either sign, `UChar4Normalized_BGRA`,
+    /// `Int1010102Normalized`, `UInt1010102Normalized`) that fixed-function vertex input fetches
+    /// is the device's conversion of its codes, through the format's own Vulkan `UNORM` or `SNORM`
+    /// vertex format. Metal's fetch answers `c / (2^b - 1)` unsigned and
+    /// `max(c / (2^(b-1) - 1), -1)` signed, correctly rounded; Vulkan states the same conversion
+    /// and a driver may compute it otherwise (by the reciprocal). Recorded on a render pipeline's
+    /// vertex stage where its vertex descriptor gives such a format to an attribute fixed-function
+    /// input fetches (`pipeline::link::vertex`), whatever width the function declares the
+    /// attribute with (a `half` attribute reads the device's `float` value rounded to `half`). A
+    /// function compiled alone records nothing: its module is the same for every format the device
+    /// fetches. A pulled attribute's decode divides in the shader and records nothing either.
+    /// **Recorded bound:** within one `f32` ulp of Metal's quotient where measured: llvmpipe (Mesa
+    /// 26.2.4) multiplies by the reciprocal and reads some 8-bit unsigned codes one ulp high (127
+    /// as `0x3EFEFF00` where Metal reads `0x3EFEFEFF`), its 16-bit and packed normalized formats
+    /// Metal's; RADV's unsigned formats are Metal's; MoltenVK on an Apple M3 Max answered Metal's
+    /// at every site measured, and records the note as every device does, since no measured
+    /// property states its conversion. The signed formats off MoltenVK are unmeasured.
+    /// Validation derives no tolerance from it.
+    DeviceVertexConversion,
     /// Native half rounding (a conversion): the module rounds a `half` result it computes in
     /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by
     /// the device's conversion of the `float` to 16 bits and its widening (`OpFConvert` of the
