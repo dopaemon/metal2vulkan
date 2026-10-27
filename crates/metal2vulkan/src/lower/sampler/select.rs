@@ -1837,13 +1837,7 @@ fn select_one(
                     (CubeGradientRoute::Vulkan, Some(false))
                     | (CubeGradientRoute::Unmeasured, _) => CubeFootprint::Length,
                     (CubeGradientRoute::Vulkan, Some(true)) => CubeFootprint::Face,
-                    (CubeGradientRoute::AppleSwizzled, Some(false)) => CubeFootprint::Isotropic,
-                    (CubeGradientRoute::AppleSwizzled, Some(true)) => {
-                        CubeFootprint::AnisotropicSwizzled
-                    }
-                    (route, None) => CubeFootprint::Word {
-                        swizzled: route == CubeGradientRoute::AppleSwizzled,
-                    },
+                    (CubeGradientRoute::Vulkan, None) => CubeFootprint::Word,
                 };
                 Lod::CubeGrad(dx, dy, form)
             } else {
@@ -2006,7 +2000,7 @@ fn select_one(
         s.anisotropy |= matches!(
             op,
             SampleOp::Sample {
-                lod: Lod::CubeGrad(_, _, CubeFootprint::Word { .. }),
+                lod: Lod::CubeGrad(_, _, CubeFootprint::Word),
                 ..
             }
         );

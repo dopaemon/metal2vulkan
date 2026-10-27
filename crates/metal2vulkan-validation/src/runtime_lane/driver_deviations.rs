@@ -19,19 +19,17 @@
 //!   deviation, every word of a function the translation hands to the device's instruction is
 //!   Metal's (`PRECISE_DEVICE_WORDS`, `FAST_DEVICE_WORDS`). Elsewhere the device's instructions
 //!   answer within Vulkan's bounds (`NativeTranscendentals`); the test prints how many words match.
-//! - **The cube routes** (`GraphicsCubeGradientRoute`, `GraphicsCubeGradientTangents` and
-//!   `CubeGradientRoute`): the owned fixture `rtl_cube_grad_fragment` samples a cube and a cube
+//! - **The cube routes** (`GraphicsCubeGradientTangents` and `CubeGradientRoute`): the owned fixture `rtl_cube_grad_fragment` samples a cube and a cube
 //!   array with explicit gradients through an anisotropic constexpr sampler in a fragment function,
 //!   over the inputs of the committed kernel cases `anisotropic-cube-gradients-along-face-rows` and
 //!   `-columns`, which run too. Where the profile takes a route's deviation, each pixel or kernel
 //!   lane is the Metal kernel's sample of its lane on the Apple M3 Max, the lane's Metal
-//!   environment; where it takes `GraphicsCubeGradientTangents` (MoltenVK under macOS 27, whose
-//!   cube-gradient swizzle loses a `y` face's `z` gradient), so are the lanes on the `x` and `z`
-//!   faces, and the `y` faces' are a near-equivalent (`CubeGradientFootprint`) the test prints.
-//!   MoltenVK's graphics route is measured on the M3 Max under macOS 26.7 and under macOS 27.0.1
-//!   (MoltenVK's device ID is the macOS release and the GPU family, which the M4 under macOS 27
-//!   shares); under any other, the fragment's pipeline is refused, naming the unmeasured deviation
-//!   `GraphicsCubeGradientRoute`. Elsewhere the sample is a near-equivalent
+//!   environment; where it takes `GraphicsCubeGradientTangents` (MoltenVK, whose cube-gradient
+//!   swizzle loses a `y` face's `z` gradient), so are the lanes on the `x` and `z` faces, and the
+//!   `y` faces' are a near-equivalent (`CubeGradientFootprint`) the test prints. MoltenVK's
+//!   graphics route is measured on the M3 Max under macOS 27.0.1 (MoltenVK's device ID is the
+//!   macOS release and the GPU family, which the M4 shares); on another identity the function
+//!   emulates Metal's footprint. Elsewhere the sample is a near-equivalent
 //!   (`CubeGradientFootprint`) or refused; the test prints which.
 //! - **The `half` fused multiply-add** (`MetalHalfFma`): the committed cases of a probe
 //!   (`fmx_fma_precise`, `fmx_fma_fast`), whose half word is a `half` `fma` and a `half`
@@ -558,14 +556,13 @@ fn differing_samples(samples: &[u8], metal: &[u8]) -> (Vec<usize>, Vec<usize>) {
     (differ, per_block)
 }
 
-/// Where the profile takes each route's deviation, the fragment function's samples (the graphics
-/// route, `GraphicsCubeGradientRoute`) and the committed kernel's (the compute route,
-/// `CubeGradientRoute`) are the Metal kernel's of the same lanes on the Apple M3 Max. Where it
-/// takes `GraphicsCubeGradientTangents` instead, the fragment's samples on the `x` and `z` faces
-/// are; its `y` faces' are printed. On MoltenVK where a route is unmeasured (any Apple GPU and
-/// macOS release but the M3 Max's under macOS 26.7 and 27: MoltenVK's device ID is both), the
-/// function emulates Metal's footprint, and its pipeline is made: its samples are printed. Every
-/// case and route is measured and printed before any is judged.
+/// Where the profile takes the compute route's deviation (`CubeGradientRoute`), the committed
+/// kernel's samples are the Metal kernel's of the same lanes on the Apple M3 Max; where it takes
+/// the graphics route's (`GraphicsCubeGradientTangents`), so are the fragment function's samples
+/// on the `x` and `z` faces, and its `y` faces' are printed. On MoltenVK where a route is
+/// unmeasured (an identity other than the M3 Max's under macOS 27: MoltenVK's device ID is the
+/// release and the family), the function emulates Metal's footprint, and its pipeline is made: its
+/// samples are printed. Every case and route is measured and printed before any is judged.
 #[test]
 fn cube_gradients_through_an_anisotropic_sampler_answer_as_metal() {
     let messages = Messages::default();
@@ -574,7 +571,6 @@ fn cube_gradients_through_an_anisotropic_sampler_answer_as_metal() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
-        let graphics = takes(&device, DriverDeviation::GraphicsCubeGradientRoute);
         let tangents = takes(&device, DriverDeviation::GraphicsCubeGradientTangents);
         let compute = takes(&device, DriverDeviation::CubeGradientRoute);
         let moltenvk = device.properties().description.driver_id == Some(DriverId::MOLTENVK);
@@ -585,7 +581,7 @@ fn cube_gradients_through_an_anisotropic_sampler_answer_as_metal() {
             let fragment = fragment_samples(&device, &case).map_err(|error| format!("{error}"));
             let kernel = run_case(&device, &case).map(|run| run.output);
             for (stage, taken, y_faces_near, answer) in [
-                ("fragment", graphics || tangents, tangents, fragment),
+                ("fragment", tangents, tangents, fragment),
                 ("kernel", compute, false, kernel),
             ] {
                 let verdict = match answer {

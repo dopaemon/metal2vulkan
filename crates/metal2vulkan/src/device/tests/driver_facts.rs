@@ -64,10 +64,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
         (D::MetalSampler, property(VkProperty::MetalSampler)),
         (D::CubeGradientRoute, routes.1 == CubeGradientRoute::Metal),
         (
-            D::GraphicsCubeGradientRoute,
-            routes.0 == CubeGradientRoute::AppleSwizzled,
-        ),
-        (
             D::GraphicsCubeGradientTangents,
             routes.0 == CubeGradientRoute::AppleProjected,
         ),
@@ -172,7 +168,7 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
 /// The deviations each committed profile takes are those its driver is measured with on its GPU,
 /// at every release: every Apple GPU's (MoltenVK's lockstep, `float` functions, canonical NaNs,
 /// sampler, compute cube route and the rest of the seventeen), with the graphics cube route and the
-/// per-sample depth of the identity's macOS release and family, the M4's identity's normalized
+/// per-sample depth of macOS 27's Apple9 identity, that identity's normalized
 /// storage writes and full quads, and every Apple GPU's 16-bit unorm depth stores, interpolation
 /// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's on
 /// the Radeon 780M, ANV's on the Iris Xe of RPL-P and the UHD 770 of RPL-S, and NVIDIA's on the
@@ -218,12 +214,8 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         D::MetalFloatStorageNans,
         D::MetalHalfTexelWrites,
     ];
-    // In `taken`'s order: the graphics route (macOS 26.7's on the M3 Max's identity there, macOS
-    // 27's on the identity both chips share) before the color writes, and each chip's per-sample
-    // depth last.
-    let mut m3_max = apple.clone();
-    m3_max.insert(5, D::GraphicsCubeGradientRoute);
-    m3_max.push(D::CenterFragCoordDepth);
+    // In `taken`'s order: the graphics route of the identity both chips share under macOS 27
+    // before the color writes, and its per-sample depth last.
     let mut m4_measured = apple.clone();
     m4_measured.insert(5, D::GraphicsCubeGradientTangents);
     m4_measured.push(D::CenterFragCoordDepth);
@@ -232,7 +224,7 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     // Every Apple GPU's 16-bit unorm depth, unbiased and biased, its interpolation and its
     // first-vertex indices, last in `taken`'s order.
     let mut apple_all = apple.clone();
-    for list in [&mut m3_max, &mut m4_measured, &mut apple_all] {
+    for list in [&mut m4_measured, &mut apple_all] {
         list.push(D::MetalDepth16Stores);
         list.push(D::MetalDepth16BiasedStores);
         list.push(D::MetalInterpolation);
@@ -241,8 +233,7 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     // macOS 27's full quads, measured on the M4's identity alone.
     m4_measured.push(D::MetalFullQuads);
     let all_of = |d: &DeviceDescription| match d.device_id {
-        crate::device::driver_facts::APPLE_M3_MAX => m3_max.clone(),
-        crate::device::driver_facts::APPLE_M4 => m4_measured.clone(),
+        crate::device::driver_facts::APPLE9 => m4_measured.clone(),
         _ => apple_all.clone(),
     };
     let profile_of = |d: DeviceDescription| {
@@ -312,7 +303,7 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         (
             Some(DriverId::MOLTENVK),
             APPLE,
-            crate::device::driver_facts::APPLE_M4
+            crate::device::driver_facts::APPLE9
         )
     );
     // macOS 27's graphics cube route is the fixup's projected form, its compute route Metal's.
@@ -320,19 +311,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         profile_of(m3.clone()).fields().cube_gradients,
         CubeGradients {
             graphics: CubeGradientRoute::AppleProjected,
-            compute: CubeGradientRoute::Metal,
-        }
-    );
-    // MoltenVK's deviceID is the macOS release and the GPU family: the graphics row of the M3 Max
-    // under macOS 26.7 names its identity there.
-    let mut m3_macos26 = m3.clone();
-    m3_macos26.device_id = crate::device::driver_facts::APPLE_M3_MAX;
-    let p = profile_of(m3_macos26);
-    assert_eq!(taken(&p), m3_max);
-    assert_eq!(
-        p.fields().cube_gradients,
-        CubeGradients {
-            graphics: CubeGradientRoute::AppleSwizzled,
             compute: CubeGradientRoute::Metal,
         }
     );

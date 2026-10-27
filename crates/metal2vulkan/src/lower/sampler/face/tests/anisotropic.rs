@@ -11,9 +11,6 @@
 //!   one tangent; and Metal's own reading must take an `x` or `z` face's gradients from what
 //!   MoltenVK's swizzle (SPIRV-Cross's `spvGradientCube`) makes of the `Projected` form, and a `y`
 //!   face's Metal length.
-//! - Metal under macOS 26.7 on the M3 Max (the probes) read `σ (g[(s + 1) mod 3], g[(t + 1) mod
-//!   3])`, `σ` the sign of `s_c`: its own reading must take it from what the swizzle makes of the
-//!   `AnisotropicSwizzled` form.
 //!
 //! Through a runtime sampler `emit::word_footprint` hands one of those forms or the isotropic one
 //! by the sampler's word (`emit::by_anisotropy`).
@@ -48,12 +45,6 @@ fn face_of(d: [f32; 3]) -> (usize, (usize, f32), (usize, f32)) {
         (_, false) => ((0, -1.0), (1, -1.0)),
     };
     (a, s, t)
-}
-
-/// The face gradients the Apple M3 Max read under macOS 26.7 from gradient `g` through an
-/// anisotropic sampler on the face `(s, t)` names, up to `σ`.
-fn m3_reading(g: [f32; 3], (s, t): (usize, usize)) -> [f32; 2] {
-    [g[(s + 1) % 3], g[(t + 1) % 3]]
 }
 
 /// The face gradient Metal reads under macOS 27 from gradient `g` (`dPdx` where `is_dx`, else
@@ -225,22 +216,6 @@ fn a_projected_footprint_reaches_metals_reading_through_the_fixup() {
                     );
                 }
             }
-        }
-    }
-}
-
-#[test]
-fn a_swizzled_anisotropic_footprint_reaches_apples_reading_as_metals() {
-    let lanes = directions();
-    for g in GRADIENTS {
-        for (d, h) in lanes
-            .iter()
-            .zip(handed(CubeFootprint::AnisotropicSwizzled, g, &lanes))
-        {
-            let (a, (s, _), (t, _)) = face_of(*d);
-            assert_eq!(h[a], 0.0, "{d:?} {g:?}: the normal's component {h:?}");
-            let read = m3_reading(swizzled(*d, h), (s, t));
-            assert_eq!(read, m3_reading(g, (s, t)), "{d:?} {g:?}: handed {h:?}");
         }
     }
 }

@@ -73,13 +73,8 @@ pub(crate) fn among<F: Copy + Ord>(
 ///   through MoltenVK on the M3 Max), and the same cases against the M4's own Metal rows on the M4;
 ///   under macOS 27.0.1 the M3 Max's MoltenVK rows of all eight committed cube-gradient cases
 ///   match its Metal rows (2026-10-14's re-record).
-/// - `GraphicsCubeGradientRoute`, a vertex or fragment function's: measured on the M3 Max's GPU
-///   under macOS 26.7 alone ([`APPLE_M3_MAX`]): SPIRV-Cross's `spvGradientCube` read in its
-///   source, its transposed form measured in a Metal kernel, and the owned fixture
-///   `rtl_cube_grad_fragment` matching Metal's kernel rows. On the M4 the same form differs on 96
-///   and 48 of 144 samples.
-/// - `GraphicsCubeGradientTangents`, a vertex or fragment function's under macOS 27, the identity
-///   [`APPLE_M4`] (the M3 Max's and the M4's): the M3 Max under macOS 27.0.1 reads the face's two
+/// - `GraphicsCubeGradientTangents`, a vertex or fragment function's, on the identity [`APPLE9`]
+///   (the M3 Max's and the M4's under macOS 27): the M3 Max under macOS 27.0.1 reads the face's two
 ///   tangents of each gradient, its normal component dropped, so SPIRV-Cross's `spvGradientCube`
 ///   (copied verbatim into a Metal kernel, 2026-10-15) of a gradient whose normal component is
 ///   zero samples as Metal's own sample of the gradient on every lane of an `x` or `z` face, under
@@ -294,7 +289,7 @@ pub(crate) fn among<F: Copy + Ord>(
 /// take `StorageImageClass::OneBitAlpha` there). ANV, Mesa 26.2.4 on the Iris Xe (RPL-P), and
 /// lavapipe (Mesa 26.0.8 on LLVM 21.1.8, x86_64) round the `f32` product with ties to even, and
 /// NVIDIA's 615.71.09 on the RTX 3090 stores the code below many values just past a tie, so none is
-/// listed. MoltenVK 1.4.1 on the M3 Max under macOS 27.0.1, of the M4's identity ([`APPLE_M4`]),
+/// listed. MoltenVK 1.4.1 on the M3 Max under macOS 27.0.1, of the M4's identity ([`APPLE9`]),
 /// stores every channel as Metal does too (2026-10-14: both of `norm_storage_writes`' tests with
 /// the fact taken, 0 channels off in every form and format it stores, the packed 16-bit ones
 /// refused for storage as on the M4).
@@ -376,7 +371,7 @@ pub(crate) fn among<F: Copy + Ord>(
 ///
 /// MoltenVK 1.4.2 (its SPIRV-Cross `6c09849f`) on the M3 Max under macOS 27.0.1
 /// (2026-10-21, the runtime lanes in release builds under `--cfg m2v_gpu`): every
-/// deviation of the 1.4.1 rows of [`APPLE_M4`]'s identity, each taken, passed the lanes that
+/// deviation of the 1.4.1 rows of [`APPLE9`]'s identity, each taken, passed the lanes that
 /// measured it (`driver_deviations`' lockstep, float function, denormal, half, minimum and
 /// maximum, cube gradient, fragment and vertex simdgroup checks, `color_writes`, `first_vertex`,
 /// `renders::public_render_cases_match_metal` and the authored cases against the M3 Max's Metal
@@ -397,19 +392,11 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     moltenvk_on_apple(DriverDeviation::MetalSampler),
     moltenvk_on_apple(DriverDeviation::CubeGradientRoute),
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::GraphicsCubeGradientRoute)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::GraphicsCubeGradientTangents)
     },
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalColorWrites)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalColorWrites)
     },
     nvidia_on(DriverDeviation::MetalFloatColorNans, NVIDIA_RTX_3090),
@@ -417,11 +404,7 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_3090),
     nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_5080_LAPTOP),
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfFma)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfFma)
     },
     Measured {
@@ -431,11 +414,7 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalFloatDenormals)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalFloatDenormals)
     },
     mesa_on(
@@ -456,11 +435,7 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     nvidia_on(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_3090),
     nvidia_on(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_5080_LAPTOP),
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfQuantize)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfQuantize)
     },
     mesa_on(
@@ -479,11 +454,7 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalCenterVaryings)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalCenterVaryings)
     },
     mesa_on(
@@ -508,27 +479,15 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
     Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalMinMax)
     },
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::MetalMinMax)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfArithmetic)
     },
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfArithmetic)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageWrites)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageWrites)
     },
     mesa_on(
@@ -558,19 +517,11 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageNans)
     },
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfStorageNans)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalFloatStorageNans)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalFloatStorageNans)
     },
     mesa_on(
@@ -590,27 +541,15 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalFragmentSimdgroups)
     },
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::MetalFragmentSimdgroups)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalVertexSimdgroups)
     },
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::MetalVertexSimdgroups)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::CenterFragCoordDepth)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::CenterFragCoordDepth)
     },
     mesa_on(
@@ -629,7 +568,7 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         NVIDIA_RTX_5080_LAPTOP,
     ),
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalNormStorageWrites)
     },
     mesa_on(
@@ -662,7 +601,7 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     moltenvk_on_apple(DriverDeviation::MetalInterpolation),
     moltenvk_on_apple(DriverDeviation::MetalFirstVertexIndices),
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalFullQuads)
     },
 ];
@@ -716,21 +655,15 @@ const fn mesa_on<F>(fact: F, driver: DriverId, (vendor, device): (u32, u32)) -> 
     }
 }
 
-/// The `deviceID` MoltenVK 1.4.1 reports for an Apple GPU of the Apple9 family under macOS 26.7:
-/// the Apple M3 Max's identity where its facts were measured, before its macOS 27 capture. On an
-/// Apple GPU MoltenVK's `deviceID` is not the GPU's: it is the macOS version and the GPU's highest
-/// families, `(major << 24) + (minor << 16) + (Mac family << 8) + Apple family`, the minor taken
-/// from `major + minor / 100` scaled and truncated, so 26.7 reads 6
-/// (`MVKPhysicalDevice::getHighestGPUCapability`, MoltenVK 1.4.1). Every GPU of a family on one
-/// macOS release has one identity.
-pub(crate) const APPLE_M3_MAX: u32 = 0x1A06_0209;
-
-/// The `deviceID` MoltenVK 1.4.1 reports for an Apple GPU of the Apple9 family under macOS 27.0
-/// ([`APPLE_M3_MAX`]'s rule): the Apple M4's (the committed capture `moltenvk-m4`) and the Apple
-/// M3 Max's under macOS 27.0.1 (the committed capture `moltenvk-m3`, 26A434), one identity. A
-/// fact of this identity's rows that decides an answer is measured on both GPUs; a cost fact on
-/// the M3 Max, or named as the M4's alone.
-pub(crate) const APPLE_M4: u32 = 0x1B00_0209;
+/// The `deviceID` MoltenVK 1.4.1 reports for an Apple GPU of the Apple9 family under macOS 27: the
+/// Apple M3 Max's (the committed capture `moltenvk-m3`, 26A434), and an M4's alike. On an Apple GPU
+/// MoltenVK's `deviceID` is not the GPU's: it is the macOS version and the GPU's highest families,
+/// `(major << 24) + (minor << 16) + (Mac family << 8) + Apple family`
+/// (`MVKPhysicalDevice::getHighestGPUCapability`, MoltenVK 1.4.1), so every GPU of a family on one
+/// macOS release has one identity. The rows of this identity were measured under macOS 27, the
+/// release the MoltenVK venue runs: a fact that decides an answer on both GPUs, a cost fact on the
+/// M3 Max or the M4 alone.
+pub(crate) const APPLE9: u32 = 0x1B00_0209;
 
 /// The row of `fact` measured on MoltenVK on Apple's GPUs.
 const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
@@ -1577,7 +1510,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///   the CPU store, and its test passes against every positive one and fails against every
 ///   negative one: Metal's answers, as Metal's own depth test makes them. Its draw at a denormal
 ///   depth stores 0, as Metal's rasterizer makes it, so a draw's is no difference anywhere. On the
-///   M3 Max under macOS 27.0.1, of the M4's identity ([`APPLE_M4`]), the same, 16 of 16 texels
+///   M3 Max under macOS 27.0.1, of the M4's identity ([`APPLE9`]), the same, 16 of 16 texels
 ///   each (2026-10-14, with the fact taken: no `depth-denormals` announced).
 /// - NVIDIA's 615.71.09 on the RTX 3090 and lavapipe, Mesa 26.2.4 with
 ///   LLVM 23.1.1 on an Iris Xe (RPL-P) host, keep each one, and their tests fail against every one.
@@ -1593,7 +1526,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// and a quiet NaN) each stored by `replace_region` into a 4x4 render target's `Depth32Float`,
 /// read back by `get_bytes`, and tested by a draw at depth 0, 0.5 and 1 under `Less`,
 /// `LessEqual`, `Equal`, `GreaterEqual` and `Greater`:
-/// - MoltenVK 1.4.1 on the M3 Max under macOS 27.0.1, of the M4's identity ([`APPLE_M4`]): every
+/// - MoltenVK 1.4.1 on the M3 Max under macOS 27.0.1, of the M4's identity ([`APPLE9`]): every
 ///   value kept, and 270 of 270 outcomes Metal's magnitude rule (225 of them an IEEE compare's),
 ///   as Metal's own probe `depthkeep` on the same GPU answers. The M4 is unmeasured; its row is
 ///   the identity's by construction (the fact's docs): through MoltenVK the M4's depth test is
@@ -1790,9 +1723,9 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// `DontCareStoreIsMetals`, read in MoltenVK 1.4.1's source
 /// (`MVKAttachmentDescription::getMTLStoreAction`; the restarts of `MVKCommandEncoder`,
 /// `MVKCmdPipelineBarrier` and the draws' compute stages) against Metal's answer on the GPU, and
-/// measured by `runtime_lane::dont_care_stores` through MoltenVK 1.4.1 on the M4 ([`APPLE_M4`]) and
-/// the M3 Max ([`APPLE_M3_MAX`]), both at 8edef9600: every kept case kept its texels. One row per
-/// GPU, as measured: Apple's other GPUs are unmeasured, and announce.
+/// measured by `runtime_lane::dont_care_stores` through MoltenVK 1.4.1 on the M4 and the M3 Max,
+/// both at 8edef9600: every kept case kept its texels. One row, of their identity under macOS 27
+/// ([`APPLE9`]): Apple's other GPUs are unmeasured, and announce.
 ///
 /// `ColorBlockDecodeIsMetals` and `ChannelBlockDecodeIsMetals`: MoltenVK 1.4.1 on Apple's GPUs
 /// takes both, by construction: it hands each BC1 to BC5 format, unorm, sRGB and signed, to Metal
@@ -1801,7 +1734,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// unsupported; `MVKImage.mm` refuses a linear or multisampled compressed image; its one BC
 /// adjustment, `BC1_RGB`'s alpha swizzle, is of a format the runtime never makes), so Metal's
 /// sampler decodes every texel on whichever Apple GPU it runs, Metal's answer there. The M4
-/// ([`APPLE_M4`]) is the measured instance: its format scout read every view, read and sample cell
+/// ([`APPLE9`]) is the measured instance: its format scout read every view, read and sample cell
 /// of the fourteen BC formats' random blocks byte for byte as plain Metal did; our probe
 /// repeats it on the M3 Max. RADV, Mesa 26.2.4, on the Radeon 780M takes the first, its BC1 to BC3
 /// texels Metal's and its BC4 and BC5 not (an endpoint of -128 clamped before the sum, some values
@@ -1858,7 +1791,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 /// `runtime_lane::snorm_tile_store::a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so` (a
 /// 4x4 target of each of the six signed normalized colour formats holding a channel's minimum code
 /// in every channel, loaded and drawn over by a full-screen triangle that writes no channel):
-/// MoltenVK 1.4.1 on the M3 Max under macOS 27.0.1 ([`APPLE_M4`]'s identity) stored the code
+/// MoltenVK 1.4.1 on the M3 Max under macOS 27.0.1 ([`APPLE9`]'s identity) stored the code
 /// above it in every texel, as plain Metal's pass does on that GPU. Its `RGB9E5Float` twin
 /// (`a_drawing_pass_keeps_an_unnormalized_shared_exponent_word_and_says_so`: the word `1 | 2 << 9
 /// | 3 << 18 | 20 << 27` in every texel) is Metal's by the same construction: MoltenVK renders
@@ -2015,11 +1948,11 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::DepthTestKeepsDenormals)
     },
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::DepthTestComparesMagnitudes)
     },
     Measured {
@@ -2066,7 +1999,7 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::FragmentDepthKeepsDepth16Codes)
     },
     mesa_on(
@@ -2089,11 +2022,7 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         NVIDIA_RTX_5080_LAPTOP,
     ),
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverFact::SampledFetchRecoversCodes)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::SampledFetchRecoversCodes)
     },
     Measured {
@@ -2103,11 +2032,7 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverFact::InterlockedPassSplitNoSlower)
-    },
-    Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::InterlockedPassSplitNoSlower)
     },
     mesa_on(
@@ -2143,11 +2068,7 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: None,
     },
     Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverFact::DontCareStoreIsMetals)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::DontCareStoreIsMetals)
     },
     nvidia_on(
@@ -2316,15 +2237,15 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::BlendlessColorAttachmentsWarn)
     },
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::ColorImagesLieAsMetalHeapTextures)
     },
     Measured {
-        device: Some(APPLE_M4),
+        device: Some(APPLE9),
         ..moltenvk_on_apple(DriverFact::MultisampleColorImagesLieAsMetalHeapTextures)
     },
 ];

@@ -230,9 +230,6 @@ impl DeviceProfile {
             DriverDeviation::CubeGradientRoute => {
                 f.cube_gradients.compute == CubeGradientRoute::Metal
             }
-            DriverDeviation::GraphicsCubeGradientRoute => {
-                f.cube_gradients.graphics == CubeGradientRoute::AppleSwizzled
-            }
             DriverDeviation::GraphicsCubeGradientTangents => {
                 f.cube_gradients.graphics == CubeGradientRoute::AppleProjected
             }
@@ -507,15 +504,14 @@ pub struct ProfileFields {
     pub function_storage: FunctionStorage,
     /// How the driver hands a cube sample's explicit gradients to the GPU, in a graphics and in
     /// a compute pipeline: Vulkan's cube derivative rule unless the driver is measured with
-    /// another (`DriverDeviation::CubeGradientRoute`, `GraphicsCubeGradientRoute` and
-    /// `GraphicsCubeGradientTangents`).
+    /// another (`DriverDeviation::CubeGradientRoute` and `GraphicsCubeGradientTangents`).
     pub cube_gradients: CubeGradients,
 }
 
 /// How a driver hands a cube sample's explicit gradients to the GPU
 /// ([`ProfileFields::cube_gradients`]), per pipeline kind, each decided by the driver's measured
-/// deviations (`DriverDeviation::GraphicsCubeGradientRoute`,
-/// `DriverDeviation::GraphicsCubeGradientTangents` and `DriverDeviation::CubeGradientRoute`);
+/// deviations (`DriverDeviation::GraphicsCubeGradientTangents` and
+/// `DriverDeviation::CubeGradientRoute`);
 /// without them, Vulkan's rule, but [`CubeGradientRoute::Unmeasured`] on a MoltenVK `driver_id`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -539,14 +535,8 @@ pub enum CubeGradientRoute {
     /// are the device's (`PrecisionNote::CubeGradientFootprint`).
     Vulkan,
     /// SPIRV-Cross's `spvGradientCube` (its `agx_manual_cube_grad_fixup`) projects each onto the
-    /// face as Vulkan's rule does and swizzles the two values into the components Apple's
-    /// isotropic reading took under macOS 26.7, then hands them to Metal's `gradientcube`, whose
-    /// anisotropic reading on the Apple M3 Max there takes them transposed: that GPU's macOS 26.7
-    /// footprint (`lower::sampler::CubeFootprint::Isotropic` and `AnisotropicSwizzled`), measured
-    /// on that identity alone.
-    AppleSwizzled,
-    /// The same fixup under macOS 27, whose Metal reads the face's two tangents of what it is
-    /// handed: an `x` or `z` face's gradient without its normal component reaches Metal as its
+    /// face as Vulkan's rule does and swizzles the two values, then hands them to Metal's
+    /// `gradientcube`, whose macOS 27 reading takes the face's two tangents of what it is handed: an `x` or `z` face's gradient without its normal component reaches Metal as its
     /// own, exactly; on a `y` face the fixup writes the face's `x` tangent on both, so the function
     /// hands Metal's length there, which keeps an isotropic sample's footprint and lays an
     /// anisotropic one's ellipse on the diagonal (`lower::sampler::CubeFootprint::Projected`,

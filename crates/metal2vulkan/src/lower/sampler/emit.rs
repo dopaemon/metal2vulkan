@@ -449,8 +449,7 @@ fn scaled_axis_gradients(
 /// table's `s_c` and `t_c`) through an isotropic sampler, and through an anisotropic one with
 /// `dPdx`'s `t` component and `dPdy`'s `s` component times `ρ = σ_s σ_t` (-1 on the `-x`, `-y` and
 /// `+z` faces, whose ellipse Metal mirrors); every lane's sample with the normal component zeroed
-/// equal to its own. Under macOS 26.7 the same GPU counted the normal and the tangent
-/// `(a + 2) mod 3` instead ([`CubeFootprint::Isotropic`], [`CubeFootprint::AnisotropicSwizzled`]).
+/// equal to its own.
 ///
 /// - [`CubeFootprint::Length`] (an isotropic sampler): each gradient's two tangent components
 ///   combined by Metal's length, `max(M + 3m/16, 49M/64 + 21m/32)` of the larger and smaller
@@ -482,12 +481,6 @@ fn scaled_axis_gradients(
 ///   (`PrecisionNote::CubeGradientFootprint`).
 /// - [`CubeFootprint::Metal`]: the gradients as the call states them, for a driver that hands them
 ///   to Metal's own `gradientcube` unchanged (`CubeGradientRoute::Metal`): exact, no note.
-/// - [`CubeFootprint::Isotropic`] and [`CubeFootprint::AnisotropicSwizzled`]: macOS 26.7's
-///   footprint on the Apple M3 Max, which MoltenVK's graphics route hands its GPU there
-///   (`CubeGradientRoute::AppleSwizzled`, measured on that identity alone): the isotropic
-///   `‖(g_a, g_b)‖ e_b`, `b = (a + 2) mod 3`, and the anisotropic `(0, g_x, g_z)`, `(g_x, 0, g_y)`
-///   and `(g_z, g_y, 0)` on an `x`, `y` and `z` face, which the fixup's swizzle hands that GPU's
-///   transposed anisotropic reading as Metal's face gradients there.
 ///
 /// The major axis is `z` over `y` over `x` at equal magnitudes, which on a direction whose ties are
 /// broken as Metal breaks them (`face::metal_ties`) is Metal's, there being none left. A footprint
@@ -501,15 +494,13 @@ pub(super) fn cube_footprint(
 ) -> BResult<(SValue, SValue)> {
     match form {
         CubeFootprint::Metal => Ok(grads),
-        CubeFootprint::Word { .. } => Err(BuildError::Operand {
+        CubeFootprint::Word => Err(BuildError::Operand {
             op: crate::spv::Op::Select,
             rule: OperandRule::Arity,
         }),
         CubeFootprint::Face => face_gradients(fb, p, grads),
         CubeFootprint::Length => tangent_length(fb, p, grads, false),
         CubeFootprint::Projected => tangent_length(fb, p, grads, true),
-        CubeFootprint::AnisotropicSwizzled => transposed_face_gradients(fb, p, grads),
-        CubeFootprint::Isotropic => normal_and_tangent_length(fb, p, grads),
     }
 }
 
@@ -624,80 +615,20 @@ fn tangent_length(
     Ok((one(fb, dx)?, one(fb, dy)?))
 }
 
-/// [`CubeFootprint::AnisotropicSwizzled`]: macOS 26.7's face gradients for the M3 Max's transposed
-/// reading through the fixup, `(0, g_x, g_z)`, `(g_x, 0, g_y)` and `(g_z, g_y, 0)` on an `x`, `y`
-/// and `z` face.
-fn transposed_face_gradients(
-    fb: &mut FunctionBuilder<'_>,
-    p: SValue,
-    (dx, dy): (SValue, SValue),
-) -> BResult<(SValue, SValue)> {
-    let f = f32_ty(fb)?;
-    let triple = vec(fb, f, 3)?;
-    let m = Major::of(fb, p)?;
-    let zero = f32_const(fb, 0)?;
-    let face = |fb: &mut FunctionBuilder<'_>, g: SValue| -> BResult<SValue> {
-        let [gx, gy, gz] = components(fb, g)?;
-        let on_x = fb.select(m.y, gx, zero)?;
-        let on_x = fb.select(m.z, gz, on_x)?;
-        let on_y = fb.select(m.z, gy, gx)?;
-        let on_y = fb.select(m.y, zero, on_y)?;
-        let on_z = fb.select(m.y, gy, gz)?;
-        let on_z = fb.select(m.z, zero, on_z)?;
-        fb.composite_construct(triple, &[on_x, on_y, on_z])
-    };
-    Ok((face(fb, dx)?, face(fb, dy)?))
-}
-
-/// [`CubeFootprint::Isotropic`]: macOS 26.7's footprint, the length of each gradient's normal
-/// component `g_a` and tangent `g_b`, `b = (a + 2) mod 3`, on that tangent.
-fn normal_and_tangent_length(
-    fb: &mut FunctionBuilder<'_>,
-    p: SValue,
-    (dx, dy): (SValue, SValue),
-) -> BResult<(SValue, SValue)> {
-    let f = f32_ty(fb)?;
-    let pair = vec(fb, f, 2)?;
-    let triple = vec(fb, f, 3)?;
-    let m = Major::of(fb, p)?;
-    let zero = f32_const(fb, 0)?;
-    let one = |fb: &mut FunctionBuilder<'_>, g: SValue| -> BResult<SValue> {
-        let [gx, gy, gz] = components(fb, g)?;
-        // `b`: `z` for an `x` face, `x` for a `y` face, `y` for a `z` face.
-        let normal = fb.select(m.y, gy, gx)?;
-        let normal = fb.select(m.z, gz, normal)?;
-        let tangent = fb.select(m.y, gx, gz)?;
-        let tangent = fb.select(m.z, gy, tangent)?;
-        let counted = fb.composite_construct(pair, &[normal, tangent])?;
-        let length = fb.glsl(GlslOp::Length, &[counted])?;
-        let on_x = fb.select(m.y, length, zero)?;
-        let on_y = fb.select(m.z, length, zero)?;
-        let on_z = fb.select(m.y_or_z, zero, length)?;
-        fb.composite_construct(triple, &[on_x, on_y, on_z])
-    };
-    Ok((one(fb, dx)?, one(fb, dy)?))
-}
-
 /// The footprint of a cube's explicit gradients at direction `p` through a runtime or argument
 /// buffer's sampler of word `word` (a `u32`), by the word (`CubeFootprint::Word`): where it states
 /// `SamplerWord::ANISOTROPIC`, the form an anisotropic constexpr sampler takes on the route, else
 /// the isotropic one, each [`cube_footprint`]'s: [`CubeFootprint::Face`] and
-/// [`CubeFootprint::Length`], or under the macOS 26.7 fixup (`swizzled`)
-/// [`CubeFootprint::AnisotropicSwizzled`] and [`CubeFootprint::Isotropic`]. The device's sampler
-/// filters by the bound sampler's own anisotropy, as it does a constexpr sampler's.
+/// [`CubeFootprint::Length`]. The device's sampler filters by the bound sampler's own anisotropy,
+/// as it does a constexpr sampler's.
 pub(super) fn word_footprint(
     fb: &mut FunctionBuilder<'_>,
     p: SValue,
     grads: (SValue, SValue),
-    swizzled: bool,
     word: SValue,
 ) -> BResult<(SValue, SValue)> {
-    let (anisotropic, isotropic) = match swizzled {
-        true => (CubeFootprint::AnisotropicSwizzled, CubeFootprint::Isotropic),
-        false => (CubeFootprint::Face, CubeFootprint::Length),
-    };
-    let anisotropic = cube_footprint(fb, p, grads, anisotropic)?;
-    let isotropic = cube_footprint(fb, p, grads, isotropic)?;
+    let anisotropic = cube_footprint(fb, p, grads, CubeFootprint::Face)?;
+    let isotropic = cube_footprint(fb, p, grads, CubeFootprint::Length)?;
     by_anisotropy(fb, word, anisotropic, isotropic)
 }
 
@@ -1303,7 +1234,7 @@ pub(super) fn plane_and_gradients(
             ..
         } => Some((cx.operand(fb, *dx)?, cx.operand(fb, *dy)?)),
         SampleOp::Sample {
-            lod: Lod::CubeGrad(dx, dy, CubeFootprint::Word { swizzled }),
+            lod: Lod::CubeGrad(dx, dy, CubeFootprint::Word),
             ..
         } => {
             let (dx, dy) = (cx.operand(fb, *dx)?, cx.operand(fb, *dy)?);
@@ -1311,7 +1242,7 @@ pub(super) fn plane_and_gradients(
                 return Err(cx.fail("a cube footprint by a word without its sampler's word"));
             };
             let word = sampler_word(cx, fb, pixel)?;
-            Some(word_footprint(fb, coord, (dx, dy), *swizzled, word)?)
+            Some(word_footprint(fb, coord, (dx, dy), word)?)
         }
         SampleOp::Sample {
             lod: Lod::CubeGrad(dx, dy, form),

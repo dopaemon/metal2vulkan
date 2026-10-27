@@ -548,7 +548,7 @@ pub enum DriverDeviation {
     /// given, to Metal's own reading. Unmeasured, the function emulates Metal's footprint where
     /// its emulation reaches the sample, and elsewhere hands the form every route reads alike
     /// through an isotropic sampler. A vertex or fragment function's route is
-    /// [`DriverDeviation::GraphicsCubeGradientRoute`].
+    /// [`DriverDeviation::GraphicsCubeGradientTangents`].
     CubeGradientRoute,
     /// The device runs each 32 consecutive invocations of a compute workgroup in lockstep, as
     /// an Apple GPU runs a Metal simdgroup (`VkProperty::SimdgroupLockstep`). Unmeasured, a kernel
@@ -567,17 +567,10 @@ pub enum DriverDeviation {
     /// emulations reach, and notes the rest.
     MetalSampler,
     /// How the driver hands a vertex or fragment function's cube sample's explicit gradients to
-    /// the GPU (`ProfileFields::cube_gradients`'s graphics route,
-    /// `CubeGradientRoute::AppleSwizzled`): through SPIRV-Cross's `spvGradientCube`, whose result
-    /// the GPU reads by its own anisotropic rule, which differs between Apple's GPUs and macOS
-    /// releases, so the fact is measured per GPU and release: the Apple M3 Max's under macOS
-    /// 26.7. Unmeasured, as [`DriverDeviation::CubeGradientRoute`].
-    GraphicsCubeGradientRoute,
-    /// How the driver hands a vertex or fragment function's cube sample's explicit gradients to
     /// the GPU under macOS 27 (the graphics route, `CubeGradientRoute::AppleProjected`): through
     /// SPIRV-Cross's `spvGradientCube`, whose result Metal reads by its macOS 27 rule, the face's
     /// two tangents: an `x` or `z` face's gradient reaches it as Metal's own, a `y` face's `z`
-    /// tangent is lost. Unmeasured, as [`DriverDeviation::GraphicsCubeGradientRoute`].
+    /// tangent is lost. Unmeasured, as [`DriverDeviation::CubeGradientRoute`].
     GraphicsCubeGradientTangents,
     /// The device stores a fragment function's float color output into a normalized, sRGB or
     /// half-float attachment as Metal does (`VkProperty::MetalColorWrites`): the exact product

@@ -374,27 +374,17 @@ pub enum CubeFootprint {
     /// fixup hands Metal on both tangents (an isotropic sample's footprint kept, an anisotropic
     /// one's ellipse on the diagonal).
     Projected,
-    /// macOS 26.7's isotropic footprint on the Apple M3 Max, for MoltenVK's graphics fixup on that
-    /// identity (`CubeGradientRoute::AppleSwizzled`): the length of the normal and the tangent
-    /// `(a + 2) mod 3`, on that tangent.
-    Isotropic,
-    /// macOS 26.7's anisotropic face gradients for the same fixup, transposed so that its swizzle
-    /// hands that GPU's anisotropic reading Metal's.
-    AnisotropicSwizzled,
     /// Metal's gradients as the call states them, through any sampler: for a driver that hands
     /// the stage's cube gradients to Metal's own `gradientcube` unchanged
     /// (`CubeGradientRoute::Metal`), whose GPU reads them by Metal's own rule. Exact: the module
     /// records no `PrecisionNote::CubeGradientFootprint` for it.
     Metal,
-    /// A runtime or argument buffer's sampler's, by its word: [`Face`] (or
-    /// [`AnisotropicSwizzled`] where `swizzled`) where the word states
-    /// `SamplerWord::ANISOTROPIC`, else [`Length`] (or [`Isotropic`]) (`emit::word_footprint`).
+    /// A runtime or argument buffer's sampler's, by its word: [`Face`] where the word states
+    /// `SamplerWord::ANISOTROPIC`, else [`Length`] (`emit::word_footprint`).
     ///
     /// [`Face`]: CubeFootprint::Face
-    /// [`AnisotropicSwizzled`]: CubeFootprint::AnisotropicSwizzled
     /// [`Length`]: CubeFootprint::Length
-    /// [`Isotropic`]: CubeFootprint::Isotropic
-    Word { swizzled: bool },
+    Word,
 }
 
 /// For an implicit-LOD sample through a multi-candidate texture or sampler: the coordinate's
@@ -965,7 +955,7 @@ impl Sampling {
             // the gradient on one tangent; Metal's own gradients are handed as they are. A
             // footprint by the word computes both forms, the word's bit, and their selects.
             SampleOp::Sample {
-                lod: Lod::CubeGrad(_, _, CubeFootprint::Word { .. }),
+                lod: Lod::CubeGrad(_, _, CubeFootprint::Word),
                 offset,
                 ..
             } => (64 + 200 + 200 + 48, offset.as_ref()),

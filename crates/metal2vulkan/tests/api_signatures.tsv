@@ -13004,7 +13004,6 @@ variant	metal2vulkan::error::DescriptorError::VertexLayout	VertexLayout { layout
 variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { step_rate: u32 }
 variant	metal2vulkan::error::DriverDeviation::CenterFragCoordDepth	CenterFragCoordDepth
 variant	metal2vulkan::error::DriverDeviation::CubeGradientRoute	CubeGradientRoute
-variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientRoute	GraphicsCubeGradientRoute
 variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	GraphicsCubeGradientTangents
 variant	metal2vulkan::error::DriverDeviation::MetalCanonicalNans	MetalCanonicalNans
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings

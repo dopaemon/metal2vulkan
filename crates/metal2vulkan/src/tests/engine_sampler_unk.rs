@@ -499,18 +499,15 @@ fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
     }
 }
 
-/// The graphics cube route is measured per GPU and macOS release (MoltenVK's `deviceID` names
-/// both). On the Apple M3 Max under macOS 26.7 (`moltenvk-m3`'s capture at that release's
-/// `deviceID`) a fragment function's explicit cube gradients through an anisotropic constexpr
-/// sampler take SPIRV-Cross's fixup in the transposed form (`AppleSwizzled`); on macOS 27's
-/// identity (`moltenvk-m3`'s capture) they take the fixup's
-/// projected form (`AppleProjected`), exact on an `x` or `z` face and a near-equivalent on a `y`
-/// face, both with `CubeGradientFootprint`. Without the macOS 27 route's measurement (a release
-/// no measurement covers) the same fragment takes Metal's level and taps in the shader, with
-/// `AnisotropicFilter` and without `CubeGradientFootprint`, while the kernel route stays Metal's
-/// and the kernel of the same samples compiles. The cover vertex function compiles on each.
+/// On the Apple M3 Max's identity (`moltenvk-m3`'s capture) a fragment function's explicit cube
+/// gradients through an anisotropic constexpr sampler take SPIRV-Cross's fixup in its projected
+/// form (`AppleProjected`), exact on an `x` or `z` face and a near-equivalent on a `y` face, with
+/// `CubeGradientFootprint`. Without the route's measurement the same fragment takes Metal's level
+/// and taps in the shader, with `AnisotropicFilter` and without `CubeGradientFootprint`, while the
+/// kernel route stays Metal's and the kernel of the same samples compiles. The cover vertex
+/// function compiles on each.
 #[test]
-fn the_graphics_cube_route_is_measured_per_macos_identity() {
+fn the_graphics_cube_route_is_the_measured_projected_form() {
     use crate::error::DriverDeviation;
     let (Some(fragment), Some(kernel)) =
         (fixture("rtl_cube_grad_fragment"), fixture("ani_cube_grad"))
@@ -531,19 +528,6 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         .find(|(s, _)| s == "moltenvk-m3")
         .map(|(_, d)| d.clone())
         .expect("moltenvk-m3");
-    let mut m3_macos26 = m3_macos27.clone();
-    m3_macos26.device_id = crate::device::driver_facts::APPLE_M3_MAX;
-    let m3 = Device::new(m3_macos26, DevicePolicy::default())
-        .expect("device")
-        .profile()
-        .clone();
-    assert_eq!(
-        (
-            m3.fields().cube_gradients.graphics,
-            m3.fields().cube_gradients.compute
-        ),
-        (CubeGradientRoute::AppleSwizzled, CubeGradientRoute::Metal)
-    );
     assert_eq!(
         (
             m3_27.fields().cube_gradients.graphics,
@@ -560,13 +544,12 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         unmeasured.fields().cube_gradients.graphics,
         CubeGradientRoute::Unmeasured
     );
-    for (stem, p) in [("moltenvk-m3", &m3), ("moltenvk-m3, macOS 27", &m3_27)] {
-        let a = artifact(&fragment, "rtl_cube_grad_fragment", stem, p).expect(stem);
-        assert!(
-            a.precision.contains(&PrecisionNote::CubeGradientFootprint),
-            "{stem}"
-        );
-    }
+    let a = artifact(&fragment, "rtl_cube_grad_fragment", "moltenvk-m3", &m3_27).expect("m3");
+    assert!(
+        a.precision.contains(&PrecisionNote::CubeGradientFootprint),
+        "{:?}",
+        a.precision
+    );
     let a = artifact(
         &fragment,
         "rtl_cube_grad_fragment",
@@ -584,7 +567,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         "{:?}",
         a.precision
     );
-    for (stem, p) in [("moltenvk-m3", &m3), ("unmeasured", &unmeasured)] {
+    for (stem, p) in [("moltenvk-m3", &m3_27), ("unmeasured", &unmeasured)] {
         artifact(&fragment, "rtl_cube_cover", stem, p).expect(stem);
         let k = artifact(&kernel, "ani_cube_grad", stem, p).expect(stem);
         assert!(
@@ -685,7 +668,7 @@ fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
                 assert!(noted, "{stem}");
                 assert_eq!(bits, vec![true], "{stem}");
             }
-            CubeGradientRoute::Vulkan | CubeGradientRoute::AppleSwizzled => {
+            CubeGradientRoute::Vulkan => {
                 assert!(reads, "{stem}: {fields:?}");
                 assert!(lengths, "{stem}");
                 assert!(noted, "{stem}");

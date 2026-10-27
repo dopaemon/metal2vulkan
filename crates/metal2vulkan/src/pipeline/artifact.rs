@@ -884,8 +884,7 @@ pub enum PrecisionNote {
     /// face through a 2D-array view of the cube with the face gradients would give Metal's own
     /// anisotropic sample on every lane whose filter stays inside the face (measured), and differ
     /// less than the fixup where it crosses the face's edge; the binder does not offer that view
-    /// yet. On macOS 26.7's identity (`CubeGradientRoute::AppleSwizzled`) the route hands that GPU
-    /// its own footprint of that release, which counted the normal and the tangent `(a + 2) mod 3`.
+    /// yet.
     ///
     /// Also recorded for every cube access whose level comes from the fragment's derivatives (an
     /// implicit-level sample, one whose gradients a switch-at-use hoisted, or an LOD query): its
