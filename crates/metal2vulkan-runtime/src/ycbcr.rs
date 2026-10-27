@@ -192,10 +192,13 @@
 //!   format's pipeline is made, as Metal makes it, and its pass refused at its start, naming the
 //!   format (`metal::format::ycbcr_pass_refused`): Metal fails the pass's command buffer, its error
 //!   and the luma bytes it leaves varying from run to run, so no exact form exists.
-//! - **Linear filtering** is Metal's, exact: the function emulates Metal's filter of the texels on
-//!   their grid of 1/2048 or 1/8192 (`metal2vulkan::metal::texel_format::PackedTexels::YCbCr2048`,
-//!   `YCbCr8192`), under MoltenVK through the slot's YCbCr variant, and announces, naming the slot,
-//!   any sample the emulation does not reach (`ycbcr-filter-not-exact`). A function that samples
+//! - **Linear filtering** of the converted texels is the device sampler's: a device that samples
+//!   natively filters them as its own sampler does (`device-sampling`), and on MoltenVK Metal's own
+//!   sampler filters them as an `RGBA16Float` or `RGBA32Float` texture's, not on their grid of
+//!   1/2048 or 1/8192 (`metal2vulkan::metal::texel_format::PackedTexels::YCbCr2048`, `YCbCr8192`),
+//!   announced naming the slot and the format (`ycbcr-filter-not-exact`). A texture whose planes
+//!   are read in place (`TextureFacts::ycbcr_in_place`) is filtered as Metal filters it on that
+//!   grid, each tap computed from the codes, exact. A function that samples
 //!   textures through handles reads its sampler from memory and is refused where it can reach the
 //!   texture (`MappedTextureSampling`, as the texture's address-mode map is).
 

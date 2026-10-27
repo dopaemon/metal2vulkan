@@ -579,11 +579,10 @@ pub enum VkProperty {
     /// GPU (the driver's measured deviation
     /// [`DriverDeviation::MetalSampler`](crate::error::DriverDeviation::MetalSampler)), so a
     /// sample's footprint, weights, rounding, and sRGB decode are Metal's. No Vulkan query reports
-    /// it. A module that leaves a filtered sample to the device's filter because it is Metal's
-    /// (where another device emulates Metal's linear filter by fetches or notes
-    /// `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter`), or an 8-bit sRGB
-    /// texel to the device's decode (where another notes `PrecisionNote::SrgbTexelDecode`),
-    /// requires it.
+    /// it. A module that leaves a sample, gather or comparison to the device's sampler, or an
+    /// 8-bit sRGB texel to the device's decode, requires it on such a device, as a module on
+    /// another requires [`VkProperty::DeviceSampling`] and records
+    /// `PrecisionNote::DeviceSampling` (and `PrecisionNote::SrgbTexelDecode` for the decode).
     MetalSampler,
     /// `storageImageSampleCounts` has this sample count: a multisampled shadow of the stencil.
     StorageImageSampleCount(u32),
@@ -617,14 +616,17 @@ pub enum VkProperty {
     /// The device stores a fragment function's float color output into a normalized, sRGB or
     /// half-float attachment as Metal does (the driver's measured deviation
     /// [`DriverDeviation::MetalColorWrites`](crate::error::DriverDeviation::MetalColorWrites)). No
-    /// Vulkan query reports it. Without it, `Device::compile_render_pipeline` has the fragment
-    /// function round such outputs by Metal's rules (`LoweringInputs::color_writes`).
+    /// Vulkan query reports it. No module requires it: where the profile has it,
+    /// `Device::compile_render_pipeline`'s map of the color writes (`LoweringInputs::color_writes`)
+    /// keeps only the half-float channels, and the others record no
+    /// `PrecisionNote::DeviceColorConversion`; without it, each channel the device converts
+    /// records that note.
     MetalColorWrites,
-    /// The device stores the NaN a fragment function writes for a `float` output to a
-    /// half-float color channel as Metal does, `0x7e00` (the driver's measured deviation
-    /// [`DriverDeviation::MetalFloatColorNans`](crate::error::DriverDeviation::MetalFloatColorNans)).
-    /// No Vulkan query reports it. Without it, such a write records
-    /// `PrecisionNote::DeviceNanEncoding`.
+    /// The device stores the NaN `0x7fc00000` a fragment function writes for a `float` output to
+    /// a half-float color channel as Metal does, `0x7e00` (the driver's measured deviation
+    /// [`DriverDeviation::MetalFloatColorNans`](crate::error::DriverDeviation::MetalFloatColorNans)):
+    /// the NaN of a lane the function rounds to nearest even. No Vulkan query reports it. Without
+    /// it, such a write records `PrecisionNote::DeviceNanEncoding`.
     MetalFloatColorNans,
     /// The device stores a `half` NaN a fragment function writes to a half-float color channel
     /// as its own bits, as Metal does (the driver's measured deviation
@@ -636,7 +638,9 @@ pub enum VkProperty {
     /// driver's measured deviation
     /// [`DriverDeviation::MetalHalfFma`](crate::error::DriverDeviation::MetalHalfFma)). No Vulkan
     /// query reports it. A module whose `half` fused multiply-add takes that instruction requires
-    /// it; without it, the module rounds the `float` sum to `half` itself.
+    /// it; without it, the fused multiply-add is a 16-bit `OpFmaKHR` under the 16-bit float
+    /// controls, or the device's `float` `Fma` rounded to `half`
+    /// (`PrecisionNote::NativeFma`).
     MetalHalfFma,
     /// The device's `float` arithmetic, comparisons, `Ldexp`, `Sqrt`, `InverseSqrt`, `Trunc` and
     /// `RoundEven` read an `f32` denormal operand as the zero of its sign and flush a denormal
@@ -645,15 +649,15 @@ pub enum VkProperty {
     /// [`DriverDeviation::MetalFloatDenormals`](crate::error::DriverDeviation::MetalFloatDenormals)).
     /// No Vulkan query reports it: `DenormFlushToZero` makes only the results' flush a
     /// requirement, the operands' remains the device's choice. A module that leaves such an
-    /// operation's denormals to the device requires it; without it, the module flushes them
-    /// itself.
+    /// operation's denormals to the device, recording no `PrecisionNote::DeviceDenormals` for it,
+    /// requires it; without it, they are the device's own, and the module records that note.
     MetalFloatDenormals,
     /// The device's `OpQuantizeToF16` rounds as Metal's conversion to `half` does, to nearest
     /// even below 65520 (the driver's measured deviation
     /// [`DriverDeviation::MetalHalfQuantize`](crate::error::DriverDeviation::MetalHalfQuantize)).
     /// No Vulkan query reports it: the quantize's rounding mode is the device's. A module that
-    /// rounds to `half` through the quantize alone requires it; without it, the module clamps
-    /// below 65520 first.
+    /// rounds to `half` through the quantize requires it; without it, the module records
+    /// `PrecisionNote::NativeHalfQuantize`.
     MetalHalfQuantize,
     /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center
     /// in every fragment invocation, a sample-rate one's included, as Metal does (the driver's
@@ -670,48 +674,52 @@ pub enum VkProperty {
     /// driver's measured deviation
     /// [`DriverDeviation::MetalSmallFloatColorWrites`](crate::error::DriverDeviation::MetalSmallFloatColorWrites)).
     /// No Vulkan query reports it: Vulkan leaves the conversion's rounding to the device. A
-    /// fragment module that writes such an output as computed requires it; without it, the module
-    /// rounds the output by Metal's rule.
+    /// fragment module that writes such an output with no `PrecisionNote::DeviceColorConversion`
+    /// requires it; without it, the module records that note.
     MetalSmallFloatColorWrites,
     /// The device stores a fragment function's float color output into a 16-bit unorm or snorm
     /// channel as Metal does, a blended snorm channel's NaN aside (the driver's measured
     /// deviation
     /// [`DriverDeviation::MetalNorm16ColorWrites`](crate::error::DriverDeviation::MetalNorm16ColorWrites)).
     /// No Vulkan query reports it: Vulkan allows a conversion within one code's width of the exact
-    /// product's. A fragment module that writes such an output as computed requires it; without it,
-    /// the module rounds the output by Metal's rule.
+    /// product's. A fragment module that writes such an output with no
+    /// `PrecisionNote::DeviceColorConversion` requires it; without it, the module records that
+    /// note.
     MetalNorm16ColorWrites,
     /// The device's `GLSL.std.450` `NMin`, `NMax` and `NClamp` on 32-bit floats are Metal's own
     /// `fmin`, `fmax` and `clamp` (the driver's measured deviation
     /// [`DriverDeviation::MetalMinMax`](crate::error::DriverDeviation::MetalMinMax)). No Vulkan
-    /// query reports it. A module whose `float` or `half` minimum, maximum or clamp takes those
-    /// instructions requires it; without it, the module picks the operand itself.
+    /// query reports it. Every `float` or `half` minimum, maximum or clamp takes those
+    /// instructions: a module that does requires it, and without it the module records
+    /// `PrecisionNote::NativeMinMax`.
     MetalMinMax,
     /// The device's 16-bit `OpFAdd` and `OpFSub` decorated `NoContraction`, and its 16-bit
     /// `Fma(a, b, -0.0)` decorated `NoContraction`, are Metal's own `half` `+`, `-` and `*` (the
     /// driver's measured deviation
     /// [`DriverDeviation::MetalHalfArithmetic`](crate::error::DriverDeviation::MetalHalfArithmetic)).
     /// No Vulkan query reports it. A module whose `half` `+`, `-` or `*` takes those instructions
-    /// requires it; without it, the module computes in `float` and rounds to `half` itself.
+    /// requires it; without it, the module takes them under the 16-bit float controls, or
+    /// computes in `float` and rounds the result to `half` as every `half` rounds.
     MetalHalfArithmetic,
     /// The device stores every `float` but a NaN that a shader writes to a half-float storage
     /// image as Metal stores a kernel's write, rounded toward zero (the driver's measured
     /// deviation
     /// [`DriverDeviation::MetalHalfStorageWrites`](crate::error::DriverDeviation::MetalHalfStorageWrites)).
     /// No Vulkan query reports it: Vulkan leaves the conversion's rounding to the device. A module
-    /// that writes such a `float` unrounded requires it; without it, the module rounds the texel by
-    /// Metal's rule.
+    /// that writes such a `float` requires it; without it, the module records
+    /// `PrecisionNote::DeviceColorConversion`.
     MetalHalfStorageWrites,
     /// The device stores every NaN a shader writes to a half-float storage image as Metal's
     /// `0x7e00` (the driver's measured deviation
     /// [`DriverDeviation::MetalHalfStorageNans`](crate::error::DriverDeviation::MetalHalfStorageNans)).
-    /// No Vulkan query reports it. A module that writes such a NaN as computed requires it; without
-    /// it, the module writes it as `0x7fc00000`.
+    /// No Vulkan query reports it. A module that writes such a NaN requires it; without it, the
+    /// module records `PrecisionNote::DeviceNanEncoding`.
     MetalHalfStorageNans,
     /// The device stores the NaN `0x7fc00000` a shader writes to a half-float storage image as
     /// `0x7e00`, Metal's (the driver's measured deviation
     /// [`DriverDeviation::MetalFloatStorageNans`](crate::error::DriverDeviation::MetalFloatStorageNans)).
-    /// No Vulkan query reports it. A module that writes such a NaN as `0x7fc00000` requires it;
+    /// No Vulkan query reports it. A module whose fragment function blends into a 16-bit float
+    /// attachment in the storage form, whose blend gives every NaN as `0x7fc00000`, requires it;
     /// without it, the write records `PrecisionNote::DeviceNanEncoding`.
     MetalFloatStorageNans,
     /// The device's fragment subgroups are Metal's simdgroups, and `SubgroupLocalInvocationId` in
@@ -748,15 +756,16 @@ pub enum VkProperty {
     /// the half's own bits, a signalling NaN's unquieted, and the NaN `0x7fc00000` written to a
     /// packed small float one as the format's canonical NaN (the driver's measured deviation
     /// [`DriverDeviation::MetalHalfTexelWrites`](crate::error::DriverDeviation::MetalHalfTexelWrites)).
-    /// No Vulkan query reports it. A module whose `half` texel write leaves such a NaN to the
-    /// device requires it; without it, the write records `PrecisionNote::DeviceNanEncoding`.
+    /// No Vulkan query reports it. A module whose `half` texel write to a 16-bit float format
+    /// leaves its NaN to the device requires it; without it, the write records
+    /// `PrecisionNote::DeviceNanEncoding`, or takes the texture's unsigned integer alias.
     MetalHalfTexelWrites,
     /// The device stores a `float` texel a shader writes to a unorm or snorm storage image as
     /// Metal's code, the exact product rounded to nearest with a tie away from zero (the driver's
     /// measured deviation
     /// [`DriverDeviation::MetalNormStorageWrites`](crate::error::DriverDeviation::MetalNormStorageWrites)).
-    /// No Vulkan query reports it. A module whose `float` texel write leaves a normalized format's
-    /// conversion to the device requires it; without it, the shader rounds each channel.
+    /// No Vulkan query reports it. A module whose `float` texel write may reach a normalized
+    /// format requires it; without it, the module records `PrecisionNote::DeviceColorConversion`.
     MetalNormStorageWrites,
     /// Native device sampling: the module hands its samples, gathers and comparisons to the
     /// device's own sampler as a device that samples through Metal's
@@ -769,14 +778,15 @@ pub enum VkProperty {
     /// Metal's code (the driver's measured deviation
     /// [`DriverDeviation::MetalDepth16Stores`](crate::error::DriverDeviation::MetalDepth16Stores)).
     /// No Vulkan query reports it: Vulkan leaves the conversion's rounding to the device. No module
-    /// requires it: where the profile lacks it, the fragment stage writes Metal's code itself.
+    /// requires it: every depth is the device's own conversion, and where the profile lacks it the
+    /// runtime announces `unorm-depth-rounding`.
     MetalDepth16Stores,
     /// The device stores every depth a draw biases on a `Depth16Unorm` attachment as Metal's code
     /// (the driver's measured deviation
     /// [`DriverDeviation::MetalDepth16BiasedStores`](crate::error::DriverDeviation::MetalDepth16BiasedStores)).
     /// No Vulkan query reports it: Vulkan leaves the biased sum's rounding to the device. No module
-    /// requires it: where the profile lacks it, a biased draw's fragment stage writes Metal's code
-    /// itself.
+    /// requires it: every biased depth is the device's own, and where the profile lacks it the
+    /// runtime announces `unorm-depth-bias`.
     MetalDepth16BiasedStores,
     /// The device interpolates a varying as Metal does, bit for bit (the driver's measured
     /// deviation

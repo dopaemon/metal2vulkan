@@ -910,11 +910,12 @@ pub struct TexturePlan {
     /// nil texture's arm), sorted (`absent_arm`), whose words the census counts under
     /// [`ABSENT_ARM`]: computed after the body's selection.
     pub absent_arm: Vec<ValueId>,
-    /// The measured driver deviations, as their properties, the function's `float` writes to a
-    /// half-float storage image rely on (`select_write`): a write left to the device's
-    /// conversion because it stores Metal's half (`MetalHalfStorageWrites`), or a NaN rounded to
-    /// `0x7fc00000` because the device stores that as Metal's (`MetalFloatStorageNans`). The
-    /// module requires them.
+    /// The measured driver deviations, as their properties, the function's storage writes rely
+    /// on (`select_write`): a `float` write to a half-float storage image, left to the device's
+    /// conversion because it stores Metal's half (`MetalHalfStorageWrites`) and its NaN
+    /// (`MetalHalfStorageNans`), a write that may reach a normalized format, because it stores
+    /// Metal's codes (`MetalNormStorageWrites`), and a `half` texel's NaN to a 16-bit float format
+    /// (`MetalHalfTexelWrites`). The module requires them.
     pub storage_properties: BTreeSet<crate::device::requirements::VkProperty>,
     /// The function's depth comparisons the device makes read depth images that keep values
     /// outside `[0, 1]` without `VK_EXT_depth_range_unrestricted` because the driver's do
@@ -1548,8 +1549,7 @@ pub enum OneTexel {
 /// conversion may not be. A slot's access notes it where its class names no measured family
 /// ([`unmeasured_class`]), the conversion's `OTHER` arm, and, where the access reads one texel, no
 /// packed field either: through a runtime sampler slot, where its word filters. Where the access
-/// converts the device's texel only under `arm`'s clauses (a runtime sampler's emulation of an
-/// 8-bit sRGB slot's raw codes, whose device arm alone converts one), the note holds there alone.
+/// converts the device's texel only under `arm`'s clauses, the note holds there alone.
 /// On a device that samples through Metal's own texture unit, an 8-bit sRGB format's class is
 /// Metal's too ([`unconverted_class`]); where that device also rounds to `half` as Metal does
 /// ([`half_families`]), every measured class's is, so the access notes it where the bound format's

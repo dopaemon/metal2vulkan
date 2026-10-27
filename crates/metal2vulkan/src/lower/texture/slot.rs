@@ -1205,17 +1205,15 @@ fn tiled_shape(shape: ImageShape) -> bool {
         }
 }
 
-/// The device compares a depth texture's texels (a sample or gather with comparison the shader
-/// does not make itself). Metal's `Depth32Float` texels hold any `float`, which a depth image keeps
-/// outside `[0, 1]` where the consumer enabled `VK_EXT_depth_range_unrestricted`, or where its
-/// driver is measured to keep them without it
-/// (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, MoltenVK's), which the module then
-/// requires; the device's comparison reads the texture's depth image: on a device with neither the
-/// function records `PrecisionNote::RestrictedDepthRange`. Its reads, samples and gathers, and the
-/// comparisons the shader makes of them, record nothing: the interface's `TextureSlot::access`
-/// states them, and the consumer announces an upload its depth image may clamp
-/// (`restricted-depth-upload`), which every read of it then reads. No module requires the
-/// extension, since every value within `[0, 1]` is exact without it.
+/// The device compares a depth texture's texels (a sample or gather with comparison). Metal's
+/// `Depth32Float` texels hold any `float`, which a depth image keeps outside `[0, 1]` where the
+/// consumer enabled `VK_EXT_depth_range_unrestricted`, or where its driver is measured to keep them
+/// without it (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, MoltenVK's), which the module
+/// then requires; the device's comparison reads the texture's depth image: on a device with neither
+/// the function records `PrecisionNote::RestrictedDepthRange`. Its reads, samples and gathers
+/// record nothing: the interface's `TextureSlot::access` states them, and the consumer announces an
+/// upload its depth image may clamp (`restricted-depth-upload`), which every read of it then reads.
+/// No module requires the extension, since every value within `[0, 1]` is exact without it.
 pub(crate) fn depth_comparison(cx: &mut SelectCx<'_>) {
     let enabled = &cx.profile.fields().enabled;
     if enabled

@@ -583,8 +583,8 @@ fn pixel_samplers_answer_metal_s_texels() {
     eprintln!("announced: {announced:?}");
     let converted = announced.contains(&Degradation::FloatSampleFilter);
     // A device with Metal's own sampler reads each configuration's texels exactly; elsewhere a
-    // linear pixel sample the emulation does not reach divides by the size (`OpFDiv`, Vulkan's
-    // bound) and filters on the device, which keeps the note.
+    // pixel sample no snap reaches divides by the size (`OpFDiv`, Vulkan's bound) and filters on
+    // the device, which keeps the note.
     if metal_sampler {
         assert!(!announced.contains(&Degradation::PixelSamplerScaling));
     }

@@ -94,11 +94,13 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   anisotropy, texel conversion and comparison, a two-plane YCbCr texture's filter among them),
   with no switch: the device's answer is the contract, recorded as `PrecisionNote::DeviceSampling`
   with its measured bound. The device's own `half` rounding and its blend of a `half` color have
-  no switch either: each records its note.
-  `DevicePolicy::exact_answers()` turns on every exact form the runtime offers.
-  [FAST-PATHS.md](FAST-PATHS.md) lists every choice, its bound and the measured cost of its exact
-  form. On MoltenVK on an Apple GPU, whose sampler and `float` functions are Metal's own, most of
-  these choices change nothing.
+  no switch either: each records its note. [FAST-PATHS.md](FAST-PATHS.md) lists these device gaps
+  with their bounds. On MoltenVK on an Apple GPU, whose sampler and `float` functions are Metal's
+  own, most of them change nothing.
+- `DevicePolicy::exact_answers()` selects Metal's answer for each of the runtime's choices that
+  offers one (the batch order and render lowering below, the heap texture compression, command
+  buffer completion and textures over host pages), each listed in [FAST-PATHS.md](FAST-PATHS.md)
+  with its bound and the measured cost of its exact form.
 - **Batches of a queue ordered by their ends** (`BatchOrderPolicy::Ends`, the runtime's choice; no
   pipeline differs). On ANV, RADV and NVIDIA's driver, each measured to start no kernel submission
   of a `VkQueue` before the one before it completed, each batch of command buffers ends with a
@@ -199,13 +201,16 @@ was measured under (`DeviceDescription::canonical_device_id`): the Radeon 780M o
 (`0x1900`) as Phoenix's (`0x15bf`). These are `DriverDeviation`s (simdgroups that run in lockstep,
 Metal's own `float` functions, sampler and canonical NaNs, color writes, ...), measured on MoltenVK
 on Apple's M3 Max and M4, with a few per-GPU facts measured elsewhere. A driver or GPU that was not
-measured takes the conservative route.
+measured takes the route each deviation's docs name for it: the device's own answer, recorded as a
+precision note, or, where the answer decides a capability, its emulation or a refusal.
 
 Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 32-lane
 simdgroups (including lockstep races on threadgroup memory within a barrier interval), and the
-bit-exact `fneg`, `fabs` and `half`-to-`float` widening of NaNs and denormals. A NaN's bits and
-the operand `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` pick beside a NaN or between
-two zeros are the device's.
+bit-exact `fneg` and `fabs` of a `float`, its NaNs and denormals included. A NaN's bits, the
+operand `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` pick beside a NaN or between two
+zeros, and a `half`'s widening to `float` where the module rounds `half` by the device's own
+conversion (a NaN's bits, and a denormal on a device that flushes 16-bit ones) or under the 16-bit
+float controls (a NaN's bits) are the device's, each recorded as a precision note.
 
 What the runtime enables for itself outside the vocabulary enters no enable set, compile profile
 or fingerprint: among it the extensions of its dma-buf fallback for no-copy memory whose pointer
@@ -829,8 +834,10 @@ fetch, ...). Compile it and plan it for the same shape: `device.compile_render_v
 ask too (`plan.dispatch_variant(&dispatch)`, or `BindError::NeedsVariant` from instantiation).
 
 Textures follow Metal's texel rules: sparse textures report residency where the device can,
-`Depth32Float` texels keep any `float`, `ulong` textures and their atomics use 64-bit images where
-the device has them, and `half` and sRGB reads give Metal's values or record their bound. The
+`Depth32Float` texels are the device's depth image's (a value it clamps or a denormal it flushes is
+announced, `restricted-depth-upload`, `depth-denormals`), `ulong` textures and their atomics use
+64-bit images where the device has them, and `half` and sRGB reads give Metal's values or record
+their bound. The
 rustdoc of `BindState`, `TextureFacts` and `BindingPlan` states each rule.
 
 ## 6. At bind time
@@ -1188,8 +1195,9 @@ requirements) and the refusal. That text is for people, not a contract.
 
 Each entry below gives the code, its category, the `Degradation` kind (or the `PrecisionNote`) and
 what triggers it; a runtime kind's cost follows. The kind's rustdoc states the trigger, cost and
-how to avoid it in full. [FAST-PATHS.md](FAST-PATHS.md) lists which notes the default policy's
-fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
+how to avoid it in full. [FAST-PATHS.md](FAST-PATHS.md) lists which notes the device's native
+forms and the default policy's fast forms record, and each `PrecisionNote`'s rustdoc states its
+bound.
 
 - `metal2vulkan-degrade-shadowed-texture` (performance). `ShadowedTexture`: A 2D texture over a
   buffer is a shadow image: the buffer is over host pages (a no-copy buffer's, imported by their

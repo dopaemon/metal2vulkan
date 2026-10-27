@@ -62,8 +62,7 @@
 //! always averages, as its sum rounds; so does a format of unorm and snorm channels alone, whose
 //! average costs about what comparing the samples does: on a Radeon 780M, comparing first took 8%
 //! off an `RGBA8Unorm` 1080p 4x resolve's cost over a plain store where every pixel's samples
-//! matched, and added 14% where one pixel in 16 straddled an edge
-//! (`runtime_lane::resolve_rounding`'s cost test).
+//! matched, and added 14% where one pixel in 16 straddled an edge.
 //!
 //! - [`ResolveSource::InputAttachment`]: the multisampled attachment as the input attachment of
 //!   index 0 (`InputAttachmentIndex 0`), in its own format, read at each sample. A unorm or snorm

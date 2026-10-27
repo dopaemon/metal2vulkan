@@ -48,9 +48,10 @@
 //!   product's flushed denormal.
 //! - **The `half` quantize** (`MetalHalfQuantize`): the NaN model's narrowing, conversion and
 //!   `half` cases. Where the profile takes the deviation, a `half` rounding is the device's
-//!   `OpQuantizeToF16` alone and the kernels require `VkProperty::MetalHalfQuantize`; elsewhere the
-//!   module rounds on the bits in integer arithmetic. Both give Metal's largest `half` there, so
-//!   every device is checked on those words.
+//!   `OpQuantizeToF16` alone and the kernels require `VkProperty::MetalHalfQuantize`; under the
+//!   float controls it is the device's conversion, Metal's by the Vulkan spec. Both give Metal's
+//!   largest `half` there, so those words are checked; elsewhere the device's own form rounds
+//!   (`NativeHalfConversion` or `NativeHalfQuantize`), whose words the test prints.
 //! - **The `half` conversion**: the same cases, and the owned `half` edge fixtures. A profile with
 //!   `shaderFloat16` and without the float controls that make the device's conversion Metal's
 //!   rounds through that conversion and records `PrecisionNote::NativeHalfConversion`: the device's
@@ -59,23 +60,27 @@
 //!   `max3`, `clamp` and `median3` cases, at NaN operands of every kind and at zeros and denormals,
 //!   with and without fast math. Where the profile takes the deviation, Metal's minimum, maximum
 //!   and clamp are the device's `NMin`, `NMax` and `NClamp` and the kernels require
-//!   `VkProperty::MetalMinMax`; elsewhere the module picks the operand itself. Both give Metal's
-//!   answer, so every device is checked on every word.
+//!   `VkProperty::MetalMinMax`, and every word is checked; elsewhere the module emits the same
+//!   instructions and records `native-min-max`, and the test prints how many words match.
 //! - **The `half` arithmetic** (`MetalHalfArithmetic`): the NaN model's narrowing and `half`
 //!   arithmetic cases, with and without fast math, and the `half` denormal arithmetic case. Where
 //!   the profile takes the deviation, a `half` `+`, `-` or `*` is the device's 16-bit instruction,
 //!   kept apart, and the kernels require `VkProperty::MetalHalfArithmetic`; elsewhere the module
-//!   computes in `float` and rounds to `half` itself. Both give Metal's answer, so every device
-//!   is checked on every word.
+//!   computes in `float` and rounds to `half` by its form (`lower::arith::narrow::round`: Metal's
+//!   under the float controls, the device's own conversion or quantize, noted, otherwise). The
+//!   test holds every word to Metal's on every device.
 //! - **The `half` widening** (`MetalHalfArithmetic` again, whose measurement reads every `half`
 //!   through the device's widening): the owned fixture `hwd_half_reads` reads back every `half`
 //!   bit pattern, one thread each, through threadgroup words and a buffer, and uses some reads only
 //!   in a sum, a product, a widening to `float` and a compare, and moves another through a select
 //!   to memory. Where the profile takes the deviation the first take the device's widening of their
 //!   bits (`lower::arith::widening`; its unit test reads the fixture's plan) under the default
-//!   policy; elsewhere, under `DevicePolicy::exact_answers`, every read is the integer decode. Both
-//!   give Metal's answer on every one of the 65,536 patterns, a NaN's included, so every device is
-//!   checked on every word.
+//!   policy; elsewhere (run under `DevicePolicy::exact_answers`, whose switches are the runtime's)
+//!   each read is the module's decode for the profile's `half` rounding
+//!   (`lower::arith::narrow::from_bits`: the integer decode, or the device's widening under the
+//!   16-bit float controls or the device's own conversion, a NaN's bits then the device's,
+//!   `NativeNanEncoding`). The lane holds every one of the 65,536 patterns, a NaN's included, to
+//!   Metal's answer on every device.
 //! - **The fragment simdgroups** (`MetalFragmentSimdgroups`): the owned fixture
 //!   `gsm2_fragment_lanes` writes a fragment's `[[thread_index_in_simdgroup]]`, read as a `uint`
 //!   and a `ushort` parameter and as a program-scope `uint`, over three draws into a 32x32 target:
@@ -1444,11 +1449,11 @@ fn differing_words<T: Copy + PartialEq + Into<u32>>(
         .collect()
 }
 
-/// Every word `hwd_half_reads` writes is Metal's on every device, for every `half` bit pattern:
-/// where the profile takes `DriverDeviation::MetalHalfArithmetic`, under the default policy, its
-/// reads used only in a sum, a product, a widening and a compare take the device's widening; on
-/// every other device, under Metal's answers (`DevicePolicy::exact_answers`), every read is the
-/// integer decode.
+/// Every word `hwd_half_reads` writes is held to Metal's on every device, for every `half` bit
+/// pattern: where the profile takes `DriverDeviation::MetalHalfArithmetic`, under the default
+/// policy, its reads used only in a sum, a product, a widening and a compare take the device's
+/// widening; on every other device, under `DevicePolicy::exact_answers`, each read is the module's
+/// decode for the profile's `half` rounding (`lower::arith::narrow::from_bits`).
 #[test]
 fn half_loads_the_device_widens_answer_as_metal() {
     let messages = Messages::default();

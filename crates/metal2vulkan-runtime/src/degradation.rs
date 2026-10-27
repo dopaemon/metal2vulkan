@@ -20,11 +20,10 @@
 //! - **Once, unless the device's options ask for each.** A bit per kind and device, set by the
 //!   first announcement; a later occurrence costs one atomic load. A kind in
 //!   `DeviceOptions::announce_each` (or `RawDevice::announce_each`) is announced at every
-//!   occurrence instead, the same notice through the same sink, on the thread whose call
-//!   announces it: a bit per kind beside those, read first. For a kind a variant's making announces
-//!   (a stage's precision notes, specialized or not, `ycbcr-filter-not-exact`, a shader's color
-//!   conversions, reconvergence that is not Metal's, unadvertised vertex simdgroups, exact forms
-//!   dropped to fit a compiler word bound), an occurrence
+//!   occurrence instead, the same notice through the same sink, on the thread whose call announces
+//!   it: a bit per kind beside those, read first. For a kind a variant's making announces (a
+//!   stage's precision notes, specialized or not, `ycbcr-filter-not-exact`, a shader's color
+//!   conversions, reconvergence that is not Metal's, unadvertised vertex simdgroups), an occurrence
 //!   is each dispatch or draw that binds the variant (an indirect command's too, where its
 //!   execution records it, and an execution the GPU alone runs, once), announced there with the
 //!   making's object and reason and not at the making, since the device memoizes a variant and
@@ -36,12 +35,8 @@
 //!   render pipeline states alike, but for a note the stage records only under some
 //!   specializations, announced where the runtime makes a `VkPipeline` whose specialization (the
 //!   bound formats' classes and samplers' words) takes it; a render pipeline's vertex simdgroups on
-//!   a driver that runs them without advertising the vertex stage, where the runtime makes a
-//!   render variant, before its shader modules (`pipeline/render.rs`, from the pipeline's
-//!   requirements); the exact forms a pipeline's translation dropped to fit the device's compiler
-//!   word bound, where the runtime makes a variant of any pipeline state, before its shader modules
-//!   (`pipeline/render.rs` for a render or mesh render state, `pipeline/mod.rs` for a compute or
-//!   tile render state, from the pipeline's dependencies); a
+//!   a driver that runs them without advertising the vertex stage, where the runtime makes a render
+//!   variant, before its shader modules (`pipeline/render.rs`, from the pipeline's requirements); a
 //!   render pass's degradations where its encoder ends (`render.rs`), from the pass's layout, its
 //!   render pass instances and the storage it kept; a rasterization-rate map that is not the
 //!   identity where the device makes it (`rate_map.rs`); a draw's use of an attachment's memory in
@@ -52,11 +47,11 @@
 //!   it (`deferred.rs`); a `Shared` buffer or heap in system memory where the device makes it
 //!   (`buffer.rs`, `heap.rs`); a texture whose blocks a carrier holds, which a command reading
 //!   texture handles reaches, once the command is encoded (`pvrtc.rs`, from `compute.rs` and
-//!   `render/arguments.rs`); native device maths that rounds a tiny product
-//!   before its flush where the device is made (`device/float_tininess.rs`); a sampler state whose
-//!   anisotropy the device filters otherwise than Metal where the device makes it (`sampler.rs`); a
-//!   BC1 to BC5 texture whose texels the device decodes otherwise than Metal where the device makes
-//!   it (`texture.rs`, `texture/shared.rs`, `texture/heap.rs`).
+//!   `render/arguments.rs`); native device maths that rounds a tiny product before its flush where
+//!   the device is made (`device/float_tininess.rs`); a sampler state whose anisotropy the device
+//!   filters otherwise than Metal where the device makes it (`sampler.rs`); a BC1 to BC5 texture
+//!   whose texels the device decodes otherwise than Metal where the device makes it (`texture.rs`,
+//!   `texture/shared.rs`, `texture/heap.rs`).
 
 use super::attachment_stand_in::{Cause, StandIn};
 use super::color_resolve;
@@ -1335,19 +1330,19 @@ degradations! {
              ID of the state set on it runs its program, as Metal runs a command the CPU encoded, \
              where for a record the GPU wrote while another state held the ID Metal runs that \
              state (nothing, for a state of the other kind)";
-        /// A pipeline stage's filtered sample of a texture slot bound to a two-plane YCbCr
-        /// texture does not take Metal's exact filter of the format: the stage records
-        /// `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` under the slot's bound format
-        /// (a format whose filter is not measured, a swizzle that moves its channels, a linear
-        /// mip filter, or a sample the emulation does not reach), or, on a device that samples
-        /// through Metal's own sampler, under any two-plane YCbCr format bound there, whose converted texels Metal's sampler filters
-        /// as an `RGBA16Float` or `RGBA32Float` texture's: within one step of the format's grid of
-        /// Metal's filter of the format, a `half` result within one `half` unit in the last place
-        /// (plain Metal on an Apple M3 Max under macOS 27.0.1, `YCBCR8_420_2P` and its `_sRGB`
-        /// twin against such a texture of the same texels). Announced, in place of those notes'
-        /// own notices for the slot, where the specialized pipeline is made, or at a draw or
-        /// dispatch that binds such a texture there (through a runtime
-        /// sampler, whatever its word states), naming the slot and the format.
+        /// A pipeline stage's filtered sample of a texture slot bound to a two-plane YCbCr texture,
+        /// on a device that samples through Metal's own sampler (MoltenVK,
+        /// `VkProperty::MetalSampler`), does not take Metal's exact filter of the format: the stage
+        /// records `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` under any two-plane
+        /// YCbCr format bound there (`lower::sampler::linear`), whose converted texels Metal's
+        /// sampler filters as an `RGBA16Float` or `RGBA32Float` texture's: within one step of the
+        /// format's grid of Metal's filter of the format, a `half` result within one `half` unit in
+        /// the last place (plain Metal on an Apple M3 Max under macOS 27.0.1, `YCBCR8_420_2P` and
+        /// its `_sRGB` twin against such a texture of the same texels). A device that samples
+        /// natively filters such a texture as its own sampler does, announced as `device-sampling`.
+        /// Announced, in place of those notes' own notices for the slot, where the specialized
+        /// pipeline is made, or at a draw or dispatch that binds such a texture there (through a
+        /// runtime sampler, whatever its word states), naming the slot and the format.
         YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,
             "the texels hold Metal's reads exactly, but the sample filters them as the device \
              does, off the grid Metal sums the format's steps on, so a filtered result can miss \

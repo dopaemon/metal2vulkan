@@ -194,15 +194,17 @@ impl UlpTable {
 /// - `HalfTexelConversion`: unbounded: a format whose conversion to `half` is not measured keeps
 ///   the device's quantize of its `f32` texel, so a lane can differ from Metal's by any amount (an
 ///   sRGB texel's decode).
-/// - `HalfSampleFilter`: unbounded: a filtered `half` sample the emulation does not reach is the
-///   device's filter, whose footprint, weights, and sum Vulkan bounds only by its precision rules,
-///   any number of ulps under cancellation.
+/// - `HalfSampleFilter`: unbounded: a filtered `half` sample of a two-plane YCbCr texture through
+///   Metal's own sampler (MoltenVK) filters the converted texels as an `RGBA16Float` or
+///   `RGBA32Float` texture's, off the format's grid; one step of the grid was measured on one chip
+///   and format, which no tolerance is derived from.
 /// - `SrgbTexelDecode`: unbounded: an 8-bit sRGB texel the device decodes where Metal decodes its
 ///   raw code through a twelve-bit table; Vulkan bounds the device's decode only by its precision
 ///   rules, and Metal's `float` gathers of sRGB texels are not measured.
-/// - `FloatSampleFilter`: unbounded: a filtered `float` sample the emulation does not reach is the
-///   device's filter, whose footprint, weights, and sum Vulkan bounds only by its precision rules,
-///   so a lane can differ from Metal's by any amount.
+/// - `FloatSampleFilter`: unbounded: a filtered `float` sample of a two-plane YCbCr texture through
+///   Metal's own sampler (MoltenVK) filters the converted texels as an `RGBA16Float` or
+///   `RGBA32Float` texture's, off the format's grid; one step of the grid was measured on one chip
+///   and format, which no tolerance is derived from.
 /// - `QuadsCountedBeforeDiscard`: unbounded: a non-quad simdgroup operation before a discard, in a
 ///   shape whose placement by Metal's compiler is not known, takes, among its lanes, the quads the
 ///   discard drops, which moves a count, a ballot, or a reduction by whole lanes.

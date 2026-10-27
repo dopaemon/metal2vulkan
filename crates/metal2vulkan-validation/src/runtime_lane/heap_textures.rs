@@ -1762,7 +1762,7 @@ fn a_heap_texture_buffer_is_the_heap_s_bytes() {
 /// shadow of the heap's bytes too: the fill changes every texel of the first, announced
 /// `shadowed-texture` once. Elsewhere neither is announced.
 #[test]
-fn heap_depth_textures_keep_their_bytes_with_their_twins() {
+fn heap_depth_textures_keep_their_bytes() {
     use super::depth_compares::{pipeline, run as compare, SIDE, VALUES};
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();

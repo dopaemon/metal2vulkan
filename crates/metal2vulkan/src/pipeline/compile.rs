@@ -2839,8 +2839,8 @@ fn compile_kept<K>(
     requirements
         .properties
         .extend(plan.families.stage_io.color_properties.iter().copied());
-    // Half-float storage writes left to the device's conversion, or their NaN to its store of
-    // `0x7fc00000`, because the device stores Metal's half.
+    // Storage writes left to the device's conversion with no note, because the device stores
+    // Metal's codes or NaN there.
     requirements
         .properties
         .extend(plan.families.texture.storage_properties.iter().copied());

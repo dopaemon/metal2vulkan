@@ -30,8 +30,10 @@
 //!
 //! **What may differ, and what justifies it.** On a device with Metal's own sampler
 //! (`VkProperty::MetalSampler`, MoltenVK here) every source is Metal's and nothing is announced.
-//! Elsewhere the emulation reaches a slot's and a constexpr sampler's pixel coordinates exactly,
-//! while an argument buffer's sampler is handed to the device's own, which announces
+//! Elsewhere a slot's and a constexpr sampler's pixel coordinates reach Metal's texels through the
+//! translator's snaps (a nearest sampler's texel centre, a gather's block, a linear sample's
+//! footprint cell), filtered by the device's own sampler, while an argument buffer's sampler is
+//! handed to the device's own, which announces
 //! `argument-pixel-sampler-scaling`, and a device that converts an 8-bit texel to a float its own
 //! way announces `float-sample-filter`. Those two sites — `arg` and `norm` — are the only ones
 //! loosened, each naming the notice that must have fired.

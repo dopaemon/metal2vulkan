@@ -920,11 +920,11 @@ impl Sampling {
     /// sampled image, and null select, the sparse arm, a bias past the limit's derivatives,
     /// `bias_gradients`, and (for a dynamic bias) the test, the selection, and the second sample, a
     /// `half` texel's call of its conversion routine or its exact rounding outside the bicubic
-    /// filter, an sRGB texel's raw decode and a linear sample's emulation, a cube gradient's
-    /// footprint, an argument buffer's pixel sampler's flagged fetch, a snapped coordinate and the
-    /// positions of an observed footprint, a cube direction's broken ties, a runtime pixel
-    /// sampler's texel centre, a level on Metal's grid, a comparison the shader makes, and a
-    /// border axis's flush of a subnormal coordinate.
+    /// filter, an sRGB texel's raw decode, a cube gradient's footprint, an argument buffer's pixel
+    /// sampler's flagged fetch, a snapped coordinate and the positions of an observed footprint,
+    /// the lanes Metal reads as constants, a cube direction's broken ties, a runtime pixel
+    /// sampler's texel centre, a raw heap sample's decode, and a border axis's flush of a subnormal
+    /// coordinate.
     pub fn words(&self) -> u32 {
         // A swizzled slot's sampling: its swizzle, and a gather's of each component.
         match (self.swizzle, &self.op) {
@@ -1110,13 +1110,12 @@ pub struct RuntimeSlot {
     /// A 2D gather snaps behind its word (`position::SnapKind::WordGather`): the function reads its
     /// word's coordinates and its `s` and `t` address modes.
     pub gathers: bool,
-    /// A sample on a device with Metal's own sampler snaps onto its footprint cell behind its
-    /// word (`position::SnapKind::WordCell`): the function reads whether its word states a linear
-    /// pixel sampler.
+    /// A sample snaps onto its footprint cell behind its word (`position::SnapKind::WordCell`):
+    /// the function reads whether its word states a linear pixel sampler.
     pub cells: bool,
-    /// A sample's `float` or `half` texel converts by the bound format's class where the sampler
-    /// reads one texel of one level (`texture::OneTexel::Word`): the function reads its word's
-    /// filter fields.
+    /// A sample's `half` texel converts by the bound format's class where the sampler reads one
+    /// texel of one level (`texture::OneTexel::Word`), on a device that samples through Metal's
+    /// own sampler (`VkProperty::MetalSampler`): the function reads its word's filter fields.
     pub texels: bool,
     /// A clamped LOD query outside a fragment function reads it ([`SampleOp::QueryLevel`]), or an
     /// extended-range sample whose linear mip filter blends two levels (`extended::Level::Word`):

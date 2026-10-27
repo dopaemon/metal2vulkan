@@ -1848,7 +1848,7 @@ fn the_raw_twin_reads_srgb_codes_in_fewer_steps() {
 /// linear values written raw ([`ColorResolveFormat::written_raw`]), and so is at least that many
 /// words smaller than the one written in the format. Lane-steps do not show the saving: the
 /// lookup takes as many instructions as the conversion and scale in its place, where the GPU pays
-/// for a dynamically indexed `Private` array (`runtime_lane::resolve_rounding`'s cost test).
+/// for a dynamically indexed `Private` array.
 #[test]
 fn the_raw_twin_writes_srgb_codes_with_no_table() {
     let format = ColorResolveFormat::of(Format::B8G8R8A8_SRGB).expect("closed");

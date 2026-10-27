@@ -221,8 +221,8 @@ impl DeviceProfile {
 
     /// Whether the profile takes the driver deviation `deviation` (`device::driver_facts`): its
     /// driver is measured with it on the device's GPU, so the translation relies on it. A
-    /// profile that does not take it compiles the conservative route the deviation's
-    /// documentation names. A gate lane that checks a deviation on the device asks this before
+    /// profile that does not take it compiles the route the deviation's documentation names for a
+    /// driver without it. A gate lane that checks a deviation on the device asks this before
     /// expecting the deviation's answer.
     pub fn takes_driver_deviation(&self, deviation: DriverDeviation) -> bool {
         let f = &self.fields;
@@ -1246,20 +1246,20 @@ pub enum DriverWorkaround {
     /// holding the insert (`spirv::serialize::serialize_for`), which SPIRV-Cross declares in the
     /// loop.
     CompositeInsertsWrittenInPlace,
-    /// The driver's shader converter writes every function the module defines as one to inline
-    /// at each call (`static inline __attribute__((always_inline))`), whatever its function
-    /// control, so the GPU's compiler compiles a routine's body once per call. MoltenVK
-    /// (`VK_DRIVER_ID_MOLTENVK`) 1.4.1 converts with SPIRV-Cross `adec7acb`, whose MSL backend
-    /// does this whatever the GPU: measured on the Apple M3 Max and the M4 (about half of corpus
-    /// row `69a35b6f`'s compile; a synthetic routine called 300 times compiled in 0.54 to 0.58 s
+    /// The driver's shader converter writes every function the module defines as one to inline at
+    /// each call (`static inline __attribute__((always_inline))`), whatever its function control,
+    /// so the GPU's compiler compiles a routine's body once per call. MoltenVK
+    /// (`VK_DRIVER_ID_MOLTENVK`) 1.4.1 converts with SPIRV-Cross `adec7acb`, whose MSL backend does
+    /// this whatever the GPU: measured on the Apple M3 Max and the M4 (about half of corpus row
+    /// `69a35b6f`'s compile; a synthetic routine called 300 times compiled in 0.54 to 0.58 s
     /// against 0.11 to 0.13 s as calls). It is keyed on the driver's release
     /// (`device::driver_facts`). There each routine (`spirv::builder::ModuleBuilder::routine`: the
-    /// math routines, and the texel conversions, the filters' sums and the cube's face fold) is
-    /// declared `DontInline`, the standard SPIR-V statement that its calls stay calls, for a
-    /// converter that honours it; elsewhere a routine takes no function control, since NVIDIA's
-    /// 615.71.09 honours `DontInline` and ran a routine-heavy kernel 8.1 times as long with it on
-    /// the RTX 3090, and Mesa's drivers inline every function whatever the control. It changes no
-    /// answer.
+    /// wide-integer divisions, precise `fmod`, the texel conversions, the filters' sums and the
+    /// sampling routines) is declared `DontInline`, the standard SPIR-V statement that its calls
+    /// stay calls, for a converter that honours it; elsewhere a routine takes no function control,
+    /// since NVIDIA's 615.71.09 honours `DontInline` and ran a routine-heavy kernel 8.1 times as
+    /// long with it on the RTX 3090, and Mesa's drivers inline every function whatever the control.
+    /// It changes no answer.
     FunctionsInlinedAtEveryCall,
     /// The driver's shader converter writes a value loaded before a loop into the text of each
     /// instruction in the loop that reads it, so the loop reads that memory again on every

@@ -128,9 +128,10 @@ recorded here.
   buffer over their bytes, and converts and filters them in the shader as Metal does; every other
   device, and every other use (a `read()`, a gather), converts the texture's image from the planes
   before the command buffer's first use (the refresh compares every word first) and reads the
-  image. Both are exact, so neither is a switch: the device's kind picks the cheaper. GPU time of a
-  3840 x 2160 texture whose planes lie in host memory composited into 1680 x 1050 (µs, best of 3
-  x 40, unchanged planes; Mesa 26.2.4, MoltenVK 1.4.2):
+  image, which holds Metal's texels exactly and whose linear sample is the device's filter
+  (`device-sampling`; on MoltenVK `ycbcr-filter-not-exact`). Neither is a switch: the device's kind
+  picks the cheaper. GPU time of a 3840 x 2160 texture whose planes lie in host memory composited
+  into 1680 x 1050 (µs, best of 3 x 40, unchanged planes; Mesa 26.2.4, MoltenVK 1.4.2):
 
   | Device | Codes | In place, 1 pass | Image, 1 pass | In place, 3 passes | Image, 3 passes |
   |---|---|---|---|---|---|

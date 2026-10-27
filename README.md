@@ -28,8 +28,10 @@ What the translator promises:
   feature and what would make it work. It never returns a module that computes something else.
 - **Recorded differences.** Where a pipeline gives a near-equivalent of Metal's answer, its
   artifact records a precision note, and the runtime announces it once with a stable code.
-- **Fast by default.** Off Apple's GPUs, choices that trade exactness for speed take the device's
-  native form; each has an opt-in exact switch ([docs/FAST-PATHS.md](docs/FAST-PATHS.md)).
+- **The GPU's native arithmetic.** Where the device has a native form (its maths, rounding,
+  conversions and sampler), that form gives the answer, its difference from Metal's recorded; the
+  runtime's speed-for-accuracy choices default to the fast form, each with an opt-in exact switch
+  ([docs/FAST-PATHS.md](docs/FAST-PATHS.md)).
 - **Bounded work.** Every compile runs under a deadline, a cancellation token and deterministic
   work and memory caps.
 

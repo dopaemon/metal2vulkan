@@ -58,8 +58,9 @@
 //! filtered (`TexelLanes::Filtered`: a sample the device filters, or a
 //! cube gather's lanes, each one channel's) keeps the `OTHER` arm, even under a packed normalized
 //! class's `EXACT` family (`TexelFormat::packed_exact`), whose grids are per channel; a small
-//! float's takes the half-float family's. The emulated linear filter of these formats
-//! (`lower::sampler::linear`) rounds its own result and does not come here.
+//! float's takes the half-float family's. A linear filter the module computes by fetches (an
+//! in-place YCbCr texture's, `lower::sampler::in_place`) rounds its own result and does not come
+//! here.
 //!
 //! **On a device that samples through Metal's own texture unit**: where the device's `f32` texel is
 //! Metal's `float` result of the same access (`VkProperty::MetalSampler`), the routine tells
@@ -89,9 +90,9 @@
 //! A sample's filtered value is the device's where the device filters it: on MoltenVK, which
 //! samples through Metal's own sampler (`VkProperty::MetalSampler`), that is Metal's `float`
 //! result, on the format's grid (normalized formats) or the sum rounded to `f32` (32-bit float
-//! formats), so the conversion of it is Metal's `half` result exactly. Elsewhere a linear sample
-//! the emulation reaches filters by fetches with Metal's footprint and weights
-//! (`lower::sampler::linear`), and this routine converts only the samples it does not reach.
+//! formats), so the conversion of it is Metal's `half` result exactly. Elsewhere the device's own
+//! sampler filters it, and the `half` is the device's `float` texel rounded to nearest even, not
+//! this routine's (`texture::device_texels`).
 
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::narrow;
