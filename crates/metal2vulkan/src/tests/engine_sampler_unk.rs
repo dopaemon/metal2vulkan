@@ -575,7 +575,7 @@ fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
 /// both). On the Apple M3 Max under macOS 26.7 (`moltenvk-m3`'s capture at that release's
 /// `deviceID`) a fragment function's explicit cube gradients through an anisotropic constexpr
 /// sampler take SPIRV-Cross's fixup in the transposed form (`AppleSwizzled`); on macOS 27's
-/// identity (`moltenvk-m3` and `moltenvk-m4`: the M3 Max's and the M4's) they take the fixup's
+/// identity (`moltenvk-m3`'s capture) they take the fixup's
 /// projected form (`AppleProjected`), exact on an `x` or `z` face and a near-equivalent on a `y`
 /// face, both with `CubeGradientFootprint`. Without the macOS 27 route's measurement (a release
 /// no measurement covers) the same fragment takes Metal's level and taps in the shader, with
@@ -596,11 +596,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
             .map(|(_, p)| p.clone())
             .expect(stem)
     };
-    let m4 = of("moltenvk-m4");
-    assert_eq!(
-        of("moltenvk-m3").fields().cube_gradients,
-        m4.fields().cube_gradients
-    );
+    let m3_27 = of("moltenvk-m3");
     let m3_macos27 = committed_descriptions()
         .expect("descriptions")
         .iter()
@@ -622,8 +618,8 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
     );
     assert_eq!(
         (
-            m4.fields().cube_gradients.graphics,
-            m4.fields().cube_gradients.compute
+            m3_27.fields().cube_gradients.graphics,
+            m3_27.fields().cube_gradients.compute
         ),
         (CubeGradientRoute::AppleProjected, CubeGradientRoute::Metal)
     );
@@ -636,7 +632,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         unmeasured.fields().cube_gradients.graphics,
         CubeGradientRoute::Unmeasured
     );
-    for (stem, p) in [("moltenvk-m3", &m3), ("moltenvk-m4", &m4)] {
+    for (stem, p) in [("moltenvk-m3", &m3), ("moltenvk-m3, macOS 27", &m3_27)] {
         let a = artifact(&fragment, "rtl_cube_grad_fragment", stem, p).expect(stem);
         assert!(
             a.precision.contains(&PrecisionNote::CubeGradientFootprint),
@@ -660,11 +656,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         "{:?}",
         a.precision
     );
-    for (stem, p) in [
-        ("moltenvk-m3", &m3),
-        ("moltenvk-m4", &m4),
-        ("unmeasured", &unmeasured),
-    ] {
+    for (stem, p) in [("moltenvk-m3", &m3), ("unmeasured", &unmeasured)] {
         artifact(&fragment, "rtl_cube_cover", stem, p).expect(stem);
         let k = artifact(&kernel, "ani_cube_grad", stem, p).expect(stem);
         assert!(

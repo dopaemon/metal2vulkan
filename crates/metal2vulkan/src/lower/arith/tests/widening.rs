@@ -173,12 +173,7 @@ fn a_half_load_whose_nans_no_use_reads_is_the_devices_widening_where_it_is_metal
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the kernels: {why}"),
     };
-    for stem in [
-        "moltenvk-m3",
-        "moltenvk-m4",
-        "lavapipe",
-        "nvidia-rtx5080-laptop",
-    ] {
+    for stem in ["moltenvk-m3", "lavapipe", "nvidia-rtx5080-laptop"] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let metal = stem.starts_with("moltenvk");
         for (entry, widened) in CASES {
@@ -232,7 +227,7 @@ fn the_lane_fixture_widens_its_reads_used_in_arithmetic_alone() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected hwd_half_reads: {why}"),
     };
-    for (stem, widened) in [("moltenvk-m3", 5), ("moltenvk-m4", 5), ("lavapipe", 0)] {
+    for (stem, widened) in [("moltenvk-m3", 5), ("lavapipe", 0)] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let (plan, module) =
             typed_module(&bc, "hwd_half_reads", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));

@@ -1943,7 +1943,7 @@ fn half_float_storage_writes_take_their_measured_class() {
     for (stem, dev) in committed_devices() {
         let p = dev.profile();
         let want = match stem.as_str() {
-            "moltenvk-m3" | "moltenvk-m4" => StorageImageClass::Identity,
+            "moltenvk-m3" => StorageImageClass::Identity,
             "amd-780m-radv"
             | "amd-780m-hawkpoint-radv"
             | "intel-irisxe-rplp-anv"
@@ -2095,7 +2095,7 @@ fn bgr10a2_storage_takes_the_rgb10a2_view_where_its_own_format_is_not_stored() {
     for stem in ["nvidia-rtx5080-laptop", "lavapipe", "gate-lavapipe-x86_64"] {
         assert!(viewed.contains(stem), "{stem}: {viewed:?}");
     }
-    for stem in ["amd-780m-radv", "intel-irisxe-rplp-anv", "moltenvk-m4"] {
+    for stem in ["amd-780m-radv", "intel-irisxe-rplp-anv"] {
         assert!(direct.contains(stem), "{stem}: {direct:?}");
     }
 }

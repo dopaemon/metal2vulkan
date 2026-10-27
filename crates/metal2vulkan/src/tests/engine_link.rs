@@ -630,7 +630,6 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
         ("nvidia-rtx50-linux", true, true),
         ("nvidia-rtx5080-laptop", false, false),
         ("moltenvk-m3", false, false),
-        ("moltenvk-m4", false, false),
     ] {
         let p = prof(stem);
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
@@ -681,7 +680,6 @@ fn half_float_attachments_take_the_halfs_bits_through_a_16_bit_output() {
         ("amd-rdna3-radv", false, false),
         ("intel-irisxe-rplp-anv", false, false),
         ("moltenvk-m3", false, true),
-        ("moltenvk-m4", false, true),
         ("lavapipe", false, false),
         ("nvidia-rtx5080-laptop", false, false),
     ] {
@@ -762,7 +760,6 @@ fn half_attachments_round_to_nearest_even_under_mode_two() {
     };
     for stem in [
         "moltenvk-m3",
-        "moltenvk-m4",
         "lavapipe",
         "amd-780m-radv",
         "nvidia-rtx5080-laptop",
@@ -881,7 +878,7 @@ fn mode_two_refuses_fragment_texture_writes_it_would_round() {
         Declared,
         Other,
     }
-    for stem in ["moltenvk-m4", "lavapipe", "amd-780m-radv"] {
+    for stem in ["lavapipe", "amd-780m-radv"] {
         let p = prof(stem);
         let v = compile(&bc, "tob_rect", &p).expect("vertex");
         let mut r = RenderLinkInputs::new();

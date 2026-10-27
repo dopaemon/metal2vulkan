@@ -39,12 +39,11 @@ use crate::spirv::testing::{check_words_valid, spirv_dis};
 use crate::vk;
 
 /// The committed profiles of the venues: each desktop driver's and MoltenVK's.
-const VENUES: [&str; 6] = [
+const VENUES: [&str; 5] = [
     "amd-rdna3-radv",
     "intel-irisxe-rplp-anv",
     "lavapipe",
     "moltenvk-m3",
-    "moltenvk-m4",
     "nvidia-rtx5080-laptop",
 ];
 

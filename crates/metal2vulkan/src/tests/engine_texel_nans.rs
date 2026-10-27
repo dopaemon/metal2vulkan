@@ -598,7 +598,8 @@ fn a_half_texels_nan_is_metals_under_the_nan_switch_where_the_arithmetic_answers
         nan_and_min_max: NanMinMaxPolicy::Exact,
         ..DevicePolicy::default()
     };
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let exact = profile(stem, switched).expect("profile");
         let native = profile(stem, DevicePolicy::default()).expect("profile");
         for p in [&exact, &native] {

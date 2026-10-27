@@ -1203,7 +1203,6 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
     d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
     d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
     let shipped = [
-        "moltenvk-m4",
         "nvidia-rtx50-linux",
         "nvidia-rtx5080-laptop",
         "amd-780m-radv",

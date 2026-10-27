@@ -1077,7 +1077,6 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
     ];
     for stem in [
         "moltenvk-m3",
-        "moltenvk-m4",
         "amd-rdna3-radv",
         "amd-780m-radv",
         "intel-arl-anv",
@@ -1126,7 +1125,7 @@ fn an_extended_range_blend_follows_the_ordered_storage_form() {
         );
     }
     // The storage form's own device needs, named where the device lacks one.
-    let p = profile("moltenvk-m4", &[VkFeature::FragmentStoresAndAtomics]);
+    let p = profile("moltenvk-m3", &[VkFeature::FragmentStoresAndAtomics]);
     assert!(extended_range_blend(PixelFormat::BGRA10XR, &p)
         .is_err_and(|u| u.feature == Feature::FramebufferFetch));
 }

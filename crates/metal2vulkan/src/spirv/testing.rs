@@ -313,7 +313,7 @@ pub(crate) fn committed_descriptions() -> Result<&'static [(String, DeviceDescri
 /// differ in their identity and allocation sizes only, so they derive one translation key and state
 /// the same deviations, and a test that singles out MoltenVK's answers among the committed profiles
 /// expects them of each.
-pub const MOLTENVK_CAPTURES: [&str; 2] = ["moltenvk-m3", "moltenvk-m4"];
+pub const MOLTENVK_CAPTURES: [&str; 1] = ["moltenvk-m3"];
 
 /// Whether the committed profile `stem` is one of [`MOLTENVK_CAPTURES`].
 pub fn is_moltenvk_capture(stem: &str) -> bool {

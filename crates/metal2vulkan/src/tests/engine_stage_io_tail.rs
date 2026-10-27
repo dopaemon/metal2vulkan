@@ -251,7 +251,8 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
 #[test]
 fn barycentric_coordinates_read_the_khr_builtins() {
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         assert_eq!(
             refused(
                 compile(&bc, "tail_fragment_barycentric", &prof(stem)),
@@ -279,7 +280,7 @@ fn barycentric_coordinates_read_the_khr_builtins() {
         .contains(&spirv_cap(Cap::FragmentBarycentricKHR)));
     assert!(r.features.contains(&F::FragmentShaderBarycentric));
     validate(&a, &p);
-    for stem in ["amd-780m-radv", "moltenvk-m3", "moltenvk-m4"] {
+    for stem in ["amd-780m-radv", "moltenvk-m3"] {
         let p = prof(stem);
         let s = compile(&bc, "tail_fragment_barycentric_scalar", &p).expect("scalar barycentric");
         assert_eq!(

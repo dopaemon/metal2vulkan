@@ -138,7 +138,8 @@ fn a_packed_sixteen_word_fetch_decodes_the_word() {
         }
     }
     // MoltenVK renders `BGRA4Unorm` through a packed 16-bit word; the 5080 three such formats.
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let formats: Vec<PixelFormat> = (checked.iter())
             .filter(|(s, _)| s == stem)
             .map(|&(_, pf)| pf)

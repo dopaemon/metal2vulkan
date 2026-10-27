@@ -494,23 +494,6 @@ SOURCES = [
 ]
 
 
-# The Apple M4 whose measured MoltenVK answers the product's driver facts name beside the M3 Max's
-# (no venue names it), under the same Homebrew MoltenVK 1.4.1 and vulkan-tools 1.4.350.1. Its
-# capture differs from the M3 Max's only in the identity and the allocation sizes.
-_MOLTENVK_M3 = next(source for source in SOURCES if source["name"] == "moltenvk-m3")
-SOURCES.insert(SOURCES.index(_MOLTENVK_M3) + 1, {
-    "name": "moltenvk-m4",
-    "kind": "vulkaninfo",
-    "sha256": "22bba06626220eaac5b02442a425c1020e4a7a3c883ef4969c62d56e02818775",
-    "profile": "VP_VULKANINFO_Apple_M4_0_2_2209_portability_subset",
-    "command": "vulkaninfo --json",
-    "host": ("Apple M4 (a cloud Mac mini), macOS 27.0.1 (26A434), Homebrew molten-vk 1.4.1, "
-             "vulkan-tools 1.4.350.1"),
-    "formats": {
-        "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-        "sha256": "b67da9048972ee55ad3fbc54cfd299c6cff9918f05fc29aea84fbf2d041971c7",
-    },
-})
 
 
 def profile_name(stem):

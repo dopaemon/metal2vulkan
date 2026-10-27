@@ -16,7 +16,6 @@ const COMMITTED: &[&str] = &[
     "lavapipe",
     "lunarg-desktop-baseline-2023",
     "moltenvk-m3",
-    "moltenvk-m4",
     "nvidia-pascal-linux",
     "nvidia-rtx50-linux",
     "nvidia-rtx5080-laptop",

@@ -17,7 +17,6 @@ validation uses them for per-profile checks.
 | `intel-arl-anv` | gpuinfo report 52029 | Intel(R) Graphics (ARL), ANV | Mesa 26.2.3 | 1.4.354 |
 | `intel-irisxe-anv` | gpuinfo report 51836 | Intel(R) Iris(R) Xe Graphics (TGL GT2), ANV | Mesa 26.2.2 | 1.4.354 |
 | `moltenvk-m3` | local `vulkaninfo --json`, portability-subset profile, plus its `--capture-formats` supplement | Apple M3 Max, macOS 27.0.1 | MoltenVK 1.4.1 | 1.4.334 |
-| `moltenvk-m4` | local `vulkaninfo --json`, portability-subset profile, plus its `--capture-formats` supplement | Apple M4 (a cloud Mac mini), macOS 27.0.1 | MoltenVK 1.4.1 | 1.4.334 |
 | `lavapipe` | gpuinfo report 51983 | llvmpipe (LLVM 23.1.1, 256 bits) | Mesa 26.2.3 | 1.4.354 |
 | `swiftshader` | gpuinfo report 38278 | SwiftShader Device (Subzero), Linux | 5.0.0 | 1.3.0 |
 | `gate-lavapipe` | `vulkaninfo --json` capture in `scripts/linux-gate --icd lavapipe` (arm64 image), plus its supplement | llvmpipe (LLVM 21.1.8, 128 bits): the gate's own CPU device, so a run restricted to it under `VK_LAYER_KHRONOS_profiles` reports the device itself | Mesa 26.0.8 | 1.4.335 |
@@ -36,11 +35,8 @@ validation uses them for per-profile checks.
 the venue's RPL-S device), `nvidia-rtx5080-laptop`. The venue list
 refuses a file that is not such a capture, whose device identity is not the one the venue
 declares for it, or that derives another translation key than the venue's profile. The gpuinfo
-files above are census profiles of devices in the wild; no venue names them. Nor does it name
-`moltenvk-m4`, the capture of the Apple M4 whose measured MoltenVK answers the product's driver
-facts name beside the M3 Max's. MoltenVK's `deviceID` is the macOS release and the Apple GPU family,
-so under macOS 27 the two captures share one identity and differ only in allocation sizes. Nor does
-it name `amd-780m-hawkpoint-radv`, the Radeon 780M of Hawk Point: the GPU of `amd-780m-radv` under
+files above are census profiles of devices in the wild; no venue names them. Nor does it
+name `amd-780m-hawkpoint-radv`, the Radeon 780M of Hawk Point: the GPU of `amd-780m-radv` under
 another `deviceID` (0x1900), whose capture under the same RADV build differs from `amd-780m-radv`'s
 only there, so it takes the 780M's measured driver facts and derives the same translation key.
 

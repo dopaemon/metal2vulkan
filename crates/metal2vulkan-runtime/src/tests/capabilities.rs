@@ -240,17 +240,9 @@ fn the_venue_devices_answer_as_pinned() {
     // amplification count: Metal's 8 wherever multiview is). The threadgroup memory and sample
     // counts are an Apple GPU's at most: RADV's 65536 bytes and ANV's and NVIDIA's 49152 answer
     // 32768, and their 8 and 16 samples (lavapipe's 8) no.
-    let pinned: [(&str, [u64; 3], u64, bool, &[u64], u64); 8] = [
+    let pinned: [(&str, [u64; 3], u64, bool, &[u64], u64); 7] = [
         (
             "moltenvk-m3",
-            [1024, 1024, 1024],
-            32768,
-            true,
-            &[1, 2, 4],
-            8,
-        ),
-        (
-            "moltenvk-m4",
             [1024, 1024, 1024],
             32768,
             true,

@@ -615,7 +615,8 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
         PrecisionNote::DeviceTranscendentals,
         PrecisionNote::DeviceDenormals,
     ];
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let p = by_stem(stem);
         assert_eq!(note_class(p), (Route::Khr, true, true), "{stem}");
         let (fast, _) = notes_of(p, "fdiv_fast");

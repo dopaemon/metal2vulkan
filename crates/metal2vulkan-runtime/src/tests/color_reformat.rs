@@ -296,7 +296,6 @@ fn held_formats_are_metal_s_own() {
         "amd-rdna3-radv",
         "intel-arl-anv",
         "nvidia-rtx50-linux",
-        "moltenvk-m4",
     ];
     let devices = committed().into_iter();
     for (name, _, device) in devices.filter(|(n, ..)| measured.contains(&n.as_str())) {

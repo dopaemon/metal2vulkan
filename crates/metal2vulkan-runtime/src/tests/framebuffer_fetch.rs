@@ -487,7 +487,8 @@ fn the_word_gap_is_the_word_kinds_whose_fetch_is_not_built() {
             packed_only.push((name.clone(), words.iter().map(|&(pf, _)| pf).collect()));
         }
     }
-    for name in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let name = "moltenvk-m3";
         let formats = (packed_only.iter())
             .find(|(n, _)| n == name)
             .map(|(_, f)| f.clone());

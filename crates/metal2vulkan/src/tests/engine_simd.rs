@@ -1348,7 +1348,7 @@ fn a_fragment_simdgroup_lane_is_the_subgroup_lane_where_the_stage_runs_32_lanes(
             "{stem}: the width reads no subgroup"
         );
     }
-    assert_eq!(taken, ["moltenvk-m3", "moltenvk-m4"]);
+    assert_eq!(taken, ["moltenvk-m3"]);
     assert!(noted > 0 && narrow > 0, "noted {noted}, narrow {narrow}");
 }
 
@@ -1499,7 +1499,6 @@ fn vertex_lane_reads_take_lanes_past_the_draw_as_zero() {
     for (stem, tier, lanes) in [
         ("amd-780m-radv", Tier::Cluster32, SubgroupSize::W64),
         ("nvidia-rtx5080-laptop", Tier::Direct, SubgroupSize::W32),
-        ("moltenvk-m4", Tier::Direct, SubgroupSize::W32),
     ] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let (a, plan, m) = compile_kept(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));

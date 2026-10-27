@@ -1940,7 +1940,7 @@ fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
     for (stem, dev) in devices() {
         let metal = match stem.as_str() {
             "lavapipe" => false,
-            "moltenvk-m3" | "moltenvk-m4" => true,
+            "moltenvk-m3" => true,
             _ => continue,
         };
         seen += 1;

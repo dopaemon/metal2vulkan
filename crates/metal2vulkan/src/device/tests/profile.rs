@@ -499,9 +499,7 @@ fn streamed_fingerprint_equals_the_hash_of_the_rendering() {
 /// its allocation sizes, as two captures of one GPU family on one driver do
 /// (`intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, the one Intel venue), two of one GPU
 /// under its two `deviceID`s (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of
-/// Hawk Point and of Phoenix), and `moltenvk-m3` and `moltenvk-m4` (MoltenVK 1.4.1 on the Apple
-/// M3 Max and the Apple M4 under macOS 27, whose `deviceID` MoltenVK makes one: the macOS release
-/// and the GPU family).
+/// Hawk Point and of Phoenix).
 #[test]
 fn fingerprints_distinguish_committed_profiles() {
     let translated = |stem: &str| {
@@ -535,7 +533,6 @@ fn fingerprints_distinguish_committed_profiles() {
                 "intel-irisxe-rplp-anv".to_string(),
                 "intel-uhd770-rpls-anv".to_string()
             ),
-            ("moltenvk-m3".to_string(), "moltenvk-m4".to_string()),
         ],
         "the committed profiles that share a fingerprint"
     );
@@ -891,7 +888,8 @@ fn moltenvk_carries_its_spirv_cross_defects_from_their_measured_release() {
                 .workarounds
                 .contains(&defect)
         };
-        for stem in ["moltenvk-m3", "moltenvk-m4"] {
+        {
+            let stem = "moltenvk-m3";
             let mut desc = profile(stem);
             assert_eq!(desc.driver_version, 10401, "{stem}");
             assert!(carries(&desc), "{stem} {defect:?}");
@@ -927,7 +925,8 @@ fn moltenvk_on_apple_carries_the_per_sample_writer_defect_from_its_measured_rele
             .workarounds
             .contains(&defect)
     };
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let mut desc = profile(stem);
         assert_eq!(desc.driver_version, 10401, "{stem}");
         assert!(carries(&desc), "{stem}");
@@ -1299,7 +1298,6 @@ fn function_storage_is_the_measured_value_of_the_device() {
         ("intel-irisxe-rplp-anv", 32 * kib),
         ("intel-uhd770-rpls-anv", 32 * kib),
         ("nvidia-rtx5080-laptop", 32 * kib),
-        ("moltenvk-m4", 192 * kib),
         ("moltenvk-m3", 192 * kib),
         ("gate-lavapipe", 48 * kib),
         ("gate-lavapipe-x86_64", 48 * kib),

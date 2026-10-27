@@ -17,9 +17,8 @@
 //      `bind::mipmap_filter`'s rule reads -- but that is an argument about our kernel, not a
 //      measurement of Metal, which is why the refusal stands until this runs.
 //   3. **The word-view render fallback** (`metal::format::word`, which has no entry for it).
-//      `A4R4G4B4_UNORM_PACK16` carries no `COLOR_ATTACHMENT` and no `BLIT_DST` on `moltenvk-m3`,
-//      `moltenvk-m4` or `nvidia-rtx5080-laptop`, while `R16_UINT` carries `COLOR_ATTACHMENT` on all
-//      three, so without the fallback a render target of this format is refused on Metal's own
+//      `A4R4G4B4_UNORM_PACK16` carries no `COLOR_ATTACHMENT` and no `BLIT_DST` on `moltenvk-m3` or
+//      `nvidia-rtx5080-laptop`, while `R16_UINT` carries `COLOR_ATTACHMENT` on both, so without the fallback a render target of this format is refused on Metal's own
 //      device. Taking it, though, turns `framebuffer_fetch::renders_through_words` true on
 //      MoltenVK -- an `any` over `PixelFormat::ALL` -- which turns the `ProgrammableBlending`
 //      family row into `RowState::Gap`, and `RowState::blocks()` means MoltenVK would then claim

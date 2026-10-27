@@ -978,7 +978,6 @@ fn a_shadowed_extended_range_attachment_reads_and_writes_its_half() {
     let mut checked = 0;
     for stem in [
         "moltenvk-m3",
-        "moltenvk-m4",
         "amd-780m-radv",
         "intel-uhd770-rpls-anv",
         "nvidia-rtx5080-laptop",
@@ -2067,7 +2066,7 @@ fn a_replacing_blend_or_a_write_that_stores_nothing_takes_the_storage_form() {
 /// and stencil attachment. On every committed profile that orders fetch through the interlock the
 /// shader blends color 0: it reads the texel, blends the output over its tile value and stores the
 /// encode (one image read and one write more than the pipeline unblended), the fact names the
-/// blend, and the module passes L3. The whole pipeline is made on `moltenvk-m3` and `moltenvk-m4`
+/// blend, and the module passes L3. The whole pipeline is made on `moltenvk-m3`
 /// (no vertex descriptor), color 0 a written storage attachment of the raw format, as are its
 /// pipelines blending one plus one, one and zero, and source alpha over, and a stage compiled under
 /// its state links into no pipeline of another blend there. The `float4` fill
@@ -2358,7 +2357,8 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
                 .expect("function"),
         )
     };
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../metal2vulkan-validation/profiles")
             .join(format!("{stem}.json"));
@@ -2445,7 +2445,7 @@ fn a_premultiplied_blend_into_an_extended_range_attachment_is_computed_in_the_sh
 /// Without fast math, a blend of the second source into an extended-range attachment reads the
 /// function's index-1 output in the shader. `stage_io`'s dual-source function, its
 /// `air.compile.fast_math_enable` switched to `_disable`, makes the whole pipeline on `moltenvk-m3`
-/// and `moltenvk-m4` into an `RGB10A8_2P_XR10` color 0 blended with the second source's factors in
+/// into an `RGB10A8_2P_XR10` color 0 blended with the second source's factors in
 /// color and alpha: color 0 a written storage attachment, the fact naming the blend and its rounded
 /// math, and no dual-source output (`dualSrcBlend` not required); under a write mask of no channel
 /// it is made too, the second output stored nowhere. Under fast math the same pipeline is refused
@@ -2502,7 +2502,8 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
         u.feature == Feature::ExtendedRangeBlend(crate::error::ExtendedRangeBlend::DualSource)
             && u.needs == Needs::NotImplemented
     };
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../metal2vulkan-validation/profiles")
             .join(format!("{stem}.json"));
@@ -2640,7 +2641,7 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
 /// function computes an extended-range attachment's blend over its input attachment. Into each of
 /// the six forms, under the premultiplied blend (source one, destination one minus the source's
 /// alpha), one plus one, and one and zero, `rt6_samples`' `half4` and `float4` fills make the
-/// pipeline exactly where `moltenvk-m4`, which blends in the pixel interlock, makes it, and refuse
+/// pipeline exactly where `moltenvk-m3`, which blends in the pixel interlock, makes it, and refuse
 /// it by the same gap elsewhere. A made pipeline's color 0 is a color attachment of the raw format
 /// with no Vulkan blend and a write of every raw component, read through an input attachment of
 /// `uint` texels, and states the blend (`RuntimeFact::ExtendedRangeInputBlend`, keeping no channel)
@@ -2694,7 +2695,7 @@ fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader()
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         Device::new(desc, DevicePolicy::default()).expect("device")
     };
-    let interlock = device("moltenvk-m4");
+    let interlock = device("moltenvk-m3");
     // Color 0 of `pf`, blended with source factor one and destination factor `destination`
     // (color and alpha alike), under `mask`.
     let color = |pf: PixelFormat, destination: BlendFactor, mask: ColorWriteMask| {
@@ -2726,7 +2727,7 @@ fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader()
         inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([0], &colors, false, false, 1));
         inputs
     };
-    // The pipeline on `dev` where `moltenvk-m4` makes it too; `None` where both refuse it by the
+    // The pipeline on `dev` where `moltenvk-m3` makes it too; `None` where both refuse it by the
     // same gap of Metal's model.
     // The blend-source notes a pipeline's stages record, which follow the blend whatever form
     // computes it.
@@ -2984,7 +2985,7 @@ fn an_extended_range_blend_through_input_attachments_is_computed_in_the_shader()
 /// `float4`, and `exf_fetch_three`'s `float4` and `half4` to two such attachments, the `_sRGB` twin
 /// among them), the fact names no blend, and the module passes L3. A mask of some of the channels
 /// is refused `NotImplemented`; a blend of the `float4` output takes its own model. The whole
-/// pipeline is made on `moltenvk-m3` and `moltenvk-m4` (no vertex descriptor), color 0 a written
+/// pipeline is made on `moltenvk-m3` (no vertex descriptor), color 0 a written
 /// storage attachment of the raw format, and a stage compiled under it links into no pipeline that
 /// blends color 0.
 #[test]
@@ -3100,7 +3101,8 @@ fn a_fetched_extended_range_attachment_is_written_unblended_in_the_shader() {
                 .expect("function"),
         )
     };
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../metal2vulkan-validation/profiles")
             .join(format!("{stem}.json"));
@@ -3446,11 +3448,7 @@ fn a_per_sample_depth_test_takes_each_sample_s_depth_where_measured() {
         .shape()
     };
     // (profile, each sample's depth computed, the stand-in as sample planes)
-    let measured = [
-        ("moltenvk-m3", true, true),
-        ("moltenvk-m4", true, true),
-        ("amd-780m-radv", false, false),
-    ];
+    let measured = [("moltenvk-m3", true, true), ("amd-780m-radv", false, false)];
     for (stem, computed, planes) in measured {
         let dev = device(stem);
         let base = dev
@@ -3590,7 +3588,6 @@ fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
     };
     let shipped = [
         ("moltenvk-m3", 1),
-        ("moltenvk-m4", 1),
         ("amd-780m-radv", 1),
         ("amd-780m-radv", 4),
         ("intel-irisxe-rplp-anv", 1),
@@ -3651,7 +3648,8 @@ fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
     }
     // MoltenVK at four samples: a multisampled stencil the device's single-sample storage images
     // would hold as sample planes, which are not implemented.
-    for stem in ["moltenvk-m3", "moltenvk-m4"] {
+    {
+        let stem = "moltenvk-m3";
         let dev = device(stem);
         let base = dev
             .compile_render_pipeline(&descriptor(4), &Budget::standard())
@@ -3721,12 +3719,7 @@ fn a_returned_depth_is_tested_in_the_shader_at_every_sample_count() {
         }
         .shape()
     };
-    let profiles = [
-        "moltenvk-m3",
-        "moltenvk-m4",
-        "amd-780m-radv",
-        "intel-irisxe-rplp-anv",
-    ];
+    let profiles = ["moltenvk-m3", "amd-780m-radv", "intel-irisxe-rplp-anv"];
     for samples in [1u32, 4] {
         let mut d = RenderPipelineDescriptor::new(function(&io, "stage_io_vertex_position"));
         d.fragment = Some(function(&returned, "fetch_returned_depth"));
@@ -3836,7 +3829,6 @@ fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
         .shape()
     };
     let shipped = [
-        ("moltenvk-m4", 1),
         ("amd-780m-radv", 1),
         ("amd-780m-radv", 4),
         ("intel-irisxe-rplp-anv", 1),

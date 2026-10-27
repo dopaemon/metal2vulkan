@@ -914,7 +914,7 @@ fn a_half_color_output_records_its_precision() {
         return;
     };
     // Profiles with sample-rate shading, which the function's sample input needs.
-    for stem in ["moltenvk-m3", "moltenvk-m4", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
         let p = prof(stem);
         let half = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         assert!(!half.precision.contains(&fast), "{stem}");
@@ -1494,7 +1494,7 @@ fn a_half_output_into_a_float32_attachment_keeps_metals_float() {
     let consts = FunctionConstantValues::defaults();
     for (what, to, lanes, marked) in cases {
         let Some(bc) = edited(to) else { return };
-        for stem in ["moltenvk-m4", "amd-rdna3-radv", "lavapipe"] {
+        for stem in ["amd-rdna3-radv", "lavapipe"] {
             let p = prof(stem);
             let mut inputs = crate::lower::select::LowerInputs::new();
             inputs.half_output_lanes.insert(0, lanes);
@@ -1563,7 +1563,7 @@ fn a_missing_half_output_map_links() {
     let rounding = (false, TextureWriteRoundingMode::default());
     let mut inputs = LoweringInputs::new();
     inputs.half_output_lanes = half_output_lanes(&plain);
-    for stem in ["moltenvk-m4", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["amd-rdna3-radv", "lavapipe"] {
         let p = prof(stem);
         let none = compile(&bc, HALF_ENTRY, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert!(none.interface.io.half_output_lanes.is_empty(), "{stem}");

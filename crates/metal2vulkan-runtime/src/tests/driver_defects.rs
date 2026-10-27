@@ -329,8 +329,8 @@ fn an_unmeasured_identity_says_so_in_an_informational_message() {
     }
     let (stem, mut desc) = super::capabilities::committed_descriptions()
         .into_iter()
-        .find(|(stem, _)| stem == "moltenvk-m4")
-        .expect("moltenvk-m4");
+        .find(|(stem, _)| stem == "moltenvk-m3")
+        .expect("moltenvk-m3");
     desc.driver_version += 1;
     let (_, properties) = super::capabilities::created(&stem, &desc);
     let text = unmeasured_driver(&properties).expect("an unmeasured MoltenVK release");

@@ -1097,12 +1097,7 @@ fn depth_twins_hold_the_texels_in_colour_where_a_depth_image_may_not() {
     }
     // Drivers measured to keep every `float` in a depth image: NVIDIA's and lavapipe with the
     // extension, MoltenVK without it.
-    for stem in [
-        "nvidia-rtx5080-laptop",
-        "gate-lavapipe",
-        "moltenvk-m3",
-        "moltenvk-m4",
-    ] {
+    for stem in ["nvidia-rtx5080-laptop", "gate-lavapipe", "moltenvk-m3"] {
         assert!(!twinned.iter().any(|n| n == stem), "{stem}: {twinned:?}");
     }
 }

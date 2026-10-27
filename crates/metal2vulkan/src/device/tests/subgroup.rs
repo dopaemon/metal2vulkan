@@ -63,7 +63,6 @@ intel-uhd770-rpls-anv: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 lavapipe: -,xO,xO,xO,xO,xO,xM | -,P,P,P,P,P,xW | -,L,E,E,E,E,E
 lunarg-desktop-baseline-2023: -,xO,xO,xO,xO,xO,xM | -,P,xQ,xO,xO,xO,xM | -,L,E,E,E,E,E
 moltenvk-m3: -,D,xO,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
-moltenvk-m4: -,D,xO,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 nvidia-pascal-linux: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 nvidia-rtx50-linux: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 nvidia-rtx5080-laptop: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
@@ -509,7 +508,6 @@ fn no_profile_answers_more_than_an_apple_gpu() {
         ("lavapipe", [1024, 32768, 8, 16384]),
         ("gate-lavapipe-x86_64", [1024, 32768, 8, 16384]),
         ("moltenvk-m3", [1024, 32768, 4, 16384]),
-        ("moltenvk-m4", [1024, 32768, 4, 16384]),
     ] {
         let dev = device(stem);
         let m = dev.metal_properties();

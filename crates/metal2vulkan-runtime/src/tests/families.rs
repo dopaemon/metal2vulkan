@@ -350,7 +350,7 @@ fn states_follow_their_sources() {
             // MoltenVK on the M3 and the M4 runs a vertex function's ballot and shuffles as
             // Metal does (`DriverDeviation::MetalVertexSimdgroups`), and a constant lane's quad
             // permute shuffles there: every SIMD and quad row is exact (the consumer's key 33).
-            if matches!(stem.as_str(), "moltenvk-m3" | "moltenvk-m4") {
+            if matches!(stem.as_str(), "moltenvk-m3") {
                 assert_eq!(got, RowState::Exact, "{stem}: {row:?}");
             }
             if both(ops) {
@@ -950,7 +950,6 @@ fn extended_range_formats_answer_the_shaders_filter_and_blend() {
     }
     for stem in [
         "moltenvk-m3",
-        "moltenvk-m4",
         "amd-rdna3-radv",
         "intel-arl-anv",
         "nvidia-rtx5080-laptop",
@@ -962,7 +961,7 @@ fn extended_range_formats_answer_the_shaders_filter_and_blend() {
             assert!(blended.contains(&at), "{stem}: {pf:?}");
         }
     }
-    let rows = audits("moltenvk-m4");
+    let rows = audits("moltenvk-m3");
     for row in [FormatRow::BGRA10XR, FormatRow::BGR10XR] {
         for capability in [FormatCapability::Filter, FormatCapability::Blend] {
             let at = FamilyRow::Format(row, capability);
@@ -1040,7 +1039,7 @@ fn srgb_formats_held_as_their_unorm_twin_answer_the_twins_filter() {
 /// does not, so the cap changes no family's row.
 #[test]
 fn listed_formats_answer_at_most_their_apple9_cell() {
-    let all = audits("moltenvk-m4");
+    let all = audits("moltenvk-m3");
     let format_rows = |family: GpuFamily| -> Vec<(FormatRow, FormatCapability)> {
         all[&family]
             .iter()

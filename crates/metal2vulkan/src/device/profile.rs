@@ -1373,7 +1373,7 @@ pub enum DriverWorkaround {
     /// `[[barycentric_coord, center_no_perspective]]`. MoltenVK (`VK_DRIVER_ID_MOLTENVK`)
     /// 1.4.1 converts the shader with SPIRV-Cross `adec7acb`, which throws "Cannot declare both
     /// BaryCoordNV and BaryCoordNoPerspNV in same shader in MSL." whatever the GPU (measured on
-    /// an Apple M4: `corpus-pipeline --fixtures` on `moltenvk-m4`). It is keyed on
+    /// an Apple M4 with `corpus-pipeline --fixtures`). It is keyed on
     /// the driver's release (`device::driver_facts`): a newer release keeps it until a
     /// measurement says otherwise. Such a fragment function is refused there
     /// (`lower::stage_io`'s input builtins); one form alone compiles.
