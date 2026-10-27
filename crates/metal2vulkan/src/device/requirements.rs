@@ -699,7 +699,10 @@ pub enum VkProperty {
     /// [`DriverDeviation::MetalHalfArithmetic`](crate::error::DriverDeviation::MetalHalfArithmetic)).
     /// No Vulkan query reports it. A module whose `half` `+`, `-` or `*` takes those instructions
     /// requires it; without it, the module takes them under the 16-bit float controls, or
-    /// computes in `float` and rounds the result to `half` as every `half` rounds.
+    /// computes in `float` and rounds the result to `half` as every `half` rounds. A module that
+    /// reads a `half` from its bits by the device's widening, outside the 16-bit float controls,
+    /// requires it too: the measurement reads every `half` through that widening, denormals
+    /// included; without it the module records `PrecisionNote::NativeHalfConversion`.
     MetalHalfArithmetic,
     /// The device stores every `float` but a NaN that a shader writes to a half-float storage
     /// image as Metal stores a kernel's write, rounded toward zero (the driver's measured

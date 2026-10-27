@@ -670,11 +670,14 @@ fn fract_and_saturate_answer_as_metal() {
         .filter(normal)
         .collect();
     metal_answers(FloatFn::Saturate, f32_, &saturate);
-    metal_answers(
-        FloatFn::Fract,
-        half,
-        &rows(|r| [u64::from(r.4), u64::from(r.5)]),
-    );
+    // `half` `fract`'s difference is the device's quantize (`narrow::device_round`): a result
+    // below the smallest normal `half` is the zero of its sign (`PrecisionNote::NativeHalfQuantize`),
+    // every other lane Metal's.
+    let flushed: Vec<Row> = rows(|r| [u64::from(r.4), u64::from(r.5)])
+        .into_iter()
+        .map(|(x, w)| (x, if w & 0x7C00 == 0 { w & 0x8000 } else { w }))
+        .collect();
+    metal_answers(FloatFn::Fract, half, &flushed);
     metal_answers(
         FloatFn::Saturate,
         half,

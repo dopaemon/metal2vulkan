@@ -76,13 +76,12 @@
 //!   through the device's widening): the owned fixture `hwd_half_reads` reads back every `half`
 //!   bit pattern, one thread each, through threadgroup words and a buffer, and uses some reads only
 //!   in a sum, a product, a widening to `float` and a compare, and moves another through a select
-//!   to memory. Where the profile takes the deviation the first take the device's widening of their
-//!   bits (`lower::arith::widening`; its unit test reads the fixture's plan), and every one of the
-//!   65,536 patterns is held to Metal's answer. Elsewhere each read is the module's decode for the
-//!   profile's `half` rounding (`lower::arith::narrow::from_bits`: the integer decode, or the
-//!   device's widening under the 16-bit float controls or the device's own conversion), held to
-//!   Metal's but within its note's bound: a NaN's bits the device's (`NativeNanEncoding`,
-//!   `NativeHalfConversion`), and under the conversion a denormal the zero of its sign.
+//!   to memory. Every read is the module's decode for the profile (`lower::arith::narrow::from_bits`):
+//!   the device's widening of the bits wherever the profile has `shaderFloat16`, else the integer
+//!   decode, exact. Each of the 65,536 patterns is held to Metal's answer but within the stage's
+//!   notes' bound: a NaN's bits the device's (`NativeNanEncoding`), and where the widening is not
+//!   measured to be Metal's (`NativeHalfConversion`) a denormal the zero of its sign; where the
+//!   profile takes the deviation the module requires it, and every denormal is Metal's.
 //! - **The fragment simdgroups** (`MetalFragmentSimdgroups`): the owned fixture
 //!   `gsm2_fragment_lanes` writes a fragment's `[[thread_index_in_simdgroup]]`, read as a `uint`
 //!   and a `ushort` parameter and as a program-scope `uint`, over three draws into a 32x32 target:
@@ -1587,34 +1586,32 @@ fn half_denormal(h: u16) -> bool {
     h & 0x7C00 == 0 && h & 0x3FF != 0
 }
 
-/// Every word `hwd_half_reads` writes, for every `half` bit pattern, is held to Metal's where the
-/// profile takes `DriverDeviation::MetalHalfArithmetic`: its reads used only in a sum, a product,
-/// a widening and a compare take the device's widening, which is Metal's. Elsewhere each read is
-/// the module's decode for the profile's `half` rounding (`lower::arith::narrow::from_bits`): the
-/// integer decode, exact; the device's widening under the 16-bit float controls, exact but for a
-/// NaN's bits (`PrecisionNote::NativeNanEncoding`); or, where the module rounds through the
-/// device's conversion, the device's widening wherever no loop holds the read, whose note
-/// (`NativeHalfConversion`) bounds it: a NaN's bits are the device's, and a denormal may be the
-/// zero of its sign. So every thread whose pattern is neither is held to Metal's, a NaN pattern's
-/// word to a NaN where the stage records one of those notes, and a denormal's to Metal's or the
-/// zero of its sign where it records the conversion; the compares are Metal's on every device. The
-/// runtime announces the notes the stage records, and the test prints how many words of each are
-/// the device's.
+/// Every word `hwd_half_reads` writes, for every `half` bit pattern, is held to Metal's but within
+/// the notes its stage records. Each read is the module's decode (`lower::arith::narrow::from_bits`):
+/// on a profile with `shaderFloat16` the device's widening, exact but for a NaN's bits
+/// (`PrecisionNote::NativeNanEncoding`) and, where that widening is not measured to be Metal's
+/// (`DriverDeviation::MetalHalfArithmetic`, whose fact the module then requires), a denormal,
+/// which may be the zero of its sign (`NativeHalfConversion`); elsewhere the integer decode,
+/// exact. So every thread whose pattern is neither is held to Metal's, a NaN pattern's word to a
+/// NaN where the stage records the NaN note, and a denormal's to Metal's or the zero of its sign
+/// where it records the conversion; the compares are Metal's on every device. The runtime
+/// announces the notes the stage records, and the test prints how many words of each are the
+/// device's.
 #[test]
 fn half_loads_the_device_widens_answer_as_metal() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
-        let widens = takes(&device, DriverDeviation::MetalHalfArithmetic);
+        let measured = takes(&device, DriverDeviation::MetalHalfArithmetic);
         let name = device.name().to_owned();
         let bitcode = llvm_assemble(&fixture("hwd_half_reads.ll")).unwrap();
         let native: Vec<PrecisionNote> = stage_notes(&device, &bitcode, "hwd_half_reads")
             .into_iter()
             .filter(|note| HALF_NATIVE.contains(note))
             .collect();
-        let nans = !widens && !native.is_empty();
-        let flushes = !widens && native.contains(&PrecisionNote::NativeHalfConversion);
+        let nans = native.contains(&PrecisionNote::NativeNanEncoding);
+        let flushes = native.contains(&PrecisionNote::NativeHalfConversion);
         let got = half_reads_run(&device);
         let metal = metal_half_reads();
         // The pattern whose read each thread's word answers (`metal_half_reads`).
@@ -1670,9 +1667,9 @@ fn half_loads_the_device_widens_answer_as_metal() {
             ),
         ] {
             eprintln!(
-                "half reads {what} on {name} (the device's widening: {widens}, native forms \
-                 {native:?}): {native_words} of {PATTERNS} differ from Metal, {} of them past the \
-                 notes' bound",
+                "half reads {what} on {name} (the device's widening measured Metal's: {measured}, \
+                 native forms {native:?}): {native_words} of {PATTERNS} differ from Metal, {} of \
+                 them past the notes' bound",
                 outside.len()
             );
             if !outside.is_empty() {

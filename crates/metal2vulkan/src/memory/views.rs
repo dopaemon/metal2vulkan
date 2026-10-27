@@ -435,7 +435,9 @@ pub fn unit_ptr(fb: &mut FunctionBuilder<'_>, view: NarrowView, index: Value) ->
     fb.access_chain(base, &[zero, index])
 }
 
-/// Load unit `index` of `view` with memory operands `ops`, zero-extended to a `u32`.
+/// Load unit `index` of `view` with memory operands `ops`, zero-extended to a `u32`; a 16-bit
+/// unit's extension is noted (`FunctionBuilder::note_widened16`), so a `half` read from it may
+/// take the unit itself (`narrow::from_word_halves`).
 pub fn read_unit(
     fb: &mut FunctionBuilder<'_>,
     view: NarrowView,
@@ -444,7 +446,11 @@ pub fn read_unit(
 ) -> BResult<Value> {
     let p = unit_ptr(fb, view, index)?;
     let x = fb.load(p, ops)?;
-    fb.convert(ConvOp::UConvert, x, view.u32_ty)
+    let y = fb.convert(ConvOp::UConvert, x, view.u32_ty)?;
+    if view.bytes == 2 {
+        fb.note_widened16(y, x);
+    }
+    Ok(y)
 }
 
 /// Store the low `8 · view.bytes` bits of `value` (a `u32`) to the place `p` of `view`'s units

@@ -86,7 +86,6 @@ pub(crate) mod regroup;
 pub mod srgb;
 pub mod texel_round;
 pub mod wide;
-pub mod widening;
 
 #[cfg(test)]
 mod tests;
@@ -792,14 +791,14 @@ pub struct ArithPlan {
     /// where the profile has `shaderFloat16` (noted `NativeHalfConversion`), else the device's
     /// `OpQuantizeToF16` (noted `NativeHalfQuantize`, but where it is measured to round as Metal
     /// does, `DriverDeviation::MetalHalfQuantize`: a module that quantizes then requires
-    /// `VkProperty::MetalHalfQuantize`).
+    /// `VkProperty::MetalHalfQuantize`; a sum or difference the bare quantize, noted
+    /// `NativeHalfQuantize` either way, `narrow::device_round`).
     pub quantize: QuantizeForm,
     /// Whether [`ArithPlan::quantize`] is the device's own rounding (native half rounding,
     /// [`narrow::native_rounding`]), decided with it by [`finish`].
     pub native_half: bool,
     /// Whether a `half`'s NaN bits are left to the device's conversion where the module rounds
     /// through the conversion under the float controls ([`QuantizeForm::Controlled`]): a `half`
-    /// read from its bits is the device's widening of them (`narrow::from_bits`), and a `half`
     /// texel takes the rounding's NaN (`narrow::round_texel`). Decided by [`finish`], on every
     /// profile that rounds so.
     pub native_half_nans: bool,
@@ -813,10 +812,6 @@ pub struct ArithPlan {
     /// ([`ArithStrategy::F16`]), measured to be Metal's (`DriverDeviation::MetalHalfArithmetic`),
     /// recorded at selection: the module then requires `VkProperty::MetalHalfArithmetic`.
     pub f16_arith: bool,
-    /// The loads of `half`s whose decode from their bits is the device's widening, where it is
-    /// Metal's and no use reads a NaN's bits ([`widening::widened_loads`]), recorded at selection:
-    /// the module then requires `VkProperty::MetalHalfArithmetic`.
-    pub widened: BTreeSet<InstId>,
     /// The precision notes the plan's operations record unless their entry's quotient and
     /// functions are Metal's own (the profile's `float` functions are Metal's and Metal compiles
     /// the entry with fast math), recorded at selection ([`OpNotes::unless_metal_fast`]);

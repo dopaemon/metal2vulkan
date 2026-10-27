@@ -2566,22 +2566,11 @@ fn compile_kept<K>(
         kernel,
     } = plan_one(r, p, m)?;
     plan.estimate.check(word_cap)?;
-    let crate::lower::emit::Emitted {
-        mut module,
-        merged,
-        loop_free,
-    } = crate::lower::emit::emit_module(&spec, &plan, m)?;
+    let crate::lower::emit::Emitted { mut module, merged } =
+        crate::lower::emit::emit_module(&spec, &plan, m)?;
     // Every driver compiles each repeated region of the entry again; above the measured size,
-    // repeated regions are written once, as a loop. With the loops final, the lowering's offers for
-    // where no loop holds them are weighed: a `half` decoded by the device's widening outside every
-    // loop.
-    let held = std::mem::size_of_val(loop_free.as_slice());
-    m.charge(held)?;
-    let taken = crate::spirv::roll::roll_entry(&mut module, m)
-        .and_then(|_| crate::spirv::dead::take_outside_loops(&mut module, &loop_free, m));
-    m.release(held);
-    drop(loop_free);
-    let decoded_natively = taken? > 0;
+    // repeated regions are written once, as a loop.
+    crate::spirv::roll::roll_entry(&mut module, m)?;
     // On a driver whose compiler loses a simdgroup's storage writes after an `optnone` call only
     // its helper invocations make, those invocations take another arm where that is exact.
     let helper_guard = crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
@@ -2634,48 +2623,60 @@ fn compile_kept<K>(
         }
     };
     // A `half` rounded through `OpQuantizeToF16` (`QuantizeForm::Device`): where the device's is
-    // measured to round as Metal does the module requires that fact, and elsewhere it records
-    // the native note.
+    // measured to round as Metal does and every quantize keeps its denormal arm, the module
+    // requires that fact, and elsewhere it records the native note.
     let mut precision = plan.precision.clone();
     let specialized = plan.specialized.clone();
-    let device_quantize = plan.families.arith.quantize
-        == crate::spirv::builder::QuantizeForm::Device
+    let quantize = plan.families.arith.quantize;
+    let device_quantize = quantize == crate::spirv::builder::QuantizeForm::Device
         && crate::lower::arith::narrow::quantizes(&module);
+    let flushes = device_quantize && crate::lower::arith::narrow::flushes_below_normal(&module, m)?;
     // A `half` rounded through the device's conversion to 16 bits and back, with no quantize: the
     // module records the native note.
-    let converts = plan.families.arith.quantize == crate::spirv::builder::QuantizeForm::Converted
+    let converts = quantize == crate::spirv::builder::QuantizeForm::Converted
         && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
+    // A `half` read from its bits by the device's widening (every profile with `shaderFloat16`):
+    // a NaN's bits are the device's, recorded. Under the float controls its denormals are Metal's,
+    // as the conversion's; on a device whose widening is measured to read every `half` as Metal's
+    // (`DriverDeviation::MetalHalfArithmetic`) the module requires that fact; elsewhere the device
+    // may flush them, within the native conversion's note.
+    let widens = crate::lower::arith::narrow::widens_bits(&module, m)?;
+    let converted_widening = widens && quantize == crate::spirv::builder::QuantizeForm::Converted;
+    let measured_widening = converted_widening
+        && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic);
+    if widens && !precision.contains(&PrecisionNote::NativeNanEncoding) {
+        precision.push(PrecisionNote::NativeNanEncoding);
+        precision.sort_unstable();
+    }
     // A `half` rounded through the device's conversion and its widening, each decorated
     // `NoContraction`, under the float controls that make it Metal's, computed by the device's
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
     // widening, which they make exact but for a NaN's bits: the entry declares them, and so
-    // requires the device's float-controls properties for them, and no fact. A module that widens
-    // so leaves a NaN's bits to the device, as every profile does.
-    if plan.families.arith.quantize == crate::spirv::builder::QuantizeForm::Controlled {
-        let widens = crate::lower::arith::narrow::widens_bits(&module, m)?;
-        if widens
+    // requires the device's float-controls properties for them, and no fact.
+    if quantize == crate::spirv::builder::QuantizeForm::Controlled
+        && (widens
             || crate::lower::arith::narrow::computes_in_16_bits(&module)
-            || crate::lower::arith::narrow::rounds_by_conversion(&module, m)?
-        {
-            let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
-            module.declare_modes(&modes)?;
-        }
-        if widens && !precision.contains(&PrecisionNote::NativeNanEncoding) {
-            precision.push(PrecisionNote::NativeNanEncoding);
-            precision.sort_unstable();
-        }
+            || crate::lower::arith::narrow::rounds_by_conversion(&module, m)?)
+    {
+        let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
+        module.declare_modes(&modes)?;
     }
     // Native half rounding: a module that rounds through the device's conversion or quantize, or
-    // decodes a `half` by the device's widening, where the profile does not take the deviation
-    // making it Metal's records the kind, and requires no fact.
-    let native_half = if device_quantize || converts || decoded_natively {
-        crate::lower::arith::narrow::native_rounding(p, plan.families.arith.quantize)
+    // widens a `half` by the device where that is not measured to be Metal's, where the profile
+    // does not take the deviation making its rounding Metal's records the kind, and requires no
+    // fact; a quantize with no denormal arm records it on every profile.
+    let native_half = if flushes {
+        Some(PrecisionNote::NativeHalfQuantize)
+    } else if device_quantize || converts || (converted_widening && !measured_widening) {
+        crate::lower::arith::narrow::native_rounding(p, quantize)
     } else {
         None
     };
     if let Some(note) = native_half {
-        precision.push(note);
-        precision.sort_unstable();
+        if !precision.contains(&note) {
+            precision.push(note);
+            precision.sort_unstable();
+        }
     }
     if helper_guard.exposed {
         precision.push(PrecisionNote::HelperBranchDropsSimdgroupStores);
@@ -2759,8 +2760,8 @@ fn compile_kept<K>(
             .insert(crate::device::requirements::VkProperty::MetalMinMax);
     }
     // `half` `+ - * /` left to the device's 16-bit arithmetic because it is Metal's, and a `half`
-    // load's decode left to the device's widening because that measurement makes it Metal's.
-    if plan.families.arith.f16_arith || !plan.families.arith.widened.is_empty() {
+    // read from its bits by the device's widening, whose denormals that measurement makes Metal's.
+    if plan.families.arith.f16_arith || measured_widening {
         requirements
             .properties
             .insert(crate::device::requirements::VkProperty::MetalHalfArithmetic);

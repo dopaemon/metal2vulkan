@@ -517,8 +517,9 @@ fn half_operands() -> Vec<[f32; 2]> {
 }
 
 /// On a device whose float controls do not make its conversion to 16 bits Metal's, the stage
-/// records `NativeHalfConversion` (or `NativeHalfQuantize` without `shaderFloat16`, unless its
-/// quantize is measured to round as Metal's does) and the pipeline state announces it, and each
+/// records `NativeHalfConversion` (or `NativeHalfQuantize` without `shaderFloat16`, which its sum,
+/// a bare quantize, records even where the quantize is measured to round as Metal's does) and the
+/// pipeline state announces it, and each
 /// `half` narrowing and sum is within the bound the note records: one unit in the last place of the
 /// `half`, 65504 where Metal answers infinity from 65520 up on a device that rounds toward zero,
 /// and the zero of its sign below `2^-14` on one that flushes 16-bit denormals; or the `float`
@@ -561,7 +562,6 @@ fn half_rounding_answers_within_its_recorded_bound() {
                 FloatWidth::F16,
             ));
             let measured = required.contains(&VkProperty::MetalHalfQuantize);
-            let metal_s = measured || controlled;
             let library = device.new_library_with_air(&bitcode).unwrap();
             let function = library.new_function_with_name("hr").unwrap();
             let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
@@ -575,6 +575,10 @@ fn half_rounding_answers_within_its_recorded_bound() {
                 .filter_map(|kind| kind.precision_note())
                 .filter(|note| kinds.contains(note))
                 .collect();
+            // A sum by the bare quantize leaves a result below the smallest normal `half` to the
+            // device, measured quantize or not.
+            let metal_s =
+                (measured || controlled) && !announced.contains(&PrecisionNote::NativeHalfQuantize);
             eprintln!(
                 "{name}: measured {measured}, float controls {controlled}; announced \
                      {announced:?}"

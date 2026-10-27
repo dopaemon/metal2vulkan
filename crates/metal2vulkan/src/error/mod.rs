@@ -670,9 +670,10 @@ pub enum DriverDeviation {
     /// and elsewhere computes the result in `float` and rounds it to `half` as every `half`
     /// rounds (`narrow::round`, noted `NativeHalfConversion` or `NativeHalfQuantize` where that
     /// rounding is not Metal's). The measurement reads every `half` through the device's
-    /// widening (`x + -0` of every `x`), exact but for a NaN: a load of `half`s none of whose uses
-    /// reads a NaN's bits (a `half` sum, difference or product, a compare, a widening to `float`)
-    /// takes that widening of its bits in place of their decode in integer arithmetic.
+    /// widening (`x + -0` of every `x`), exact but for a NaN, denormals included: a module that
+    /// reads a `half` from its bits by that widening (every profile with `shaderFloat16` does)
+    /// requires the property for its denormals, and records `PrecisionNote::NativeNanEncoding`
+    /// for its NaNs' bits.
     MetalHalfArithmetic,
     /// The device stores every `float` but a NaN that a shader writes to a half-float storage
     /// image (`R16Float`, `RG16Float`, `RGBA16Float`; a storage texel buffer of one too) as Metal

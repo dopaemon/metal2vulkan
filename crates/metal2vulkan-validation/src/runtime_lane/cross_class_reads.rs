@@ -26,7 +26,7 @@
 //! A `half` result's lane whose bits are a NaN is the device's where the stage leaves a `half`
 //! NaN's bits to it: where the module rounds through the device's conversion
 //! (`PrecisionNote::NativeHalfConversion`, whose widening may quiet a signalling NaN, as lavapipe's
-//! does) or widens under the float controls (`NativeNanEncoding`). Such a lane is any NaN, counted
+//! does) or widens a `half` by the device (`NativeNanEncoding`). Such a lane is any NaN, counted
 //! apart (`CROSS-CLASS-NAN` lines); every other lane stays the native slot's.
 //!
 //! A slot whose access has no exact answer (a `uint` read of a depth texture here) binds the
@@ -423,7 +423,7 @@ fn settled_key(
 
 /// Whether a stage whose notes are `notes` leaves a `half` NaN's bits to the device: it rounds
 /// through the device's conversion and may widen a `half` by it (`PrecisionNote::NativeHalfConversion`),
-/// or widens one under the float controls (`NativeNanEncoding`).
+/// or widens one by the device (`NativeNanEncoding`).
 fn leaves_half_nan_bits(notes: &BTreeSet<PrecisionNote>) -> bool {
     notes.contains(&PrecisionNote::NativeHalfConversion)
         || notes.contains(&PrecisionNote::NativeNanEncoding)

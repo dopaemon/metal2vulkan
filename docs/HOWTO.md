@@ -44,9 +44,14 @@ driver's subgroup width instead.
 A `half` computed in `float` rounds through the device's conversion to 16 bits and back, Metal's
 `half(float)` under the float controls the entry declares, where the driver keeps that pair (ANV,
 RADV). Elsewhere it rounds through the device's own conversion, or its `OpQuantizeToF16` without
-`shaderFloat16`, and the pipeline records `NativeHalfConversion` or `NativeHalfQuantize`. NVIDIA's
-driver (615.71.09) folds the pair (`DriverWorkaround::HalfConversionPairFolded`), so it takes the
-native conversion.
+`shaderFloat16` (a sum or difference by the quantize alone, which may flush a result below the
+smallest normal `half`), and the pipeline records `NativeHalfConversion` or `NativeHalfQuantize`.
+NVIDIA's driver (615.71.09) folds the pair (`DriverWorkaround::HalfConversionPairFolded`), so it
+takes the native conversion. A `half` read from memory or from its bits is the device's widening
+(an `OpFConvert` of the bits read as a 16-bit float) wherever the device has `shaderFloat16`, and
+the pipeline records `NativeNanEncoding` (a NaN's bits) and, where that widening is not measured
+to be Metal's, `NativeHalfConversion` (a denormal the device may flush); without `shaderFloat16`
+it is decoded exactly in integer arithmetic.
 
 To read AIR without translating it (list a metallib's functions, decode a module into typed IR,
 read its entry points' bindings, canonicalize an entry under function-constant values), depend on

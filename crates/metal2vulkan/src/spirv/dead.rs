@@ -34,8 +34,7 @@ use crate::budget::Meter;
 use crate::error::{Error, InternalError, InternalKind};
 use crate::spirv::ids::{BlockId, ConstId, FuncId, TypeId, Value};
 use crate::spirv::ir::{
-    ConstDef, ConstKind, Constant, Decl, GlslOp, Inst, InstAt, Merge, Terminator, Type,
-    TypedModule, ValueOrigin,
+    ConstDef, ConstKind, Constant, Decl, GlslOp, Inst, InstAt, Merge, Terminator, Type, TypedModule,
 };
 
 fn invariant(detail: impl Into<String>) -> Error {
@@ -241,42 +240,20 @@ enum Def {
 /// re-derive its interface and requirements. On error `m` is unchanged.
 #[cfg(test)]
 pub fn remove_dead(m: &mut TypedModule, meter: &mut Meter) -> Result<DeadReport, Error> {
-    remove_dead_keeping(m, &[], &[], meter)
+    remove_dead_keeping(m, &[], meter)
 }
 
 /// Remove every dead removable instruction, dead phi, and dead removable constant of `m`, then
 /// re-derive its interface and requirements, after weighing `offers`: each group's instructions
 /// become copies of their offered values when what that frees outweighs what it keeps alive, in
-/// words. Each value of `keep` is read once more: it stays, with what it reads, for an offer
-/// weighed later ([`take_outside_loops`]). On error `m` is unchanged.
+/// words. On error `m` is unchanged.
 pub fn remove_dead_keeping(
     m: &mut TypedModule,
     offers: &[Offer],
-    keep: &[Value],
-    meter: &mut Meter,
-) -> Result<DeadReport, Error> {
-    sweep(m, (offers, Taking::Smaller), keep, meter)
-}
-
-/// Which offers a sweep takes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Taking {
-    /// An offer group whose copies make the module smaller, in words.
-    Smaller,
-    /// Every offer whose instruction stays and may become a copy, whatever the words: the
-    /// lowering chose the form by where it lies ([`take_outside_loops`]).
-    Every,
-}
-
-/// [`remove_dead_keeping`], taking the offers as `taking` states.
-fn sweep(
-    m: &mut TypedModule,
-    (offers, taking): (&[Offer], Taking),
-    keep: &[Value],
     meter: &mut Meter,
 ) -> Result<DeadReport, Error> {
     let mut ledger = 0usize;
-    let r = plan(m, (offers, taking), keep, meter, &mut ledger);
+    let r = plan(m, offers, meter, &mut ledger);
     meter.release(ledger);
     let Dead {
         insts,
@@ -298,112 +275,6 @@ fn sweep(
         m.remove_dead(&insts, &phis, &consts, &types, &copies, &funcs)?;
     }
     Ok(report)
-}
-
-/// Take each offer of `offers` whose `from` no loop of `m` holds, once the module's loops are
-/// final (after `spirv::roll`): `from`'s instruction becomes a copy of `to`, whatever the words,
-/// and what neither the module nor such an offer reads leaves (the `to` of an offer a loop holds
-/// among it). A block is held by a loop when it lies in a loop's layout interval, from its header
-/// to its merge, or belongs to a function a call in a held block reaches. Returns the copies made.
-/// The lowering offers here a form a driver compiles faster outside loops but slower inside them,
-/// which is not the form of fewer words: a vector's device widening is one instruction per lane
-/// where the exact decode is one per vector, but the driver compiles each lane's either way. The
-/// first sweep keeps each `to` ([`remove_dead_keeping`]), since a later pass may write the code
-/// holding it as a loop.
-pub fn take_outside_loops(
-    m: &mut TypedModule,
-    offers: &[Offer],
-    meter: &mut Meter,
-) -> Result<u32, Error> {
-    if offers.is_empty() {
-        return Ok(0);
-    }
-    let held = loop_held_blocks(m, meter)?;
-    let mut outside = Vec::new();
-    for o in offers {
-        let ValueOrigin::Inst(b) = m.value(o.from)?.origin else {
-            continue;
-        };
-        if !held.get(b.index()).copied().unwrap_or(true) {
-            outside.push(*o);
-        }
-    }
-    meter.charge(std::mem::size_of_val(outside.as_slice()))?;
-    let r = sweep(m, (&outside, Taking::Every), &[], meter);
-    meter.release(std::mem::size_of_val(outside.as_slice()));
-    Ok(r?.copies)
-}
-
-/// Whether a loop holds each block of `m`, by block index: the blocks of each loop's layout
-/// interval, and every block of a function a call in such a block reaches.
-fn loop_held_blocks(m: &TypedModule, meter: &mut Meter) -> Result<Vec<bool>, Error> {
-    let nb = m.blocks().len();
-    let nf = m.functions().len();
-    meter.charge(nb.saturating_add(nf))?;
-    let mut held = vec![false; nb];
-    let mut called = vec![false; nf];
-    let mut stack: Vec<FuncId> = Vec::new();
-    let mut open: Vec<BlockId> = Vec::new();
-    for f in m.functions() {
-        open.clear();
-        for b in &f.blocks {
-            while open.last() == Some(b) {
-                open.pop();
-            }
-            let blk = m
-                .blocks()
-                .get(b.index())
-                .ok_or_else(|| invariant("a function's block"))?;
-            meter.tick(u32::try_from(blk.insts.len()).unwrap_or(u32::MAX))?;
-            if let Some(Merge::Loop { merge, .. }) = blk.merge {
-                open.push(merge);
-            }
-            if open.is_empty() {
-                continue;
-            }
-            if let Some(h) = held.get_mut(b.index()) {
-                *h = true;
-            }
-            for node in &blk.insts {
-                if let Inst::Call { func, .. } = node.inst {
-                    if let Some(c) = called.get_mut(func.index()) {
-                        if !*c {
-                            *c = true;
-                            stack.push(func);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // The functions a held call reaches, transitively: every block of each is held.
-    while let Some(f) = stack.pop() {
-        let func = m
-            .functions()
-            .get(f.index())
-            .ok_or_else(|| invariant("a called function"))?;
-        for b in &func.blocks {
-            if let Some(h) = held.get_mut(b.index()) {
-                *h = true;
-            }
-            let blk = m
-                .blocks()
-                .get(b.index())
-                .ok_or_else(|| invariant("a function's block"))?;
-            for node in &blk.insts {
-                if let Inst::Call { func, .. } = node.inst {
-                    if let Some(c) = called.get_mut(func.index()) {
-                        if !*c {
-                            *c = true;
-                            stack.push(func);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    meter.release(nb.saturating_add(nf));
-    Ok(held)
 }
 
 /// An equal value the lowering offers for a [`removable`] instruction's result: `to` holds what
@@ -436,8 +307,7 @@ struct Dead {
 /// (read-only).
 fn plan(
     m: &TypedModule,
-    (offers, taking): (&[Offer], Taking),
-    keep: &[Value],
+    offers: &[Offer],
     meter: &mut Meter,
     ledger: &mut usize,
 ) -> Result<Dead, Error> {
@@ -488,10 +358,6 @@ fn plan(
             }
         }
         blk.term.for_each_value(|v| count(&mut uses, v));
-    }
-    // The values kept for a later offer, read once more each.
-    for v in keep {
-        count(&mut uses, *v);
     }
     // Module-level readers of constants: a declared composite's parts (released when the
     // composite leaves), and variable initializers.
@@ -558,7 +424,7 @@ fn plan(
     charge::<bool>(meter, ledger, nf)?;
     let gone = sim.unreached(meter, ledger)?;
     sim.release(&gone, meter)?;
-    let copies = sim.weigh((offers, taking), meter, ledger)?;
+    let copies = sim.weigh(offers, meter, ledger)?;
     let in_gone = |b: BlockId| {
         m.blocks()
             .get(b.index())
@@ -1041,11 +907,11 @@ impl Sim<'_> {
     }
 
     /// Weigh each offer group, latest first: its offers' instructions become copies of the
-    /// offered values when the words that frees exceed the words the offered values revive, or
-    /// whatever the words under [`Taking::Every`]. The copies kept, by instruction.
+    /// offered values when the words that frees exceed the words the offered values revive. The
+    /// copies kept, by instruction.
     fn weigh(
         &mut self,
-        (offers, taking): (&[Offer], Taking),
+        offers: &[Offer],
         meter: &mut Meter,
         ledger: &mut usize,
     ) -> Result<Vec<(InstAt, Value)>, Error> {
@@ -1128,7 +994,7 @@ impl Sim<'_> {
                 made.push((o.from, at, o.to));
             }
             self.logging = false;
-            if declined || (gain <= 0 && taking == Taking::Smaller) {
+            if declined || gain <= 0 {
                 while let Some(u) = self.log.pop() {
                     match u {
                         Undo::Uses(v, x) => {
@@ -1522,7 +1388,7 @@ mod tests {
             let (mut m, offers) = offers_kernel(take).expect("build");
             let before = insts(&m);
             let mut meter = Meter::new(&crate::budget::Budget::default());
-            let report = remove_dead_keeping(&mut m, &offers, &[], &mut meter).expect("dce");
+            let report = remove_dead_keeping(&mut m, &offers, &mut meter).expect("dce");
             // Taken: the long chain's two inner instructions leave and its last one is a copy;
             // declined: the long chain leaves. The dead vector leaves both times.
             let (copies, removed) = if take { (1, 3) } else { (0, 4) };
@@ -1554,7 +1420,7 @@ mod tests {
             assert_eq!(bytes.get(4..8), Some(&41u32.to_le_bytes()[..]), "{take}");
             crate::spirv::serialize::serialize(m.clone()).expect("serialize");
             let mut meter = Meter::new(&crate::budget::Budget::default());
-            let again = remove_dead_keeping(&mut m, &[], &[], &mut meter).expect("dce");
+            let again = remove_dead_keeping(&mut m, &[], &mut meter).expect("dce");
             assert_eq!(again, DeadReport::default(), "{take}");
         }
     }

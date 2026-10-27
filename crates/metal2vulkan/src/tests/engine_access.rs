@@ -7,8 +7,8 @@
 //! - Generated kernels load and store every leaf path (aligned words, one word, byte by byte) at
 //!   offsets around the end of the buffer and at `0xFFFF_FFF0..=0xFFFF_FFFF`: with the in-shader
 //!   encoding no access traps, an in-bounds access is exact (a `half` NaN loaded a NaN where the
-//!   module reads a `half` by the device's widening, `PrecisionNote::NativeHalfConversion`), and
-//!   an out-of-bounds load is 0 and an out-of-bounds store changes nothing.
+//!   module reads a `half` by the device's widening, `PrecisionNote::NativeNanEncoding`), and an
+//!   out-of-bounds load is 0 and an out-of-bounds store changes nothing.
 //! - Slot forms: the `constant` fixture gets a uniform view (`u32[]` with standard layout,
 //!   `uvec4[]` without) with robust descriptors and a storage view in shader, where an allocation
 //!   shorter than the window is contained; several slots are storage views decorated `Aliased`, a
@@ -748,8 +748,8 @@ fn offsets(size: u64) -> Vec<u64> {
 /// (with residuals 0 and 4 wrapping them further): no trap, exact in bounds, 0 or unchanged out of
 /// bounds. Probes are skipped where the offset breaks the access's stated alignment (undefined in
 /// Metal). A `half` NaN loaded need only come back a NaN where the module reads a `half` from its
-/// bits by the device's widening (`PrecisionNote::NativeHalfConversion`), whose NaN encoding is
-/// the device's.
+/// bits by the device's widening (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the
+/// device's.
 #[test]
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
@@ -765,7 +765,7 @@ fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
                 && compile(&bc, k.name, &p)
                     .unwrap_or_else(|e| panic!("{what}: {e}"))
                     .precision
-                    .contains(&PrecisionNote::NativeHalfConversion);
+                    .contains(&PrecisionNote::NativeNanEncoding);
             let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             for r in [0u32, 4] {
                 for off in offsets(size) {
@@ -1048,7 +1048,9 @@ fn push_with_table(plan: &Plan) -> Vec<u8> {
 /// Every leaf path, with bind offsets 0 and 8, at offsets around the end of the allocation and near
 /// 2^32: no trap, exact in bounds, 0 out of bounds, and an out-of-bounds store lands in the sink
 /// and leaves the allocation unchanged. Robust buffer access does not cover device addresses, so
-/// the check is emitted on a robust profile too.
+/// the check is emitted on a robust profile too. A `half` NaN loaded need only come back a NaN
+/// where the module reads a `half` from its bits by the device's widening
+/// (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the device's.
 #[test]
 fn a_device_address_slot_is_exact_and_contained() {
     let size = 32u64;
@@ -1072,6 +1074,8 @@ fn a_device_address_slot_is_exact_and_contained() {
         )
         .unwrap_or_else(|e| panic!("{what}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let native_halves =
+            k.ty.contains("half") && a.precision.contains(&PrecisionNote::NativeNanEncoding);
         let (plan, m) = typed_module_with(&bc, k.name, &p, &inputs);
         for bind in [0u64, 8] {
             for off in offsets(size) {
@@ -1119,11 +1123,15 @@ fn a_device_address_slot_is_exact_and_contained() {
                         } else {
                             vec![0; k.bytes as usize]
                         };
-                        assert_eq!(
-                            out.buffers[3][..k.bytes as usize],
-                            want[..],
-                            "{what} bind={bind} off={off:#x}"
-                        );
+                        let got = &out.buffers[3][..k.bytes as usize];
+                        if native_halves {
+                            assert!(
+                                same_halves(got, &want),
+                                "{what} bind={bind} off={off:#x}: {got:?} for {want:?}"
+                            );
+                        } else {
+                            assert_eq!(got, &want[..], "{what} bind={bind} off={off:#x}");
+                        }
                     }
                     Some((_, bytes)) => {
                         let mut want = data.clone();
@@ -1758,7 +1766,7 @@ fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
 /// follows the binder contract (descriptor base congruent to the Metal address modulo 4), and a
 /// sub-word store through a unit leaves its neighbours unchanged. A `half` NaN loaded need only
 /// come back a NaN where the module reads a `half` from its bits by the device's widening
-/// (`PrecisionNote::NativeHalfConversion`), whose NaN encoding is the device's.
+/// (`PrecisionNote::NativeNanEncoding`), whose NaN encoding is the device's.
 #[test]
 fn narrow_units_are_exact_at_every_bind_residual() {
     let size = 32u64;
@@ -1780,7 +1788,7 @@ fn narrow_units_are_exact_at_every_bind_residual() {
                 && compile(&bc, k.name, &p)
                     .unwrap_or_else(|e| panic!("{what}: {e}"))
                     .precision
-                    .contains(&PrecisionNote::NativeHalfConversion);
+                    .contains(&PrecisionNote::NativeNanEncoding);
             let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let mut probes: Vec<u32> = (0..=9).collect();
             probes.extend(size as u32 - 9..=size as u32 + 1);

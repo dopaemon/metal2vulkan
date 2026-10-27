@@ -731,12 +731,13 @@ pub fn value_of(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, words: &[Value]) -> B
             }
             Held::Wide { .. } => Err(dangling()),
             Held::Float(FloatFmt::Half | FloatFmt::BFloat) => {
-                // A narrow float is held widened: decode its 16 format bits exactly (`from_bits`
-                // reads only the low 16 bits).
+                // A narrow float is held widened: its 16 format bits (`from_bits` reads only the
+                // low 16 bits), a `half` widened from its word where the device widens it.
                 let at = 2 * i;
-                let w = word(words, (at / 4) as usize)?;
-                let h = shr(fb, w, 8 * (at % 4))?;
-                narrow::from_bits(fb, scalar, h)
+                let w = (at / 4) as usize;
+                let h = shr(fb, word(words, w)?, 8 * (at % 4))?;
+                let tail = words.get(w..).ok_or_else(dangling)?;
+                narrow::from_word_halves(fb, scalar, tail, (at % 4) / 2, h)
             }
             Held::Float(FloatFmt::F64) => {
                 let lo = word(words, (2 * i) as usize)?;
@@ -807,11 +808,12 @@ fn vector_of(fb: &mut FunctionBuilder<'_>, form: Form, words: &[Value]) -> BResu
             low_bits(fb, v, &shifts, bits)?
         }
         Held::Float(FloatFmt::Half | FloatFmt::BFloat) => {
-            // A narrow float is held widened: one exact decode of every lane's bits, which reads
-            // only each lane's low 16 bits.
+            // A narrow float is held widened: one decode of every lane's bits, which reads only
+            // each lane's low 16 bits, or a `half` vector widened from its words at once where the
+            // device widens it (its lanes are the words' halves in order).
             let (v, shifts) = gathered(fb)?;
             let h = low_bits(fb, v, &shifts, 32)?;
-            narrow::from_bits(fb, form, h)?
+            narrow::from_word_halves(fb, form, words, 0, h)?
         }
         Held::Float(FloatFmt::F32) => {
             let (v, _) = gathered(fb)?;

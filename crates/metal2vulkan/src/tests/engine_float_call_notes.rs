@@ -11,10 +11,10 @@
 //! Metal does. Each artifact's notes are exactly what the exported function answers for that call
 //! in that entry's math mode. The loads and stores around it record none, but a `half` kernel's
 //! widening and rounding, which the module records once by the profile's own form: its rounding's
-//! note (`narrow::native_rounding`), which the test sets aside, and under the float controls
-//! (`QuantizeForm::Controlled`) a module's widening of a `half` from its bits by the device, whose
-//! NaN's bits are the device's (`narrow::widens_bits`, `NativeNanEncoding`), which the test adds
-//! to the operation's notes.
+//! note (`narrow::native_rounding`), which the test sets aside, and a module's widening of a
+//! `half` from its bits by the device (every profile with `shaderFloat16`), whose NaN's bits are
+//! the device's (`narrow::widens_bits`, `NativeNanEncoding`), which the test adds to the
+//! operation's notes.
 //!
 //! `llvm-as` assembles the modules; without it the test skips visibly.
 
@@ -31,7 +31,6 @@ use crate::pipeline::artifact::{EntryMath, PrecisionNote};
 use crate::pipeline::testing::{
     compile, exact_maths, llvm_assemble, meter, typed_module, AssembleError, Scratch,
 };
-use crate::spirv::builder::QuantizeForm;
 use crate::spirv::testing::committed_profiles_with;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -367,14 +366,12 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                         if let Some(own) = narrow::native_rounding(p, form) {
                             got.remove(&own);
                         }
-                        if form == QuantizeForm::Controlled {
-                            let (_, m) = typed_module(&bitcode, &k.name, p)
-                                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                            if narrow::widens_bits(&m, &mut meter())
-                                .unwrap_or_else(|e| panic!("{what}: {e:?}"))
-                            {
-                                want.insert(PrecisionNote::NativeNanEncoding);
-                            }
+                        let (_, m) = typed_module(&bitcode, &k.name, p)
+                            .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                        if narrow::widens_bits(&m, &mut meter())
+                            .unwrap_or_else(|e| panic!("{what}: {e:?}"))
+                        {
+                            want.insert(PrecisionNote::NativeNanEncoding);
                         }
                     }
                     assert_eq!(got, want, "{what}");

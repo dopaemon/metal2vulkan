@@ -1016,13 +1016,6 @@ impl<'a> Emitter<'a> {
         fragment::emit_quad_exit(cx, fb, id)?;
         match s {
             Strategy::Arith(s) => arith::emit(cx, fb, id, s),
-            // A load of `half`s whose decode the plan leaves to the device's widening.
-            Strategy::Access(s) if plan.families.arith.widened.contains(&id) => {
-                fb.module().set_widens_halves(true);
-                let r = access::emit(cx, fb, id, s);
-                fb.module().set_widens_halves(false);
-                r
-            }
             Strategy::Access(s) => access::emit(cx, fb, id, s),
             Strategy::Texture(s) => texture::emit(cx, fb, id, s),
             Strategy::Sampler(s) => sampler::emit(cx, fb, id, s),
@@ -1280,9 +1273,6 @@ pub struct Emitted {
     /// The buffer slots a store merged a partial word into through the sub-word store's atomics:
     /// the module reads each of them, whatever the function's own accesses are.
     pub merged: BTreeSet<SlotRef>,
-    /// The lowering's offers for where no loop holds them, each `to` kept by the module, for
-    /// `spirv::dead::take_outside_loops` once its loops are final.
-    pub loop_free: Vec<Offer>,
 }
 
 /// Structurize and emit `e` under `plan` into a finalized module with P9 applied.
@@ -1295,146 +1285,136 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
     let view = EntryView::new(e, body, plan);
     let structured = crate::structurize::structurize(&view, m)?;
     let mut mb = ModuleBuilder::new();
-    let emitted =
-        (|| -> Result<(TypedModule, Vec<Offer>, Vec<Offer>, BTreeSet<SlotRef>), Error> {
-            let decl = declare(&mut mb, plan)?;
-            // The builder is charged as it grows: the declarations here, the walk's growth by
-            // `structurize::emit` after each block, and what the walk left once it returns.
-            let mut held = Growth::default();
-            held.charge_to(mb.footprint(), m)?;
-            let mut em = Emitter::new(e, body, plan, &decl);
-            // The emitter's tables once built, with the peak of the sets that built them, and what
-            // they grew to once the walk returns.
-            let mut tables = Growth::default();
-            tables.charge_to(em.footprint(), m)?;
-            m.charge(em.scratch)?;
-            m.release(em.scratch);
-            let void = mb.ty(Type::Void)?;
-            let walked = {
-                let mut fb = mb.function(void)?;
-                // The entry hook: what must happen before any instruction of the body (the pulled
-                // vertex fetch) or must not depend on where the body first uses it (a push field; a
-                // dispatch builtin parameter) is emitted in the function's first block, ahead of
-                // the walk. The simdgroup lane counted at entry comes first, ahead of any branch
-                // the other hooks emit, where every invocation of the simdgroup is active.
-                let r = crate::lower::simd::emit_entry(&mut em.cx, &mut fb)
-                    .and_then(|()| em.cx.load_push_fields(&mut fb))
-                    // The bound values the function reads as data, right after their fields.
-                    .and_then(|()| crate::lower::specialized::emit_entry(&mut em.cx, &mut fb))
-                    .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))
-                    .and_then(|()| stage_io::emit_entry(&mut em.cx, &mut fb))
-                    .and_then(|()| tessellation::emit_entry(&mut em.cx, &mut fb))
-                    .and_then(|()| fragment::emit_entry(&mut em.cx, &mut fb))
-                    .map_err(Error::from)
-                    .and_then(|()| {
-                        crate::structurize::emit::emit(&structured, &mut fb, &mut em, m)
-                    });
-                match r {
-                    Ok(_) => fb.finish().map_err(Error::from),
-                    Err(e) => Err(e),
-                }
-            };
-            let grown = tables.charge_to(em.footprint(), m);
-            m.release(tables.charged());
-            // A recorded fault replaces the builder error.
-            let func = match (walked, &em.cx.fault) {
-                (_, Some(fault)) => return Err(fault.clone()),
-                (r, None) => r?,
-            };
-            grown?;
-            // The tile staging's entry-wrapper hook: a tile function that stages an attachment runs
-            // `body` between the loads and the stores of its tile's cells.
-            let mut wrapper = em.cx.for_new_function();
-            let func = match (
-                access::tile::wrap_entry(&mut wrapper, &mut mb, func),
-                &wrapper.fault,
-            ) {
-                (_, Some(fault)) => return Err(fault.clone()),
-                (r, None) => r?,
-            };
-            // An object or mesh function's wrapper: its grid's launch, or its outputs'
-            // initialization and the culling of the slots past its count.
-            let func = match (
-                mesh::wrap_entry(&mut wrapper, &mut mb, func),
-                &wrapper.fault,
-            ) {
-                (_, Some(fault)) => return Err(fault.clone()),
-                (r, None) => r?,
-            };
-            // An emulated post-tessellation vertex function's wrapper: the tessellator's point for
-            // the vertex it draws, and the function's patch inputs.
-            let func = match (
-                tessellation::wrap_entry(&mut wrapper, &mut mb, func),
-                &wrapper.fault,
-            ) {
-                (_, Some(fault)) => return Err(fault.clone()),
-                (r, None) => r?,
-            };
-            let merged = em
-                .cx
-                .merged
-                .iter()
-                .chain(&wrapper.merged)
-                .filter_map(|&i| plan.slots.get(i).copied().flatten().map(|c| c.slot))
-                .collect();
-            held.charge_to(mb.footprint(), m)?;
-            // The entry-wrapper hook: a raster order group's body runs inside the interlock
-            // critical section of a new entry function, and the body of a function looping over its
-            // covered samples once per sample from a new entry function; otherwise the body is the
-            // entry.
-            let func = fragment::wrap_entry(&mut mb, plan, &decl.families, func)?;
-            let model = match plan.stage {
-                Stage::Kernel => ExecModel::GLCompute,
-                // A post-tessellation vertex function, but one emulated on a device without
-                // `tessellationShader`, a plain vertex entry.
-                Stage::Vertex
-                    if plan
-                        .families
-                        .tessellation
-                        .eval
-                        .as_ref()
-                        .is_some_and(|e| e.emulated.is_none()) =>
-                {
-                    ExecModel::TessellationEvaluation
-                }
-                Stage::Vertex => ExecModel::Vertex,
-                Stage::Fragment => ExecModel::Fragment,
-                // An emulated object or mesh function is a compute entry.
-                Stage::Object | Stage::Mesh if plan.families.mesh.emulated => ExecModel::GLCompute,
-                Stage::Object => ExecModel::TaskEXT,
-                Stage::Mesh => ExecModel::MeshEXT,
-            };
-            mb.entry(model, func, decl.modes.clone())?;
-            // The pinned size and full subgroups the plan chose need device facts the SPIR-V does
-            // not state; the module's requirements record them.
-            mb.subgroup(plan.subgroup);
-            // The lowering's offers outlive the builder; charged until weighed.
-            let offers = mb.offers().to_vec();
-            let loop_free = mb.loop_free_offers().to_vec();
-            let mut module = mb.finalize()?;
-            // Every read of a constant the function reads as data takes its local value, and the
-            // constants nothing else reads leave.
-            if let Some((body, local)) = &em.cx.localized {
-                module.localize_specs(*body, local)?;
+    let emitted = (|| -> Result<(TypedModule, Vec<Offer>, BTreeSet<SlotRef>), Error> {
+        let decl = declare(&mut mb, plan)?;
+        // The builder is charged as it grows: the declarations here, the walk's growth by
+        // `structurize::emit` after each block, and what the walk left once it returns.
+        let mut held = Growth::default();
+        held.charge_to(mb.footprint(), m)?;
+        let mut em = Emitter::new(e, body, plan, &decl);
+        // The emitter's tables once built, with the peak of the sets that built them, and what
+        // they grew to once the walk returns.
+        let mut tables = Growth::default();
+        tables.charge_to(em.footprint(), m)?;
+        m.charge(em.scratch)?;
+        m.release(em.scratch);
+        let void = mb.ty(Type::Void)?;
+        let walked = {
+            let mut fb = mb.function(void)?;
+            // The entry hook: what must happen before any instruction of the body (the pulled
+            // vertex fetch) or must not depend on where the body first uses it (a push field; a
+            // dispatch builtin parameter) is emitted in the function's first block, ahead of
+            // the walk. The simdgroup lane counted at entry comes first, ahead of any branch
+            // the other hooks emit, where every invocation of the simdgroup is active.
+            let r = crate::lower::simd::emit_entry(&mut em.cx, &mut fb)
+                .and_then(|()| em.cx.load_push_fields(&mut fb))
+                // The bound values the function reads as data, right after their fields.
+                .and_then(|()| crate::lower::specialized::emit_entry(&mut em.cx, &mut fb))
+                .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))
+                .and_then(|()| stage_io::emit_entry(&mut em.cx, &mut fb))
+                .and_then(|()| tessellation::emit_entry(&mut em.cx, &mut fb))
+                .and_then(|()| fragment::emit_entry(&mut em.cx, &mut fb))
+                .map_err(Error::from)
+                .and_then(|()| crate::structurize::emit::emit(&structured, &mut fb, &mut em, m));
+            match r {
+                Ok(_) => fb.finish().map_err(Error::from),
+                Err(e) => Err(e),
             }
-            m.charge(std::mem::size_of_val(offers.as_slice()))?;
-            Ok((module, offers, loop_free, merged))
-        })();
+        };
+        let grown = tables.charge_to(em.footprint(), m);
+        m.release(tables.charged());
+        // A recorded fault replaces the builder error.
+        let func = match (walked, &em.cx.fault) {
+            (_, Some(fault)) => return Err(fault.clone()),
+            (r, None) => r?,
+        };
+        grown?;
+        // The tile staging's entry-wrapper hook: a tile function that stages an attachment runs
+        // `body` between the loads and the stores of its tile's cells.
+        let mut wrapper = em.cx.for_new_function();
+        let func = match (
+            access::tile::wrap_entry(&mut wrapper, &mut mb, func),
+            &wrapper.fault,
+        ) {
+            (_, Some(fault)) => return Err(fault.clone()),
+            (r, None) => r?,
+        };
+        // An object or mesh function's wrapper: its grid's launch, or its outputs'
+        // initialization and the culling of the slots past its count.
+        let func = match (
+            mesh::wrap_entry(&mut wrapper, &mut mb, func),
+            &wrapper.fault,
+        ) {
+            (_, Some(fault)) => return Err(fault.clone()),
+            (r, None) => r?,
+        };
+        // An emulated post-tessellation vertex function's wrapper: the tessellator's point for
+        // the vertex it draws, and the function's patch inputs.
+        let func = match (
+            tessellation::wrap_entry(&mut wrapper, &mut mb, func),
+            &wrapper.fault,
+        ) {
+            (_, Some(fault)) => return Err(fault.clone()),
+            (r, None) => r?,
+        };
+        let merged = em
+            .cx
+            .merged
+            .iter()
+            .chain(&wrapper.merged)
+            .filter_map(|&i| plan.slots.get(i).copied().flatten().map(|c| c.slot))
+            .collect();
+        held.charge_to(mb.footprint(), m)?;
+        // The entry-wrapper hook: a raster order group's body runs inside the interlock
+        // critical section of a new entry function, and the body of a function looping over its
+        // covered samples once per sample from a new entry function; otherwise the body is the
+        // entry.
+        let func = fragment::wrap_entry(&mut mb, plan, &decl.families, func)?;
+        let model = match plan.stage {
+            Stage::Kernel => ExecModel::GLCompute,
+            // A post-tessellation vertex function, but one emulated on a device without
+            // `tessellationShader`, a plain vertex entry.
+            Stage::Vertex
+                if plan
+                    .families
+                    .tessellation
+                    .eval
+                    .as_ref()
+                    .is_some_and(|e| e.emulated.is_none()) =>
+            {
+                ExecModel::TessellationEvaluation
+            }
+            Stage::Vertex => ExecModel::Vertex,
+            Stage::Fragment => ExecModel::Fragment,
+            // An emulated object or mesh function is a compute entry.
+            Stage::Object | Stage::Mesh if plan.families.mesh.emulated => ExecModel::GLCompute,
+            Stage::Object => ExecModel::TaskEXT,
+            Stage::Mesh => ExecModel::MeshEXT,
+        };
+        mb.entry(model, func, decl.modes.clone())?;
+        // The pinned size and full subgroups the plan chose need device facts the SPIR-V does
+        // not state; the module's requirements record them.
+        mb.subgroup(plan.subgroup);
+        // The lowering's offers outlive the builder; charged until weighed.
+        let offers = mb.offers().to_vec();
+        let mut module = mb.finalize()?;
+        // Every read of a constant the function reads as data takes its local value, and the
+        // constants nothing else reads leave.
+        if let Some((body, local)) = &em.cx.localized {
+            module.localize_specs(*body, local)?;
+        }
+        m.charge(std::mem::size_of_val(offers.as_slice()))?;
+        Ok((module, offers, merged))
+    })();
     structured.release(m);
-    let (mut module, offers, loop_free, merged) = emitted?;
+    let (mut module, offers, merged) = emitted?;
     promote_single_store(&mut module, m)?;
     // What no instruction reads leaves the module, after P9 turned its loads into copies, and the
-    // offers that make it smaller are taken. The values offered for where no loop holds them stay
-    // until the module's loops are final.
-    let keep: Vec<_> = loop_free.iter().map(|o| o.to).collect();
-    let r = remove_dead_keeping(&mut module, &offers, &keep, m);
+    // offers that make it smaller are taken.
+    let r = remove_dead_keeping(&mut module, &offers, m);
     m.release(std::mem::size_of_val(offers.as_slice()));
     r?;
-    Ok(Emitted {
-        module,
-        merged,
-        loop_free,
-    })
+    Ok(Emitted { module, merged })
 }
 
 #[cfg(test)]

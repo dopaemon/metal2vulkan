@@ -394,13 +394,9 @@ fn typed_module_of(
     )?;
     let memory = crate::memory::static_root::analyze_memory(&spec, p, m)?;
     let plan = crate::lower::select::select(&spec, &memory, p, inputs, m)?;
-    let crate::lower::emit::Emitted {
-        mut module,
-        loop_free,
-        ..
-    } = crate::lower::emit::emit_module(&spec, &plan, m)?;
+    let crate::lower::emit::Emitted { mut module, .. } =
+        crate::lower::emit::emit_module(&spec, &plan, m)?;
     crate::spirv::roll::roll_entry(&mut module, m)?;
-    crate::spirv::dead::take_outside_loops(&mut module, &loop_free, m)?;
     crate::spirv::helper_branches::guard_for(&mut module, p, m)?;
     crate::spirv::verify::verify(&module, p, m)?;
     Ok((plan, module))

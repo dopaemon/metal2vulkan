@@ -7,8 +7,8 @@
 //!
 //! - On the CPU interpreter, a read through each foreign class is the words the native slot's
 //!   read gives, a `half` result their low 16 bits (a NaN's any NaN where the module widens a
-//!   `half` by the device's conversion, `PrecisionNote::NativeHalfConversion`, whose NaN encoding
-//!   is the device's), on the lavapipe and MoltenVK profiles; every module validates.
+//!   `half` by the device's conversion, `PrecisionNote::NativeNanEncoding`, whose NaN encoding is
+//!   the device's), on the lavapipe and MoltenVK profiles; every module validates.
 //! - The binder joins a slot bound to a texture of another class to the plan's variant, the
 //!   variant's plan states the same key, and the slot's binding views the texture's own format
 //!   (an integer slot over an 8-bit sRGB texture joins the sRGB variant too); a slot sampled
@@ -342,8 +342,9 @@ fn run(
 /// Every read through a slot of another class gives the words the slot of the texture's own
 /// class gives, a `half` result their low 16 bits: Metal's rule. A `ushort` result of an integer
 /// texture is the low 16 bits too, of a float texture the `half` read's bits. Where the module
-/// records `PrecisionNote::NativeHalfConversion` (both profiles here), a `half` result's NaN is the
-/// device's widening's, so a NaN pattern need only come back a NaN.
+/// widens a `half` from its bits by the device and records `PrecisionNote::NativeNanEncoding` (both
+/// profiles here, which have `shaderFloat16`), a `half` result's NaN is the device's widening's,
+/// so a NaN pattern need only come back a NaN.
 #[test]
 fn accesses_through_another_class_are_the_native_words() {
     use SampledType as S;
@@ -402,7 +403,7 @@ fn accesses_through_another_class_are_the_native_words() {
                 )
                 .unwrap_or_else(|e| panic!("{what}: {e}"))
                 .precision
-                .contains(&PrecisionNote::NativeHalfConversion);
+                .contains(&PrecisionNote::NativeNanEncoding);
             let nan = |h: u32| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
             let lanes = (SIDE * SIDE * 4) as usize;
             let lane_of = |b: &[u8], t: Ty, lane: usize| match t {

@@ -130,6 +130,17 @@ impl<'m> FunctionBuilder<'m> {
         self.m.lanes.get(&y).copied()
     }
 
+    /// Note that `y`, a 32-bit unsigned integer, is the zero extension of 16-bit integer `of`:
+    /// `of` dominates `y`.
+    pub fn note_widened16(&mut self, y: Value, of: Value) {
+        self.m.widened16.insert(y, of);
+    }
+
+    /// The 16-bit integer `y` was noted to zero-extend.
+    pub fn widened16_of(&self, y: Value) -> Option<Value> {
+        self.m.widened16.get(&y).copied()
+    }
+
     /// Note that vector `y` is vector `v` with lane `index` replaced by `e`: `v` and `e` dominate
     /// `y`.
     pub fn note_insert(&mut self, y: Value, v: Value, e: Value, index: u32) {
@@ -154,16 +165,6 @@ impl<'m> FunctionBuilder<'m> {
     pub fn offer(&mut self, group: u32, from: Value, to: Value) {
         self.m
             .offers
-            .push(crate::spirv::dead::Offer { group, from, to });
-    }
-
-    /// Offer `to` for `from` where no loop holds `from`: as [`FunctionBuilder::offer`] states, in a
-    /// group of its own, taken by `spirv::dead::take_outside_loops` once the module's loops are
-    /// final; until then the module keeps `to`.
-    pub fn offer_outside_loops(&mut self, from: Value, to: Value) {
-        let group = self.offer_group();
-        self.m
-            .loop_free
             .push(crate::spirv::dead::Offer { group, from, to });
     }
 

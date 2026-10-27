@@ -6,7 +6,7 @@
 //!   bits, and every `half` bit pattern (NaN payloads, signalling NaNs, denormals, both zeros)
 //!   reads back as it was stored, on the CPU interpreter, but that a NaN's bits are the device's
 //!   where the module reads a `half` from its bits by the device's widening
-//!   (`PrecisionNote::NativeHalfConversion`).
+//!   (`PrecisionNote::NativeNanEncoding`).
 //! - The reported static threadgroup length stays Metal's layout's, and the arena holds only the
 //!   other objects.
 //! - Where the structure does not allow it the array stays in the arena: an access through a
@@ -181,12 +181,12 @@ fn run_both(m: &TypedModule, res: &Resources) -> Vec<u32> {
 }
 
 /// Whether entry `entry` of `bc` on `prof` reads a `half` from its bits by the device's widening
-/// (`PrecisionNote::NativeHalfConversion`), whose reinterpretation of a NaN's bits is the device's.
+/// (`PrecisionNote::NativeNanEncoding`), whose reinterpretation of a NaN's bits is the device's.
 fn native_halves(bc: &[u8], entry: &str, prof: &DeviceProfile) -> bool {
     compile(bc, entry, prof)
         .expect("compile")
         .precision
-        .contains(&PrecisionNote::NativeHalfConversion)
+        .contains(&PrecisionNote::NativeNanEncoding)
 }
 
 /// `got` against the bit patterns `want`. Where the module reads a `half` from its bits by the

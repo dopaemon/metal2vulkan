@@ -61,6 +61,17 @@ fn nbits(f: Form, x: f64) -> u64 {
     }
 }
 
+/// [`nbits`] of `x` as the device's rounding alone gives it in `QuantizeForm::Device`, the module
+/// builder's default (`narrow::device_round`, a sum's or difference's): a `half` below the smallest
+/// normal half is the interpreter's quantize's zero of its sign.
+fn nbits_flushed(f: Form, x: f64) -> u64 {
+    let b = nbits(f, x);
+    match f.float_fmt() {
+        Some(FloatFmt::Half) if b & 0x7C00 == 0 => b & 0x8000,
+        _ => b,
+    }
+}
+
 /// Equal bits, or both NaN.
 fn exact_ok(out: Form) -> impl Fn(u64, u64) -> bool {
     move |g, w| g == w || (is_nan(out, g) && is_nan(out, w))
@@ -636,7 +647,8 @@ fn narrow_vector_bitcasts_move_narrow_patterns() {
 }
 
 /// `+ - * / %` on widened narrow floats round once to the format (double rounding through `f32` is
-/// innocuous for these), on scalars and vectors.
+/// innocuous for these), on scalars and vectors; in `QuantizeForm::Device` a `half` sum or
+/// difference below the smallest normal half is the device's quantize's zero ([`nbits_flushed`]).
 #[test]
 fn narrow_float_operators_round_once() {
     for (f, vals) in [(half(), half_values()), (bfloat(), bf16_values())] {
@@ -656,14 +668,13 @@ fn narrow_float_operators_round_once() {
                 &pairs(&vals, &vals),
                 &|c| {
                     let (a, b) = (nval(f, arg(c, 0)), nval(f, arg(c, 1)));
-                    let r = match op {
-                        AirBin::FAdd => a + b,
-                        AirBin::FSub => a - b,
-                        AirBin::FMul => a * b,
-                        AirBin::FDiv => a / b,
-                        _ => a % b,
-                    };
-                    Some(vec![nbits(f, r)])
+                    Some(vec![match op {
+                        AirBin::FAdd => nbits_flushed(f, a + b),
+                        AirBin::FSub => nbits_flushed(f, a - b),
+                        AirBin::FMul => nbits(f, a * b),
+                        AirBin::FDiv => nbits(f, a / b),
+                        _ => nbits(f, a % b),
+                    }])
                 },
                 &accept,
             );
@@ -698,6 +709,8 @@ fn narrow_float_operators_round_once() {
 /// The float functions on half and bfloat values: closed functions return values of the format,
 /// `fract` rounds its `f32` difference once (it is not closed: a negative non-integral input needs
 /// more bits), `mix` and `llvm.fmuladd` round per step (the unfused choice), `sqrt` rounds once.
+/// In `QuantizeForm::Device` `fract`'s difference and `fmuladd`'s sum take the device's rounding
+/// alone, which flushes a `half` below the smallest normal half ([`nbits_flushed`]).
 #[test]
 fn narrow_float_functions_match_their_definitions() {
     for (f, vals) in [(half(), half_values()), (bfloat(), bf16_values())] {
@@ -780,8 +793,9 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
             &cases,
             &|c| {
                 let x = |i: usize| nval(f, c[i][0]);
-                // An intermediate step's rounding.
+                // An intermediate step's rounding, and a sum's or difference's.
                 let q = |v: f64| nval(f, nbits(f, v));
+                let qs = |v: f64| nval(f, nbits_flushed(f, v));
                 let r = match op {
                     FloatFn::Abs => x(0).abs(),
                     FloatFn::Floor => x(0).floor(),
@@ -795,7 +809,7 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                     FloatFn::Fract if x(0).is_infinite() => 0.0,
                     FloatFn::Fract => {
                         let below = 1.0 - 2f64.powi(if is_half { -11 } else { -8 });
-                        q(x(0) - x(0).floor()).min(below)
+                        qs(x(0) - x(0).floor()).min(below)
                     }
                     FloatFn::Sign if x(0) > 0.0 => 1.0,
                     FloatFn::Sign if x(0) < 0.0 => -1.0,
@@ -812,7 +826,7 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                         return Some(vec![median3_ref(b, &|v| nval(f, v), false)]);
                     }
                     FloatFn::Mix => q(x(0) * q(1.0 - x(2))) + q(x(1) * x(2)),
-                    FloatFn::MulAdd => q(x(0) * x(1)) + x(2),
+                    FloatFn::MulAdd => qs(q(x(0) * x(1)) + x(2)),
                     _ => x(0).sqrt(),
                 };
                 Some(vec![nbits(f, r)])
@@ -824,7 +838,9 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
 
 /// Class K: Metal's `half` `fract` with every fast-math flag (`nan_half_fast`) answers the largest
 /// `half` below one, `0x3BFF`, for a NaN and for either infinity, where without flags (`nan_half`)
-/// a NaN is itself and an infinity `+0`; every finite lane is the precise one's.
+/// a NaN is itself and an infinity `+0`; every finite lane is the precise one's, its difference the
+/// device's rounding alone (in `QuantizeForm::Device` a positive denormal's is the quantize's
+/// zero).
 #[test]
 fn flagged_half_fract_answers_below_one_at_nans_and_infinities() {
     let mut halves: Vec<u64> = (0..0x10000u64).step_by(97).collect();
@@ -844,7 +860,7 @@ fn flagged_half_fract_answers_below_one_at_nans_and_infinities() {
                     _ => 0,
                 }
             } else {
-                let d = f16_to_f64(f64_to_f16(x - x.floor()));
+                let d = f16_to_f64(nbits_flushed(half(), x - x.floor()) as u16);
                 u64::from(f64_to_f16(d.min(1.0 - 2f64.powi(-11))))
             };
             Some(vec![r; n])
@@ -972,8 +988,8 @@ fn half_rounding_keeps_denormals() {
 /// In `QuantizeForm::Converted` and `Controlled` a `half` rounding is the conversion to 16 bits
 /// and its widening alone, which the interpreter rounds to nearest even with half denormals kept,
 /// as the Vulkan spec makes it under the controlled form's float controls: over
-/// [`half_rounding_operands`], `round` and `round_exact_below_normal` give the exactly rounded
-/// half on scalars and vectors, with no `OpQuantizeToF16` and no `RoundEven` in the module. In
+/// [`half_rounding_operands`], `round` and `device_round` give the exactly rounded half on scalars
+/// and vectors, with no `OpQuantizeToF16` and no `RoundEven` in the module. In
 /// `Controlled` each conversion is decorated `NoContraction`, and none in `Converted`.
 #[test]
 fn converted_half_rounding_is_the_exactly_rounded_half() {
@@ -999,10 +1015,7 @@ fn converted_half_rounding_is_the_exactly_rounded_half() {
     type Round = fn(&mut FunctionBuilder<'_>, Form, Value) -> BResult<Value>;
     let rounds: [(&str, Round); 2] = [
         ("round", crate::lower::arith::narrow::round),
-        (
-            "round_exact_below_normal",
-            crate::lower::arith::narrow::round_exact_below_normal,
-        ),
+        ("device_round", crate::lower::arith::narrow::device_round),
     ];
     use crate::spirv::builder::QuantizeForm;
     use crate::spirv::ir::Contraction;
@@ -1010,8 +1023,6 @@ fn converted_half_rounding_is_the_exactly_rounded_half() {
         .into_iter()
         .flat_map(|r| [(r, QuantizeForm::Converted), (r, QuantizeForm::Controlled)])
     {
-        // `round_exact_below_normal` is exact only on an `x` that is a value of the format
-        // below the smallest normal half; the converted form is exact on every `x`.
         for (form, input, cs) in [(h, f32f, &cases), (v, vec(f32f, 3), &vc)] {
             let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| {
                 fb.module().set_quantize_form(q);
@@ -1131,42 +1142,46 @@ fn metal_half_operands() -> Vec<u32> {
     xs
 }
 
-/// In `QuantizeForm::Device`, the default, through the interpreter's quantize (to nearest even),
-/// `round` is Metal's conversion of a `float` to `half` ([`metal_half`]) over
-/// [`metal_half_operands`] (signed zeros included, a NaN a NaN) on scalars and vectors, its
-/// quantize's flush to zero rounded onto the half denormal grid, and `round_exact_below_normal` is
-/// too wherever its operand is a value of the format below the smallest normal half (every other
-/// operand).
+/// In `QuantizeForm::Device`, the default, through the interpreter's quantize (to nearest even,
+/// flushing what is too small for a normal half to the zero of its sign), `round` is Metal's
+/// conversion of a `float` to `half` ([`metal_half`]) over [`metal_half_operands`] (signed zeros
+/// included, a NaN a NaN) on scalars and vectors, its quantize's flush to zero rounded onto the
+/// half denormal grid, and keeps that arm (`narrow::flushes_below_normal` finds none);
+/// `device_round` is the quantize alone: Metal's conversion of every operand from the smallest
+/// normal half up, and the quantize's zero below it.
 #[test]
 fn device_half_rounding_is_metals_conversion_on_a_nearest_even_quantize() {
     use crate::spirv::builder::QuantizeForm;
     let xs = metal_half_operands();
     let (f32f, h) = (float(32), half());
     let v = vec(h, 3);
-    let normal_or_exact = |b: &u32| {
-        let m = b & 0x7FFF_FFFF;
-        m >= 0x3880_0000 || f64::from(f32::from_bits(m)) * 16_777_216.0 % 1.0 == 0.0
-    };
     type Round = fn(&mut FunctionBuilder<'_>, Form, Value) -> BResult<Value>;
     let rounds: [(&str, Round, bool); 2] = [
         ("round", crate::lower::arith::narrow::round, false),
         (
-            "round_exact_below_normal",
-            crate::lower::arith::narrow::round_exact_below_normal,
+            "device_round",
+            crate::lower::arith::narrow::device_round,
             true,
         ),
     ];
-    let want = |c: &Case| Some(c[0].iter().map(|b| metal_half(*b)).collect::<Vec<u64>>());
+    // The quantize alone: Metal's conversion where it is a normal half, an infinity or a NaN, and
+    // the zero of the operand's sign below the smallest normal half.
+    let flushed = |b: u64| match metal_half(b) {
+        h if h & 0x7C00 == 0 => h & 0x8000,
+        h => h,
+    };
     // The device form's quantize is the interpreter's: a quarter of the operands shows the
     // routine around it.
     for (form_name, form, step) in [("device", QuantizeForm::Device, 4)] {
-        for (name, round, exact_only) in rounds {
-            let ops: Vec<u32> = xs
-                .iter()
-                .copied()
-                .filter(|b| !exact_only || normal_or_exact(b))
-                .step_by(step)
-                .collect();
+        for (name, round, bare) in rounds {
+            let want = |c: &Case| {
+                Some(
+                    c[0].iter()
+                        .map(|b| if bare { flushed(*b) } else { metal_half(*b) })
+                        .collect::<Vec<u64>>(),
+                )
+            };
+            let ops: Vec<u32> = xs.iter().copied().step_by(step).collect();
             let cases: Vec<Case> = ops.iter().map(|b| vec![vec![u64::from(*b)]]).collect();
             let vc: Vec<Case> = ops
                 .chunks(3)
@@ -1186,6 +1201,10 @@ fn device_half_rounding_is_metals_conversion_on_a_nearest_even_quantize() {
                     crate::lower::arith::narrow::quantizes(&m),
                     "{what}: OpQuantizeToF16"
                 );
+                let mut meter = crate::budget::Meter::new(&crate::budget::Budget::default());
+                let flushes = crate::lower::arith::narrow::flushes_below_normal(&m, &mut meter)
+                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                assert_eq!(flushes, bare, "{what}: a quantize with no denormal arm");
                 // The interpreter's quantize keeps a NaN a NaN, its bits the device's.
                 let nan_loose = exact_ok(lanes);
                 check_module(&what, m, &[input], lanes, cs, &want, &nan_loose);
@@ -1194,15 +1213,18 @@ fn device_half_rounding_is_metals_conversion_on_a_nearest_even_quantize() {
     }
 }
 
-/// A sum or difference of two half values that rounds below the smallest normal half is exact in
-/// `f32`, so `round_exact_below_normal` keeps it there with no denormal arithmetic: over every
-/// eleventh half pattern below `2^-13` and its negation, the patterns around the smallest normal
-/// half, and normal, infinite, and NaN operands, every sum and difference is the exactly rounded
-/// half, on scalars and vectors. The addends include the ties at the half's last bit (`2048 + 1`
+/// A `half` sum or difference takes the device's rounding alone (`narrow::device_round`): over
+/// every eleventh half pattern below `2^-13` and its negation, the patterns around the smallest
+/// normal half, and normal, infinite, and NaN operands, on scalars and vectors, every sum and
+/// difference is the exactly rounded half where that is a normal half, a zero, an infinity or a
+/// NaN; below the smallest normal half it is the device's: the interpreter's quantize's zero of its
+/// sign in `QuantizeForm::Device`, and the half denormal its conversion keeps in
+/// `QuantizeForm::Converted`. The addends include the ties at the half's last bit (`2048 + 1`
 /// rounds to 2048 and `2050 + 1` to 2052) and the overflow threshold (`65504 + 8` stays 65504,
 /// `65504 + 16` is the tie at 65520 and rounds to the infinity).
 #[test]
-fn half_sums_keep_their_exact_value_below_the_smallest_normal() {
+fn half_sums_take_the_devices_rounding_below_the_smallest_normal() {
+    use crate::spirv::builder::QuantizeForm;
     let mut vals: Vec<u64> = (0..0x0800u64).step_by(11).collect();
     vals.extend(0x03F0..0x0410u64);
     vals.extend([
@@ -1212,21 +1234,6 @@ fn half_sums_keep_their_exact_value_below_the_smallest_normal() {
     let mut few: Vec<u64> = signed.iter().copied().step_by(9).collect();
     few.extend([0x3C00, 0x4800, 0x4C00, 0x0001, 0x8001, 0xBC00]);
     let h = half();
-    for op in [AirBin::FAdd, AirBin::FSub] {
-        check_accept(
-            &format!("{op:?} below the smallest normal"),
-            &[h, h],
-            h,
-            &|fb, x| ops::float_binary(fb, op, h, Contraction::Forbidden, x[0], x[1]),
-            &pairs(&signed, &few),
-            &|c| {
-                let (a, b) = (nval(h, arg(c, 0)), nval(h, arg(c, 1)));
-                let r = if op == AirBin::FAdd { a + b } else { a - b };
-                Some(vec![nbits(h, r)])
-            },
-            &exact_ok(h),
-        );
-    }
     let v = vec(h, 4);
     let cases: Vec<Case> = (0..signed.len())
         .map(|i| {
@@ -1234,21 +1241,53 @@ fn half_sums_keep_their_exact_value_below_the_smallest_normal() {
             vec![vec![l(0), l(1), l(2), l(3)], vec![l(7), l(5), l(3), l(1)]]
         })
         .collect();
-    check_accept(
-        "fsub <4 x half> below the smallest normal",
-        &[v, v],
-        v,
-        &|fb, x| ops::float_binary(fb, AirBin::FSub, v, Contraction::Forbidden, x[0], x[1]),
-        &cases,
-        &|c| {
-            Some(
-                (0..4)
-                    .map(|i| nbits(v, nval(v, c[0][i]) - nval(v, c[1][i])))
-                    .collect(),
-            )
-        },
-        &exact_ok(v),
-    );
+    for q in [QuantizeForm::Device, QuantizeForm::Converted] {
+        // The exactly rounded half, or below the smallest normal half the zero of its sign where
+        // the interpreter's quantize flushes it.
+        let rounded = move |r: f64| {
+            let b = nbits(h, r);
+            match q {
+                QuantizeForm::Device if b & 0x7C00 == 0 => b & 0x8000,
+                _ => b,
+            }
+        };
+        for op in [AirBin::FAdd, AirBin::FSub] {
+            check_accept(
+                &format!("{op:?} below the smallest normal, {q:?}"),
+                &[h, h],
+                h,
+                &|fb, x| {
+                    fb.module().set_quantize_form(q);
+                    ops::float_binary(fb, op, h, Contraction::Forbidden, x[0], x[1])
+                },
+                &pairs(&signed, &few),
+                &|c| {
+                    let (a, b) = (nval(h, arg(c, 0)), nval(h, arg(c, 1)));
+                    let r = if op == AirBin::FAdd { a + b } else { a - b };
+                    Some(vec![rounded(r)])
+                },
+                &exact_ok(h),
+            );
+        }
+        check_accept(
+            &format!("fsub <4 x half> below the smallest normal, {q:?}"),
+            &[v, v],
+            v,
+            &|fb, x| {
+                fb.module().set_quantize_form(q);
+                ops::float_binary(fb, AirBin::FSub, v, Contraction::Forbidden, x[0], x[1])
+            },
+            &cases,
+            &|c| {
+                Some(
+                    (0..4)
+                        .map(|i| rounded(nval(v, c[0][i]) - nval(v, c[1][i])))
+                        .collect(),
+                )
+            },
+            &exact_ok(v),
+        );
+    }
 }
 
 /// Conversions into and out of the narrow formats round once, including from `double` through a
@@ -2885,23 +2924,24 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
     }
 }
 
-/// Under the float controls (`QuantizeForm::Controlled`), where the module leaves a NaN's bits to
-/// the device (`ModuleBuilder::native_half_nans`, every profile so rounding), `from_bits` is the
-/// device's widening of the bits as a 16-bit float, with no integer decode: every half bit
-/// pattern, with junk above its 16 bits, reads as its exact `f32` value but a NaN, which reads as
-/// a NaN, one lane at a time and four at once, and `narrow::widens_bits` finds the widening.
-/// Without the flag the integer decode stands: every pattern exact, NaN payloads included, and
+/// Wherever the module can hold a 16-bit float (`QuantizeForm::Converted` and `Controlled`, a
+/// profile with `shaderFloat16`), `from_bits` is the device's widening of the bits as 16-bit
+/// floats, with no integer decode: every half bit pattern, with junk above its 16 bits, reads as
+/// its exact `f32` value but a NaN, which reads as a NaN, on one to four lanes (one conversion of
+/// the gathered lanes), and `narrow::widens_bits` finds the widening. In `QuantizeForm::Device`
+/// (no `shaderFloat16`) the integer decode stands: every pattern exact, NaN payloads included, and
 /// `widens_bits` finds none.
 #[test]
-fn a_half_decode_under_the_float_controls_is_the_devices_widening() {
+fn a_half_decode_with_float16_is_the_devices_widening() {
     use super::super::narrow::{f32_of_half_bits, from_bits, widens_bits};
     use crate::spirv::builder::QuantizeForm;
     let junk = |h: u32| u64::from(h | NARROW_JUNK);
-    let one: Vec<Case> = (0..=0xFFFFu32).map(|h| vec![vec![junk(h)]]).collect();
-    let four: Vec<Case> = (0..0x1_0000u32)
-        .step_by(4)
-        .map(|h| vec![(h..h + 4).map(junk).collect()])
-        .collect();
+    let lanes_of = |n: u32| -> Vec<Case> {
+        (0..0x1_0000u32)
+            .step_by(n as usize)
+            .map(|h| vec![(h..h + n).map(|x| junk(x & 0xFFFF)).collect()])
+            .collect()
+    };
     let want = |c: &Case| {
         Some(
             c[0].iter()
@@ -2909,12 +2949,18 @@ fn a_half_decode_under_the_float_controls_is_the_devices_widening() {
                 .collect(),
         )
     };
-    for native in [false, true] {
-        for (lanes, cases) in [(1u8, &one), (4, &four)] {
-            let what = format!("{lanes} lanes, NaN bits the device's {native}");
+    for q in [
+        QuantizeForm::Device,
+        QuantizeForm::Converted,
+        QuantizeForm::Controlled,
+    ] {
+        let native = q != QuantizeForm::Device;
+        for lanes in 1u8..=4 {
+            let cases = lanes_of(u32::from(lanes));
+            let cases = &cases;
+            let what = format!("{lanes} lanes, {q:?}");
             let body = move |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
-                fb.module().set_quantize_form(QuantizeForm::Controlled);
-                fb.module().set_native_half_nans(native);
+                fb.module().set_quantize_form(q);
                 from_bits(fb, vec(half(), lanes), x[0])
             };
             let (ins, out) = ([vec(int(32), lanes)], vec(float(32), lanes));
@@ -2924,7 +2970,8 @@ fn a_half_decode_under_the_float_controls_is_the_devices_widening() {
             let mut meter = crate::budget::Meter::new(&budget);
             let widens = widens_bits(&m, &mut meter).expect("widens_bits");
             assert_eq!(widens, native, "{what}: widens_bits");
-            let decodes = m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
+            let insts = || m.blocks().iter().flat_map(|b| &b.insts);
+            let decodes = insts().any(|n| {
                 matches!(
                     n.inst,
                     Inst::Convert {
@@ -2933,6 +2980,18 @@ fn a_half_decode_under_the_float_controls_is_the_devices_widening() {
                     }
                 )
             });
+            let conversions = insts()
+                .filter(|n| {
+                    matches!(
+                        n.inst,
+                        Inst::Convert {
+                            op: ConvOp::FConvert,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(conversions, usize::from(native), "{what}: the conversions");
             assert_eq!(decodes, !native, "{what}: the integer decode");
             check_accept(&what, &ins, out, &body, cases, &want, &|g, w| {
                 g == w

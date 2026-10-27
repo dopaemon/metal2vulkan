@@ -3034,7 +3034,9 @@ fn half_rounding_follows_the_operation() {
 }
 
 /// Where the device's 16-bit `+ - *` is measured Metal's, a `half` sum is that instruction, which
-/// rounds nothing of the module's: it requires `MetalHalfArithmetic` alone.
+/// rounds nothing of the module's: it requires `MetalHalfArithmetic`. So does every kernel there
+/// that reads a `half` from its bits (each here, by a bitcast), by the device's widening, which
+/// the same measurement reads as Metal's.
 #[test]
 fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
     let halves = format!(
@@ -3086,7 +3088,7 @@ fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
                 a.requirements
                     .properties
                     .contains(&crate::device::requirements::VkProperty::MetalHalfArithmetic),
-                ha && kk.name == "half_sum",
+                ha,
                 "{what}: {:?}",
                 a.requirements.properties
             );
@@ -3095,13 +3097,13 @@ fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
     assert!(converting > 0, "no profile rounds through the conversion");
 }
 
-/// Only a `half` result that is a value of the format wherever it lies below the smallest normal
-/// half skips the denormal arithmetic. A square root and `fract`'s difference round through
+/// Only a square root or a sum or difference skips the denormal arithmetic, taking the device's
+/// rounding alone (`narrow::device_round`): a square root and `fract`'s difference round through
 /// `OpQuantizeToF16` alone, and an integer converted to `half` rounds by integer arithmetic with
 /// neither; a transcendental, `ldexp`, a quotient, and the one rounding of a fused sum (`fmuladd`
 /// and `mix`, the device's `Fma` and `FMix` in `float`) keep one `RoundEven` each, since
 /// their `f32` result below `2^-14` is off the `2^-24` grid (half `exp(-10)` is about `4.54e-5`).
-/// The counts pin which steps may take `round_exact_below_normal`. On a profile whose driver
+/// The counts pin which steps take `device_round`. On a profile whose driver
 /// computes a 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3), a fused sum rounds nothing
 /// itself: the device's `Fma` rounds it. On a profile with `shaderFloat16` (moltenvk-m3,
 /// amd-rdna3-radv) no rounding holds either: each is the conversion and its widening.
@@ -3667,10 +3669,11 @@ fn stores_nan(bits: u32, half: bool) -> bool {
 /// Kernels `ks` of `bitcode` (each storing a NaN's bits, `half` ones zero-extended where `half`)
 /// on `lavapipe` and `moltenvk-m3`, each with its driver's deviation `MetalCanonicalNans` taken
 /// and not: the module selects no NaN, so it is the same word for word on both sides of the fact;
-/// it records `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel, fact)` and never
-/// `DeviceNanEncoding`; and the interpreter's answer is the kernel's `want`, or a NaN, its bits the
-/// device's, where it has none, but for the kernels `unread` names, whose device instruction the
-/// interpreter does not evaluate.
+/// it records `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel, fact)` or it reads a
+/// `half` from its bits by the device's widening (`narrow::widens_bits`: both profiles have
+/// `shaderFloat16`), and never `DeviceNanEncoding`; and the interpreter's answer is the kernel's
+/// `want`, or a NaN, its bits the device's, where it has none, but for the kernels `unread` names,
+/// whose device instruction the interpreter does not evaluate.
 fn nans_are_the_device_s(
     bitcode: &[u8],
     ks: &[Kernel],
@@ -3687,9 +3690,13 @@ fn nans_are_the_device_s(
                 let a = compile(bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let (_, words) =
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+                let (_, m) = crate::pipeline::testing::typed_module(bitcode, kk.name, &p)
+                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                let widens = crate::lower::arith::narrow::widens_bits(&m, &mut meter())
+                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::NativeNanEncoding),
-                    noted(kk.name, fact),
+                    noted(kk.name, fact) || widens,
                     "{what}: {:?}",
                     a.precision
                 );
@@ -4201,10 +4208,11 @@ fn half_nans_answer_the_device_s_nan() {
 }
 
 /// Class C: Metal widens a `half` NaN to the canonical `float` NaN `0x7FC00000`, sign and payload
-/// dropped, by `fpext` and by its intrinsic form `air.convert`. A `half` is held widened, so the
-/// widening emits no device operation and every device keeps the payload, MoltenVK included: the
-/// module selects nothing and notes `PrecisionNote::NativeNanEncoding` whatever the device fact
-/// states. The interpreter keeps the payload as a device would.
+/// dropped, by `fpext` and by its intrinsic form `air.convert`. A `half` is held widened, so
+/// `fpext` emits no device operation: the NaN is the device's widening of the `half`'s bits where
+/// the profile has `shaderFloat16` (both profiles here), and the module selects nothing and notes
+/// `PrecisionNote::NativeNanEncoding` whatever the device fact states. The interpreter's widening
+/// keeps the payload, as a device may.
 #[test]
 fn a_widened_half_nan_keeps_its_payload_on_every_profile() {
     let hx = oh("hx", 0xFE01);

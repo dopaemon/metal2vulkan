@@ -17,12 +17,12 @@
 //!
 //! Each runs on every committed profile under the default policy and under
 //! `DevicePolicy::exact_answers`. A module may leave a NaN's bits to the device, and then says so:
-//! a `half` read from its bits by the device's widening (`PrecisionNote::NativeHalfConversion`,
-//! wherever the module rounds to `half` through the device's conversion) or a NaN's bits left to
-//! the device's arithmetic and conversions (`PrecisionNote::NativeNanEncoding`, under either
-//! policy). There a NaN pattern need only come back a NaN (a move through the select or the
-//! threadgroup array; a move straight to a buffer reuses the loaded bits). No
-//! other pattern may change, nor any where the module records neither note.
+//! a `half` read from its bits by the device's widening (every profile with `shaderFloat16`) or a
+//! NaN's bits left to the device's arithmetic and conversions, each `PrecisionNote::NativeNanEncoding`
+//! (under either policy), or the native conversion's `PrecisionNote::NativeHalfConversion`. There
+//! a NaN pattern need only come back a NaN (a move through the select or the threadgroup array; a
+//! move straight to a buffer reuses the loaded bits). No other pattern may change, nor any where
+//! the module records neither note.
 //!
 //! The profiles and policies compile to a few distinct modules: each runs once, all at once on
 //! threads of their own.

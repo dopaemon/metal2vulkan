@@ -363,7 +363,7 @@ fn kernel_defs(
     if dce {
         let budget = crate::budget::Budget::default();
         let mut meter = crate::budget::Meter::new(&budget);
-        if let Err(e) = crate::spirv::dead::remove_dead_keeping(&mut m, &offers, &[], &mut meter) {
+        if let Err(e) = crate::spirv::dead::remove_dead_keeping(&mut m, &offers, &mut meter) {
             panic!("remove_dead_keeping: {e:?}");
         }
     }
@@ -3769,7 +3769,6 @@ mod snapshot_codes;
 mod specials;
 mod texel_round;
 mod wide;
-mod widening;
 
 /// `air.convert` from an integer to `bool` is C++'s `x != 0`, lane by lane, at every width and
 /// whatever the source's sign: the values that differ from the low bit (2, 0x80, the top bit) are

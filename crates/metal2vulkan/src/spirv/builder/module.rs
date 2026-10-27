@@ -121,6 +121,9 @@ pub struct ModuleBuilder {
     /// The vector, lane value, and lane index of each narrow lane insert the lowering noted
     /// (`FunctionBuilder::note_insert`).
     pub(super) inserts: HashMap<Value, (Value, Value, u32)>,
+    /// The 16-bit integer each zero extension to 32 bits the lowering noted widens
+    /// (`FunctionBuilder::note_widened16`).
+    pub(super) widened16: HashMap<Value, Value>,
     /// Every `OpUndef` result (`FunctionBuilder::is_undef`).
     pub(super) undefs: HashSet<Value>,
     /// The dynamic texel offsets the lowering asked to be taken as constants, by offset value
@@ -147,12 +150,6 @@ pub struct ModuleBuilder {
     /// Whether a `half`'s NaN bits are the device's conversion's under the float controls
     /// ([`ModuleBuilder::native_half_nans`]).
     native_half_nans: bool,
-    /// Whether the `half`s read from their bits now are the device's widening of them
-    /// ([`ModuleBuilder::widens_halves`]).
-    widens_halves: bool,
-    /// The equal values offered for where no loop holds them (`FunctionBuilder::offer_outside_loops`),
-    /// in offer order.
-    pub(super) loop_free: Vec<Offer>,
 }
 
 /// How a float multiply the device must round on its own and never fuse is emitted
@@ -281,10 +278,9 @@ impl ModuleBuilder {
     }
 
     /// Whether a `half`'s NaN bits are left to the device's conversion where the module rounds
-    /// through it under the float controls ([`QuantizeForm::Controlled`]): a `half` read from its
-    /// bits is the device's widening of them, and a `half` texel takes the rounding's NaN. Emission
-    /// sets it with the form; a builder that never sets it decodes in integer arithmetic and keeps a
-    /// texel's NaN, as before.
+    /// through it under the float controls ([`QuantizeForm::Controlled`]): a `half` texel takes the
+    /// rounding's NaN. Emission sets it with the form; a builder that never sets it keeps a
+    /// texel's NaN.
     pub fn set_native_half_nans(&mut self, native: bool) {
         self.native_half_nans = native;
     }
@@ -293,20 +289,6 @@ impl ModuleBuilder {
     /// ([`ModuleBuilder::set_native_half_nans`]).
     pub fn native_half_nans(&self) -> bool {
         self.native_half_nans
-    }
-
-    /// Whether the `half`s read from their bits from here on are the device's widening of them
-    /// (`narrow::from_bits`): emission sets it while it emits a load of `half`s the plan leaves to
-    /// that widening (`ArithPlan::widened`), where it is Metal's and no use reads a NaN's bits,
-    /// and clears it after. A builder that never sets it decodes in integer arithmetic.
-    pub fn set_widens_halves(&mut self, widens: bool) {
-        self.widens_halves = widens;
-    }
-
-    /// Whether the `half`s read from their bits now are the device's widening of them
-    /// ([`ModuleBuilder::set_widens_halves`]).
-    pub fn widens_halves(&self) -> bool {
-        self.widens_halves
     }
 
     /// The heap bytes the builder holds, for the byte ledger: every input-scaled container's
@@ -353,8 +335,8 @@ impl ModuleBuilder {
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
+            + map_bytes(&self.widened16)
             + vec_bytes(&self.offers)
-            + vec_bytes(&self.loop_free)
             + map_bytes(&self.encodes)
             + self.undefs.capacity() * std::mem::size_of::<Value>();
         #[cfg(test)]
@@ -397,12 +379,6 @@ impl ModuleBuilder {
     /// once the module is finalized.
     pub fn offers(&self) -> &[Offer] {
         &self.offers
-    }
-
-    /// The equal values offered for where no loop holds them, for
-    /// [`crate::spirv::dead::take_outside_loops`] once the module's loops are final.
-    pub fn loop_free_offers(&self) -> &[Offer] {
-        &self.loop_free
     }
 
     /// The constant table.

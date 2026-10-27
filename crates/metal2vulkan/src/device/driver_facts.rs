@@ -198,8 +198,9 @@ pub(crate) fn among<F: Copy + Ord>(
 /// narrowings and the widening away (3,468,601,344 pairs for a sum, 4,014,926,892 for a product,
 /// 6,140 for a quotient); so does SPIRV-Cross's `NoContraction` `OpFMul`, `spvFMul`, which answers
 /// `+0` for a `-0` product (126,974 pairs). The translation emits none of them. The sums read every
-/// `half` through the device's widening (`x + -0` of every `x`), which a load of `half`s whose uses
-/// read no NaN's bits takes (`lower::arith::widening`); Metal's own widening, read on the M3 Max
+/// `half` through the device's widening (`x + -0` of every `x`), which every `half` read from its
+/// bits takes on a profile with `shaderFloat16` (`lower::arith::narrow::from_bits`), so a module
+/// that reads one requires this fact for its denormals; Metal's own widening, read on the M3 Max
 /// (macOS 27.0.1) over every bit pattern from threadgroup memory in fast and safe math, takes every
 /// `half` but a NaN to its value, denormals included, and every NaN to `0x7FC00000`. One row per
 /// GPU, as measured.
