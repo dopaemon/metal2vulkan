@@ -80,10 +80,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
             D::MetalHalfColorNans,
             property(VkProperty::MetalHalfColorNans),
         ),
-        (
-            D::HalfColorOutputBits,
-            property(VkProperty::HalfColorOutputBits),
-        ),
         (D::MetalHalfFma, property(VkProperty::MetalHalfFma)),
         (
             D::MetalFloatDenormals,
@@ -92,10 +88,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
         (
             D::MetalHalfQuantize,
             property(VkProperty::MetalHalfQuantize),
-        ),
-        (
-            D::MetalHalfConversion,
-            property(VkProperty::MetalHalfConversion),
         ),
         (
             D::MetalCenterVaryings,
@@ -151,10 +143,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
             property(VkProperty::MetalNormStorageWrites),
         ),
         (
-            D::Unorm8LinearFilter,
-            property(VkProperty::Unorm8LinearFilter),
-        ),
-        (
             D::MetalDepth16Stores,
             property(VkProperty::MetalDepth16Stores),
         ),
@@ -183,7 +171,7 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
 
 /// The deviations each committed profile takes are those its driver is measured with on its GPU,
 /// at every release: every Apple GPU's (MoltenVK's lockstep, `float` functions, canonical NaNs,
-/// sampler, compute cube route and the rest of the nineteen), with the graphics cube route and the
+/// sampler, compute cube route and the rest of the seventeen), with the graphics cube route and the
 /// per-sample depth of the identity's macOS release and family, the M4's identity's normalized
 /// storage writes and full quads, and every Apple GPU's 16-bit unorm depth stores, interpolation
 /// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's on
@@ -199,7 +187,7 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     use crate::device::{Device, DevicePolicy};
     use crate::error::DriverDeviation as D;
     use crate::spirv::testing::is_moltenvk_capture;
-    // The nineteen of every Apple GPU measured, and the M3 Max's graphics cube route.
+    // The seventeen of every Apple GPU measured, and the M3 Max's graphics cube route.
     let apple = vec![
         D::SimdgroupLockstep,
         D::MetalFloatFunctions,
@@ -207,11 +195,9 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         D::MetalSampler,
         D::CubeGradientRoute,
         D::MetalColorWrites,
-        D::HalfColorOutputBits,
         D::MetalHalfFma,
         D::MetalFloatDenormals,
         D::MetalHalfQuantize,
-        D::MetalHalfConversion,
         D::MetalCenterVaryings,
         D::MetalMinMax,
         D::MetalHalfArithmetic,
@@ -231,7 +217,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         D::MetalHalfStorageWrites,
         D::MetalFloatStorageNans,
         D::MetalHalfTexelWrites,
-        D::Unorm8LinearFilter,
     ];
     // In `taken`'s order: the graphics route (macOS 26.7's on the M3 Max's identity there, macOS
     // 27's on the identity both chips share) before the color writes, and each chip's per-sample
@@ -286,7 +271,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::MetalFloatColorNans,
                 D::MetalHalfStorageWrites,
                 D::MetalFloatStorageNans,
-                D::Unorm8LinearFilter,
             ],
             // The per-sample `FragCoord.z` last, in `taken`'s order. The 780M under Phoenix's
             // `deviceID` and Hawk Point's alike.
@@ -300,7 +284,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::SampleFragCoordDepth,
                 D::MetalHalfTexelWrites,
                 D::MetalNormStorageWrites,
-                D::Unorm8LinearFilter,
                 D::MetalDepth16Stores,
                 D::MetalDepth16BiasedStores,
             ],
@@ -309,7 +292,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::MetalHalfQuantize,
                 D::MetalSmallFloatColorWrites,
                 D::MetalHalfStorageWrites,
-                D::Unorm8LinearFilter,
                 D::MetalDepth16Stores,
             ],
             (false, "intel-uhd770-rpls-anv") => vec![
@@ -317,7 +299,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::MetalHalfQuantize,
                 D::MetalSmallFloatColorWrites,
                 D::MetalHalfStorageWrites,
-                D::Unorm8LinearFilter,
                 D::MetalDepth16Stores,
             ],
             (false, _) => Vec::new(),
@@ -387,7 +368,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
             D::MetalFloatColorNans,
             D::MetalHalfStorageWrites,
             D::MetalFloatStorageNans,
-            D::Unorm8LinearFilter
         ]
     );
     let vulkan = CubeGradients {

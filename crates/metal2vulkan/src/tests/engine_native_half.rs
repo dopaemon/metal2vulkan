@@ -189,10 +189,6 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         PrecisionNote::NativeHalfConversion,
         PrecisionNote::NativeHalfQuantize,
     ];
-    let facts = [
-        VkProperty::MetalHalfConversion,
-        VkProperty::MetalHalfQuantize,
-    ];
     let cases: [(&str, Option<PrecisionNote>); 4] = [
         ("lavapipe", Some(natives[0])),
         ("swiftshader", Some(natives[1])),
@@ -207,12 +203,12 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let noted: Vec<_> = natives.iter().filter(|n| a.precision.contains(n)).collect();
             assert_eq!(noted, note.iter().collect::<Vec<_>>(), "{what}");
-            for fact in &facts {
-                assert!(
-                    !a.requirements.properties.contains(fact),
-                    "{what}: {fact:?}"
-                );
-            }
+            assert!(
+                !a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfQuantize),
+                "{what}"
+            );
         }
     }
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to
@@ -625,15 +621,12 @@ fn a_controlled_conversion_rounds_half_where_the_float_controls_allow() {
                     "{what}: {kind:?} {width:?}"
                 );
             }
-            for fact in [
-                VkProperty::MetalHalfConversion,
-                VkProperty::MetalHalfQuantize,
-            ] {
-                assert!(
-                    !a.requirements.properties.contains(&fact),
-                    "{what}: {fact:?}"
-                );
-            }
+            assert!(
+                !a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfQuantize),
+                "{what}"
+            );
             for note in [
                 PrecisionNote::NativeHalfConversion,
                 PrecisionNote::NativeHalfQuantize,

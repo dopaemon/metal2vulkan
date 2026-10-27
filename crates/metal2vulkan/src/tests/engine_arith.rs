@@ -2878,8 +2878,7 @@ fn narrow_float_module_growth_is_bounded() {
 /// `SignedZeroInfNanPreserve` for 16 bits and the modes its independence ties to them
 /// (`narrow::controlled_modes`). No other module declares a 16-bit float mode or
 /// `RoundingModeRTE` for it. A module that quantizes requires
-/// `DriverDeviation::MetalHalfQuantize`'s fact only where the profile takes it, and no module
-/// requires `VkProperty::MetalHalfConversion`.
+/// `DriverDeviation::MetalHalfQuantize`'s fact only where the profile takes it.
 ///
 /// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. The
 /// `fast` chain's seven multiplies whose one use is the next addition are fused into it: each pair
@@ -3030,22 +3029,14 @@ fn half_rounding_follows_the_operation() {
                     && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfQuantize),
                 "{what}"
             );
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&crate::device::requirements::VkProperty::MetalHalfConversion),
-                "{what}"
-            );
         }
     }
 }
 
-/// No module requires `VkProperty::MetalHalfConversion`: a rounding through the device's conversion
-/// to 16 bits and back is the device's own (moltenvk-m3 rounds so). Where the device's 16-bit
-/// `+ - *` is measured Metal's, a `half` sum is that instruction, which rounds nothing of the
-/// module's: it requires `MetalHalfArithmetic` alone.
+/// Where the device's 16-bit `+ - *` is measured Metal's, a `half` sum is that instruction, which
+/// rounds nothing of the module's: it requires `MetalHalfArithmetic` alone.
 #[test]
-fn no_rounding_requires_the_conversion_fact() {
+fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
     let halves = format!(
         "{}{}{}  %h = bitcast i16 %t to half\n  %g = bitcast i16 %s to half\n  %u = bitcast i16 %v to half\n",
         on("t", 16, 0x3C01),
@@ -3096,13 +3087,6 @@ fn no_rounding_requires_the_conversion_fact() {
                     .properties
                     .contains(&crate::device::requirements::VkProperty::MetalHalfArithmetic),
                 ha && kk.name == "half_sum",
-                "{what}: {:?}",
-                a.requirements.properties
-            );
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&crate::device::requirements::VkProperty::MetalHalfConversion),
                 "{what}: {:?}",
                 a.requirements.properties
             );

@@ -632,12 +632,6 @@ pub enum VkProperty {
     /// No Vulkan query reports it. Without it, such a write records
     /// `PrecisionNote::DeviceNanEncoding`.
     MetalHalfColorNans,
-    /// The device stores a 16-bit float color output to a half-float color channel as its bits,
-    /// a NaN's included (the driver's measured deviation
-    /// [`DriverDeviation::HalfColorOutputBits`](crate::error::DriverDeviation::HalfColorOutputBits)).
-    /// No Vulkan query reports it. Without it, an output the device does not store Metal's NaN of
-    /// stays 32-bit and its write records `PrecisionNote::DeviceNanEncoding`.
-    HalfColorOutputBits,
     /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma` (the
     /// driver's measured deviation
     /// [`DriverDeviation::MetalHalfFma`](crate::error::DriverDeviation::MetalHalfFma)). No Vulkan
@@ -661,15 +655,6 @@ pub enum VkProperty {
     /// rounds to `half` through the quantize alone requires it; without it, the module clamps
     /// below 65520 first.
     MetalHalfQuantize,
-    /// The device's `OpFConvert` from 32-bit to 16-bit floats, of the result of an `OpFAdd`
-    /// decorated `NoContraction`, rounds as Metal's conversion to `half` does: to nearest even on
-    /// the half grid, half denormals kept, infinity from 65520 up (the driver's measured deviation
-    /// [`DriverDeviation::MetalHalfConversion`](crate::error::DriverDeviation::MetalHalfConversion)).
-    /// No Vulkan query reports it: without `RoundingModeRTE` and `DenormPreserve` for 16 bits
-    /// the conversion's rounding mode and its denormals are the device's. A module that rounds
-    /// to `half` through the conversion and its widening requires it; without it, the module
-    /// rounds through `OpQuantizeToF16`.
-    MetalHalfConversion,
     /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center
     /// in every fragment invocation, a sample-rate one's included, as Metal does (the driver's
     /// measured deviation
@@ -773,13 +758,6 @@ pub enum VkProperty {
     /// No Vulkan query reports it. A module whose `float` texel write leaves a normalized format's
     /// conversion to the device requires it; without it, the shader rounds each channel.
     MetalNormStorageWrites,
-    /// The device's linear filter of an 8-bit unsigned normalized texture, at the coordinate of
-    /// the centre of Metal's footprint step, lands within one code of Metal's (the driver's
-    /// measured deviation
-    /// [`DriverDeviation::Unorm8LinearFilter`](crate::error::DriverDeviation::Unorm8LinearFilter)).
-    /// No Vulkan query reports it. A module that hands such a sample to the device's filter
-    /// requires it; without it, the sample takes Metal's filter, emulated exactly.
-    Unorm8LinearFilter,
     /// Native device sampling: the module hands its samples, gathers and comparisons to the
     /// device's own sampler as a device that samples through Metal's
     /// ([`VkProperty::MetalSampler`]) would, on a device that does not. No Vulkan query reports

@@ -1059,41 +1059,6 @@ fn nvidia_carries_the_folded_half_conversion_pair() {
     assert!(!carries(&desc));
 }
 
-/// `DriverWorkaround::UniformReadsOutpaceStorageReads` is keyed on ANV, whatever its GPU, and on
-/// lavapipe at `subgroupSize` 4 (128-bit vectors): every committed ANV profile carries it (the
-/// Intel venue's two devices alike, so they keep one translation key), and of the lavapipes the
-/// arm64 gate's alone; no other profile does. The UHD 770's description under RADV or NVIDIA's
-/// driver does not, nor the arm64 lavapipe's at `subgroupSize` 8.
-#[test]
-fn uniform_reads_outpace_storage_reads_on_anv_and_narrow_lavapipe() {
-    use crate::device::profile::DriverWorkaround;
-    let fact = DriverWorkaround::UniformReadsOutpaceStorageReads;
-    let carries = |desc: &DeviceDescription| {
-        Device::new(desc.clone(), DevicePolicy::default())
-            .unwrap()
-            .profile()
-            .fields()
-            .workarounds
-            .contains(&fact)
-    };
-    for (stem, text) in committed_profiles() {
-        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let want =
-            desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) || stem == "gate-lavapipe";
-        assert_eq!(carries(&desc), want, "{stem}");
-    }
-    let mut desc = profile("intel-uhd770-rpls-anv");
-    assert!(carries(&desc));
-    for other in [vk::DriverId::MESA_RADV, vk::DriverId::NVIDIA_PROPRIETARY] {
-        desc.driver_id = Some(other);
-        assert!(!carries(&desc), "{other:?}");
-    }
-    let mut desc = profile("gate-lavapipe");
-    assert_eq!(desc.subgroup.size, 4);
-    desc.subgroup.size = 8;
-    assert!(!carries(&desc));
-}
-
 /// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` is keyed on ANV, whatever its GPU
 /// and release; every committed ANV profile carries it, and no other profile does. The UHD 770's
 /// description under RADV or NVIDIA's driver loses it.

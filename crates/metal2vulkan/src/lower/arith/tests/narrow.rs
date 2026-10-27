@@ -971,8 +971,7 @@ fn half_rounding_keeps_denormals() {
 
 /// In `QuantizeForm::Converted` and `Controlled` a `half` rounding is the conversion to 16 bits
 /// and its widening alone, which the interpreter rounds to nearest even with half denormals kept,
-/// as the devices that take `DriverDeviation::MetalHalfConversion` are measured to on every `f32`
-/// and as the Vulkan spec makes it under the controlled form's float controls: over
+/// as the Vulkan spec makes it under the controlled form's float controls: over
 /// [`half_rounding_operands`], `round` and `round_exact_below_normal` give the exactly rounded
 /// half on scalars and vectors, with no `OpQuantizeToF16` and no `RoundEven` in the module. In
 /// `Controlled` each conversion is decorated `NoContraction`, and none in `Converted`.

@@ -596,14 +596,6 @@ pub enum DriverDeviation {
     /// a module that writes a `half` output to such a channel records
     /// `PrecisionNote::DeviceNanEncoding`.
     MetalHalfColorNans,
-    /// The device stores a 16-bit float color output to a half-float color channel as its bits,
-    /// a NaN's included (`VkProperty::HalfColorOutputBits`). Where the profile also declares 16-bit
-    /// outputs (`storageInputOutput16`, with `shaderInt16` and `shaderFloat16`) and the device does
-    /// not store the output's NaN as Metal does, a fragment function writes an output to an
-    /// attachment whose every written channel is half-float as the bits of the half Metal stores,
-    /// through a 16-bit output, and records no `PrecisionNote::DeviceNanEncoding` for it.
-    /// Unmeasured, the output stays 32-bit and records the note.
-    HalfColorOutputBits,
     /// The device's `GLSL.std.450 Fma` on 16-bit floats is Metal's own `half` `fma`, which
     /// rounds the exact `a * b + c` once (`VkProperty::MetalHalfFma`). Where the profile also has
     /// `shaderFloat16`, a `half` fused multiply-add converts its operands (each a `half`, so
@@ -622,18 +614,6 @@ pub enum DriverDeviation {
     /// the device. Unmeasured, the module rounds on the `f32`'s bits in integer arithmetic, which
     /// is Metal's conversion on every device (`QuantizeForm::Integer`).
     MetalHalfQuantize,
-    /// The device's `OpFConvert` from 32-bit to 16-bit floats, of the result of an `OpFAdd`
-    /// decorated `NoContraction` (which its compiler cannot fold the conversion into), is Metal's
-    /// conversion of a `float` to `half`: it rounds to nearest even on the half grid, half
-    /// denormals included, keeps the sign of a zero and gives infinity from 65520 up
-    /// (`VkProperty::MetalHalfConversion`). Vulkan leaves the conversion's rounding mode, and
-    /// whether it keeps a 16-bit denormal, to the device; a conversion folded into the
-    /// instruction computing its operand rounds otherwise on MoltenVK (toward zero). Where the
-    /// profile also has `shaderFloat16`, a `half` rounding is that conversion of `x + -0.0` and its
-    /// widening (`QuantizeForm::Converted`), with no `OpQuantizeToF16` and no denormal arithmetic
-    /// beside it. Unmeasured, the module rounds through the measured quantize (`MetalHalfQuantize`)
-    /// or on the bits in integer arithmetic, exact either way.
-    MetalHalfConversion,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
     /// invocation, a sample-rate one's included, as Metal reads it
@@ -760,17 +740,6 @@ pub enum DriverDeviation {
     /// profile takes it, such a write is left to the device. Unmeasured, the shader rounds each
     /// channel to Metal's code by the bound format's class.
     MetalNormStorageWrites,
-    /// The device's linear filter of an 8-bit unsigned normalized texture (`R8Unorm`,
-    /// `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`), at the coordinate of the centre of Metal's 1/256
-    /// footprint step, lands within one code (1/255) of Metal's on every channel
-    /// (`VkProperty::Unorm8LinearFilter`): a bounded deviation the owner accepted, not an exact
-    /// equality. Where the profile takes it, such a 2D sample through a constexpr or runtime
-    /// sampler slot is the device's at that coordinate, under
-    /// `PrecisionNote::DeviceUnorm8LinearFilter` (`lower::sampler::native`). Unmeasured, the sample
-    /// takes Metal's filter, emulated exactly. A profile takes it only under a policy of
-    /// `Unorm8LinearFilterPolicy::DeviceWithinOneCode`; the default policy keeps Metal's filter
-    /// exact on every device.
-    Unorm8LinearFilter,
     /// The device stores every depth a draw writes to a `Depth16Unorm` attachment, unbiased, as
     /// Metal's code: the depth scaled by 65535 exactly and rounded to nearest, a tie up
     /// (`VkProperty::MetalDepth16Stores`; Metal stored 32768 for 0.5 and 6554 for 0.1's

@@ -402,11 +402,6 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
             DriverWorkaround::EarlyTestsDropMultisampledImageWrites,
             DriverWorkaround::DiscardDropsSimdgroupStores,
         ],
-        // The uniform buffer's reads, on 128-bit vectors (`subgroupSize` 4) alone.
-        Some(vk::DriverId::MESA_LLVMPIPE) if desc.subgroup.size == 4 => vec![
-            DriverWorkaround::ClippedTrianglesSplitPixelFragments,
-            DriverWorkaround::UniformReadsOutpaceStorageReads,
-        ],
         Some(vk::DriverId::MESA_LLVMPIPE) => {
             vec![DriverWorkaround::ClippedTrianglesSplitPixelFragments]
         }
@@ -419,12 +414,11 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
             }
             found
         }
-        // A uniform buffer's reads at different addresses, and a register allocator that faults
-        // compiling a module past a word bound, on every GPU it drives.
-        Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) => vec![
-            DriverWorkaround::UniformReadsOutpaceStorageReads,
-            DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
-        ],
+        // A register allocator that faults compiling a module past a word bound, on every GPU it
+        // drives.
+        Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) => {
+            vec![DriverWorkaround::RegisterAllocatorOverflowsLargeModules]
+        }
         _ => Vec::new(),
     }
 }
@@ -755,9 +749,6 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     if deviations.contains(&DriverDeviation::MetalHalfColorNans) {
         properties.insert(VkProperty::MetalHalfColorNans);
     }
-    if deviations.contains(&DriverDeviation::HalfColorOutputBits) {
-        properties.insert(VkProperty::HalfColorOutputBits);
-    }
     if deviations.contains(&DriverDeviation::MetalHalfFma) {
         properties.insert(VkProperty::MetalHalfFma);
     }
@@ -766,9 +757,6 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     }
     if deviations.contains(&DriverDeviation::MetalHalfQuantize) {
         properties.insert(VkProperty::MetalHalfQuantize);
-    }
-    if deviations.contains(&DriverDeviation::MetalHalfConversion) {
-        properties.insert(VkProperty::MetalHalfConversion);
     }
     if deviations.contains(&DriverDeviation::MetalCenterVaryings) {
         properties.insert(VkProperty::MetalCenterVaryings);
@@ -811,9 +799,6 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     }
     if deviations.contains(&DriverDeviation::MetalNormStorageWrites) {
         properties.insert(VkProperty::MetalNormStorageWrites);
-    }
-    if deviations.contains(&DriverDeviation::Unorm8LinearFilter) {
-        properties.insert(VkProperty::Unorm8LinearFilter);
     }
     if deviations.contains(&DriverDeviation::MetalDepth16Stores) {
         properties.insert(VkProperty::MetalDepth16Stores);

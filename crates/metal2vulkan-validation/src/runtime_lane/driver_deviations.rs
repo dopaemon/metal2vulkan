@@ -1,10 +1,10 @@
 //! The gate lanes of the driver deviations translation relies on, on the device the cfg selects,
 //! under the validation layer. A deviation is a driver's measured answer where Vulkan leaves the
-//! answer to it, keyed on the driver's release (`device::driver_facts`): MoltenVK 1.4.1 on Apple's
-//! GPUs has twenty-three. A profile takes each at a measured release, and past the last measured
-//! one with a notice (`DeviceProfile::takes_driver_deviation`). Each test here runs what relies on
-//! one deviation and compares the device's answer with Metal's, so a venue whose driver release
-//! changes the deviation fails at the gate. The sampler's deviation has its own lanes (`depth_compares`,
+//! answer to it, keyed on the driver and, where measured on some alone, the GPU
+//! (`device::driver_facts`), at every release of that driver
+//! (`DeviceProfile::takes_driver_deviation`). Each test here runs what relies on one deviation and
+//! compares the device's answer with Metal's, so a venue whose driver changes the answer fails at
+//! the gate. The sampler's deviation has its own lanes (`depth_compares`,
 //! `mip_levels`, `nearest_positions`, `border_swizzles`), and the color writes theirs
 //! (`color_writes`); these are the others, the cube route's in both stages:
 //!
@@ -53,11 +53,10 @@
 //!   `OpQuantizeToF16` alone and the kernels require `VkProperty::MetalHalfQuantize`; elsewhere the
 //!   module rounds on the bits in integer arithmetic. Both give Metal's largest `half` there, so
 //!   every device is checked on those words.
-//! - **The `half` conversion** (`MetalHalfConversion`): the same cases, and the owned `half` edge
-//!   fixtures on every word. Where the profile takes the deviation, a `half` rounding is the
-//!   device's conversion to 16 bits and back, with no quantize, and the kernels require
-//!   `VkProperty::MetalHalfConversion` and not `MetalHalfQuantize`; elsewhere they require neither
-//!   or the quantize's fact as above.
+//! - **The `half` conversion**: the same cases, and the owned `half` edge fixtures. A profile with
+//!   `shaderFloat16` and without the float controls that make the device's conversion Metal's
+//!   rounds through that conversion and records `PrecisionNote::NativeHalfConversion`: the device's
+//!   answer, whose differing words the test prints.
 //! - **The minimum and maximum family** (`MetalMinMax`): the NaN model's `fmin`, `fmax`, `min3`,
 //!   `max3`, `clamp` and `median3` cases, at NaN operands of every kind and at zeros and denormals,
 //!   with and without fast math. Where the profile takes the deviation, Metal's minimum, maximum
@@ -122,7 +121,7 @@ use metal2vulkan::error::{Capability, DriverDeviation, Error as CompileError, Fe
 use metal2vulkan::library::Library;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote,
     RenderPipelineDescriptor, Stage, StageSource,
 };
 use metal2vulkan::vk::DriverId;
@@ -666,6 +665,28 @@ fn rounds_under_float_controls(device: &Device, case: &PublicCase) -> bool {
     )
 }
 
+/// Whether `case`'s kernel, as `device`'s compile layer compiles its pipeline, rounds to `half` by
+/// the device's own form: it records `PrecisionNote::NativeHalfConversion` or
+/// `NativeHalfQuantize`, so its rounded words are the device's, not Metal's.
+fn rounds_natively(device: &Device, case: &PublicCase) -> bool {
+    let compile = device.compile_device();
+    let budget = Budget::standard();
+    let library = Library::from_air(&case.bitcode).unwrap();
+    let function = FunctionDescriptor::new(library.function(&case.case.entry).unwrap());
+    let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
+    let compiled = compile
+        .compile_function(&function, &inputs, &budget)
+        .unwrap();
+    let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
+    let notes = compile
+        .compile_compute_pipeline(&descriptor, &budget)
+        .unwrap()
+        .stage
+        .precision_notes;
+    notes.contains(&PrecisionNote::NativeHalfConversion)
+        || notes.contains(&PrecisionNote::NativeHalfQuantize)
+}
+
 /// Where the profile takes the deviation, both cases' kernels take the device's 16-bit `Fma`
 /// (they require `VkProperty::MetalHalfFma`) and every thread's two `half` results are the Metal
 /// row's of the same chip, with and without fast math. Elsewhere neither kernel requires it.
@@ -853,12 +874,12 @@ const HALF_EDGE_CASES: [&str; 6] = [
 
 /// Every word of [`HALF_EDGE_CASES`] whose Metal answer holds the largest `half` (`0x7BFF` or
 /// `0xFBFF` in either half, or the `float` 65504 of either sign) is the Metal row's of the same
-/// chip on every profile: the device's conversion to 16 bits and back where the profile takes
-/// `DriverDeviation::MetalHalfConversion` (the kernels then require
-/// `VkProperty::MetalHalfConversion` and hold no quantize), else that conversion under the float
-/// controls that make it Metal's where the profile has them (the kernels then declare them and
-/// require neither fact), else the device's quantize where the profile takes `MetalHalfQuantize`
-/// (the kernels then require `VkProperty::MetalHalfQuantize`), integer arithmetic elsewhere.
+/// chip where the kernel rounds as Metal does: the device's conversion to 16 bits and back under
+/// the float controls that make it Metal's where the profile has them (the kernels then declare
+/// them and require no fact), else the device's quantize where the profile takes
+/// `MetalHalfQuantize` (the kernels then require `VkProperty::MetalHalfQuantize`). A kernel that
+/// rounds by the device's own form (`rounds_natively`) answers the device's words, which the test
+/// prints.
 #[test]
 fn half_quantize_rounds_as_metal_at_the_edge() {
     let messages = Messages::default();
@@ -866,9 +887,7 @@ fn half_quantize_rounds_as_metal_at_the_edge() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
-        // A profile that rounds through the device's conversion holds no quantize to rely on.
-        let converts = takes(&device, DriverDeviation::MetalHalfConversion);
-        let metals = takes(&device, DriverDeviation::MetalHalfQuantize) && !converts;
+        let quantizes = takes(&device, DriverDeviation::MetalHalfQuantize);
         let word = |bytes: &[u8], i: usize| {
             u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap())
         };
@@ -882,21 +901,14 @@ fn half_quantize_rounds_as_metal_at_the_edge() {
         for case_name in HALF_EDGE_CASES {
             let case = public_case(case_name).unwrap();
             let controlled = rounds_under_float_controls(&device, &case);
-            assert!(
-                !(converts && controlled),
-                "{case_name} on {name}: the measured conversion takes no float controls"
-            );
+            let native = rounds_natively(&device, &case);
+            // A profile that rounds through the device's conversion holds no quantize to rely on.
+            let metals = quantizes && !native && !controlled;
             assert_eq!(
                 requires_property(&device, &case, VkProperty::MetalHalfQuantize),
-                metals && !controlled,
+                metals,
                 "{case_name} on {name}: the kernel takes the device's quantize alone exactly \
                  where the profile takes the deviation and has not the float controls"
-            );
-            assert_eq!(
-                requires_property(&device, &case, VkProperty::MetalHalfConversion),
-                converts,
-                "{case_name} on {name}: the kernel rounds through the device's conversion \
-                 exactly where the profile takes the deviation"
             );
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
@@ -910,14 +922,14 @@ fn half_quantize_rounds_as_metal_at_the_edge() {
                 .filter(|(_, a, b)| a != b)
                 .collect();
             eprintln!(
-                "half quantize {case_name} on {name} (the device's: {metals}, the device's \
-                 conversion: {converts}, under float controls: {controlled}): {} of {} edge \
-                 words differ from Metal",
+                "half quantize {case_name} on {name} (the device's: {metals}, the device's own \
+                 rounding: {native}, under float controls: {controlled}): {} of {} edge words \
+                 differ from Metal",
                 differ.len(),
                 edge.len()
             );
             assert!(!edge.is_empty(), "{case_name}: no edge word");
-            if !differ.is_empty() {
+            if !native && !differ.is_empty() {
                 failures.push(format!(
                     "{case_name} on {name}: edge words differ from Metal (word, device, Metal): \
                      {differ:x?}"
@@ -969,9 +981,9 @@ const DFL_TRIG_CASE: &str = "precise-trigonometric-functions-at-nan-operands-und
 /// `DriverDeviation::MetalFloatDenormals` (elsewhere a denormal is the device's own, and the test
 /// prints how many words differ), the kernels requiring `VkProperty::MetalFloatDenormals` exactly
 /// where the profile takes the deviation; in the `half`
-/// edge cases every word, the kernels requiring `VkProperty::MetalHalfConversion` exactly where the
-/// profile takes that one, else neither where they round under the float controls, else
-/// `VkProperty::MetalHalfQuantize` exactly where the profile takes that one;
+/// edge cases every word where the kernel rounds as Metal does (under the float controls, or
+/// through the quantize, requiring `VkProperty::MetalHalfQuantize`, exactly where the profile takes
+/// that one), the device's words printed where it rounds by its own form;
 /// and in [`DFL_TRIG_CASE`] every word whose Metal answer is a NaN (the functions' other words are
 /// the math library's precision, not their NaNs). The test prints how many words of the other rows
 /// differ, by row.
@@ -1030,38 +1042,29 @@ fn owned_float_fixtures_answer_metal() {
                 ));
             }
         }
-        let converts = takes(&device, DriverDeviation::MetalHalfConversion);
-        let quantize = takes(&device, DriverDeviation::MetalHalfQuantize) && !converts;
+        let quantizes = takes(&device, DriverDeviation::MetalHalfQuantize);
         for case_name in DFL_HALF_EDGE_CASES {
             let case = public_case(case_name).unwrap();
             let controlled = rounds_under_float_controls(&device, &case);
-            assert!(
-                !(converts && controlled),
-                "{case_name} on {name}: the measured conversion takes no float controls"
-            );
+            let native = rounds_natively(&device, &case);
+            let quantize = quantizes && !native && !controlled;
             assert_eq!(
                 requires_property(&device, &case, VkProperty::MetalHalfQuantize),
-                quantize && !controlled,
+                quantize,
                 "{case_name} on {name}: the kernel takes the device's quantize alone exactly \
                  where the profile takes the deviation and has not the float controls"
-            );
-            assert_eq!(
-                requires_property(&device, &case, VkProperty::MetalHalfConversion),
-                converts,
-                "{case_name} on {name}: the kernel rounds through the device's conversion \
-                 exactly where the profile takes the deviation"
             );
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
             let differ = differing_of(&run.output, &metal, 16, &(0..16).collect::<Vec<_>>());
             eprintln!(
-                "owned half edge {case_name} on {name} (the device's quantize: {quantize}, \
-                 conversion: {converts}, under float controls: {controlled}): {} of {} words \
-                 differ from Metal",
+                "owned half edge {case_name} on {name} (the device's quantize: {quantize}, own \
+                 rounding: {native}, under float controls: {controlled}): {} of {} words differ \
+                 from Metal",
                 differ.len(),
                 metal.len() / 4
             );
-            if !differ.is_empty() {
+            if !native && !differ.is_empty() {
                 failures.push(format!(
                     "{case_name} on {name}: {} words differ from Metal (thread, word, device, \
                      Metal): {:x?}",

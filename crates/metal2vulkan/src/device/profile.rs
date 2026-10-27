@@ -256,10 +256,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalHalfColorNans),
-            DriverDeviation::HalfColorOutputBits => f
-                .enabled
-                .properties
-                .contains(&VkProperty::HalfColorOutputBits),
             DriverDeviation::MetalHalfFma => {
                 f.enabled.properties.contains(&VkProperty::MetalHalfFma)
             }
@@ -271,10 +267,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalHalfQuantize),
-            DriverDeviation::MetalHalfConversion => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfConversion),
             DriverDeviation::MetalCenterVaryings => f
                 .enabled
                 .properties
@@ -328,10 +320,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalNormStorageWrites),
-            DriverDeviation::Unorm8LinearFilter => f
-                .enabled
-                .properties
-                .contains(&VkProperty::Unorm8LinearFilter),
             DriverDeviation::MetalDepth16Stores => f
                 .enabled
                 .properties
@@ -1325,18 +1313,6 @@ pub enum DriverWorkaround {
     /// that runs a simdgroup or quad operation records `PrecisionNote::VertexSimdgroupGrouping`
     /// (`lower::simd::finish`); no exact path exists.
     VertexGroupingNotApples,
-    /// The driver reads a uniform buffer at its lanes' different addresses faster than a
-    /// storage buffer. Measured with a fragment function's sRGB color writes, whose lanes read
-    /// the color table at their own channel's byte: ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`) on
-    /// the UHD 770 of RPL-S and the Iris Xe of RPL-P drew them in up to 1.5 and 4.0 times the time
-    /// from a storage buffer as from a uniform buffer, and lavapipe (`VK_DRIVER_ID_MESA_LLVMPIPE`)
-    /// on 128-bit vectors (`subgroupSize` 4, an arm64 host) in up to 1.3 times; NVIDIA's driver
-    /// (the RTX 3090, the RTX 5080 Laptop GPU) drew them in 3.5 to 8.6 times the time from the
-    /// uniform buffer, lavapipe on 256-bit vectors (`subgroupSize` 8, x86_64) in up to 1.5 times,
-    /// and RADV in the same time from either. Keyed on ANV whatever its GPU, and on lavapipe at
-    /// `subgroupSize` 4. There the color table lives in a uniform buffer
-    /// (`lower::arith::srgb::ColorTable`). It changes no answer.
-    UniformReadsOutpaceStorageReads,
     /// The GPU's compiler drops the texture writes of every live thread of a simdgroup that
     /// holds a discarded thread, where the fragment function discards (`discard_fragment()`),
     /// then writes a texture, samples a texture bound through an argument buffer, and calls a

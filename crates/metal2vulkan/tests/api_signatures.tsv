@@ -12413,7 +12413,6 @@ variant	metal2vulkan::device::DriverWorkaround::MeshIndexComponentStoresMisplace
 variant	metal2vulkan::device::DriverWorkaround::NarrowMaskAfterSignedClamp	NarrowMaskAfterSignedClamp
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
-variant	metal2vulkan::device::DriverWorkaround::UniformReadsOutpaceStorageReads	UniformReadsOutpaceStorageReads
 variant	metal2vulkan::device::DriverWorkaround::VertexGroupingNotApples	VertexGroupingNotApples
 variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
 variant	metal2vulkan::device::Exposure::Extension	Extension(&'static [VkExtension])
@@ -12850,7 +12849,6 @@ variant	metal2vulkan::device::VkProperty::FramebufferDepthSampleCount	Framebuffe
 variant	metal2vulkan::device::VkProperty::FramebufferIntegerColorSampleCount	FramebufferIntegerColorSampleCount(u32)
 variant	metal2vulkan::device::VkProperty::FramebufferNoAttachmentsSampleCount	FramebufferNoAttachmentsSampleCount(u32)
 variant	metal2vulkan::device::VkProperty::FramebufferStencilSampleCount	FramebufferStencilSampleCount(u32)
-variant	metal2vulkan::device::VkProperty::HalfColorOutputBits	HalfColorOutputBits
 variant	metal2vulkan::device::VkProperty::IndependentResolve	IndependentResolve
 variant	metal2vulkan::device::VkProperty::IndependentResolveNone	IndependentResolveNone
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	InterpolateAtOffsetCentered
@@ -12866,7 +12864,6 @@ variant	metal2vulkan::device::VkProperty::MetalFragmentSimdgroups	MetalFragmentS
 variant	metal2vulkan::device::VkProperty::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::device::VkProperty::MetalHalfArithmetic	MetalHalfArithmetic
 variant	metal2vulkan::device::VkProperty::MetalHalfColorNans	MetalHalfColorNans
-variant	metal2vulkan::device::VkProperty::MetalHalfConversion	MetalHalfConversion
 variant	metal2vulkan::device::VkProperty::MetalHalfFma	MetalHalfFma
 variant	metal2vulkan::device::VkProperty::MetalHalfQuantize	MetalHalfQuantize
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageNans	MetalHalfStorageNans
@@ -12892,7 +12889,6 @@ variant	metal2vulkan::device::VkProperty::StorageImageSampleCount	StorageImageSa
 variant	metal2vulkan::device::VkProperty::SubgroupOperation	SubgroupOperation(SubgroupOp)
 variant	metal2vulkan::device::VkProperty::SubgroupQuadOperationsInAllStages	SubgroupQuadOperationsInAllStages
 variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)
-variant	metal2vulkan::device::VkProperty::Unorm8LinearFilter	Unorm8LinearFilter
 variant	metal2vulkan::device::VkProperty::VariableSampleLocations	VariableSampleLocations
 variant	metal2vulkan::error::AbiError::BadSamplerState	BadSamplerState
 variant	metal2vulkan::error::AbiError::BadValue	BadValue
@@ -13010,7 +13006,6 @@ variant	metal2vulkan::error::DriverDeviation::CenterFragCoordDepth	CenterFragCoo
 variant	metal2vulkan::error::DriverDeviation::CubeGradientRoute	CubeGradientRoute
 variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientRoute	GraphicsCubeGradientRoute
 variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	GraphicsCubeGradientTangents
-variant	metal2vulkan::error::DriverDeviation::HalfColorOutputBits	HalfColorOutputBits
 variant	metal2vulkan::error::DriverDeviation::MetalCanonicalNans	MetalCanonicalNans
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings
 variant	metal2vulkan::error::DriverDeviation::MetalColorWrites	MetalColorWrites
@@ -13025,7 +13020,6 @@ variant	metal2vulkan::error::DriverDeviation::MetalFragmentSimdgroups	MetalFragm
 variant	metal2vulkan::error::DriverDeviation::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::error::DriverDeviation::MetalHalfArithmetic	MetalHalfArithmetic
 variant	metal2vulkan::error::DriverDeviation::MetalHalfColorNans	MetalHalfColorNans
-variant	metal2vulkan::error::DriverDeviation::MetalHalfConversion	MetalHalfConversion
 variant	metal2vulkan::error::DriverDeviation::MetalHalfFma	MetalHalfFma
 variant	metal2vulkan::error::DriverDeviation::MetalHalfQuantize	MetalHalfQuantize
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageNans	MetalHalfStorageNans
@@ -13040,7 +13034,6 @@ variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatColorWrites	MetalSm
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups
 variant	metal2vulkan::error::DriverDeviation::SampleFragCoordDepth	SampleFragCoordDepth
 variant	metal2vulkan::error::DriverDeviation::SimdgroupLockstep	SimdgroupLockstep
-variant	metal2vulkan::error::DriverDeviation::Unorm8LinearFilter	Unorm8LinearFilter
 variant	metal2vulkan::error::DynamicLibraryProblem::FunctionConstants	FunctionConstants
 variant	metal2vulkan::error::DynamicLibraryProblem::NoInstallName	NoInstallName
 variant	metal2vulkan::error::DynamicLibraryProblem::NotDynamic	NotDynamic

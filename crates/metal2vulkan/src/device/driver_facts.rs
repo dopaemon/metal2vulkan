@@ -117,15 +117,6 @@ pub(crate) fn among<F: Copy + Ord>(
 /// `half` NaN as `0x7e00` on the M3 Max and the M4, and its `float` NaN as Metal does
 /// (`MetalColorWrites`).
 ///
-/// `HalfColorOutputBits`, measured by `runtime_lane::color_writes` through the 16-bit output (at
-/// 19411f193 and our probe at 50bc61f5e, 2026-10-07, the route then taken wherever the profile
-/// declares 16-bit outputs): every `half` NaN of a `half` output to `RGBA16Float`, plain and
-/// blended with factors one and zero, stored as its own bits, and every other channel Metal's,
-/// through MoltenVK 1.4.1 on the M3 Max and the M4. One row per GPU, as measured. Measured to store
-/// another NaN from a 16-bit output too, so not listed: RADV, Mesa 26.2.4 on the Radeon 780M, and
-/// ANV, Mesa 26.2.4 on the Iris Xe (RPL-P), `0xfe00` for every NaN of a `float` and a `half`
-/// output. lavapipe and NVIDIA's captures declare no 16-bit outputs.
-///
 /// `MetalHalfFma`: MoltenVK 1.4.1's `GLSL.std.450 Fma` on 16-bit floats, which SPIRV-Cross writes
 /// as Metal's `fma(half, half, half)`, the operation a Metal `half` fused multiply-add compiles to.
 /// The gate lane
@@ -157,25 +148,6 @@ pub(crate) fn among<F: Copy + Ord>(
 /// NVIDIA's 615.71.09 rounds `0x477FEFFF` to infinity, so it is not listed; lavapipe's rows match
 /// at Mesa 26.0.8 alone, below the committed `lavapipe` profile's release, so it is not listed
 /// either. One row per GPU, as measured.
-///
-/// `MetalHalfConversion`: MoltenVK 1.4.1's `OpFConvert` from 32 to 16 bits of the result of an
-/// `OpFAdd` decorated `NoContraction`, which SPIRV-Cross writes as Metal's `half(float)` of its
-/// `[[clang::optnone]]` `spvFAdd` helper's result. Our probes convert `x + -0.0` so for every one
-/// of the 2^32 `float` bit patterns `x`, scalar and four-lane, and for a
-/// computed `x`, in each of Metal's three math modes (fast, relaxed, safe), on the M3 Max and the
-/// M4: none differs from round to nearest even on the half grid with half denormals kept, the sign
-/// of a zero kept and infinity from 65520 up, a NaN gives a NaN, and each NaN's half has the bits
-/// of Metal's own conversion of the NaN; a control against truncation differs, as it must. Without
-/// the add, Metal's compiler folds the conversion into the instruction computing `x`, which rounds
-/// toward zero (measured the conversion of loaded values alone). The gate lanes `half_quantize_*`
-/// and `owned_float_fixtures_*` run the `half` cases through it. One row per GPU, as measured.
-/// Measured and not listed: NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU converts every one of the
-/// 2^32 `float` patterns through the add as Metal does when the value is loaded, four-lane,
-/// `fma(x, 1, -0)` or a product (the scratch commit `e867099bb`), but with the row taken, 18 C3
-/// cases that matched Metal on that GPU differed (at master `c0af7712`: a computed `half` NaN
-/// stored as `0x7FFF` where Metal stores `0x7E00`, among others); on the RTX 3090 the same driver
-/// converts toward zero; lavapipe (Mesa 26.0.8 on LLVM 21.1.8, x86_64) converts a loaded value
-/// toward zero (its compiler drops the add).
 ///
 /// `MetalCenterVaryings`: MoltenVK 1.4.1 hands Metal a smooth input decorated neither `Centroid`
 /// nor `Sample` with no interpolation qualifier (SPIRV-Cross `adec7acb`, `spirv_msl.cpp`
@@ -327,20 +299,6 @@ pub(crate) fn among<F: Copy + Ord>(
 /// the fact taken, 0 channels off in every form and format it stores, the packed 16-bit ones
 /// refused for storage as on the M4).
 ///
-/// `Unorm8LinearFilter`, measured by the deviation probe (`probes/shb-dev` at the scratch commit
-/// `aa944573d` and its `cell` variant, the translator's native coordinate; our probes compared, an
-/// Apple M4 on macOS 27.0.1, 2026-10-10): 19x13 textures of `R8Unorm`, `RG8Unorm`,
-/// `RGBA8Unorm` and `BGRA8Unorm` sampled at 4,096 coordinates (a third near the 1/256 grid, the
-/// rest within `[-1.5, 2.5]`) through a linear filter under clamp to edge, repeat, mirrored repeat
-/// and clamp to zero, at the centre of Metal's footprint step: no channel of a `float` result one
-/// code (1/255) or more from Metal's. The largest: 0.849 on NVIDIA's 615.71.09 on the RTX 3090 and
-/// the RTX 5080 Laptop GPU (alike lane for lane); 0.031 on RADV, Mesa 26.2.4 on the Radeon 780M,
-/// and on ANV, Mesa 26.2.4 on the Iris Xe (RPL-P) and the UHD 770 (RPL-S); just under 1 on
-/// lavapipe, Mesa 26.2.4 on LLVM 23.1.1, x86_64, whose filter answers whole codes. It is a bound
-/// the owner accepted, not Metal's answer. One row per GPU, as measured; lavapipe's on every CPU at
-/// that release. MoltenVK (whose sampler is Metal's: `MetalSampler`) and lavapipe before Mesa
-/// 26.2.4 are not measured.
-///
 /// `MetalDepth16Stores`, measured by `runtime_lane::unorm_depth_bias`'s unbiased rows (the 16
 /// depths of probe 7 and the 39 of probe 7b around the midpoints of codes 100 and 40000, each
 /// drawn at a constant of 0; at d51c2aa8, 2026-10-07), every code Metal's:
@@ -460,14 +418,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     nvidia_on(DriverDeviation::MetalHalfColorNans, NVIDIA_RTX_5080_LAPTOP),
     Measured {
         device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::HalfColorOutputBits)
-    },
-    Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::HalfColorOutputBits)
-    },
-    Measured {
-        device: Some(APPLE_M3_MAX),
         ..moltenvk_on_apple(DriverDeviation::MetalHalfFma)
     },
     Measured {
@@ -528,14 +478,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),
-    Measured {
-        device: Some(APPLE_M3_MAX),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfConversion)
-    },
-    Measured {
-        device: Some(APPLE_M4),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfConversion)
-    },
     Measured {
         device: Some(APPLE_M3_MAX),
         ..moltenvk_on_apple(DriverDeviation::MetalCenterVaryings)
@@ -695,29 +637,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         DriverId::MESA_RADV,
         (AMD_VENDOR_ID, AMD_RADEON_780M),
     ),
-    nvidia_on(DriverDeviation::Unorm8LinearFilter, NVIDIA_RTX_3090),
-    nvidia_on(DriverDeviation::Unorm8LinearFilter, NVIDIA_RTX_5080_LAPTOP),
-    mesa_on(
-        DriverDeviation::Unorm8LinearFilter,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
-    mesa_on(
-        DriverDeviation::Unorm8LinearFilter,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
-    ),
-    mesa_on(
-        DriverDeviation::Unorm8LinearFilter,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
-    ),
-    Measured {
-        fact: DriverDeviation::Unorm8LinearFilter,
-        driver: DriverId::MESA_LLVMPIPE,
-        vendor: None,
-        device: None,
-    },
     mesa_on(
         DriverDeviation::MetalDepth16Stores,
         DriverId::MESA_RADV,
