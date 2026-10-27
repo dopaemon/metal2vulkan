@@ -5,22 +5,26 @@
 //! its runtime and argument buffer's samplers filter as its constexpr samplers of the same state).
 //!
 //! RADV's gathers and nearest samples, NVIDIA's gathers and ANV's nearest samples read such a
-//! texel as the zero of its sign; their fetches keep it. The texture is read at texture slot 0
+//! texel as the zero of its sign. Those are the device's own samples, which the stages record
+//! (`PrecisionNote::DeviceSampling`): off MoltenVK the lane prints the lanes that differ
+//! (`DENORMAL-TEXEL-DIFFERS` lines) without failing. The texture is read at texture slot 0
 //! through runtime sampler slot 0, and as the texture an argument buffer holds through runtime
 //! sampler slot 0, through the sampler the argument buffer holds, and through a constexpr sampler:
 //! a gather at each interior texel corner reads the four texels around it, in gather order, and a
 //! nearest sample at each texel centre its texel. The samplers are nearest, without a mip filter,
-//! clamped to the edge, normalized: the word states one texel, where the shader fetches. On
-//! MoltenVK Metal's own sampler reads them.
+//! clamped to the edge, normalized. On MoltenVK (`VkProperty::MetalSampler`) Metal's own sampler
+//! reads them, which must keep every texel's bits.
 
 use super::argument_linear_samples::kernel;
+use super::degrade_notices::counts;
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_devtools::llvm_assemble_text;
-use metal2vulkan_runtime::{Region, TextureDescriptor};
+use metal2vulkan_runtime::{Degradation, Region, TextureDescriptor};
 
 /// A constexpr sampler's words: nearest filters, no mip filter, normalized coordinates clamped to
 /// the edge.
@@ -86,6 +90,12 @@ fn denormal_texels_read_through_words_and_heaps_keep_their_bits() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
+        let own = !device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&VkProperty::MetalSampler);
         let texture = device
             .new_texture(&TextureDescriptor::texture_2d(
                 PixelFormat::R32Float,
@@ -180,12 +190,24 @@ fn denormal_texels_read_through_words_and_heaps_keep_their_bits() {
             }
         }
         eprintln!("{name}: {} of {compared} lanes differ", wrong.len());
-        assert!(
-            wrong.is_empty(),
-            "{name}: {} of {compared} lanes differ:\n{}",
-            wrong.len(),
-            wrong.join("\n")
+        let announced = counts(&messages.take_notices());
+        assert_eq!(
+            announced.contains_key(&Degradation::DeviceSampling),
+            own,
+            "{name}: device-sampling exactly where the device's sampler is not Metal's"
         );
+        if own {
+            for w in &wrong {
+                eprintln!("DENORMAL-TEXEL-DIFFERS {name}: {w}");
+            }
+        } else {
+            assert!(
+                wrong.is_empty(),
+                "{name}: {} of {compared} lanes differ:\n{}",
+                wrong.len(),
+                wrong.join("\n")
+            );
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }

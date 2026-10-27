@@ -8,8 +8,10 @@
 //! read through `access::read` and `access::read_write`, a texture buffer's read, a nearest
 //! sample and a gather. NVIDIA and RADV hand back the half widened with its NaN's sign and
 //! payload, ANV every NaN as `0xffc00000`, and lavapipe a signalling NaN quieted (the format
-//! scout's rows), so the module converts a one-texel `float` result of a half-float class to
-//! Metal's NaN (`lower::texture::float_texel`); MoltenVK's value is Metal's already.
+//! scout's rows). The module hands back the device's texel: on MoltenVK, Metal's own; on a device
+//! whose texture unit is not Metal's (no `VkProperty::MetalSampler`), the device's NaN, which
+//! its precision note records (`PrecisionNote::DeviceTexelConversion`), and the lane takes any NaN
+//! for Metal's there.
 //!
 //! The kernels are this lane's own AIR: each reads texel `(x, 0)` of an [`N`] by 1 texture whose
 //! texel `x` holds [`word`]'s channels (a texture buffer's element `x`), samples it at the texel's
@@ -22,6 +24,7 @@ use super::degrade_notices::on_device;
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{
     PixelFormat, ResourceUsage, SamplerAddressMode, SamplerMinMagFilter, TextureUsage,
 };
@@ -396,12 +399,20 @@ fn dispatch(
 }
 
 /// Every access of [`OPS`] to every format of [`FORMATS`] hands back Metal's words: a half-float
-/// texel's NaN as `0x7fc00000`, a 32-bit float texel's words as stored.
+/// texel's NaN as `0x7fc00000` (a NaN of the device's encoding where its texture unit is not
+/// Metal's), a 32-bit float texel's words as stored.
 #[test]
 fn half_float_reads_hand_back_metals_nans() {
     let mut report = Vec::new();
     let mut differ_total = 0;
     on_device(|device, _| {
+        // The device's texel, a half-float NaN its own, where its texture unit is not Metal's.
+        let own = !device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&VkProperty::MetalSampler);
         let mut nearest = SamplerDescriptor::new();
         nearest.min_filter = SamplerMinMagFilter::Nearest;
         nearest.mag_filter = SamplerMinMagFilter::Nearest;
@@ -417,7 +428,8 @@ fn half_float_reads_hand_back_metals_nans() {
                 for (x, lanes) in got.iter().enumerate() {
                     let want = metal_lanes(f, op, x);
                     for (k, (&g, &w)) in lanes.iter().zip(&want).enumerate() {
-                        if g != w {
+                        let nans = f32::from_bits(g).is_nan() && f32::from_bits(w).is_nan();
+                        if g != w && !(own && f.half && nans) {
                             differ.push(format!("texel {x} lane {k}: {g:08x} (Metal {w:08x})"));
                         }
                     }

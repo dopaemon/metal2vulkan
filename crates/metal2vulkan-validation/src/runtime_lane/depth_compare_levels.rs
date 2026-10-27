@@ -15,17 +15,19 @@
 //! `equal` against one level's depth at the texture's centre, so its answer is that level's
 //! weight. The samplers filter nearest under nearest and linear mip filters through clamps of
 //! whole, half-way and sixty-fourth bounds, and without a mip filter. Metal's own comparison runs
-//! through MoltenVK; elsewhere the shader fetches the texel from the level the sampler's word
-//! reads (`fetched::FetchLevel::Word`) or a constexpr sampler's snap, and blends a linear mip
-//! filter's two levels' comparisons (`compared::blended`).
+//! through MoltenVK (`VkProperty::MetalSampler`), which must answer the rule exactly; elsewhere
+//! the comparison is the device's, which the stages record (`PrecisionNote::DeviceSampling`) and
+//! the lane counts against the rule (`DEPTH-LEVEL-DIFFERS` lines) without failing.
 
+use super::degrade_notices::counts;
 use super::depth_compares::{argument_kernel, pipeline_of, run_held, Held, Through};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, SamplerMipFilter};
 use metal2vulkan_devtools::llvm_assemble_text;
-use metal2vulkan_runtime::{Device, Region, SamplerState, Texture, TextureDescriptor};
+use metal2vulkan_runtime::{Degradation, Device, Region, SamplerState, Texture, TextureDescriptor};
 
 /// The texture's side and levels.
 const SIDE: u64 = 16;
@@ -257,7 +259,9 @@ fn sampler(device: &Device, mip: SamplerMipFilter, (min, max): (f32, f32)) -> Sa
 /// neither) and through an argument buffer's sampler and a runtime sampler of a texture an
 /// argument buffer holds (at a level) reads the level Metal reads, and every one through a
 /// constexpr sampler under a nearest or a linear mip filter (at a level, a bias, and neither)
-/// reads or blends Metal's levels, on `Depth32Float` and `Depth16Unorm` (module docs).
+/// reads or blends Metal's levels, on `Depth32Float` and `Depth16Unorm` (module docs), on a device
+/// that samples through Metal's own sampler; elsewhere the stages announce `device-sampling` and
+/// the comparisons that differ are printed.
 #[test]
 fn comparisons_read_the_level_metal_reads() {
     let cache = ScratchCache::new().unwrap();
@@ -265,6 +269,12 @@ fn comparisons_read_the_level_metal_reads() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
+        let own = !device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&VkProperty::MetalSampler);
         let levels = lane_levels();
         let mut compared = 0usize;
         let mut wrong = Vec::new();
@@ -337,8 +347,7 @@ fn comparisons_read_the_level_metal_reads() {
                 }
             }
             // Constexpr samplers of nearest filters under a nearest and a linear mip filter, their
-            // clamps `half`s: a nearest one's texel fetched from Metal's level, a linear one's two
-            // levels' comparisons blended (`compared::blended`).
+            // clamps `half`s.
             for (code, mip) in [
                 (1, SamplerMipFilter::Nearest),
                 (2, SamplerMipFilter::Linear),
@@ -363,17 +372,29 @@ fn comparisons_read_the_level_metal_reads() {
             }
         }
         eprintln!("{name}: {} of {compared} comparisons differ", wrong.len());
-        assert!(
-            wrong.is_empty(),
-            "{name}: {} of {compared} comparisons differ:\n{}",
-            wrong.len(),
-            wrong
-                .iter()
-                .take(200)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
+        let announced = counts(&messages.take_notices());
+        assert_eq!(
+            announced.contains_key(&Degradation::DeviceSampling),
+            own,
+            "{name}: device-sampling exactly where the device's sampler is not Metal's"
         );
+        if own {
+            for w in &wrong {
+                eprintln!("DEPTH-LEVEL-DIFFERS {name}: {w}");
+            }
+        } else {
+            assert!(
+                wrong.is_empty(),
+                "{name}: {} of {compared} comparisons differ:\n{}",
+                wrong.len(),
+                wrong
+                    .iter()
+                    .take(200)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }

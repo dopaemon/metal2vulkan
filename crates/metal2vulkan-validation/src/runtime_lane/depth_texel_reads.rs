@@ -3,13 +3,16 @@
 //! reads and samples (nearest) every 16-bit code `c` as `c / 65535` correctly rounded to `float`
 //! (our own probe: all 65,536 codes, both accesses, the outputs' SHA-256 below),
 //! where a device that multiplies by the reciprocal answers 512 codes one ulp off (lavapipe, the
-//! format scout's `Depth16Unorm` read cell). The kernels are the format scout's (`format_scout.ll`):
-//! a 16x16 texture of 256 codes at a time, each code read and sampled at its texel's centre.
+//! format scout's `Depth16Unorm` read cell). The module hands back the device's conversion: on
+//! MoltenVK, Metal's own; on a device whose texture unit is not Metal's (no
+//! `VkProperty::MetalSampler`), the device's, which `PrecisionNote::DeviceTexelConversion`
+//! records, and the lane takes a value within one ulp of Metal's there. The kernels are the format
+//! scout's (`format_scout.ll`): a 16x16 texture of 256 codes at a time, each code read and sampled
+//! at its texel's centre.
 //!
 //! The same texture through an argument buffer ([`HEAP`]'s kernels, synthetic AIR written for
 //! this lane) reads and samples alike: Metal reads a texture an argument buffer holds as the same
-//! texture at a slot, and the module converts a heap depth texture's texel by the class its
-//! handle carries.
+//! texture at a slot.
 
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
@@ -19,6 +22,7 @@ use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use crate::hash::sha256_bytes;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{PixelFormat, ResourceUsage, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text};
@@ -136,6 +140,14 @@ fn a_depth16_texel_reads_and_samples_as_metal_s_code_over_65535() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         eprintln!("device {}", device.name());
+        // The device's conversion, within one ulp of Metal's, where its texture unit is not
+        // Metal's.
+        let own = !device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&VkProperty::MetalSampler);
         let scout = llvm_assemble(&engine_dir().join("format_scout.ll")).unwrap();
         let scout = device.new_library_with_air(&scout).unwrap();
         let heap = device
@@ -243,19 +255,22 @@ fn a_depth16_texel_reads_and_samples_as_metal_s_code_over_65535() {
                 .filter_map(|(c, v)| {
                     let v = u32::from_le_bytes([v[0], v[1], v[2], v[3]]);
                     let metal = (c as f32 / 65535.0).to_bits();
-                    (v != metal).then_some((c as u32, v, metal))
+                    let near = own && v.abs_diff(metal) <= 1;
+                    (v != metal && !near).then_some((c as u32, v, metal))
                 })
                 .collect();
             assert!(
                 off.is_empty(),
-                "{} on {}: {} of 65536 codes not c / 65535 correctly rounded, the first \
-                 (code, device, Metal): {:x?}",
+                "{} on {}: {} of 65536 codes not c / 65535 correctly rounded (within one ulp \
+                 where the device converts), the first (code, device, Metal): {:x?}",
                 what,
                 device.name(),
                 off.len(),
                 &off[..off.len().min(8)]
             );
-            assert_eq!(sha256_bytes(got), METAL, "{what}: Metal's digest");
+            if !own {
+                assert_eq!(sha256_bytes(got), METAL, "{what}: Metal's digest");
+            }
         }
     }
     layer_reported_nothing_at_all(&messages);

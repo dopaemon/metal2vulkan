@@ -1,7 +1,8 @@
 //! A device test of depth comparisons against Metal's measured rule on the device the cfg selects,
-//! under the validation layer: the comparisons the shader makes on a device without
-//! `VkProperty::MetalSampler` (a nearest comparison's and a comparison gather's; a linear
-//! comparison's), and Metal's own through MoltenVK.
+//! under the validation layer: Metal's own through MoltenVK (`VkProperty::MetalSampler`), which
+//! must answer it exactly; elsewhere the device's own comparisons, which the stages record
+//! (`PrecisionNote::DeviceSampling`) and the lane counts against the rule
+//! (`DEPTH-COMPARE-DIFFERS` lines) without failing.
 //!
 //! Metal compares a `Depth16Unorm` texel against the reference's code: the reference clamped into
 //! [0, 1] and the exact product with 65535 rounded to the nearest code (the one half-way
@@ -31,6 +32,7 @@
 //! the eight functions. (A sampler that filters leaves a heap texture's comparison to the device,
 //! which the module records, so it is not asked here.)
 
+use super::degrade_notices::counts;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
     ScratchCache, WAIT,
@@ -38,12 +40,13 @@ use super::{
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, ResourceUsage, SamplerMinMagFilter};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text};
 use metal2vulkan_runtime::{
-    ComputePipelineState, Device, Error, PipelineOptions, Region, ResourceOptions, SamplerState,
-    Size, Texture, TextureDescriptor,
+    ComputePipelineState, Degradation, Device, Error, PipelineOptions, Region, ResourceOptions,
+    SamplerState, Size, Texture, TextureDescriptor,
 };
 use std::cmp::Ordering;
 
@@ -779,13 +782,15 @@ fn gather_jobs(texels: Texels) -> Jobs<([usize; 4], f32)> {
     (jobs, want)
 }
 
-/// Every comparison of a `Depth16Unorm` and a `Depth32Float` texel is Metal's: `sample_compare`
-/// through a linear and a nearest sampler at each texel's centre, and `gather_compare` at each
-/// inner corner, under `less_equal` and `equal` through constexpr samplers and under each of the
-/// eight functions through a runtime sampler; each plain gather states its footprint's four
-/// texels in Metal's order. And through an argument buffer that holds the texture: through the
-/// constexpr nearest samplers, and through a nearest runtime sampler and a nearest sampler the
-/// argument buffer holds under each of the eight functions.
+/// On a device that samples through Metal's own sampler, every comparison of a `Depth16Unorm`
+/// and a `Depth32Float` texel is Metal's: `sample_compare` through a linear and a nearest sampler
+/// at each texel's centre, and `gather_compare` at each inner corner, under `less_equal` and
+/// `equal` through constexpr samplers and under each of the eight functions through a runtime
+/// sampler; each plain gather states its footprint's four texels in Metal's order. And through an
+/// argument buffer that holds the texture: through the constexpr nearest samplers, and through a
+/// nearest runtime sampler and a nearest sampler the argument buffer holds under each of the eight
+/// functions. Elsewhere the comparisons are the device's: the stages announce `device-sampling`,
+/// and the comparisons that differ from Metal's are printed.
 #[test]
 fn depth_comparisons_compare_as_metal_does() {
     let cache = ScratchCache::new().unwrap();
@@ -793,6 +798,12 @@ fn depth_comparisons_compare_as_metal_does() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
+        let own = !device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&VkProperty::MetalSampler);
         let mut compared = 0;
         let mut wrong = Vec::new();
         for texels in [Texels::Unorm16(&CODES), Texels::Float32(&VALUES)] {
@@ -805,12 +816,24 @@ fn depth_comparisons_compare_as_metal_does() {
             compared += n;
             wrong.extend(w);
         }
-        assert!(
-            wrong.is_empty(),
-            "{name}: {} of {compared} comparisons differ:\n{}",
-            wrong.len(),
-            wrong.join("\n")
+        let announced = counts(&messages.take_notices());
+        assert_eq!(
+            announced.contains_key(&Degradation::DeviceSampling),
+            own,
+            "{name}: device-sampling exactly where the device's sampler is not Metal's"
         );
+        if own {
+            for w in &wrong {
+                eprintln!("DEPTH-COMPARE-DIFFERS {name}: {w}");
+            }
+        } else {
+            assert!(
+                wrong.is_empty(),
+                "{name}: {} of {compared} comparisons differ:\n{}",
+                wrong.len(),
+                wrong.join("\n")
+            );
+        }
     }
     layer_reported_nothing_at_all(&messages);
 }
