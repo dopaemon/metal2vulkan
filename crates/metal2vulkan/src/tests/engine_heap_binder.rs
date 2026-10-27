@@ -51,9 +51,8 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Capability, Feature, Needs, Unsupported};
 use crate::library::{FunctionArtifact, Library};
 use crate::memory::handles::{
-    declare_table, define_lookup, lookup_host, Lookup, FLAG_DEPTH_CODES, FLAG_DEPTH_VALUES,
-    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_TEXEL_CLASS, HANDLE_ALPHA_ONE, HANDLE_DEPTH_CODES,
-    HANDLE_DEPTH_VALUES, TABLE_ENTRY_BYTES,
+    declare_table, define_lookup, lookup_host, Lookup, FLAG_OUT_OF_BOUNDS_ALPHA_ONE,
+    FLAG_TEXEL_CLASS, HANDLE_ALPHA_ONE, TABLE_ENTRY_BYTES,
 };
 use crate::memory::leaf::k32;
 use crate::memory::views;
@@ -249,8 +248,8 @@ fn table(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32)> {
 }
 
 /// The entries `(id, element, flags)` of the table bytes at `(set, binding)`: a texture entry's
-/// flags hold its out-of-bounds-alpha flag, its depth class, and its texel class's index alone, and
-/// the null entry's none.
+/// flags hold its out-of-bounds-alpha flag and its texel class's index alone, and the null entry's
+/// none.
 fn entries(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32, u32)> {
     let b = &bytes
         .iter()
@@ -263,10 +262,7 @@ fn entries(bytes: &[DescriptorBytes], set: u32, binding: u32) -> Vec<(u64, u32, 
             let w = |i: usize| u32::from_le_bytes(e[4 * i..4 * i + 4].try_into().expect("word"));
             let id = u64::from(w(0)) | (u64::from(w(1)) << 32);
             assert_eq!(
-                w(3) & !(FLAG_OUT_OF_BOUNDS_ALPHA_ONE
-                    | FLAG_DEPTH_CODES
-                    | FLAG_DEPTH_VALUES
-                    | FLAG_TEXEL_CLASS),
+                w(3) & !(FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_TEXEL_CLASS),
                 0,
                 "other flags are reserved"
             );
@@ -577,7 +573,7 @@ fn a_sampled_heap_writes_each_member_and_its_table() {
     assert_eq!(emitted_lookup(bytes, &keys), want.to_vec());
     // Each entry's flags are its member's out-of-bounds alpha: token 2's `R32Uint` has no alpha,
     // every other member's format has one, and the null entries have none (beside its texel class,
-    // which `table_entries_state_each_members_depth_class` reads).
+    // which `table_entries_state_each_members_texel_class` reads).
     let flag = FLAG_OUT_OF_BOUNDS_ALPHA_ONE;
     let flags: Vec<u32> = entries(&cmds.descriptor_bytes, set, binding)
         .iter()
@@ -592,7 +588,6 @@ fn a_sampled_heap_writes_each_member_and_its_table() {
         .collect();
     let flagged = Lookup::Flagged {
         alpha: true,
-        depth: false,
         class: false,
     };
     assert_eq!(emitted_lookup_in(bytes, &keys, flagged), alpha);
@@ -1057,15 +1052,12 @@ fn a_compared_depth_member_is_held_by_the_depth_comparison_class() {
         .any(|d| d.set == 0 && d.binding == samplers[0].binding));
 }
 
-/// Each member's table entry states its depth class beside its out-of-bounds alpha, by its pixel
-/// format: `Depth16Unorm` compares codes ([`FLAG_DEPTH_CODES`]), `Depth32Float` and
-/// `Depth32Float_Stencil8` values ([`FLAG_DEPTH_VALUES`]), and a color format neither (a depth
-/// format has no alpha). The search's flagged form carries the class into the handle's bits 29 and
-/// 30, beside the alpha in bit 31 where it carries that too; a miss carries nothing. Each entry
-/// also states its texel class's index (`heap_class_index`, in [`FLAG_TEXEL_CLASS`]), which the
-/// flagged form carries in place where it carries the class.
+/// Each member's table entry states its texel class's index (`heap_class_index`, in
+/// [`FLAG_TEXEL_CLASS`]) beside its out-of-bounds alpha (a depth format has no alpha). The
+/// search's flagged form carries the alpha in the handle's bit 31 and the class in place where it
+/// carries them; a miss carries nothing.
 #[test]
-fn table_entries_state_each_members_depth_class() {
+fn table_entries_state_each_members_texel_class() {
     let dev = m3();
     let Some(bc) = assembled("handles", llvm_assemble(&engine_dir().join("handles.ll"))) else {
         return;
@@ -1128,9 +1120,9 @@ fn table_entries_state_each_members_depth_class() {
         vec![
             (0, 0, 0),
             (D, 4, rgba8),
-            (A, 1, alpha | FLAG_DEPTH_CODES | d16),
-            (B, 2, alpha | FLAG_DEPTH_VALUES | d32),
-            (C, 3, alpha | FLAG_DEPTH_VALUES | d32s8),
+            (A, 1, alpha | d16),
+            (B, 2, alpha | d32),
+            (C, 3, alpha | d32s8),
         ]
     );
     let bytes = &cmds
@@ -1140,30 +1132,17 @@ fn table_entries_state_each_members_depth_class() {
         .expect("bytes")
         .bytes;
     let keys = [D, A, B, C, 0, E];
-    let depth = Lookup::Flagged {
-        alpha: false,
-        depth: true,
-        class: false,
-    };
-    let codes = HANDLE_DEPTH_CODES;
-    let values = HANDLE_DEPTH_VALUES;
-    assert_eq!(
-        emitted_lookup_in(bytes, &keys, depth),
-        vec![4, 1 | codes, 2 | values, 3 | values, 0, 0]
-    );
-    let both = Lookup::Flagged {
+    let flagged = Lookup::Flagged {
         alpha: true,
-        depth: true,
         class: false,
     };
     let one = HANDLE_ALPHA_ONE;
     assert_eq!(
-        emitted_lookup_in(bytes, &keys, both),
-        vec![4, 1 | one | codes, 2 | one | values, 3 | one | values, 0, 0]
+        emitted_lookup_in(bytes, &keys, flagged),
+        vec![4, 1 | one, 2 | one, 3 | one, 0, 0]
     );
     let classes = Lookup::Flagged {
         alpha: false,
-        depth: false,
         class: true,
     };
     assert_eq!(

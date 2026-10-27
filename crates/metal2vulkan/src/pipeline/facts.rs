@@ -284,13 +284,14 @@ pub enum RuntimeFact {
     /// kernel in the emulated tier votes in its scratch instead
     /// (`RuntimeFact::SimdgroupEmulation`).
     PredicationVote,
-    /// The function reads or samples the texture (or texture buffer) bound to the slot with a
-    /// `half` result, or samples it through an emulated linear filter, and Metal's conversion of
-    /// a texel to `half`, or its linear filter's sum, depends on the bound pixel format (a read
-    /// of a 32-bit float texel rounds to nearest even, a sample of one toward zero; a normalized
-    /// texel's value is rounded onto its format's grid first): the slot's `SpecKey::TexelFormat`
-    /// specialization (`metal::texel_format::texel_format`), which the binder sets from the
-    /// bound format.
+    /// The function reads the class of the texture (or texture buffer) bound to the slot, which
+    /// the binder sets from the bound format: the slot's `SpecKey::TexelFormat` specialization
+    /// (`metal::texel_format::texel_format`). A read, gather or sample with a `half` result on a
+    /// device that samples through Metal's own sampler converts its texel by it, Metal's conversion
+    /// depending on the format (a read of a 32-bit float texel rounds to nearest even, a sample of
+    /// one toward zero; a normalized texel's value is rounded onto its format's grid first); an
+    /// 8-bit sRGB slot's raw read, a fetched gather and a NaN texel's rule (the NaN switch) read
+    /// it too.
     TexelFormat { slot: SlotRef },
     /// The function reads, samples, or gathers the texture bound to the slot in a form whose
     /// result Metal takes from the raw code of an 8-bit sRGB texel, decoded through its
@@ -525,19 +526,6 @@ pub enum RuntimeFact {
     /// serve (tests the draw does not state) is refused, as any draw whose variant is refused: the
     /// runtime keeps the color out of the storage form there (the pass splits, or the shadow ends).
     MovableStorageWrites { early_variant: bool },
-    /// On a device that samples through Metal's own sampler (`VkProperty::MetalSampler`:
-    /// MoltenVK on Apple's GPU), the function samples the texture bound to the slot through a
-    /// linear filter, which the device's filter answers as Metal does for every format but the
-    /// two-plane YCbCr ones, whose view holds texels Metal filters by the YCbCr format's own rule
-    /// (`metal::format::ycbcr_format`): bound in such a format, the slot joins the plan's variant
-    /// (`VariantKey::ycbcr_textures`, `LoweringInputs::ycbcr_textures`), under which the function
-    /// emulates Metal's filter of the slot's samples as a device without the property does, and
-    /// notes the samples the emulation does not reach. Bound in any other format, or unbound, the
-    /// slot leaves the variant. Recorded only under `YCbCrFilterPolicy::Exact`, and through Metal's
-    /// own sampler also under `SamplingPolicy::Exact`, as is the same fact on a device that samples
-    /// natively (`VkProperty::DeviceSampling`; `ProfileFields::ycbcr_variant`); under the default
-    /// the device's filter answers the slot as any other's, noted, and no draw makes the variant.
-    YCbCrTexture { slot: SlotRef },
     /// The tile function reads a builtin whose answer depends on its pipeline's
     /// `threadgroupSizeMatchesTileSize` (its threads per threadgroup, simdgroups or quadgroups
     /// per threadgroup or their `dispatch_` forms, its position in the grid, the threads per
@@ -753,15 +741,11 @@ pub enum RuntimeFact {
     /// device's compiler word bound and that driver faults compiling a module past it
     /// ([`DriverWorkaround::RegisterAllocatorOverflowsLargeModules`](crate::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules):
     /// ANV's register allocator). Each `true` field is an exact form the pipeline would carry under
-    /// the consumer's policy that the fitting translation gave up to fit the bound (`sampling`
-    /// also for Metal's filter of a two-plane YCbCr texture, `YCbCrFilterPolicy::Exact`, which is
-    /// dropped with it); the stages carry
+    /// the consumer's policy that the fitting translation gave up to fit the bound; the stages carry
     /// the reduced policy's own precision notes besides. The consumer announces it once per device
     /// (the runtime's `Degradation::ExactFormsOverCompilerLimit`), naming the pipeline and the forms
     /// dropped. Nothing binds it.
     ExactFormsOverCompilerLimit {
-        sampling: bool,
-        texel_conversion: bool,
     },
     /// The render pipeline was compiled under `VariantKey::quad_primitive_ids`, and its fragment
     /// function reads `[[primitive_id]]` from Vulkan's `PrimitiveId` shifted right by one

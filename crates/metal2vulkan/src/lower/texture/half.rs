@@ -273,8 +273,6 @@ struct PackedField {
     fields: Vec<([u32; 4], SValue)>,
     /// Whether the field states coded channels (a field with scales).
     coded: SValue,
-    /// Whether the field is `PackedTexels::SmallFloat`.
-    small: SValue,
     /// Whether the field's one texel rounds with ties away from zero, a two-plane YCbCr format's
     /// or `RGB10A2Unorm_sRGB`'s (`PackedTexels::ties_away`).
     ycbcr: SValue,
@@ -316,15 +314,12 @@ impl PackedField {
             coded = fb.binary(BinOp::LogicalOr, coded, is)?;
             fields.push((s, is));
         }
-        let small = u1(fb, PackedTexels::SmallFloat as u32)?;
-        let small = fb.binary(BinOp::IEqual, field, small)?;
         let three = u1(fb, 3)?;
         let gathered = fb.binary(BinOp::ULessThanEqual, channel, three)?;
         let channel = fb.glsl(GlslOp::UMin, &[channel, three])?;
         Ok(PackedField {
             fields,
             coded,
-            small,
             ycbcr,
             gathered,
             channel,
@@ -345,22 +340,6 @@ impl PackedField {
         let one = fb.composite_construct(t, &[one; 4])?;
         fb.select(self.gathered, one, lanes)
     }
-}
-
-/// The code scales `S` of a packed class's channels (`TexelFormat::PACKED`) as `u32` lanes, a
-/// gather's lanes each its channel's (`channel` below 4), 1 in every lane for any other field;
-/// whether the field states coded channels (a field with scales); and whether it is
-/// `PackedTexels::SmallFloat`. Shared with the `float` routine (`float_texel`).
-pub(crate) fn packed_scales(
-    fb: &mut FunctionBuilder<'_>,
-    flags: SValue,
-    channel: SValue,
-) -> BResult<(SValue, SValue, SValue)> {
-    let p = PackedField::read(fb, flags, channel)?;
-    let scales = p.lanes(fb, &|fb, s| {
-        lanes_of(fb, uform(4), s.unwrap_or([1; 4]).map(u64::from))
-    })?;
-    Ok((scales, p.coded, p.small))
 }
 
 /// The `f32` bits of `v` and of `RN(1 / v)`, the reciprocal correctly rounded to `f32`.

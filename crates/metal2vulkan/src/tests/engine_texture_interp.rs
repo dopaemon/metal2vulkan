@@ -56,7 +56,7 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::new(desc, crate::pipeline::testing::EXACT_SAMPLING)
+    Device::new(desc, crate::device::DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -64,7 +64,7 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
 
 /// Every committed profile, and two without any robustness (so the shader contains itself).
 fn profiles() -> Vec<(String, DeviceProfile)> {
-    let mut out = crate::spirv::testing::committed_exact_profiles().expect("profiles");
+    let mut out = crate::spirv::testing::committed_profiles().expect("profiles");
     let all = [
         VkFeature::RobustImageAccess,
         VkFeature::RobustImageAccess2,
@@ -533,13 +533,17 @@ fn short_texels_sign_extend_and_half_reads_round() {
     assert!(ran > 0);
 }
 
-/// A `half` read converts its texel by the bound format's class, the slot's `TexelFormat`
-/// specialization: a 32-bit float texel to nearest even, half denormals kept; a 16-bit normalized
-/// texel's code value `c / 65535` correctly rounded, where rounding the `f32` value would round
-/// twice (`65455` and `65519`); a format whose conversion is not measured (the default) takes every
-/// other `half` texel's exact rounding, which keeps a half denormal.
+/// A `half` read on a profile with Metal's own sampler (`VkProperty::MetalSampler`) converts its
+/// texel by the bound format's class, the slot's `TexelFormat` specialization: a 32-bit float
+/// texel to nearest even, half denormals kept; a 16-bit normalized texel's code value `c / 65535`
+/// correctly rounded, where rounding the `f32` value would round twice (`65455` and `65519`); a
+/// format whose conversion is not measured (the default) takes every other `half` texel's exact
+/// rounding, which keeps a half denormal. On any other profile the read is the device's conversion
+/// of its `f32` texel, to nearest even here, with no class. Both record
+/// `PrecisionNote::HalfTexelConversion`.
 #[test]
 fn half_reads_convert_by_the_bound_format() {
+    use crate::device::requirements::VkProperty;
     use crate::metal::texel_format::texel_format;
     use crate::metal::PixelFormat;
     use crate::pipeline::artifact::PrecisionNote;
@@ -573,8 +577,14 @@ fn half_reads_convert_by_the_bound_format() {
         let Some((plan, m)) = module(&bc, "short_texels", &stem, &p) else {
             continue;
         };
-        assert!(
+        let metal = p
+            .fields()
+            .enabled
+            .properties
+            .contains(&VkProperty::MetalSampler);
+        assert_eq!(
             plan.facts.contains(&RuntimeFact::TexelFormat { slot }),
+            metal,
             "{stem}"
         );
         assert!(
@@ -582,6 +592,9 @@ fn half_reads_convert_by_the_bound_format() {
             "{stem}"
         );
         for (class, texel, want) in cases {
+            if class.is_some() && !metal {
+                continue;
+            }
             let s = Image::new(texture(0), [2, 2, 1], 1, 1, 1);
             let d = Image::new(texture(1), [2, 2, 1], 1, 1, 1);
             let mut h = Image::new(texture(2), [4, 4, 2], 1, 2, 1);
@@ -686,9 +699,11 @@ fn half_reads_keep_subnormals_zeros_infinities_and_nans() {
     assert!(ran > 0);
 }
 
-/// A depth read is the texel's first component; a multisampled read reads its sample.
+/// A depth read is the texel's first component, the device's value with no class of the bound
+/// format; a multisampled read reads its sample.
 #[test]
 fn depth_and_multisample_reads_read_their_texel() {
+    use crate::pipeline::facts::RuntimeFact;
     let Some(bc) = fixture() else {
         return;
     };
@@ -697,6 +712,13 @@ fn depth_and_multisample_reads_read_their_texel() {
         let Some((plan, m)) = module(&bc, "depth_ms", &stem, &p) else {
             continue;
         };
+        assert!(
+            !plan
+                .facts
+                .iter()
+                .any(|f| matches!(f, RuntimeFact::TexelFormat { .. })),
+            "{stem}"
+        );
         let mut dp = Image::new(texture(0), [2, 2, 1], 1, 1, 1);
         dp.texels[0] = [fl(0.75), fl(9.0), fl(9.0), fl(9.0)];
         let mut ms = Image::new(texture(1), [2, 2, 1], 1, 1, 4);
@@ -708,73 +730,6 @@ fn depth_and_multisample_reads_read_their_texel() {
         let (bufs, _) =
             run_both(&m, &res, &[dp, ms], [1, 1, 1]).unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         assert_eq!(words(&bufs[0]), [fl(0.75), fl(-5.0)], "{stem}");
-        ran += 1;
-    }
-    assert!(ran > 0);
-}
-
-/// A depth read with a `float` result converts its texel by the bound format's class, the slot's
-/// `TexelFormat` specialization, on a profile without Metal's own sampler: a `Depth16Unorm`
-/// texel the device gives as its code times the reciprocal (lavapipe) reads `c / 65535`
-/// correctly rounded, Metal's, and a `Depth32Float` texel reads as given. On
-/// a profile with Metal's own sampler the device's value is Metal's, and the read takes no class.
-#[test]
-fn a_depth_read_converts_by_the_bound_format() {
-    use crate::device::requirements::VkProperty;
-    use crate::metal::texel_format::texel_format;
-    use crate::metal::PixelFormat;
-    use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::sym::{SlotClass, SlotRef};
-    let Some(bc) = fixture() else {
-        return;
-    };
-    let slot = SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Texture,
-        index: 0,
-    };
-    // A code whose reciprocal product is not its quotient.
-    let code = (1..65535u16)
-        .find(|&c| f32::from(c) * (1.0 / 65535.0) != f32::from(c) / 65535.0)
-        .expect("a code the reciprocal misses");
-    let reciprocal = f32::from(code) * (1.0 / 65535.0);
-    let metal = f32::from(code) / 65535.0;
-    let mut ran = 0;
-    for (stem, p) in profiles() {
-        let Some((plan, m)) = module(&bc, "depth_ms", &stem, &p) else {
-            continue;
-        };
-        let metal_sampler = p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
-        assert_eq!(
-            plan.facts.contains(&RuntimeFact::TexelFormat { slot }),
-            !metal_sampler,
-            "{stem}"
-        );
-        if metal_sampler {
-            continue;
-        }
-        for (pf, texel, want) in [
-            (PixelFormat::Depth16Unorm, reciprocal, metal),
-            (PixelFormat::Depth32Float, reciprocal, reciprocal),
-        ] {
-            let mut dp = Image::new(texture(0), [2, 2, 1], 1, 1, 1);
-            dp.texels[0] = [fl(texel), fl(9.0), fl(9.0), fl(9.0)];
-            let ms = Image::new(texture(1), [2, 2, 1], 1, 1, 4);
-            let mut res = resources(&plan, &[vec![0; 8]]);
-            res.spec
-                .insert(SpecKey::TexelFormat(slot), u64::from(texel_format(pf).0));
-            res.spec.insert(
-                SpecKey::PlainHalfTexels(slot),
-                u64::from(texel_format(pf).plain_on_metal_sampler()),
-            );
-            let (bufs, _) = run_both(&m, &res, &[dp, ms], [1, 1, 1])
-                .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-            assert_eq!(words(&bufs[0])[0], fl(want), "{stem} {pf:?} code {code}");
-        }
         ran += 1;
     }
     assert!(ran > 0);

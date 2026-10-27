@@ -61,11 +61,8 @@
 //!   entry is the null entry, and every id resolves as [`lookup_host`] says. A texture no member
 //!   names misses. A member's flags are [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`] where its pixel format
 //!   has no alpha (`metal::format::out_of_bounds_alpha_one`): a module whose shader-checked heap
-//!   read observes the alpha takes Metal's out-of-bounds alpha from it; and its depth class
-//!   ([`depth_flags`]), [`FLAG_DEPTH_CODES`] for `Depth16Unorm` and [`FLAG_DEPTH_VALUES`] for
-//!   `Depth32Float` and `Depth32Float_Stencil8`: a module whose heap depth comparison the shader
-//!   makes compares as Metal does where one is set, and leaves the comparison to the device
-//!   elsewhere. Every other bit is 0.
+//!   read observes the alpha takes Metal's out-of-bounds alpha from it; and its texel class in
+//!   [`FLAG_TEXEL_CLASS`]. Every other bit is 0.
 //! - **Heap samplers**. A heap image is sampled through a separate sampler binding
 //!   (`BindingSource::HeapSampler`) in set 0: a constexpr sampler is the layout's immutable sampler
 //!   and takes no write; a runtime `[[sampler(n)]]` is written with the sampler bound at slot `n`
@@ -140,9 +137,9 @@ use crate::device::requirements::FormatUsage;
 use crate::device::DeviceProfile;
 use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::handles::{
-    lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO, FLAG_DEPTH_CODES,
-    FLAG_DEPTH_VALUES, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_TEXEL_CLASS, NEUTRAL_ELEMENT,
-    TABLE_CAPACITY, TABLE_ENTRY_BYTES,
+    lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO,
+    FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_TEXEL_CLASS, NEUTRAL_ELEMENT, TABLE_CAPACITY,
+    TABLE_ENTRY_BYTES,
 };
 use crate::metal::format::{
     is_depth_stencil, sampled_type, storage_choice, vk_format, without_format_gaps, StorageUse,
@@ -537,9 +534,7 @@ pub fn heap_element(
 
 /// The flags word of the handle-table entry of a texture of `facts`, for [`handle_entry`]: bit 1
 /// where its pixel format has no alpha, so a shader-checked read past the texture takes Metal's
-/// out-of-bounds alpha of 1; bit 2 for `Depth16Unorm`, whose depth comparison the shader makes on
-/// codes, and bit 3 for `Depth32Float` and `Depth32Float_Stencil8`, whose comparison it makes on
-/// values; bits 16 to 28 the index of the texture's texel class
+/// out-of-bounds alpha of 1; bits 16 to 28 the index of the texture's texel class
 /// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
 /// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; every other
 /// bit 0. A writable half-float texture whose image takes no view in another format
@@ -575,7 +570,7 @@ fn entry_flags(shape: &TextureShape) -> u32 {
     let index = own_view
         .unwrap_or_else(|| crate::metal::texel_format::heap_class_index(pixel_format, swizzle));
     let class = index << FLAG_TEXEL_CLASS.trailing_zeros();
-    alpha | depth_flags(pixel_format) | (class & FLAG_TEXEL_CLASS)
+    alpha | (class & FLAG_TEXEL_CLASS)
 }
 
 /// The bytes of one handle-table entry (the module docs' **Tables**): resource ID `id` at heap
@@ -1785,7 +1780,7 @@ fn handle_table_bytes(
         ids.push(member_id(m, &used, state)?);
     }
     // A member's flags: Metal's out-of-bounds read of a pixel format without alpha returns
-    // alpha 1, its depth class, and its texel class.
+    // alpha 1, and its texel class.
     let flags: Vec<u32> = members.iter().map(|m| entry_flags(&m.shape)).collect();
     let mut out = Vec::with_capacity(tables.len());
     for t in tables {
@@ -1801,21 +1796,6 @@ fn handle_table_bytes(
         out.push(table_of(t, entries)?);
     }
     Ok(out)
-}
-
-/// The depth class of a texture of pixel format `pf` in its table entry's flags: how Metal compares
-/// its texels against a depth comparison's reference, as measured. `Depth16Unorm` compares codes,
-/// the texel's against the reference's ([`FLAG_DEPTH_CODES`]); `Depth32Float` compares values, and
-/// `Depth32Float_Stencil8` as `Depth32Float` ([`FLAG_DEPTH_VALUES`]). Every other
-/// format has no measured class, 0: the device compares a heap comparison of it, which the module
-/// records (`DeviceDepthComparison`).
-fn depth_flags(pf: metal::PixelFormat) -> u32 {
-    use metal::PixelFormat as P;
-    match pf {
-        P::Depth16Unorm => FLAG_DEPTH_CODES,
-        P::Depth32Float | P::Depth32FloatStencil8 => FLAG_DEPTH_VALUES,
-        _ => 0,
-    }
 }
 
 /// The bytes of the sampler tables `tables`, planned for the argument samplers' `shape`, for

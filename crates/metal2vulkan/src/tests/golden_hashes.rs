@@ -47,10 +47,8 @@
 //! A second table, `golden_hashes_exact.tsv`, pins the same cells of the fixtures that sample,
 //! gather or compute a level of detail (their source declares an `air.sample_texture*`,
 //! `air.gather_texture*` or `air.calculate_*` intrinsic) under every exact form
-//! (`pipeline::testing::EXACT_SAMPLING`: Metal's sampler emulated, `SamplingPolicy::Exact`, and
-//! `DevicePolicy::exact_answers`), whose output the default policy's native device sampling never
-//! reaches. Its profiles' fingerprints are those of that policy. The bless writes both tables,
-//! under the same rule.
+//! (`DevicePolicy::exact_answers`). Its profiles' fingerprints are those of that policy. The bless
+//! writes both tables, under the same rule.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -65,7 +63,6 @@ use crate::metal::format::storage_image_choice;
 use crate::metal::{PixelFormat, VertexFormat};
 use crate::pipeline::testing::{
     engine_dir, fixtures_dir, link_standalone, llvm_assemble, metal_assemble, AssembleError,
-    EXACT_SAMPLING,
 };
 use crate::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, FramebufferFetchInputs,
@@ -101,9 +98,9 @@ const DEFAULT: Golden = Golden {
 const EXACT: Golden = Golden {
     table: "tests/golden_hashes_exact.tsv",
     title: "# Golden output hashes of the engine over the public fixtures that sample x the\n\
-            # committed profiles under EXACT_SAMPLING, every exact form\n\
+            # committed profiles under every exact form\n\
             # (src/tests/golden_hashes.rs). Written by the bless; do not edit:\n",
-    policy: EXACT_SAMPLING,
+    policy: DevicePolicy::UNTRUSTED.exact_answers(),
     takes: samples,
 };
 
@@ -111,8 +108,7 @@ fn every(_: &str) -> bool {
     true
 }
 
-/// Whether a fixture's source declares a sample, a gather or a level-of-detail query: the
-/// intrinsics whose lowering `SamplingPolicy` chooses.
+/// Whether a fixture's source declares a sample, a gather or a level-of-detail query.
 fn samples(text: &str) -> bool {
     [
         "@air.sample_texture",
@@ -1001,8 +997,7 @@ fn golden_hashes_match_the_table() {
     matches_the_table(DEFAULT, &devices, &observed);
 }
 
-/// The fixtures that sample, under every exact form: the sampler's emulation, which the default
-/// table's native device sampling does not reach.
+/// The fixtures that sample, under every exact form.
 #[test]
 fn exact_golden_hashes_match_the_table() {
     let devices = devices(EXACT.policy);
@@ -1137,18 +1132,11 @@ fn a_stale_cell_names_the_key_that_moved_and_not_an_unmoved_cell() {
     assert_eq!(d.changed, ["f.ll | main | a-gpu: was -> now"]);
 }
 
-/// The exact table takes the fixtures whose sampling the policy changes, under the sampler's
-/// emulation and Metal's other answers: its fingerprints are not the default table's.
+/// The exact table takes the fixtures that sample, under Metal's exact answers: its fingerprints
+/// are not the default table's.
 #[test]
-fn the_exact_table_takes_the_sampling_fixtures_under_the_emulation() {
-    assert_eq!(EXACT.policy.sampling, crate::device::SamplingPolicy::Exact);
-    assert_eq!(
-        EXACT.policy,
-        DevicePolicy {
-            sampling: crate::device::SamplingPolicy::Exact,
-            ..DevicePolicy::default().exact_answers()
-        }
-    );
+fn the_exact_table_takes_the_sampling_fixtures_under_the_exact_answers() {
+    assert_eq!(EXACT.policy, DevicePolicy::default().exact_answers());
     assert_eq!(DEFAULT.policy, DevicePolicy::default());
     let all = fixture_paths(DEFAULT);
     let taken = fixture_paths(EXACT);

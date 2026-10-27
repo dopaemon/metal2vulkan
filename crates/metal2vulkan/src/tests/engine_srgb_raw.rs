@@ -9,12 +9,9 @@
 //!   `k = round(decode(c / 255) · 4095)` (the MSL transfer, which A1's every-byte reading matches)
 //!   and its value `k / 4095`, alpha's `c / 255`, each correctly rounded to the result's type.
 //! - The selection pins which accesses read the raw view under the variant, which keep the
-//!   device's decode there and record `PrecisionNote::SrgbTexelDecode` (a runtime sampler's
-//!   sample both, its note conditional on the bound sampler's word), and that without the
-//!   variant every access records the fact and nothing else.
-//! - On the CPU interpreter, a linear sample through a runtime sampler under the variant is the
-//!   raw emulation's sum where the word reaches it, as a constexpr sampler's is; where the word
-//!   reads one texel the device samples the raw view, and the decode note does not hold there.
+//!   device's decode there and record `PrecisionNote::SrgbTexelDecode` (a filtered sample, a
+//!   runtime sampler's included), and that without the variant every access records the fact and
+//!   nothing else.
 //! - The binder joins a slot bound in an 8-bit sRGB format to the plan's variant, the variant's
 //!   plan states the same key, and its raw bindings view the image in the UNORM format of the
 //!   same channels, on every committed profile.
@@ -29,7 +26,7 @@ use crate::bind::{
     BindState, BoundBuffer, BoundTexture, ImageSource, StageTable, TextureFacts, WriteSource,
 };
 use crate::budget::{Budget, SPIRV_WORDS};
-use crate::device::{Device, DeviceDescription, FormatUsage};
+use crate::device::{Device, DeviceDescription, DevicePolicy, FormatUsage};
 use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::texel_format::srgb_raw_view;
@@ -41,7 +38,6 @@ use crate::pipeline::layout::BindingSource;
 use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
-use crate::pipeline::testing::EXACT_SAMPLING;
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
 };
@@ -50,7 +46,7 @@ use crate::pipeline::{
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::{GlobalKind, TypedModule};
-use crate::spirv::testing::committed_exact_profiles;
+use crate::spirv::testing::committed_profiles;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -244,11 +240,11 @@ fn twin_inputs() -> LowerInputs {
 }
 
 fn lavapipe() -> crate::device::profile::DeviceProfile {
-    profile("lavapipe", EXACT_SAMPLING).expect("profile")
+    profile("lavapipe", DevicePolicy::default()).expect("profile")
 }
 
 fn m3() -> crate::device::profile::DeviceProfile {
-    profile("moltenvk-m3", EXACT_SAMPLING).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
 }
 
 // ---- The reference ----------------------------------------------------------------------------
@@ -574,12 +570,9 @@ fn an_srgb_swizzle_across_alpha_swizzles_in_the_function() {
 enum Raw {
     /// On every device.
     Always,
-    /// Where the device does not sample through Metal's own sampler: the emulated linear filter,
-    /// and a `float` gather, which Metal's own sampler gathers as the table decodes.
-    Emulated,
-    /// Where the device does not sample through Metal's own sampler, beside the device's decode:
-    /// a runtime sampler's emulated linear filter, which the bound sampler's word selects.
-    Word,
+    /// Where the device does not sample through Metal's own sampler: a `float` gather, which
+    /// Metal's own sampler gathers as the table decodes.
+    Unmetal,
     /// Nowhere: the device's decode.
     Never,
 }
@@ -587,14 +580,14 @@ enum Raw {
 /// Which accesses read the raw view under the variant, and which keep the device's decode there:
 /// recording `PrecisionNote::SrgbTexelDecode` on lavapipe, and on MoltenVK, whose decode is
 /// Metal's own, requiring `VkProperty::MetalSampler` instead, and stating
-/// `RuntimeFact::SrgbDeviceDecode` on both. A runtime sampler's sample does both on lavapipe: its
-/// emulation reads the raw view where the bound sampler's word reaches it, and its device arm
-/// decodes elsewhere, the note conditional on the word. Without the variant every access records
-/// `RuntimeFact::SrgbTexture` and none of them, and on MoltenVK a filtered sample, a gather and a
-/// `half` access require the property. A filtered `float` sample records
-/// `PrecisionNote::FloatSampleFilter` on lavapipe, but an emulated linear one under the variant
-/// through a constexpr sampler, which sums the raw codes exactly with no device arm. Every form
-/// validates on both devices.
+/// `RuntimeFact::SrgbDeviceDecode` on both. A filtered sample (a linear filter, a linear mip filter
+/// or a runtime sampler) is the device's, and keeps its decode. Without the variant every access
+/// records `RuntimeFact::SrgbTexture` and none of them. On MoltenVK every sample and gather the
+/// device makes requires the property, and so does a `half` access that converts its texel by the
+/// bound format's class (`RuntimeFact::TexelFormat`) outside the raw view; a filtered sample
+/// records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter` under the bound
+/// format (`lower::sampler::linear::metal_filtered_ycbcr`). On lavapipe the texel is the device's
+/// conversion: no class, no filter note. Every form validates on both devices.
 #[test]
 fn the_raw_view_serves_what_metal_measured() {
     use crate::device::requirements::VkProperty;
@@ -628,17 +621,17 @@ fn the_raw_view_serves_what_metal_measured() {
         ("gather alpha half", Access::Gather(3), true, Raw::Always),
         ("bicubic half", Access::Sample(bicubic), true, Raw::Always),
         ("bicubic float", Access::Sample(bicubic), false, Raw::Always),
-        ("linear half", Access::Sample(linear), true, Raw::Emulated),
-        ("gather float", Access::Gather(0), false, Raw::Emulated),
-        ("linear float", Access::Sample(linear), false, Raw::Emulated),
+        ("gather float", Access::Gather(0), false, Raw::Unmetal),
+        ("linear half", Access::Sample(linear), true, Raw::Never),
+        ("linear float", Access::Sample(linear), false, Raw::Never),
         (
             "mip linear",
             Access::Sample(sampler_words(0, 2, false)),
             false,
             Raw::Never,
         ),
-        ("runtime half", Access::Runtime, true, Raw::Word),
-        ("runtime float", Access::Runtime, false, Raw::Word),
+        ("runtime half", Access::Runtime, true, Raw::Never),
+        ("runtime float", Access::Runtime, false, Raw::Never),
     ];
     let consts = FunctionConstantValues::defaults();
     for (name, access, half, raw) in cases {
@@ -647,11 +640,10 @@ fn the_raw_view_serves_what_metal_measured() {
         };
         for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
             let metal = stem == "moltenvk-m3";
-            let word = raw == Raw::Word && !metal;
             let raw = match raw {
                 Raw::Always => true,
-                Raw::Emulated => !metal,
-                Raw::Word | Raw::Never => false,
+                Raw::Unmetal => !metal,
+                Raw::Never => false,
             };
             for variant in [false, true] {
                 let what = format!("{name} on {stem}, variant {variant}");
@@ -664,19 +656,17 @@ fn the_raw_view_serves_what_metal_measured() {
                 );
                 let reads_raw = resource(&m, |k| *k == ResourceKind::RawTexture).is_some()
                     || resource(&m, raw_combined).is_some();
-                assert_eq!(reads_raw, variant && (raw || word), "{what}");
+                assert_eq!(reads_raw, variant && raw, "{what}");
                 assert_eq!(
                     plan.precision.contains(&PrecisionNote::SrgbTexelDecode),
                     variant && !raw && !metal,
                     "{what}"
                 );
-                // A runtime sampler's device decode holds where its word does not reach the
-                // emulation.
-                assert_eq!(
-                    plan.specialized
+                assert!(
+                    !plan
+                        .specialized
                         .iter()
                         .any(|s| s.note == PrecisionNote::SrgbTexelDecode),
-                    variant && word,
                     "{what}"
                 );
                 // A form that keeps the device's decode under the variant states it, so the
@@ -687,43 +677,16 @@ fn the_raw_view_serves_what_metal_measured() {
                     variant && !raw,
                     "{what}"
                 );
-                // A raw `half` access converts nothing by the format's class; a raw linear one
-                // reads the class's channels. A `float` access reads the class for an emulated
-                // linear sample: a constexpr sampler's, and a runtime sampler's, whose device arm
-                // converts by it. It reads it too for a plain read the shader fetches where the
-                // bound format is a 32-bit float one, and the device reads otherwise: a nearest
-                // sample at a level the function knows and a gather, through a constexpr sampler,
-                // outside the raw view; and for any access that may read one texel, whose `float`
-                // texel converts by the class.
-                let linear_half = name == "linear half";
-                let has_class = plan
-                    .facts
-                    .contains(&RuntimeFact::TexelFormat { slot: TEXTURE });
-                if half && name != "bicubic half" {
-                    assert_eq!(has_class, !(variant && raw) || linear_half, "{what}");
-                }
-                if !half {
-                    let emulated = matches!(name, "linear float" | "runtime float");
-                    let fetched =
-                        matches!(name, "nearest float" | "nearest level" | "gather float")
-                            && !(variant && raw);
-                    // A `float` access that may read one texel converts it by the class where
-                    // the device's sampler is not Metal's, outside the raw view.
-                    let one_texel = matches!(
-                        name,
-                        "read float"
-                            | "fetch float"
-                            | "nearest float"
-                            | "nearest level"
-                            | "gather float"
-                            | "runtime float"
-                    ) && !(variant && raw);
-                    assert_eq!(
-                        has_class,
-                        (emulated || fetched || one_texel) && !metal,
-                        "{what}"
-                    );
-                }
+                // On MoltenVK a `half` access outside the raw view converts its texel by the
+                // format's class, whose rounding to `half` is Metal's there only through Metal's
+                // own texture unit; a bicubic sample's taps are fetched.
+                let converts = metal && half && !(variant && raw) && name != "bicubic half";
+                assert_eq!(
+                    plan.facts
+                        .contains(&RuntimeFact::TexelFormat { slot: TEXTURE }),
+                    converts,
+                    "{what}"
+                );
                 let a = compile_bitcode(
                     &bc,
                     EntryRef::Name("k"),
@@ -734,11 +697,6 @@ fn the_raw_view_serves_what_metal_measured() {
                     SPIRV_WORDS,
                 )
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
-                // A filtered sample of either result type needs Metal's sampler on MoltenVK
-                // anyway, and elsewhere a `float` one records `FloatSampleFilter`; so does a gather
-                // through a constexpr normalized sampler, which is Metal's own there and reads a
-                // snapped coordinate elsewhere. The variant adds every access that keeps the
-                // device's decode.
                 let filtered = matches!(
                     name,
                     "linear half"
@@ -747,23 +705,32 @@ fn the_raw_view_serves_what_metal_measured() {
                         | "runtime half"
                         | "runtime float"
                 );
-                let gather = matches!(access, Access::Gather(_));
-                // The raw emulation has no device arm.
-                let raw_linear = variant && raw && matches!(name, "linear half" | "linear float");
                 assert_eq!(
                     plan.precision.contains(&PrecisionNote::FloatSampleFilter),
-                    filtered && !half && !metal && !raw_linear,
+                    filtered && !half && metal,
                     "{what}"
                 );
-                // And on MoltenVK a `half` access that converts its texel by the class, outside
-                // the raw view, whose rounding to `half` is Metal's there only through Metal's
-                // own texture unit; a bicubic sample's taps are fetched.
-                let converts = half && !(variant && raw) && name != "bicubic half";
+                assert_eq!(
+                    plan.precision.contains(&PrecisionNote::HalfSampleFilter),
+                    filtered && half && metal,
+                    "{what}"
+                );
+                // Every sample and gather the device makes (not a read, a pixel fetch or a
+                // bicubic sample's fetched taps).
+                let sampled = !matches!(
+                    name,
+                    "read half"
+                        | "read float"
+                        | "fetch half"
+                        | "fetch float"
+                        | "bicubic half"
+                        | "bicubic float"
+                );
                 assert_eq!(
                     a.requirements
                         .properties
                         .contains(&VkProperty::MetalSampler),
-                    metal && (filtered || gather || (variant && !raw) || converts),
+                    metal && (sampled || converts),
                     "{what}"
                 );
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -863,649 +830,9 @@ declare {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}({args})
     )
 }
 
-/// A deterministic source: a 64-bit LCG.
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        self.0 >> 11
-    }
-}
-
-/// The base tap and 1/256 fraction of texel-space coordinate `x` (Metal's footprint).
-fn split(x: f64) -> (i64, i64) {
-    let q = (256.0 * (x - 0.5) + 0.5).floor() as i64;
-    (q >> 8, q & 255)
-}
-
-/// Channel `c`'s grid code of code `code` on the sRGB grids: a color step (grid 4095), alpha's
-/// `16 c` (grid 4080).
-fn grid_code(c: usize, code: u32) -> (i128, u64) {
-    if c < 3 {
-        (i128::from(step(code)), 4095)
-    } else {
-        (i128::from(16 * code), 4080)
-    }
-}
-
-/// A raw filter form: its sampler's filter code (1 linear, 2 bicubic), the texture's dimensions
-/// (1, 2, or 3), and a `half` result.
-#[derive(Clone, Copy, Debug)]
-struct Form {
-    filter: u64,
-    dims: u8,
-    half: bool,
-}
-
-/// Metal's filtered value (a `half` or `f32` result, as bits) of channel `c` of texels `codes`
-/// (`w × h × d`, row-major, slice by slice) at texel-space `(x, y, z)` (`y` unused for 1D, `z`
-/// unused below 3D) in form `f`, clamped to the edge: the footprint's weights (`(256 - k, k)`
-/// linear, Metal's table bicubic, a 1D texture bilinear either way), the grid codes summed
-/// exactly, rounded half up, clamped into the grid, and the quotient correctly rounded. A 2D or 3D
-/// linear sample's is Metal's sum of truncated terms: an axis whose two taps clamp onto one texel
-/// weighs `(256, 0)`, each tap's weight is `wx · wy` (2D) or `wx · wy · wz / 256` rounded to
-/// nearest (3D, a tie up on the `t` axis's first tap), and each term `code · w` is truncated onto
-/// `2^-4` of the grid before the sum's step `⌊(T + 2^11) / 2^12⌋`.
-fn filtered(
-    codes: &[[u32; 4]],
-    (w, h, d): (i64, i64, i64),
-    (x, y, z): (f64, f64, f64),
-    f: Form,
-    c: usize,
-) -> u32 {
-    let Form { filter, dims, half } = f;
-    let at3 = |i: i64, j: i64, l: i64| {
-        let (i, j, l) = (i.clamp(0, w - 1), j.clamp(0, h - 1), l.clamp(0, d - 1));
-        codes[((l * h + j) * w + i) as usize][c]
-    };
-    let at = |i: i64, j: i64| at3(i, j, 0);
-    let (i, kx) = split(x);
-    let grid = grid_code(c, 0).1;
-    // An axis's weights, `(256, 0)` where its two taps clamp onto one texel.
-    let axis = |i: i64, k: i64, n: i64| {
-        let k = if i.clamp(0, n - 1) == (i + 1).clamp(0, n - 1) {
-            0
-        } else {
-            k
-        };
-        [256 - k, k]
-    };
-    let n: i128 = match dims {
-        1 => {
-            let a = grid_code(c, at(i, 0)).0;
-            let b = grid_code(c, at(i + 1, 0)).0;
-            (a * i128::from(256 - kx) + b * i128::from(kx) + 128) >> 8
-        }
-        3 => {
-            let (j, ky) = split(y);
-            let (l, kz) = split(z);
-            let (wx, wy, wz) = (axis(i, kx, w), axis(j, ky, h), axis(l, kz, d));
-            let mut t = 0i128;
-            for n in 0..8 {
-                let (a, b, e) = (n & 1, (n >> 1) & 1, n >> 2);
-                let p = wx[a] * wy[b] * wz[e];
-                let wt = (p >> 8) + i64::from(p & 255 > 128 || (p & 255 == 128 && b == 0));
-                let code = grid_code(c, at3(i + a as i64, j + b as i64, l + e as i64)).0;
-                t += (code * i128::from(wt)) >> 4;
-            }
-            (t + (1 << 11)) >> 12
-        }
-        _ if filter == 1 => {
-            let (j, ky) = split(y);
-            let (wx, wy) = (axis(i, kx, w), axis(j, ky, h));
-            let mut t = 0i128;
-            for n in 0..4 {
-                let (a, b) = (n & 1, n >> 1);
-                let code = grid_code(c, at(i + a as i64, j + b as i64)).0;
-                t += (code * i128::from(wx[a] * wy[b])) >> 4;
-            }
-            (t + (1 << 11)) >> 12
-        }
-        _ => {
-            let (j, ky) = split(y);
-            let cubic = |k: i64| -> Vec<i128> {
-                crate::metal::bicubic::weights(k as u32)
-                    .iter()
-                    .map(|v| i128::from(*v))
-                    .collect()
-            };
-            let (wx, wy) = (cubic(kx), cubic(ky));
-            let mut sum = 0i128;
-            for (b, wb) in (-1..=2).zip(&wy) {
-                for (a, wa) in (-1..=2).zip(&wx) {
-                    sum += wa * wb * grid_code(c, at(i + a, j + b)).0;
-                }
-            }
-            (sum + (1 << 31)) >> 32
-        }
-    };
-    let n = n.clamp(0, i128::from(grid)) as u64;
-    if half {
-        u32::from(half_bits(n, grid))
-    } else {
-        f32_bits(n, grid)
-    }
-}
-
-/// Under the variant a linear sample (3D, 2D, and 1D, `half` and `float`) and a bicubic sample
-/// (2D and 1D, `half` and `float`) of an 8-bit sRGB texture are Metal's sums of the table's
-/// steps, bit for bit, on the interpreter (lavapipe): random codes in every channel, coordinates
-/// on a 1/512 grid inside and past each edge.
-#[test]
-fn raw_filters_sum_the_steps_as_metal_does() {
-    let (w, h, depth) = (7i64, 5i64, 3i64);
-    let n = 96u32;
-    let mut rng = Lcg(0x5eed_0251_5267_0000);
-    let mut codes: Vec<[u32; 4]> = (0..w * h)
-        .map(|_| std::array::from_fn(|_| (rng.next() % 256) as u32))
-        .collect();
-    let points: Vec<(f64, f64)> = (0..n)
-        .map(|_| {
-            let x = (rng.next() % ((w as u64 + 2) * 512)) as f64 / 512.0 - 1.0;
-            let y = (rng.next() % ((h as u64 + 2) * 512)) as f64 / 512.0 - 1.0;
-            (x, y)
-        })
-        .collect();
-    // A 3D texture's further slices, and each lane's depth.
-    let mut deep = Lcg(0x5eed_0307_0017_0000);
-    codes.extend(
-        (0..w * h * (depth - 1)).map(|_| std::array::from_fn(|_| (deep.next() % 256) as u32)),
-    );
-    let points: Vec<(f64, f64, f64)> = points
-        .into_iter()
-        .map(|(x, y)| {
-            let z = (deep.next() % ((depth as u64 + 2) * 512)) as f64 / 512.0 - 1.0;
-            (x, y, z)
-        })
-        .collect();
-    let p = lavapipe();
-    let form = |filter, dims, half| Form { filter, dims, half };
-    let forms = [
-        ("linear 2d half", form(1, 2, true)),
-        ("linear 1d half", form(1, 1, true)),
-        ("linear 2d float", form(1, 2, false)),
-        ("linear 1d float", form(1, 1, false)),
-        ("linear 3d half", form(1, 3, true)),
-        ("linear 3d float", form(1, 3, false)),
-        ("bicubic 2d half", form(2, 2, true)),
-        ("bicubic 2d float", form(2, 2, false)),
-        ("bicubic 1d float", form(2, 1, false)),
-    ];
-    for (name, f) in forms {
-        let Form { filter, dims, half } = f;
-        let words = sampler_words(filter, 0, true);
-        let Some(bc) = assemble(name, &filter_kernel(words, dims, half)) else {
-            return;
-        };
-        let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-        let raw = resource(&m, raw_combined).unwrap_or_else(|| panic!("{name}: no raw binding"));
-        let rows = if dims == 1 { 1 } else { h };
-        let slices = if dims == 3 { depth } else { 1 };
-        let mut img = Image::new(raw, [w as u32, rows as u32, slices as u32], 1, 1, 1);
-        for l in 0..slices {
-            for j in 0..rows {
-                for i in 0..w {
-                    let at = img
-                        .index(0, 0, 0, [i as u32, j as u32, l as u32])
-                        .expect("texel");
-                    img.texels[at] =
-                        codes[((l * h + j) * w + i) as usize].map(|c| f32_bits(u64::from(c), 255));
-                }
-            }
-        }
-        let coords: Vec<u8> = points
-            .iter()
-            .flat_map(|(x, y, z)| {
-                let mut v = vec![(*x as f32).to_le_bytes(), (*y as f32).to_le_bytes()];
-                if dims == 3 {
-                    v.extend([(*z as f32).to_le_bytes(), 0f32.to_le_bytes()]);
-                }
-                v
-            })
-            .flatten()
-            .collect();
-        let bytes = if half { 8 } else { 16 };
-        let mut res = resources(&plan, bytes);
-        res.buffers.push(Buffer {
-            slot: Some(ResourceSlot {
-                stage: Stage::Kernel,
-                kind: ResourceKind::Buffer,
-                index: 1,
-            }),
-            address: None,
-            bytes: coords,
-        });
-        // The class the binder gives an `RGBA8Unorm_sRGB` texture.
-        let class = crate::metal::texel_format::texel_format(PixelFormat::RGBA8UnormSRGB);
-        res.spec
-            .insert(SpecKey::TexelFormat(TEXTURE), u64::from(class.0));
-        res.spec.insert(
-            SpecKey::PlainHalfTexels(TEXTURE),
-            u64::from(class.plain_on_metal_sampler()),
-        );
-        let bicubic = crate::metal::bicubic::texels(PixelFormat::RGBA8UnormSRGB).expect("measured");
-        res.spec
-            .insert(SpecKey::BicubicTexels(TEXTURE), u64::from(bicubic.0));
-        let mut outs = Vec::new();
-        for order in [Order::Forward, Order::Reverse] {
-            let cfg = Config {
-                workgroups: [n, 1, 1],
-                order,
-                ..Config::default()
-            };
-            let (o, _) = run_with_images(&m, &cfg, res.clone(), vec![img.clone()])
-                .unwrap_or_else(|e| panic!("{name}: interpreter: {e:?}"));
-            outs.push(o.buffers);
-        }
-        assert_eq!(outs[0], outs[1], "{name}: the scheduling orders disagree");
-        let out = &outs[0][0];
-        for (lane, (x, y, z)) in points.iter().enumerate() {
-            for c in 0..4 {
-                let want = filtered(&codes, (w, rows, slices), (*x, *y, *z), f, c);
-                let at = lane * bytes;
-                let got = if half {
-                    let i = at + 2 * c;
-                    u32::from(u16::from_le_bytes([out[i], out[i + 1]]))
-                } else {
-                    let i = at + 4 * c;
-                    u32::from_le_bytes([out[i], out[i + 1], out[i + 2], out[i + 3]])
-                };
-                assert_eq!(
-                    got, want,
-                    "{name} lane {lane} ({x}, {y}, {z}) channel {c}: {got:#x} vs {want:#x}"
-                );
-            }
-        }
-    }
-}
-
-/// Under the variant a linear sample through a runtime sampler (3D, 2D, and 1D, `half` and
-/// `float`) of an 8-bit sRGB texture is its constexpr sampler's raw emulation where the bound
-/// sampler's word reaches it (Metal's runtime sampler answers as its constexpr sampler of the same
-/// state, bit for bit), on the interpreter (lavapipe): random codes in every channel, coordinates
-/// on a 1/512 grid inside and past each edge, through the raw view alone (the texture's own view
-/// holds NaNs, and the interpreter samples nothing, so the device's arm would fail the run). The
-/// device's decode is noted only where the word does not reach the emulation.
-#[test]
-fn runtime_raw_filters_sum_the_steps_where_the_word_reaches() {
-    use crate::metal::sampler::SamplerWord;
-    use crate::metal::SamplerAddressMode;
-    let (w, h, depth) = (7i64, 5i64, 3i64);
-    let n = 96u32;
-    let mut rng = Lcg(0x5eed_0251_4220_0000);
-    let codes: Vec<[u32; 4]> = (0..w * h * depth)
-        .map(|_| std::array::from_fn(|_| (rng.next() % 256) as u32))
-        .collect();
-    let points: Vec<(f64, f64, f64)> = (0..n)
-        .map(|_| {
-            let mut at = |n: i64| (rng.next() % ((n as u64 + 2) * 512)) as f64 / 512.0 - 1.0;
-            (at(w), at(h), at(depth))
-        })
-        .collect();
-    // Linear filters, every axis clamped to its edge, pixel coordinates.
-    let mut word = SamplerWord::LINEAR | SamplerWord::PIXEL_COORDINATES;
-    for shift in SamplerWord::ADDRESS_SHIFT {
-        word |= SamplerAddressMode::ClampToEdge.as_raw() << shift;
-    }
-    let p = lavapipe();
-    let consts = FunctionConstantValues::defaults();
-    for (dims, half) in [
-        (3, true),
-        (3, false),
-        (2, true),
-        (2, false),
-        (1, true),
-        (1, false),
-    ] {
-        let name = format!(
-            "runtime linear {dims}d {}",
-            if half { "half" } else { "float" }
-        );
-        let Some(bc) = assemble(&name, &filter_kernel_through(None, dims, half)) else {
-            return;
-        };
-        let a = compile_bitcode(
-            &bc,
-            EntryRef::Name("k"),
-            &consts,
-            &p,
-            &inputs(true),
-            &mut meter(),
-            SPIRV_WORDS,
-        )
-        .unwrap_or_else(|e| panic!("{name}: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(
-            a.specialized
-                .iter()
-                .any(|s| s.note == PrecisionNote::SrgbTexelDecode),
-            "{name}: {:?}",
-            a.specialized
-        );
-        let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-        let raw = resource(&m, raw_combined).unwrap_or_else(|| panic!("{name}: no raw binding"));
-        let own = resource(
-            &m,
-            |k| matches!(k, ResourceKind::CombinedTextureSampler(c) if !c.raw),
-        )
-        .unwrap_or_else(|| panic!("{name}: no decoding binding"));
-        let rows = if dims == 1 { 1 } else { h };
-        let slices = if dims == 3 { depth } else { 1 };
-        let extent = [w as u32, rows as u32, slices as u32];
-        let mut img = Image::new(raw, extent, 1, 1, 1);
-        let mut nan = Image::new(own, extent, 1, 1, 1);
-        for l in 0..slices {
-            for j in 0..rows {
-                for i in 0..w {
-                    let at = img
-                        .index(0, 0, 0, [i as u32, j as u32, l as u32])
-                        .expect("texel");
-                    img.texels[at] =
-                        codes[((l * h + j) * w + i) as usize].map(|c| f32_bits(u64::from(c), 255));
-                    nan.texels[at] = [f32::NAN.to_bits(); 4];
-                }
-            }
-        }
-        let coords: Vec<u8> = points
-            .iter()
-            .flat_map(|(x, y, z)| {
-                let mut v = vec![(*x as f32).to_le_bytes(), (*y as f32).to_le_bytes()];
-                if dims == 3 {
-                    v.extend([(*z as f32).to_le_bytes(), 0f32.to_le_bytes()]);
-                }
-                v
-            })
-            .flatten()
-            .collect();
-        let bytes = if half { 8 } else { 16 };
-        let mut res = resources(&plan, bytes);
-        res.buffers.push(Buffer {
-            slot: Some(ResourceSlot {
-                stage: Stage::Kernel,
-                kind: ResourceKind::Buffer,
-                index: 1,
-            }),
-            address: None,
-            bytes: coords,
-        });
-        // The class the binder gives an `RGBA8Unorm_sRGB` texture, and the bound sampler's word
-        // masked by the fields the function reads.
-        let class = crate::metal::texel_format::texel_format(PixelFormat::RGBA8UnormSRGB);
-        res.spec
-            .insert(SpecKey::TexelFormat(TEXTURE), u64::from(class.0));
-        res.spec.insert(
-            SpecKey::PlainHalfTexels(TEXTURE),
-            u64::from(class.plain_on_metal_sampler()),
-        );
-        let mut words = 0;
-        for k in a.interface.read_keys() {
-            if let SpecKey::SamplerState { fields, .. } = k {
-                res.spec.insert(k, u64::from(word & fields));
-                words += 1;
-            }
-        }
-        assert_eq!(
-            words, 1,
-            "{name}: the sampler's `SamplerState` specialization"
-        );
-        let mut outs = Vec::new();
-        for order in [Order::Forward, Order::Reverse] {
-            let cfg = Config {
-                workgroups: [n, 1, 1],
-                order,
-                ..Config::default()
-            };
-            let (o, _) = run_with_images(&m, &cfg, res.clone(), vec![img.clone(), nan.clone()])
-                .unwrap_or_else(|e| panic!("{name}: interpreter: {e:?}"));
-            outs.push(o.buffers);
-        }
-        assert_eq!(outs[0], outs[1], "{name}: the scheduling orders disagree");
-        let out = &outs[0][0];
-        let f = Form {
-            filter: 1,
-            dims,
-            half,
-        };
-        for (lane, (x, y, z)) in points.iter().enumerate() {
-            for c in 0..4 {
-                let want = filtered(&codes, (w, rows, slices), (*x, *y, *z), f, c);
-                let at = lane * bytes;
-                let got = if half {
-                    let i = at + 2 * c;
-                    u32::from(u16::from_le_bytes([out[i], out[i + 1]]))
-                } else {
-                    let i = at + 4 * c;
-                    u32::from_le_bytes([out[i], out[i + 1], out[i + 2], out[i + 3]])
-                };
-                assert_eq!(
-                    got, want,
-                    "{name} lane {lane} ({x}, {y}, {z}) channel {c}: {got:#x} vs {want:#x}"
-                );
-            }
-        }
-    }
-}
-
-/// How many device samples (`OpImageSample*`) of `m` read the combined binding at `slot`: their
-/// sampled image loaded from the slot's variable.
-fn samples_of(m: &TypedModule, slot: ResourceSlot) -> usize {
-    use crate::spirv::ir::Inst;
-    let Some(var) = m.globals().iter().find_map(|g| match g.kind {
-        GlobalKind::Resource(s) if s == slot => Some(g.value),
-        _ => None,
-    }) else {
-        return 0;
-    };
-    let insts = || m.blocks().iter().flat_map(|b| &b.insts);
-    let loads: BTreeSet<u32> = insts()
-        .filter_map(|n| match (&n.inst, n.result) {
-            (Inst::Load { ptr, .. }, Some(r)) if *ptr == var => Some(r.0),
-            _ => None,
-        })
-        .collect();
-    insts()
-        .filter(|n| {
-            matches!(&n.inst, Inst::ImageSample { sampled_image, .. }
-                if loads.contains(&sampled_image.0))
-        })
-        .count()
-}
-
-/// Under the variant a runtime sampler's sample (2D `half` and `float`, 3D, and 1D) whose bound
-/// word reads one texel (nearest minification and magnification, no linear mip filter, isotropic)
-/// samples the slot's raw view through the same sampler and decodes the code through Metal's table,
-/// as a constexpr nearest sample's raw read does: the module samples the raw binding as well as the
-/// decoding one, and `PrecisionNote::SrgbTexelDecode` holds only where the word filters but does
-/// not reach the emulation, not under a nearest word with or without a nearest mip filter. On
-/// lavapipe; every form validates.
-#[test]
-fn a_runtime_raw_sample_reads_one_texel_through_the_raw_view() {
-    use crate::metal::sampler::SamplerWord;
-    use crate::metal::SamplerAddressMode;
-    let mut clamp = 0;
-    for shift in SamplerWord::ADDRESS_SHIFT {
-        clamp |= SamplerAddressMode::ClampToEdge.as_raw() << shift;
-    }
-    let mip = |m: u32| m << SamplerWord::MIP_FILTER_SHIFT;
-    // A word and whether the device decodes under it.
-    let words = [
-        ("nearest", 0, false),
-        ("nearest, nearest mip", mip(1), false),
-        ("nearest, linear mip", mip(2), true),
-        ("linear minification", SamplerWord::MIN_LINEAR, true),
-        ("linear", SamplerWord::LINEAR, false),
-        ("linear, linear mip", SamplerWord::LINEAR | mip(2), true),
-    ];
-    let class = crate::metal::texel_format::texel_format(PixelFormat::RGBA8UnormSRGB);
-    let p = lavapipe();
-    let consts = FunctionConstantValues::defaults();
-    let kernels = [
-        ("runtime 2d half", kernel(Access::Runtime, true)),
-        ("runtime 2d float", kernel(Access::Runtime, false)),
-        ("runtime 3d float", filter_kernel_through(None, 3, false)),
-        ("runtime 1d half", filter_kernel_through(None, 1, true)),
-    ];
-    for (name, k) in kernels {
-        let Some(bc) = assemble(name, &k) else {
-            return;
-        };
-        let a = compile_bitcode(
-            &bc,
-            EntryRef::Name("k"),
-            &consts,
-            &p,
-            &inputs(true),
-            &mut meter(),
-            SPIRV_WORDS,
-        )
-        .unwrap_or_else(|e| panic!("{name}: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let (_, m) = typed_module_with(&bc, "k", &p, &inputs(true))
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-        let raw = resource(&m, raw_combined).unwrap_or_else(|| panic!("{name}: no raw binding"));
-        let own = resource(
-            &m,
-            |k| matches!(k, ResourceKind::CombinedTextureSampler(c) if !c.raw),
-        )
-        .unwrap_or_else(|| panic!("{name}: no decoding binding"));
-        assert!(samples_of(&m, raw) >= 1, "{name}: the raw view's sample");
-        assert!(
-            samples_of(&m, own) >= 1,
-            "{name}: the decoding view's sample"
-        );
-        let Some(note) = a
-            .specialized
-            .iter()
-            .find(|s| s.note == PrecisionNote::SrgbTexelDecode)
-        else {
-            panic!("{name}: no conditional decode note: {:?}", a.specialized);
-        };
-        let fields: Vec<(SpecKey, u32)> = a
-            .interface
-            .read_keys()
-            .into_iter()
-            .filter_map(|k| match k {
-                SpecKey::SamplerState { fields, .. } => Some((k, fields)),
-                _ => None,
-            })
-            .collect();
-        let [(sampler, fields)] = fields[..] else {
-            panic!("{name}: the sampler's `SamplerState` specialization: {fields:?}");
-        };
-        for (what, filter, decodes) in words {
-            let word = (clamp | filter) & fields;
-            let holds = note.when.iter().any(|clause| {
-                clause.all.iter().all(|t| {
-                    let v = match t.key {
-                        k if k == sampler => word,
-                        SpecKey::TexelFormat(_) | SpecKey::BoundTexelFormat(_) => class.0,
-                        k => panic!("{name}: a decode note's test of {k:?}"),
-                    };
-                    (v & t.mask == t.bits) == t.equal
-                })
-            });
-            assert_eq!(holds, decodes, "{name} under a {what} word");
-        }
-    }
-}
-
-/// A kernel sampling element `ks[tid]` (`uint` buffer 2) of an array of `n` `texture2d<half>`
-/// slots through the runtime `[[sampler(0)]]` at `float2` buffer 0's lane `tid`, storing the
-/// `half4` to buffer 1 (the null texture where `ks[tid]` is past the array): a switch-at-use.
-fn switch_kernel(n: u32) -> String {
-    format!(
-        r#"%"struct.metal::texture2d" = type {{ ptr addrspace(1) }}
-
-define void @k(ptr readonly byval([{n} x ptr addrspace(1)]) %t, ptr addrspace(1) %c, ptr addrspace(1) %out, ptr addrspace(1) %ks, ptr addrspace(2) %s, i32 %tid) {{
-  %i = zext i32 %tid to i64
-  %p = getelementptr inbounds <2 x float>, ptr addrspace(1) %c, i64 %i
-  %uv = load <2 x float>, ptr addrspace(1) %p, align 8
-  %pk = getelementptr inbounds i32, ptr addrspace(1) %ks, i64 %i
-  %k = load i32, ptr addrspace(1) %pk, align 4
-  %past = icmp uge i32 %k, {n}
-  %kc = select i1 %past, i32 0, i32 %k
-  %kk = zext i32 %kc to i64
-  %e = getelementptr inbounds [{n} x %"struct.metal::texture2d"], ptr %t, i64 0, i64 %kk, i32 0
-  %elem = load ptr addrspace(1), ptr %e, align 8
-  %h = select i1 %past, ptr addrspace(1) null, ptr addrspace(1) %elem
-  %r = call {{ <4 x half>, i8 }} @air.sample_texture_2d.v4f16(ptr addrspace(1) %h, ptr addrspace(2) %s, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)
-  %v = extractvalue {{ <4 x half>, i8 }} %r, 0
-  %q = getelementptr inbounds <4 x half>, ptr addrspace(1) %out, i64 %i
-  store <4 x half> %v, ptr addrspace(1) %q, align 8
-  ret void
-}}
-
-declare {{ <4 x half>, i8 }} @air.sample_texture_2d.v4f16(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)
-
-!air.kernel = !{{!0}}
-!0 = !{{ptr @k, !1, !2}}
-!1 = !{{}}
-!2 = !{{!3, !4, !5, !6, !7, !8}}
-!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 {n}, !"air.sample", !"air.arg_type_name", !"array<texture2d<half, sample>, {n}>", !"air.arg_name", !"t"}}
-!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"float2", !"air.arg_name", !"c"}}
-!5 = !{{i32 2, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"half4", !"air.arg_name", !"out"}}
-!6 = !{{i32 3, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"ks"}}
-!7 = !{{i32 4, !"air.sampler", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"sampler", !"air.arg_name", !"s"}}
-!8 = !{{i32 5, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}}
-"#
-    )
-}
-
-/// A switch-at-use over texture slots under the variant, sampled through a runtime sampler, reads
-/// each slot's raw view where the word reads one texel, as one slot's sample does: on lavapipe the
-/// module samples every slot's raw binding, its estimate bounds its emission, and it validates.
-#[test]
-fn a_switch_of_raw_slots_reads_one_texel_through_each_raw_view() {
-    let p = lavapipe();
-    let consts = FunctionConstantValues::defaults();
-    for n in [2u32, 4] {
-        let name = format!("switch of {n}");
-        let Some(bc) = assemble(&name, &switch_kernel(n)) else {
-            return;
-        };
-        let mut under = LowerInputs::new();
-        for index in 0..n {
-            under.srgb_textures.insert(SlotRef { index, ..TEXTURE });
-        }
-        let entry = EntryRef::Name("k");
-        let plan = plan_bitcode(&bc, entry, &consts, &p, &under, &mut meter())
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-        let a = compile_bitcode(&bc, entry, &consts, &p, &under, &mut meter(), SPIRV_WORDS)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let words = a.module.words.len() as u64;
-        assert!(
-            plan.estimate.words >= words,
-            "{name}: estimate {} < emitted {words}",
-            plan.estimate.words
-        );
-        let (_, m) =
-            typed_module_with(&bc, "k", &p, &under).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let raw: Vec<ResourceSlot> = m
-            .globals()
-            .iter()
-            .filter_map(|g| match g.kind {
-                GlobalKind::Resource(s) if raw_combined(&s.kind) => Some(s),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(raw.len(), n as usize, "{name}: the raw bindings {raw:?}");
-        for slot in raw {
-            assert!(samples_of(&m, slot) >= 1, "{name}: {slot:?} is not sampled");
-        }
-    }
-}
-
-/// The plan's word estimate bounds the emitted module of every raw form under the variant (a
-/// runtime sampler's emulation beside its device arm included), with the slot bound to a twin
-/// (whose device arm decodes the filtered codes) and without, on every committed profile, and
-/// every form validates there.
+/// The plan's word estimate bounds the emitted module of every raw form under the variant (and of
+/// the device's samples beside them), with the slot bound to a twin (whose device sample decodes
+/// the filtered codes) and without, on every committed profile, and every form validates there.
 #[test]
 fn the_raw_estimate_bounds_its_emission() {
     let consts = FunctionConstantValues::defaults();
@@ -1562,16 +889,9 @@ fn the_raw_estimate_bounds_its_emission() {
         let Some(bc) = assemble(name, &k) else {
             return;
         };
-        // Native sampling's profiles too: a runtime sampler's sample there keeps the device's
-        // arm alone, which decodes a twin's filtered codes.
-        let native = crate::spirv::testing::committed_profiles()
+        for ((stem, p), (twin, under)) in committed_profiles()
             .expect("profiles")
             .into_iter()
-            .map(|(stem, p)| (format!("{stem} native"), p));
-        for ((stem, p), (twin, under)) in committed_exact_profiles()
-            .expect("profiles")
-            .into_iter()
-            .chain(native)
             .flat_map(|sp| {
                 [
                     (sp.clone(), ("", inputs(true))),
@@ -1614,7 +934,10 @@ fn devices() -> Vec<(String, Device)> {
             .unwrap_or_default();
         let text = std::fs::read_to_string(&path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        out.push((stem, Device::new(desc, EXACT_SAMPLING).expect("device")));
+        out.push((
+            stem,
+            Device::new(desc, DevicePolicy::default()).expect("device"),
+        ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
@@ -1915,9 +1238,9 @@ fn an_astc_srgb_slot_reads_raw_codes_only_where_its_twin_holds_them() {
 /// decode and filter are Metal's own texture unit's, that `f32` is Metal's `float` value, whose
 /// rounding to `half` is Metal's (`metals_srgb_float_steps_round_to_their_half_steps`): the
 /// pipeline takes no `PrecisionNote::HalfTexelConversion` under the format and requires
-/// `VkProperty::MetalSampler`. On lavapipe, whose decode is not Metal's, the note holds under it;
-/// on both it holds under a format of no measured family, which the variant leaves for another
-/// bound format.
+/// `VkProperty::MetalSampler`, and the note holds under a format of no measured family, which the
+/// variant leaves for another bound format. On lavapipe, whose decode and conversion are the
+/// device's, the note holds under every format.
 #[test]
 fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
     use crate::device::requirements::VkProperty;
@@ -1953,8 +1276,26 @@ fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
                 "{stem} {pf:?}: {notes:?}"
             );
         }
-        // The variant's module keeps the note for a format of no measured family: its class,
-        // or on MoltenVK its slot's `UnmeasuredTexels` specialization, 1 for such a format.
+        if !metal {
+            assert!(
+                p.stage
+                    .precision_notes
+                    .contains(&PrecisionNote::HalfTexelConversion),
+                "{stem}: {:?}",
+                p.stage.precision_notes
+            );
+            assert!(
+                !p.stage
+                    .specialized_notes
+                    .iter()
+                    .any(|s| s.note == PrecisionNote::HalfTexelConversion),
+                "{stem}: {:?}",
+                p.stage.specialized_notes
+            );
+            continue;
+        }
+        // The variant's module keeps the note for a format of no measured family: its slot's
+        // `UnmeasuredTexels` specialization, 1 for such a format.
         let other = crate::metal::texel_format::TexelFormat::OTHER.0;
         let value = |key: &crate::pipeline::sym::SpecKey| match key {
             crate::pipeline::sym::SpecKey::UnmeasuredTexels(_) => 1,
@@ -2273,7 +1614,7 @@ fn a_raw_view_past_the_sampler_limit_is_its_own_separate_texture() {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.limits.max_per_stage_descriptor_samplers = 1;
-    let dev = Device::new(desc, EXACT_SAMPLING).expect("device");
+    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
     let (_, m) = typed_module_with(&bc, "k", dev.profile(), &inputs(true)).expect("module");
     let (mut textures, mut samplers) = (Vec::new(), Vec::new());
     for g in m.globals() {

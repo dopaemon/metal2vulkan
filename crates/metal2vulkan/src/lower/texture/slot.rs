@@ -225,10 +225,6 @@ pub struct SlotPlan {
     /// (`TexelFormat::unmeasured_on_metal_sampler`): the slot declares its `UnmeasuredTexels`
     /// specialization, which the note's clause tests.
     pub unmeasured: bool,
-    /// A read, gather, or sample reading one texel of the slot with a `float` result converts its
-    /// texel by the bound format's class (`float_texel`): the slot declares its `TexelFormat`
-    /// specialization and the module the `float` routine.
-    pub float_format: bool,
     /// A read of the slot, or an emulated linear sample of its cube's faces, takes an 8-bit sRGB
     /// texel's raw code from the slot's raw view (`ResourceKind::RawTexture`), the slot being one
     /// of `LoweringInputs::srgb_textures` (`RuntimeFact::SrgbTexture`).
@@ -275,7 +271,6 @@ impl SlotPlan {
             texel_format: false,
             half_filtered: false,
             unmeasured: false,
-            float_format: false,
             raw: false,
             swizzle: false,
             constant_lanes: false,
@@ -288,7 +283,7 @@ impl SlotPlan {
     /// Whether the slot declares its `TexelFormat` specialization: a conversion by the bound
     /// format's class takes it.
     pub fn declares_texel_format(&self) -> bool {
-        self.half_format || self.texel_format || self.float_format
+        self.half_format || self.texel_format
     }
 
     /// Whether the slot is a storage image or storage texel buffer.

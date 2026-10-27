@@ -580,8 +580,9 @@ fn argument_dispatch(
 
 /// While a cubic sampler state is live, a kernel that samples a texture through the sampler its
 /// argument buffer holds runs. Through a linear sampler it answers every lane as the same texture
-/// at a slot through that sampler (within one code where the slot's sample is the device's filter,
-/// `argument_linear_samples::device_filters`), and its command buffer completes; through the cubic
+/// at a slot through that sampler (within `argument_linear_samples::DEVICE_FILTER` where the
+/// device's own sampler filters, `argument_linear_samples::device_filters`), and its command buffer
+/// completes; through the cubic
 /// state, whose bicubic filter the runtime does not emulate through an argument buffer, its command
 /// buffer fails `CubicArgumentSampler`, the reach decided where the function ran.
 #[test]
@@ -629,7 +630,7 @@ fn an_argument_buffer_reaches_a_cubic_sampler_only_where_it_names_one() {
             &jobs,
             1,
         );
-        let within = device_filters(device, PixelFormat::RGBA8Unorm, false, true);
+        let within = device_filters(device);
         let differ = (0..got.len())
             .filter(|&i| !alike(got[i], want[i], within))
             .count();

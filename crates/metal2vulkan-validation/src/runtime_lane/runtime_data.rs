@@ -7,8 +7,8 @@
 //! msf_runtime_samplers.metal`) samples its slot texture through a constexpr sampler into its
 //! even outputs and through the runtime sampler at slot 0 into its odd ones. Its committed cases
 //! bind four formats with a runtime sampler filtering linearly, clamped to the edge: each runs on
-//! the one pipeline state, and each output is Metal's, within one code where the bound format is
-//! an 8-bit unsigned normalized class the device filters itself
+//! the one pipeline state, and each output is Metal's, within
+//! `argument_linear_samples::DEVICE_FILTER` where the device's own sampler filters
 //! (`argument_linear_samples::device_filters`). The kernel `msf_slot2d_nearest_repeat` is the same
 //! macro under another constexpr sampler; its cases bind a runtime sampler filtering to the nearest
 //! texel, repeating, and their odd outputs are Metal's runtime-sampler answers for those inputs.
@@ -23,7 +23,6 @@ use super::{
     layer_reported_nothing_at_all, pipeline_state, public_cases, run_with, validated_device,
     Messages, ScratchCache,
 };
-use crate::candidate::engine::resources::pixel_format;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan_runtime::ExecutedPipeline;
 use std::collections::BTreeSet;
@@ -91,13 +90,9 @@ fn one_pipeline_per_sampler_answers_every_bound_format_as_metal() {
     };
     let mut variants = BTreeSet::new();
     for case in &edge {
-        // Where both samplers' samples of the bound format are the device's filter at Metal's
-        // footprint step (`argument_linear_samples::device_filters`), each lane within one code.
-        let within = case
-            .compute
-            .textures
-            .values()
-            .all(|texture| device_filters(&device, pixel_format(texture.format), false, true));
+        // Where the device's own sampler filters (`argument_linear_samples::device_filters`),
+        // each lane within `argument_linear_samples::DEVICE_FILTER`.
+        let within = device_filters(&device);
         let got = ran(case, &mut variants);
         let lanes = |bytes: &[u8]| -> Vec<f32> {
             bytes
@@ -114,7 +109,8 @@ fn one_pipeline_per_sampler_answers_every_bound_format_as_metal() {
                     .iter()
                     .zip(&metal_lanes)
                     .all(|(&g, &m)| alike(g, m, within)),
-            "{} (within one code: {within}): {got_lanes:?}, Metal's {metal_lanes:?}",
+            "{} (within the device's filter's bound: {within}): {got_lanes:?}, Metal's \
+             {metal_lanes:?}",
             case.case.name
         );
     }

@@ -40,8 +40,8 @@
 //! memory is its parameter's (what either side stores through it the other may load), and the
 //! values the callee returns reach the call's result. The callee's instructions are the module's,
 //! judged as any other; a callee called from several sites takes the reach of them all. Lowering's
-//! texel routines (Metal's exact conversion of a texel, `lower::texture::float_texel`) are such
-//! calls, whose selects carry the texel to the result alone.
+//! texel routines (Metal's conversion of a `half` texel, `lower::texture::half`) are such calls,
+//! whose selects carry the texel to the result alone.
 //!
 //! A module that already holds an interlock critical section has none: the variant's entry opens
 //! its own. Nor has one with a `Coherent` resource or under the Vulkan memory model: the variant

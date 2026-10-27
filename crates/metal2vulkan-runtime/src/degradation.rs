@@ -450,8 +450,7 @@ degradations! {
         /// ([`metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit`];
         /// [`metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules`],
         /// ANV's register allocator faults compiling a module past it), so the translation dropped
-        /// the consumer's exact forms until it fit: native sampling first, then every
-        /// module-growing exact answer native. Announced where the runtime makes a variant whose
+        /// the consumer's exact forms: every module-growing exact answer native. Announced where the runtime makes a variant whose
         /// pipeline the fit reduced, the base variant or another (`pipeline/render.rs` for a
         /// render or mesh render state, `pipeline/mod.rs` for a compute or tile render state, from
         /// the pipeline's dependencies), naming the state's kind and the forms dropped; the
@@ -1354,14 +1353,13 @@ degradations! {
         /// `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` under the slot's bound format
         /// (a format whose filter is not measured, a swizzle that moves its channels, a linear
         /// mip filter, or a sample the emulation does not reach), or, on a device that samples
-        /// through Metal's own sampler under `YCbCrFilterPolicy::Device` (no slot variant), under
-        /// any two-plane YCbCr format bound there, whose converted texels Metal's sampler filters
+        /// through Metal's own sampler, under any two-plane YCbCr format bound there, whose converted texels Metal's sampler filters
         /// as an `RGBA16Float` or `RGBA32Float` texture's: within one step of the format's grid of
         /// Metal's filter of the format, a `half` result within one `half` unit in the last place
         /// (plain Metal on an Apple M3 Max under macOS 27.0.1, `YCBCR8_420_2P` and its `_sRGB`
         /// twin against such a texture of the same texels). Announced, in place of those notes'
-        /// own notices for the slot, where the specialized pipeline is made, or, without the
-        /// variant, at a draw or dispatch that binds such a texture there (through a runtime
+        /// own notices for the slot, where the specialized pipeline is made, or at a draw or
+        /// dispatch that binds such a texture there (through a runtime
         /// sampler, whatever its word states), naming the slot and the format.
         YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,
             "the texels hold Metal's reads exactly, but the sample filters them as the device \
@@ -1705,10 +1703,10 @@ degradations! {
         /// (`textureCompressionETC2`): its blocks lie in an image of a carrier format whose blocks
         /// are also 16 (ASTC, `EAC_RGBA8`, `RG11`) or 8 (PVRTC, the other ETC2 and EAC formats)
         /// bytes, which copies and `get_bytes` move unchanged, and its samples read a decoded
-        /// twin, Metal's decode of the blocks (an ASTC error block's magenta included) in the
-        /// texels [`metal2vulkan::device::DecodedTexelsPolicy`] names (a PVRTC texture's, an ASTC
-        /// sRGB one's and an 8-bit ETC2 or EAC one's, 8-bit codes, exact, under either), decoded
-        /// after each write into it as a BC texture's twin is (`decoded-block-twin`; a PVRTC
+        /// twin, Metal's decode of the blocks (an ASTC error block's magenta included) in codes:
+        /// an ASTC LDR texture's and an EAC 11-bit one's each nearest Metal's value
+        /// (`decoded-texel-precision`), a PVRTC texture's, an ASTC sRGB one's and an 8-bit ETC2 or
+        /// EAC one's 8-bit codes, exact, decoded after each write into it as a BC texture's twin is (`decoded-block-twin`; a PVRTC
         /// texture's whole levels). An ASTC texture's first view in its other colour space gives
         /// it a second twin of that form's decode. Also a texture of a 4:2:2 format (`GBGR422`,
         /// `BGRG422`) on every device, whose Vulkan formats reconstruct chroma by the
@@ -1716,23 +1714,20 @@ degradations! {
         /// holds Metal's texels as 8-bit codes, exact, decoded in whole rows.
         CarriedDecodedTwin = "carried-decoded-twin", Performance,
             "a carrier image of its blocks, at most about 1 byte a texel (a 4:2:2 texture's 2), \
-             and a decoded twin of 4 bytes a texel (R8G8B8A8, \
-             `DecodedTexelsPolicy::Compact`; an EAC 11-bit texture's \
-             16-bit codes, 2 bytes a channel) or 16 (R32G32B32A32_SFLOAT, \
-             `DecodedTexelsPolicy::Exact`; an EAC 11-bit texture's floats, 4 bytes a channel), \
-             two for an ASTC texture viewed in both colour spaces, and a decode after each write \
-             into it: a pass on the GPU for a blit, a copy from a texture or a CPU copy through a \
+             and a decoded twin of 4 bytes a texel (R8G8B8A8; an EAC 11-bit texture's \
+             16-bit codes, 2 bytes a channel, or its floats, 4 bytes a channel, where the device \
+             does not take those codes), two for an ASTC texture viewed in both colour \
+             spaces, and a decode after each write into it: a pass on the GPU for a blit, a copy from a texture or a CPU copy through a \
              submission; on the CPU, on the device's decode thread, where its CPU copies go on \
              the host or the staging queue";
         /// A texture with an ASTC LDR decoded twin (`carried-decoded-twin`) of 8-bit codes, or an
-        /// EAC 11-bit one of 16-bit codes, under
-        /// [`metal2vulkan::device::DecodedTexelsPolicy::Compact`]: Metal decodes an ASTC LDR channel
+        /// EAC 11-bit one of 16-bit codes: Metal decodes an ASTC LDR channel
         /// to a 12-bit value (`C >> 4` over 4095 of the 16-bit interpolated channel `C`), which the
         /// twin's R8G8B8A8 texels hold as the nearest 8-bit code (at most 1/510 off Metal's value).
         /// It reads an EAC 11-bit channel as `c / 2047` (signed `c / 1023`), which the twin holds
-        /// as the nearest 16-bit normalized code (at most half a 16-bit step off).
-        /// `DecodedTexelsPolicy::Exact` holds Metal's values instead. (An ASTC sRGB texture's twin
-        /// holds Metal's own 8-bit codes, which its slots decode through Metal's table: exact.)
+        /// as the nearest 16-bit normalized code (at most half a 16-bit step off). (An ASTC sRGB
+        /// texture's twin holds Metal's own 8-bit codes, which its slots decode through Metal's
+        /// table: exact.)
         DecodedTexelPrecision = "decoded-texel-precision", Precision,
             "a read, sample or gather of its texels answers the nearest 8-bit code to Metal's \
              12-bit value, at most 1/510 off it; an EAC 11-bit texture's, the nearest 16-bit \
@@ -2063,12 +2058,8 @@ degradations! {
         HalfSampleFilter = "half-sample-filter";
         SrgbTexelDecode = "srgb-texel-decode";
         FloatSampleFilter = "float-sample-filter";
-        DeviceGatherFootprint = "device-gather-footprint";
-        CubeFaceReciprocal = "cube-face-reciprocal";
         FunctionStorageAssumed = "function-storage-assumed";
         QuadsCountedBeforeDiscard = "quads-counted-before-discard";
-        DeviceDepthComparison = "device-depth-comparison";
-        DeviceTexelDenormals = "device-texel-denormals";
         ViewBaseTexelOffset = "view-base-texel-offset";
         DeviceColorConversion = "device-color-conversion";
         DeviceInterpolation = "device-interpolation";
@@ -2090,14 +2081,11 @@ degradations! {
         DevicePointSize = "device-point-size";
         ClippedCoverageSplit = "clipped-coverage-split";
         LoopedSampleOutputs = "looped-sample-outputs";
-        DeviceUnorm8LinearFilter = "device-unorm8-linear-filter";
         HalfOutputFastMathBlend = "half-output-fast-math-blend";
         /// Class: native device sampling. The device's own sampler answers the pipeline's
-        /// samples, gathers and comparisons where Metal's would be emulated
-        /// (`SamplingPolicy::NativeDevice`, the default on a device whose sampler is not Metal's;
-        /// `SamplingPolicy::Exact` keeps Metal's). Recorded bound, measured against an Apple M4
-        /// on 2D textures of one level in seven formats under four address modes: a linear
-        /// filter within 0.919 of a code (1/255) of Metal's on NVIDIA's 615.71.09, 0.548 on RADV,
+        /// samples, gathers and comparisons on a device whose sampler is not Metal's. Recorded
+        /// bound, measured against an Apple M4 on 2D textures of one level in seven formats
+        /// under four address modes: a linear filter within 0.919 of a code (1/255) of Metal's on NVIDIA's 615.71.09, 0.548 on RADV,
         /// 0.918 on ANV and 1.0 on lavapipe (Mesa 26.2.4); an sRGB texture's within 1.832, 0.764,
         /// 0.912 and 0.781; a nearest sample's texel the neighbour of Metal's at 0.1% of the
         /// probe's coordinates on NVIDIA and ANV, 0.02% on RADV and none on lavapipe. Level
@@ -2125,10 +2113,8 @@ degradations! {
         /// the last place of the result.
         NativeFma = "native-fma";
         /// Class: native device sampling. The device's own conversion of a texel's codes answers
-        /// the pipeline's reads, samples and gathers with a `float` result where Metal's would be
-        /// emulated (`TexelConversionPolicy::Device`, the default, on a device whose sampler is not
-        /// Metal's; `Exact` keeps Metal's for a read, and for a sample or gather under
-        /// `SamplingPolicy::Exact`). Recorded bound, of a texel whose access reads one texel of one
+        /// the pipeline's reads, samples and gathers with a `float` result, on a device whose
+        /// sampler is not Metal's. Recorded bound, of a texel whose access reads one texel of one
         /// level: an 8- or 16-bit normalized code within one `f32` ulp of Metal's `c / (2^b - 1)`
         /// where measured (lavapipe's reciprocal product); a 5- or 6-bit channel the device widens
         /// by replicating its bits within 0.18 of a code (ANV, NVIDIA; a 4-bit channel's exact); a
@@ -2606,12 +2592,8 @@ pub(crate) fn dropped_exact_forms(
 ) -> Option<Vec<&'static str>> {
     dependencies.iter().find_map(|d| match d.fact {
         metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit {
-            sampling,
-            texel_conversion,
         } => Some(
             [
-                (sampling, "exact sampling"),
-                (texel_conversion, "exact texel conversion"),
             ]
             .into_iter()
             .filter_map(|(dropped, name)| dropped.then_some(name))

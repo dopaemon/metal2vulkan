@@ -418,16 +418,14 @@ impl Case for PixelDownscales {
         // These are the two kinds a run of this round provoked (see `pixel_samplers`); a venue
         // that announces another reads as divergent there until someone names it with a run.
         //
-        // Two more are named from the run that shows them, which is what the paragraph above asks
-        // for: on lavapipe the device's texel decode keeps a denormal where Metal flushes it
-        // (`device-texel-denormals`) and decodes an sRGB code its own way (`srgb-texel-decode`).
+        // One more is named from the run that shows it, which is what the paragraph above asks
+        // for: on lavapipe the device decodes an sRGB code its own way (`srgb-texel-decode`).
         //
         // **Every one of these is a declaration and loosens nothing.** Each sits at the notices
         // site alone, so a texel that differs still fails the case wherever it differs.
         [
             Degradation::ArgumentPixelSamplerScaling,
             Degradation::FloatSampleFilter,
-            Degradation::DeviceTexelDenormals,
             Degradation::SrgbTexelDecode,
         ]
         .iter()

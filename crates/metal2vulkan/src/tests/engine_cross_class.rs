@@ -24,6 +24,7 @@ use crate::bind::{
     WriteSource,
 };
 use crate::budget::{Budget, SPIRV_WORDS};
+use crate::device::DevicePolicy;
 use crate::device::{Device, DeviceDescription};
 use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::{LowerInputs, Plan};
@@ -33,7 +34,6 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{
     Axis, ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, SpecKey, Stage,
 };
-use crate::pipeline::testing::EXACT_SAMPLING;
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
 };
@@ -357,7 +357,12 @@ fn accesses_through_another_class_are_the_native_words() {
     ];
     let profiles: Vec<_> = ["lavapipe", "moltenvk-m3"]
         .into_iter()
-        .map(|stem| (stem, profile(stem, EXACT_SAMPLING).expect("profile")))
+        .map(|stem| {
+            (
+                stem,
+                profile(stem, DevicePolicy::default()).expect("profile"),
+            )
+        })
         .collect();
     let mut checked = 0;
     // The interpreter models no sample or gather: theirs compile and validate in
@@ -417,7 +422,10 @@ fn devices() -> Vec<(String, Device)> {
             .unwrap_or_default();
         let text = std::fs::read_to_string(&path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        out.push((stem, Device::new(desc, EXACT_SAMPLING).expect("device")));
+        out.push((
+            stem,
+            Device::new(desc, DevicePolicy::default()).expect("device"),
+        ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
@@ -767,7 +775,7 @@ fn a_texture_an_argument_buffer_holds_is_read_in_its_own_class() {
         let Some(bc) = assemble(&name, &held_kernel(held, ty)) else {
             return;
         };
-        for (stem, p) in crate::spirv::testing::committed_exact_profiles().expect("profiles") {
+        for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
             let what = format!("{name} on {stem}");
             let a = match compile_bitcode(
                 &bc,
@@ -945,7 +953,12 @@ fn integer_writes_saturate_to_the_bound_formats_channels() {
     ];
     let profiles: Vec<_> = ["lavapipe", "moltenvk-m3"]
         .into_iter()
-        .map(|stem| (stem, profile(stem, EXACT_SAMPLING).expect("profile")))
+        .map(|stem| {
+            (
+                stem,
+                profile(stem, DevicePolicy::default()).expect("profile"),
+            )
+        })
         .collect();
     let mut checked = 0;
     for (ty, pf, format, cross) in cases {

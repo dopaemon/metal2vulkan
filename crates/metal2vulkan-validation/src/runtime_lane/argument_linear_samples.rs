@@ -5,29 +5,21 @@
 //! or the runtime sampler of the same state.
 //!
 //! Metal filters a heap texture as a slot's, and through an argument buffer's sampler as through
-//! a constexpr or a runtime sampler of the same state (Apple M4), and the slot's
-//! emulated filter is Metal's on the measured formats (the authored cases on every venue). Outside
-//! MoltenVK the heap texture's filter is emulated by the class its handle-table entry carries, else
-//! the device's; a device whose filter is not Metal's (an 8-bit format's weights, a half-float
-//! format's rounding) answers the two apart where the class is not carried. On MoltenVK both are
-//! Metal's own sampler. On a device measured to filter an 8-bit unsigned normalized class within
-//! one code of Metal (the owner's accepted difference), a slot's 2D sample of such a class through
-//! normalized coordinates is the device's filter at Metal's footprint step, the heap texture's
-//! Metal's emulated: the two answer within one code there ([`device_filters`]).
+//! a constexpr or a runtime sampler of the same state (Apple M4). Both samples are the device's
+//! own sampler's: on MoltenVK, Metal's own; on a device whose sampler is not Metal's, the device's
+//! filter, which the lane judges within [`DEVICE_FILTER`] ([`device_filters`]).
 //!
 //! The textures are 8x8 (2D) and 4x4x4 (3D) of five formats of measured classes (8- and 16-bit
 //! normalized, half-float, 32-bit float, and a packed small float), their texels deterministic
 //! noise; each is sampled at coordinates across and past its edges, with `float` and `half`
 //! results, through linear samplers of every address mode, a border colour, and (2D) pixel
-//! coordinates; but a 3D texture's mirror-clamped axes, which the emulation does not reach (no
-//! probe measured them), so that both samples are the device's, a slot's `half` result converted
-//! by its class and a heap texture's not.
+//! coordinates; but a 3D texture's mirror-clamped axes, which no probe measured.
 
 use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::error::DriverDeviation;
+use metal2vulkan::device::VkProperty;
 use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, TextureType,
 };
@@ -38,7 +30,7 @@ use metal2vulkan_runtime::{
 use std::collections::BTreeMap;
 
 /// A constexpr sampler's words: linear filters, no mip filter, normalized coordinates clamped to
-/// the edge (`engine_linear_half`'s `linear(1, false, 0)`).
+/// the edge.
 pub(super) const LINEAR_EDGE: u64 = 0x007b_ff00_0008_0a49;
 
 /// The formats sampled: one of each measured class's family.
@@ -90,42 +82,28 @@ const STATES: [(SamplerAddressMode, SamplerBorderColor, bool); 7] = [
     ),
 ];
 
-/// Whether a texture slot's linear sample of a 2D texture (not `three`) of `format`, through a
-/// sampler of normalized coordinates and no `MirrorClampToEdge` axis (`plain`), is the device's
-/// own filter at Metal's footprint step (`lower::sampler::native`): the device's profile takes
-/// `DriverDeviation::Unorm8LinearFilter` (only under a policy of
-/// `Unorm8LinearFilterPolicy::DeviceWithinOneCode`; the lanes' devices take the default, `Exact`)
-/// and `format` is of an 8-bit unsigned normalized class it covers. There each channel is within
-/// [`ONE_CODE`] of Metal's, where a heap texture's sample keeps Metal's filter, emulated; elsewhere
-/// both are bit for bit alike.
-pub(super) fn device_filters(
-    device: &Device,
-    format: PixelFormat,
-    three: bool,
-    plain: bool,
-) -> bool {
-    !three
-        && plain
-        && matches!(
-            format,
-            PixelFormat::R8Unorm
-                | PixelFormat::RG8Unorm
-                | PixelFormat::RGBA8Unorm
-                | PixelFormat::BGRA8Unorm
-        )
-        && device
-            .compile_device()
-            .profile()
-            .takes_driver_deviation(DriverDeviation::Unorm8LinearFilter)
+/// Whether the device's own sampler answers a filtered sample where Metal's would differ
+/// (`VkProperty::DeviceSampling`: a device whose sampler is not Metal's). Its answers are then
+/// Metal's only within the bound `PrecisionNote::DeviceSampling` records, and a lane that compares
+/// them judges each channel within [`DEVICE_FILTER`]; on a device that samples through Metal's own
+/// sampler, bit for bit.
+pub(super) fn device_filters(device: &Device) -> bool {
+    device
+        .compile_device()
+        .profile()
+        .enabled()
+        .properties
+        .contains(&VkProperty::DeviceSampling)
 }
 
-/// One code of an 8-bit unsigned normalized channel (1/255): the bound of a sample
-/// [`device_filters`] holds of, the owner's accepted difference.
-pub(super) const ONE_CODE: f32 = 1.0 / 255.0;
+/// The bound a lane judges the device's filter by: two codes of an 8-bit channel (2/255), above
+/// the largest linear filter's difference `PrecisionNote::DeviceSampling` records (1.832 codes,
+/// an sRGB texture's on NVIDIA).
+pub(super) const DEVICE_FILTER: f32 = 2.0 / 255.0;
 
-/// Whether `got` answers as `want` does: bit for bit, or within [`ONE_CODE`] where `within`.
+/// Whether `got` answers as `want` does: bit for bit, or within [`DEVICE_FILTER`] where `within`.
 pub(super) fn alike(got: f32, want: f32, within: bool) -> bool {
-    got.to_bits() == want.to_bits() || (within && (got - want).abs() <= ONE_CODE)
+    got.to_bits() == want.to_bits() || (within && (got - want).abs() <= DEVICE_FILTER)
 }
 
 /// A texture's side: 8 in 2D, 4 in 3D.
@@ -387,8 +365,8 @@ impl Kernels {
 
 /// Every linear sample of a heap texture (2D and 3D, `float` and `half` results; through a
 /// constexpr sampler, a runtime sampler slot, and its argument buffer's sampler) answers each lane
-/// bit for bit as the slot texture's sample through the same state (module docs), but within one
-/// code where the slot's sample is the device's filter (`device_filters`).
+/// bit for bit as the slot texture's sample through the same state (module docs), but within
+/// [`DEVICE_FILTER`] where the device's own sampler filters (`device_filters`).
 #[test]
 fn heap_linear_samples_answer_as_slot_samples() {
     let cache = ScratchCache::new().unwrap();
@@ -396,6 +374,7 @@ fn heap_linear_samples_answer_as_slot_samples() {
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
         let name = device.name().to_owned();
+        let within = device_filters(&device);
         let mut noise = Noise(0x5eed_d499);
         let mut compared = 0usize;
         // The differing lanes by group (format, shape, result, sampler), with the first few.
@@ -445,17 +424,14 @@ fn heap_linear_samples_answer_as_slot_samples() {
                     );
                     judge(
                         format!("{result} constexpr sampler"),
-                        device_filters(&device, format, three, true),
+                        within,
                         &normalized,
                         &slot,
                         &heap,
                     );
                     for state in STATES {
-                        // Metal reads pixel coordinates of 1D and 2D textures alone. The emulation
-                        // does not reach a 3D texture's mirror-clamped axis, which no probe
-                        // measured (`linear::reaches_word`): both samples are the device's there,
-                        // and a slot's `half` result converts the device's value by its class
-                        // where a heap texture's does not.
+                        // Metal reads pixel coordinates of 1D and 2D textures alone; no probe
+                        // measured a 3D texture's mirror-clamped axis.
                         if three && (!state.2 || state.0 == SamplerAddressMode::MirrorClampToEdge) {
                             continue;
                         }
@@ -484,10 +460,9 @@ fn heap_linear_samples_answer_as_slot_samples() {
                         ] {
                             let heap =
                                 run_held(&device, (&texture, held, runtime), state_of, &jobs, 1);
-                            let plain = state.2 && state.0 != SamplerAddressMode::MirrorClampToEdge;
                             judge(
                                 format!("{result} {what} {state:?}"),
-                                device_filters(&device, format, three, plain),
+                                within,
                                 &jobs,
                                 &slot,
                                 &heap,

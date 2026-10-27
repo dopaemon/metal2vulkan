@@ -9,8 +9,8 @@
 //! keep such values without it (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, MoltenVK's),
 //! which the module then requires instead: a read, a sample and a gather read the
 //! texels the consumer holds, which a colour image keeps, and record nothing, their use stated by
-//! the interface's `TextureSlot::access`, as do the comparisons the shader makes of such texels. A
-//! size query reads no texel, and a color texture's read is not a depth texel.
+//! the interface's `TextureSlot::access`. A size query reads no texel, and a color texture's read
+//! is not a depth texel.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -22,9 +22,9 @@ use crate::device::requirements::{VkExtension, VkProperty};
 /// The property a depth comparison the device makes requires on a device without the extension
 /// whose depth images keep values outside `[0, 1]`.
 const KEPT: VkProperty = VkProperty::DepthImageKeepsValuesOutsideUnitRange;
+use crate::device::DevicePolicy;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::interface::SlotInterface;
-use crate::pipeline::testing::EXACT_SAMPLING;
 use crate::pipeline::testing::{compile, link_and_validate, llvm_assemble, profile, AssembleError};
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
@@ -187,7 +187,7 @@ fn the_extension_is_read_from_the_device_description() {
         ("intel-irisxe-anv", false),
         ("vk12-floor", false),
     ] {
-        let p = profile(stem, EXACT_SAMPLING).expect(stem);
+        let p = profile(stem, DevicePolicy::default()).expect(stem);
         assert_eq!(unrestricted(&p), listed, "{stem}");
     }
 }
@@ -196,39 +196,32 @@ fn the_extension_is_read_from_the_device_description() {
 /// profile lacks the extension and its driver is not measured to keep depth values outside
 /// `[0, 1]` (MoltenVK's is, and the module requires that property there instead); a read, a sample and a gather never do, their use stated by the
 /// texture slot's access (read or sample) on every profile, as a color read's is; a size query
-/// reads no texel. The nearest comparison through a constexpr sampler is the device's only on a
-/// device with `VkProperty::MetalSampler` (MoltenVK's); elsewhere the shader compares the texels a
-/// sample without comparison reads, so the slot does not compare and nothing is recorded, with the
-/// extension (RADV) or without it (ANV).
+/// reads no texel. Every comparison is the device's, a constexpr sampler's nearest one included.
 #[test]
 fn depth_comparisons_record_the_restricted_range_without_the_extension() {
     let profiles = [
         (
             "radv",
-            profile("amd-rdna3-radv", EXACT_SAMPLING).expect("radv"),
+            profile("amd-rdna3-radv", DevicePolicy::default()).expect("radv"),
         ),
         (
             "anv",
-            profile("intel-irisxe-anv", EXACT_SAMPLING).expect("anv"),
+            profile("intel-irisxe-anv", DevicePolicy::default()).expect("anv"),
         ),
-        ("m3", profile("moltenvk-m3", EXACT_SAMPLING).expect("m3")),
+        (
+            "m3",
+            profile("moltenvk-m3", DevicePolicy::default()).expect("m3"),
+        ),
     ];
-    let metal = |p: &DeviceProfile| {
-        p.fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler)
-    };
     let [(_, radv), (_, anv), (_, m3)] = &profiles;
     assert!(unrestricted(radv) && !unrestricted(anv) && !unrestricted(m3));
     assert!(!kept(anv) && kept(m3));
-    assert!(!metal(radv) && !metal(anv) && metal(m3));
     for (form, text, texels, compares) in depth_kernels() {
         let Some(bc) = assemble(form, &text) else {
             return;
         };
         for (device, p) in &profiles {
-            let device_compares = compares && metal(p);
+            let device_compares = compares;
             let expected = device_compares && !unrestricted(p) && !kept(p);
             let requires = device_compares && !unrestricted(p) && kept(p);
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{form}: compile: {e}"));
@@ -260,46 +253,5 @@ fn depth_comparisons_record_the_restricted_range_without_the_extension() {
             );
             assert_eq!(slot.depth_compare, device_compares, "{form} on {device}");
         }
-    }
-}
-
-/// A linear comparison through a constexpr sampler that the emulation reaches compares in the
-/// shader the taps it fetched without comparison, which a twinned texture holds in colour, so it
-/// records no `RestrictedDepthRange` without the extension (ANV), nor with it (RADV); on MoltenVK,
-/// whose device comparison is Metal's own (`VkProperty::MetalSampler`), the device compares,
-/// without the extension, over a depth image that keeps values outside `[0, 1]`, and requires
-/// that property in place of the note.
-#[test]
-fn a_linear_comparison_the_shader_makes_records_no_restricted_range() {
-    // Linear minification and magnification, compare function `less`.
-    let words = SAMPLER_WORDS & !(0xf << 16) | 1 << 16 | 1 << 9 | 1 << 11;
-    let text = kernel_with(
-        words,
-        "depth2d<float, sample>",
-        "%r = call { float, i8 } @air.sample_compare_depth_2d.f32(ptr addrspace(1) %t, ptr addrspace(2) @__air_sampler_state, i32 1, <2 x float> <float 0.5, float 0.5>, float 0.5, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)
-  %v = extractvalue { float, i8 } %r, 0",
-        "declare { float, i8 } @air.sample_compare_depth_2d.f32(ptr addrspace(1), ptr addrspace(2), i32, <2 x float>, float, i1, <2 x i32>, i1, float, float, i32)",
-    );
-    let Some(bc) = assemble("linear compare", &text) else {
-        return;
-    };
-    for (stem, requires) in [
-        ("intel-irisxe-anv", false),
-        ("amd-rdna3-radv", false),
-        ("moltenvk-m3", true),
-    ] {
-        let p = profile(stem, EXACT_SAMPLING).expect(stem);
-        let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("{stem}: compile: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        assert!(
-            !a.precision.contains(&PrecisionNote::RestrictedDepthRange),
-            "{stem}: {:?}",
-            a.precision
-        );
-        assert_eq!(
-            a.requirements.properties.contains(&KEPT),
-            requires,
-            "{stem}"
-        );
     }
 }

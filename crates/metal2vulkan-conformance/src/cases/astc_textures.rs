@@ -81,14 +81,12 @@
 //! second-twin view and the refusals are facts about our own objects and our own typed errors
 //! rather than about Metal's texels.
 //!
-//! **Tolerances.** Only a linear (`_LDR`) format has one. Under the default
-//! `DecodedTexelsPolicy::Compact` its twin holds each channel as the 8-bit code nearest Metal's
-//! 12-bit value, which `docs/FAST-PATHS.md` bounds at **1/510**, and the runtime announces
-//! `decoded-texel-precision` where such a texture is made. That is the ledger's own number, not a
-//! round one. The fourteen sRGB forms hold Metal's own 8-bit codes, which their slots decode through
-//! Metal's table, so they are exact under either value and name **no tolerance at all**; and neither
-//! does any format under `DecodedTexelsPolicy::Exact`, where the twin holds Metal's values as
-//! `float`s. An `_HDR` format names none under any policy, having no twin.
+//! **Tolerances.** Only a linear (`_LDR`) format has one. Its twin holds each channel as the 8-bit
+//! code nearest Metal's 12-bit value, which the runtime announces as `decoded-texel-precision`
+//! where such a texture is made, and whose catalogue entry (docs/API.md) bounds it at **1/510**.
+//! That is the notice's own number, not a round one. The fourteen sRGB forms hold Metal's own 8-bit
+//! codes, which their slots decode through Metal's table, so they are exact and name **no tolerance
+//! at all**. An `_HDR` format names none, having no twin.
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -124,10 +122,10 @@ const TEXEL_BYTES: usize = 16;
 /// texture of its own, so a diff names which blocks moved.
 const ROUNDS: [&str; 2] = ["zero-blocks", "seeded-blocks"];
 
-/// The most a compact linear channel may be off Metal's value, as `docs/FAST-PATHS.md` states it
-/// for `decoded_texels = DecodedTexelsPolicy::Compact`: the 8-bit code nearest Metal's 12-bit
-/// value is at most half an 8-bit step away, which is 1/510. It is the ledger's number, so a run
-/// that exceeds it fails rather than being re-fitted to whatever a device answers.
+/// The most a compact linear channel may be off Metal's value, as the `decoded-texel-precision`
+/// notice states it (docs/API.md): the 8-bit code nearest Metal's 12-bit value is at most half an
+/// 8-bit step away, which is 1/510. It is the notice's number, so a run that exceeds it fails
+/// rather than being re-fitted to whatever a device answers.
 const LEDGERS_COMPACT_BOUND: f64 = 1.0 / 510.0;
 
 /// An LDR void-extent block of red, green, blue and alpha `0x4000`, `0x8000`, `0xc000` and
@@ -519,13 +517,11 @@ impl Case for AstcTextures {
             false => Vec::new(),
         };
         // An sRGB form's twin holds Metal's own 8-bit codes, which its slots decode through Metal's
-        // table, so its texels compare exactly under either policy and it names nothing further. A
-        // linear format's compact twin holds the 8-bit code nearest Metal's 12-bit value, which the
-        // runtime announces as `decoded-texel-precision` and `docs/FAST-PATHS.md` bounds at 1/510.
-        // The bound here is the ledger's number, so a run that exceeds it is the ledger's claim
-        // failing. Under `DecodedTexelsPolicy::Exact` the twin holds Metal's values as `float`s,
-        // the notice does not fire, the justification does not hold, and every texel is compared
-        // exactly.
+        // table, so its texels compare exactly and it names nothing further. A linear format's
+        // compact twin holds the 8-bit code nearest Metal's 12-bit value, which the runtime
+        // announces as `decoded-texel-precision`, whose catalogue entry bounds it at 1/510. The
+        // bound here is the notice's number, so a run that exceeds it is the notice's claim
+        // failing.
         if let Some(bound) = self.compact_bound() {
             all.push(crate::replay::notice_allowance(
                 Degradation::DecodedTexelPrecision.code(),
@@ -769,12 +765,12 @@ mod tests {
         }
     }
 
-    /// Only the linear formats name a tolerance, and each names the bound `docs/FAST-PATHS.md`
-    /// states.
+    /// Only the linear formats name a tolerance, and each names the bound the
+    /// `decoded-texel-precision` notice states.
     ///
     /// This is the ruling that a notice declaration is not a tolerance, held as a test: the
     /// `carried-decoded-twin` declaration is on every case and loosens no value, while the one
-    /// allowance that loosens a texel is named only where the ledger says a texel moves.
+    /// allowance that loosens a texel is named only where the notice says a texel moves.
     #[test]
     fn only_the_linear_formats_loosen_a_texel() {
         let mut loosened = 0;

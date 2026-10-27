@@ -3,8 +3,8 @@
 use crate::lower::emit::EmitCx;
 use crate::lower::texture::half::{HalfForm, TexelOrigin};
 use crate::lower::texture::{
-    float_class, half_class, heap_element, held_texel, live_or_zero, resident_access, sparse_spec,
-    tile_map, tiled_word, with_word, ImageRef,
+    half_class, heap_element, held_texel, live_or_zero, resident_access, sparse_spec, tile_map,
+    tiled_word, with_word, ImageRef,
 };
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, Merged};
 use crate::spirv::builder::ops::image::ArmedOffset;
@@ -19,7 +19,6 @@ use crate::spirv::ir::{
 use crate::air::ir::ValueId;
 use crate::lower::texture::TexelClass;
 use crate::memory::handles::{entry_field, EntryField};
-use crate::metal::bicubic::BicubicTexels;
 use crate::metal::sampler::SamplerWord;
 
 use super::{
@@ -1070,49 +1069,20 @@ pub(super) fn sampled_value(
     // bias past the device's limit scales, and from which Metal's footprint of an observed access
     // follows.
     let plane = coord;
-    // A runtime sampler's level by its word: the level handed to the device, and the one its
-    // nearest snap reads.
-    let (lambda, nearest) = word_level(cx, fb, s)?;
-    // The device reads a coordinate snapped onto the texels Metal reads; a runtime sampler's
-    // nearest one behind its word.
+    // The device reads a coordinate snapped onto the texels Metal reads.
     if let Some(snap) = &s.snap {
         coord = match snap.kind {
-            super::position::SnapKind::Word { leveled, .. } => {
-                let word = sampler_word(cx, fb, s.pixel)?;
-                // A runtime sampler's sample scales pixel coordinates, so its base level's size
-                // is queried; a leveled snap queries the size of the level it reads.
-                // Metal's offset rule reads the level's size and the base level's.
-                let (size, base) = match (leveled, nearest, level0) {
-                    (true, Some(nearest), Some((img, base))) => {
-                        (word_level_size(fb, word, nearest, img)?, Some(base))
-                    }
-                    (false, _, Some((_, size))) => (size, None),
-                    _ => return Err(cx.fail("a word snap without its level's size")),
-                };
-                let offsets = snap_offsets(cx, fb, op_offset(&s.op), s.lanes)?;
-                let parent = offset_base(cx, s)?;
-                super::position::snapped_by_word(
-                    fb,
-                    (word, leveled),
-                    (coord, &offsets, parent),
-                    s.lanes,
-                    (size, base, size_lanes),
-                )?
-            }
-            // A runtime or argument buffer's sampler's gather, and on a device with Metal's own
-            // sampler its linear pixel sample, on the base level's size the pixel coordinates
-            // queried, from the coordinate as given.
-            super::position::SnapKind::WordGather { metal } => {
+            // A runtime or argument buffer's sampler's gather, and its linear pixel sample, on the
+            // base level's size the pixel coordinates queried, from the coordinate as given.
+            super::position::SnapKind::WordGather => {
                 let word = sampler_word(cx, fb, s.pixel)?;
                 let Some((_, size)) = level0 else {
                     return Err(cx.fail("a word gather without its base level's size"));
                 };
-                let offsets = snap_offsets(cx, fb, op_offset(&s.op), s.lanes)?;
-                let parent = offset_base(cx, s)?;
                 super::position::gathered_by_word(
                     fb,
-                    (word, metal),
-                    (given, coord, &offsets, parent),
+                    word,
+                    (given, coord),
                     s.lanes,
                     (size, size_lanes),
                 )?
@@ -1131,9 +1101,8 @@ pub(super) fn sampled_value(
                 )?
             }
             _ => {
-                let from = if snap.pixel { given } else { coord };
                 let offsets = snap_offsets(cx, fb, op_offset(&s.op), s.lanes)?;
-                let at = (from, offsets.as_slice(), offset_base(cx, s)?);
+                let at = (given, offsets.as_slice(), offset_base(cx, s)?);
                 super::position::snapped(cx, fb, snap, at, s.lanes, (si, image))?
             }
         };
@@ -1175,138 +1144,9 @@ pub(super) fn sampled_value(
                 cx,
                 fb,
                 s,
-                (plane, grad, lambda, true),
+                (plane, grad, true),
                 (lod, *min_lod, offset, *dref),
             )?;
-            // A heap texture's comparison: the device's, and the shader's of the depths read
-            // without comparison where the handle states the texture's class. Its sampler is not
-            // one a dynamic bias may take past the device's limit, and it observes no residency, so
-            // the word is 0. A depth sample reads the first component.
-            if let Some(c) = s.compared.as_ref().filter(|c| c.on_heap()) {
-                if beyond.is_some() {
-                    return Err(cx.fail("a heap comparison biased past the device's limit"));
-                }
-                let device = sample_access(coord, dref, ops)(fb, si, false)?;
-                let plain = sample_access(coord, None, ops);
-                let x = super::compared::heap(cx, fb, (s, c), device, &|fb, si| {
-                    let x = plain(fb, si, false)?;
-                    fb.composite_extract(x, &[0])
-                })?;
-                let x = live_or_zero(fb, live, x)?;
-                return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
-            }
-            // A constexpr sampler's blend of two levels' comparisons under a linear mip filter,
-            // made in the shader where the slot's format is measured, else the device's. Its level
-            // is explicit, so no bias passes the device's limit, and it observes no residency, so
-            // the word is 0.
-            if let Some(c) = s.compared.as_ref().filter(|c| c.blends()) {
-                if beyond.is_some() {
-                    return Err(cx.fail("a blended comparison biased past the device's limit"));
-                }
-                let access = sample_access(coord, dref, ops);
-                let x = super::compared::blended(cx, fb, (s, c, image), &|fb, si| {
-                    access(fb, si, false)
-                })?;
-                return with_word(cx, fb, &s.result, x, None);
-            }
-            // A runtime sampler's comparison, made in the shader where the bound sampler reads
-            // one texel, else filtered as below. Its sampler is not one a dynamic bias may take
-            // past the device's limit, and it observes no residency, so the word is 0.
-            if let Some(c) = s.compared.as_ref().filter(|c| c.keeps_reference(&s.op)) {
-                let (Some(form), None) = (s.texel, beyond) else {
-                    return Err(cx.fail("a branched comparison without its form, or biased past"));
-                };
-                let access = sample_access(coord, dref, ops);
-                let plain = sample_access(coord, None, ops);
-                let filtered: ArmFn<'_, EmitCx<'_>> = Box::new(move |fb, cx| {
-                    let x = match &s.linear {
-                        Some(l) => super::linear::emit(
-                            cx,
-                            fb,
-                            s,
-                            (plane, image, dref),
-                            l,
-                            &|fb, si| access(fb, si, false),
-                            None,
-                        )?,
-                        None => {
-                            let (si, _, _) = sampled_image(cx, fb, s.source)?;
-                            let x = access(fb, si, false)?;
-                            held_texel(fb, image.texel, form, x)?
-                        }
-                    };
-                    Ok(ArmEnd::FallThrough(vec![x]))
-                });
-                let x = super::compared::runtime_sample(
-                    cx,
-                    fb,
-                    (s, c, image),
-                    &|fb, si| plain(fb, si, false),
-                    filtered,
-                )?;
-                return with_word(cx, fb, &s.result, x, None);
-            }
-            // Metal's linear filter emulated where the slot's bound format is measured, else the
-            // device's sample, branched on the slot's `TexelFormat` specialization. It observes no
-            // residency, so the word is 0. The emulation's sampler has no mip filter and filters
-            // alike on both sides of level 0, so no bias moves its texel; the device's sample takes
-            // a bias decided per invocation as the plain one does ([`device_access`]). A depth
-            // comparison's value is a scalar; a depth sample without comparison reads the first
-            // component.
-            if let Some(l) = s.linear.as_ref().filter(|l| l.image.slot().is_some()) {
-                // A native class's device sample reads Metal's footprint step (`native`).
-                let (coord, native) = match super::native::slot_facts(cx, fb, s, l)? {
-                    Some(facts) => {
-                        match super::native::coordinate(cx, fb, s, l, (plane, coord), facts)? {
-                            Some((at, native)) => (at, Some(native)),
-                            None => (coord, None),
-                        }
-                    }
-                    None => (coord, None),
-                };
-                let device = device_access(coord, dref, ops, beyond);
-                let x = super::linear::emit(cx, fb, s, (plane, image, dref), l, &device, native)?;
-                let x = if s.depth && dref.is_none() {
-                    fb.composite_extract(x, &[0])?
-                } else {
-                    held_constants(cx, fb, s, x)?
-                };
-                return with_word(cx, fb, &s.result, x, None);
-            }
-            // A comparison whose texel the shader fetches, where the bound format is measured; it
-            // observes no residency, so the word is 0.
-            if let Some(c) = &s.compared {
-                if let Some(f) = &c.fetch {
-                    let device = device_access(coord, dref, ops, beyond);
-                    let x = super::compared::fetched(cx, fb, s, (c, f), image, &device)?;
-                    return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
-                }
-            }
-            // A plain nearest sample whose texel the shader fetches, where the bound format is a
-            // 32-bit float one and a runtime sampler's word states one texel, else the device's
-            // sample, which takes a bias decided per invocation as the plain one does
-            // ([`device_access`]); it observes no residency, so the word is 0. A depth sample reads
-            // the first component.
-            if let (Some((p, texture)), Source::Combined(key)) = (
-                s.fetched.as_ref().and_then(|p| Some((p, p.image.slot()?))),
-                s.source,
-            ) {
-                let device = device_access(coord, dref, ops, beyond);
-                let x = super::fetched::branch(
-                    cx,
-                    fb,
-                    (s, key),
-                    (texture, &p.fetch, BicubicTexels::LINEAR, true),
-                    image,
-                    &super::fetched::one,
-                    &device,
-                )?;
-                let x = match s.depth {
-                    true => fb.composite_extract(x, &[0])?,
-                    false => x,
-                };
-                return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
-            }
             let (x, word) = observe(cx, fb, si, &sample_access(coord, dref, ops))?;
             // Past the device's limit the sample with the scaled derivatives replaces the
             // implicit one; the implicit sample stays where it was, unconditional.
@@ -1367,57 +1207,12 @@ pub(super) fn sampled_value(
             dref,
             offset,
         } => {
-            // Metal's cube footprint emulated by fetches, where the slot's bound format's corner
-            // rule is measured, else the device's gather. It observes no residency, so the word is
-            // 0; a raw gather's value is already its held texel.
-            if let Some(g) = &s.cube_gather {
-                let component = *component;
-                let dref = match dref {
-                    Some(r) => Some(reference(cx, fb, s, *r)?),
-                    None => None,
-                };
-                let device = |fb: &mut FunctionBuilder<'_>, si: SValue| match dref {
-                    Some(r) => fb.dref_gather(si, coord, r, &ImageOperands::default()),
-                    None => fb.gather(si, coord, component, &ImageOperands::default()),
-                };
-                let at = (plane, component, dref);
-                let x = super::linear::gather(cx, fb, s, at, g, &device)?;
-                return match g.raw {
-                    true => {
-                        let x = held_constants(cx, fb, s, x)?;
-                        with_word(cx, fb, &s.result, x, None)
-                    }
-                    false => texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None),
-                };
-            }
             let mut ops = ImageOperands::default();
             offset_operands(cx, fb, offset, s.lanes, &mut ops)?;
             let component = *component;
-            // A heap texture's comparison gather: the device's, and the shader's of the depths
-            // gathered without comparison where the handle states the texture's class; it observes
-            // no residency, so the word is 0.
-            if let (Some(c), Some(r)) = (s.compared.as_ref().filter(|c| c.on_heap()), dref) {
-                let r = cx.operand(fb, *r)?;
-                let device = fb.dref_gather(si, coord, r, &ops)?;
-                let x = super::compared::heap(cx, fb, (s, c), device, &|fb, si| {
-                    fb.gather(si, coord, 0, &ops)
-                })?;
-                let x = live_or_zero(fb, live, x)?;
-                return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
-            }
-            // A comparison gather whose taps the shader fetches, where the bound format is
-            // measured; it observes no residency, so the word is 0.
-            if let Some(c) = &s.compared {
-                if let Some(f) = &c.fetch {
-                    let x = super::compared::fetched(cx, fb, s, (c, f), image, &|fb, si| {
-                        fb.gather(si, coord, component, &ops)
-                    })?;
-                    return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
-                }
-            }
-            // A plain gather whose taps the shader fetches, where the bound format is a 32-bit
-            // float one: component `component` of each tap's texel, else the device's gather. It
-            // observes no residency, so the word is 0.
+            // A `half` gather whose taps the shader fetches, where the bound format is a
+            // half-float one: component `component` of each tap's texel, else the device's gather.
+            // It observes no residency, so the word is 0.
             if let (Some((p, texture)), Source::Combined(key)) = (
                 s.fetched.as_ref().and_then(|p| Some((p, p.image.slot()?))),
                 s.source,
@@ -1426,9 +1221,8 @@ pub(super) fn sampled_value(
                     cx,
                     fb,
                     (s, key),
-                    (texture, &p.fetch, super::fetched::CLASSES, true),
+                    (texture, &p.fetch),
                     image,
-                    &|fb, texels| super::fetched::plain_value(fb, s, texels),
                     &|fb, si| fb.gather(si, coord, component, &ops),
                 )?;
                 return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
@@ -1485,25 +1279,13 @@ pub(super) fn sampled_value(
     };
     // Metal's value of texels in a sparse image's block that holds no mapped tile.
     let texel = unmapped_value(cx, fb, s, texel, named)?;
-    // A comparison the shader makes of the depths the device read.
-    let texel = match &s.compared {
-        Some(c) => super::compared::emit(cx, fb, s, c, texel)?,
-        None => texel,
-    };
-    // A heap texture's plain gather or nearest sample: the texels the shader fetches where the
-    // class its handle carries is the 32-bit float one, else the device's.
+    // A heap texture's `half` gather: the texels the shader fetches where the class its handle
+    // carries is the half-float one, else the device's.
     let texel = match s.fetched.as_ref().filter(|p| p.image.slot().is_none()) {
         Some(p) => super::fetched::heap(cx, fb, s, image, p, texel)?,
         None => texel,
     };
     let texel = live_or_zero(fb, live, texel)?;
-    // A heap texture's linear sample: Metal's filter emulated where the class its handle carries
-    // is measured, else the device's sample just made. It observes no residency.
-    if let Some(l) = s.linear.as_ref().filter(|l| l.image.slot().is_none()) {
-        let held = held_value(cx, fb, s, image, (texel, TexelOrigin::Computed))?;
-        let x = super::linear::emit_heap(cx, fb, s, image, l, held)?;
-        return with_word(cx, fb, &s.result, x, word);
-    }
     texel_value(cx, fb, s, image, (texel, TexelOrigin::Image), word)
 }
 
@@ -1646,9 +1428,7 @@ fn word_states(fb: &mut FunctionBuilder<'_>, word: SValue, mask: u32) -> BResult
 /// `u size` of the scaled coordinate can round onto the next integer, so the texel's centre, half a
 /// texel from either edge, names it on every device. A coordinate outside the texture keeps its
 /// centre outside it, where clamping to the edge, to zero, or to a border, or mirroring once and
-/// clamping, reads what Metal reads; where Metal drops a texel offset the device adds
-/// ([`Sampling::centre_offset`]), the centre moves back by it (`position::pixel_centre_by_word`).
-/// `None` for any other sampling: a gather or a comparison keeps the scaled coordinate, whose
+/// clamping, reads what Metal reads. `None` for any other sampling: a gather or a comparison keeps the scaled coordinate, whose
 /// texels are the device's.
 fn pixel_centre(
     cx: &mut EmitCx<'_>,
@@ -1660,13 +1440,13 @@ fn pixel_centre(
     if !s.centred {
         return Ok(None);
     }
-    let (nearest, word) = match s.pixel {
+    let nearest = match s.pixel {
         Pixel::None => return Ok(None),
-        Pixel::Always => (None, None),
+        Pixel::Always => None,
         // A runtime sampler: its word's nearest pixel sampler.
         Pixel::Spec(_) | Pixel::Heap(_) => {
             let word = sampler_word(cx, fb, s.pixel)?;
-            (Some(word_states(fb, word, s.centre_word)?), Some(word))
+            Some(word_states(fb, word, s.centre_word)?)
         }
     };
     let floor = fb.glsl(GlslOp::Floor, &[coord])?;
@@ -1687,21 +1467,6 @@ fn pixel_centre(
     };
     let half = fb.module().const_value(half)?;
     let centre = fb.binary(BinOp::FAdd, floor, half)?;
-    // A texel offset Metal drops on a mirror-clamped axis, which the device adds.
-    let centre = match (s.centre_offset, word) {
-        (true, Some(word)) => {
-            let offsets = snap_offsets(cx, fb, op_offset(&s.op), s.lanes)?;
-            let parent = offset_base(cx, s)?;
-            super::position::pixel_centre_by_word(
-                fb,
-                word,
-                (centre, &offsets, parent),
-                s.lanes,
-                (size, size_lanes),
-            )?
-        }
-        _ => centre,
-    };
     let centre = scale(fb, centre, size, s.lanes, size_lanes)?;
     Ok(Some((nearest, centre)))
 }
@@ -1906,8 +1671,7 @@ pub(super) type Beyond = Option<(SValue, (SValue, SValue))>;
 /// The operands of sample `s` (level `lod`, `min_lod` clamp, `offset`, comparison `dref`) at
 /// plane coordinate `plane` with gradients `grad`: its image operands, its comparison reference,
 /// and for a bias decided per invocation the test and the gradients that replace the `Bias`
-/// operand where it holds, both in the implicit sample's own position. A runtime sampler's level by
-/// its word ([`word_level`]'s `lambda`) is handed in place of the sample's own. An `unshared`
+/// operand where it holds, both in the implicit sample's own position. An `unshared`
 /// sample's axis gradients read its texture's level-0 size and its sampler's word; a shared one (a
 /// switch-at-use's emulation, whose arms' samplers differ) takes the derivatives scaled by `2^B`
 /// through every sampler, the isotropic route.
@@ -1915,7 +1679,7 @@ pub(super) fn sample_operands(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     s: &Sampling,
-    (plane, grad, lambda, unshared): (SValue, Option<(SValue, SValue)>, Option<SValue>, bool),
+    (plane, grad, unshared): (SValue, Option<(SValue, SValue)>, bool),
     (lod, min_lod, offset, dref): (&Lod, Option<ValueId>, &Option<Offset>, Option<ValueId>),
 ) -> BResult<(ImageOperands, Option<SValue>, Beyond)> {
     let mut ops = ImageOperands::default();
@@ -1924,14 +1688,14 @@ pub(super) fn sample_operands(
         Lod::Implicit { bias, reach } => {
             if let Some(b) = bias {
                 let b = cx.operand(fb, *b)?;
-                // Metal's reading of the bias, but where Metal's own sampler reads it.
+                // Metal's reading of the bias, but where the device's sampler reads it.
                 let b = match reach {
                     BiasReach::Metal => b,
                     _ => metal_bias(fb, b)?,
                 };
                 // The level-0 size the axis gradients read, where they are taken.
                 let axes = match reach {
-                    BiasReach::Axes | BiasReach::Either { word: true, .. } if unshared => {
+                    BiasReach::Axes if unshared => {
                         // A sampled image is consumed in the block that makes it.
                         let (si, image, _) = sampled_image(cx, fb, s.source)?;
                         let img = fb.image(si)?;
@@ -1956,26 +1720,13 @@ pub(super) fn sample_operands(
                     BiasReach::Either {
                         max_bias_bits,
                         sampler_bias_bits,
-                        word,
                     } => {
                         // The derivatives in the implicit sample's own position, before any
                         // branch: both need the fragment's uniform control flow.
                         let scaled = plane_bias_gradients(fb, plane, b, s.lanes)?;
                         let past = past_limit(fb, b, max_bias_bits, sampler_bias_bits)?;
-                        // Where the sampler's word states its anisotropy, the axis gradients
-                        // replace the `Bias` operand within the limit too.
-                        let (test, grads) = match (word, axes, word_pixel(s)) {
-                            (true, Some(size), Some(pixel)) => {
-                                let axis = plane_axis_gradients(fb, plane, b, size)?;
-                                let w = sampler_word(cx, fb, pixel)?;
-                                let anisotropic = word_states_any(fb, w, SamplerWord::ANISOTROPIC)?;
-                                let grads = by_anisotropy(fb, w, axis, scaled)?;
-                                (fb.binary(BinOp::LogicalOr, past, anisotropic)?, grads)
-                            }
-                            _ => (past, scaled),
-                        };
                         ops.bias = Some(b);
-                        beyond = Some((test, grads));
+                        beyond = Some((past, scaled));
                     }
                 }
             }
@@ -1984,15 +1735,6 @@ pub(super) fn sample_operands(
         Lod::Level(None) => ops.lod = Some(f32_const(fb, 0)?),
         Lod::Base { bias, min } => ops.lod = Some(base_level(cx, fb, *bias, *min)?),
         Lod::Grad(..) | Lod::CubeGrad(..) | Lod::Hoisted => ops.grad = grad,
-    }
-    // The level on Metal's grid, a runtime sampler's by its word.
-    match (&s.level, ops.lod, lambda) {
-        (Some(super::level::LevelRule::Stated(snap)), Some(l), None) => {
-            ops.lod = Some(snap.emit(fb, l)?);
-        }
-        (Some(super::level::LevelRule::Word), Some(_), Some(l)) => ops.lod = Some(l),
-        (None, _, None) => {}
-        _ => return Err(cx.fail("a sample's level rule without its level")),
     }
     if let Some(m) = min_lod {
         ops.min_lod = Some(cx.operand(fb, m)?);
@@ -2052,32 +1794,6 @@ pub(super) fn reference(
     let is_nan = fb.unary(UnOp::IsNan, r)?;
     let r = fb.select(is_nan, zero, r)?;
     fb.glsl(GlslOp::NClamp, &[r, zero, one])
-}
-
-/// The device's sample at `coord` with comparison `dref` and operands `ops`, from the sampled
-/// image it is handed, in an arm of a wrapper that reads the texel otherwise elsewhere (a linear
-/// sample's emulation, a plain or a comparison's fetch, a switch-at-use's candidates). Where a
-/// bias is decided per invocation (`beyond`), the sample with its gradients from the same sampled
-/// image, selected where the test holds: the arm's block consumes the one sampled image it is
-/// handed, and the gradients were taken before the wrapper's branch, in the implicit sample's own
-/// position.
-pub(super) fn device_access(
-    coord: SValue,
-    dref: Option<SValue>,
-    ops: ImageOperands,
-    beyond: Beyond,
-) -> impl Fn(&mut FunctionBuilder<'_>, SValue) -> BResult<SValue> {
-    move |fb, si| {
-        let x = fb.sample(si, coord, dref, false, &ops)?;
-        let Some((test, grads)) = beyond else {
-            return Ok(x);
-        };
-        let mut grad_ops = ops;
-        grad_ops.bias = None;
-        grad_ops.grad = Some(grads);
-        let past = fb.sample(si, coord, dref, false, &grad_ops)?;
-        fb.select(test, past, x)
-    }
 }
 
 /// The access of a sample at `coord` with comparison `dref` and operands `ops`, from the sampled
@@ -2249,56 +1965,6 @@ fn base_level(
     Ok(level)
 }
 
-/// A runtime or argument buffer's sampler's level of sample `s` by its word (`level::by_word`): the
-/// level handed to the device where `s.level` is the word's rule, and the level before the
-/// sampler's clamp that a nearest mip filter reads (an `f32`) where its snap is leveled. A sample
-/// at level 0 hands its own (on every rule's grid) and reads 0 there.
-pub(super) fn word_level(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    s: &Sampling,
-) -> BResult<(Option<SValue>, Option<SValue>)> {
-    let rule = matches!(s.level, Some(super::level::LevelRule::Word));
-    let leveled = matches!(
-        s.snap,
-        Some(super::position::Snap {
-            kind: super::position::SnapKind::Word { leveled: true, .. },
-            ..
-        })
-    );
-    if !rule && !leveled {
-        return Ok((None, None));
-    }
-    let SampleOp::Sample { lod, .. } = &s.op else {
-        return Err(cx.fail("a word level without its sample"));
-    };
-    let x = match lod {
-        Lod::Level(Some(l)) => Some(cx.operand(fb, *l)?),
-        Lod::Base {
-            bias: Some(b),
-            min: None,
-        } => Some(cx.operand(fb, *b)?),
-        Lod::Level(None)
-        | Lod::Base {
-            bias: None,
-            min: None,
-        } => None,
-        _ => return Err(cx.fail("a word level without a level the function knows")),
-    };
-    let Some(x) = x else {
-        if rule {
-            return Err(cx.fail("a word level rule of level 0"));
-        }
-        return Ok((None, Some(f32_const(fb, 0)?)));
-    };
-    let Some(pixel) = word_pixel(s) else {
-        return Err(cx.fail("a word level without its sampler's word"));
-    };
-    let word = sampler_word(cx, fb, pixel)?;
-    let (lambda, nearest) = super::level::by_word(fb, word, x)?;
-    Ok((rule.then_some(lambda), leveled.then_some(nearest)))
-}
-
 /// Where the word of sample `s`'s runtime or argument buffer's sampler is read: its pixel
 /// handling's, else (a cube's) its source's sampler slot or sampler table entry.
 pub(super) fn word_pixel(s: &Sampling) -> Option<Pixel> {
@@ -2322,23 +1988,6 @@ pub(super) fn word_pixel(s: &Sampling) -> Option<Pixel> {
         (_, Source::HeapSampler { sampler, .. }) => Some(Pixel::Heap(sampler)),
         _ => None,
     }
-}
-
-/// The size of the level a runtime sampler's leveled nearest snap reads of image `img`
-/// (`level::snap_level` of its word `word` and level `nearest`, clamped into the image's levels).
-pub(super) fn word_level_size(
-    fb: &mut FunctionBuilder<'_>,
-    word: SValue,
-    nearest: SValue,
-    img: SValue,
-) -> BResult<SValue> {
-    let level = super::level::snap_level(fb, word, nearest)?;
-    let levels = fb.query(ImageQuery::Levels, img)?;
-    let one = fb.u32_const(1)?;
-    let one = fb.module().const_value(one)?;
-    let last = fb.binary(BinOp::ISub, levels, one)?;
-    let level = fb.glsl(GlslOp::UMin, &[level, last])?;
-    fb.query(ImageQuery::SizeLod(level), img)
 }
 
 /// The texel a nearest, clamp-to-edge pixel sampler returns, exactly: `OpImageFetch` of the base
@@ -2614,9 +2263,8 @@ pub(super) fn held_value(
         return crate::lower::texture::srgb_raw_texel(cx, fb, form, texel, color);
     }
     // A `half` texel of a slot converts by the bound format's class: a gather's texel as a read's,
-    // a sample's (nearest, linear, or fetched) filtered value as a sample's; a `float` texel that
-    // may be one texel's likewise. Each takes the access's lanes. Not where the sample's texel is
-    // the device's (`Sampling::half_texel`): it is held.
+    // a sample's (nearest, linear, or fetched) filtered value as a sample's, each with the access's
+    // lanes. Not where the sample's texel is the device's (`Sampling::half_texel`): it is held.
     let half = match s.source {
         Source::Combined(key) if !s.depth && s.half_texel => {
             half_class(cx, &ImageRef::Slot(key.texture), form)
@@ -2628,24 +2276,8 @@ pub(super) fn held_value(
         }
         _ => None,
     };
-    let float = match s.source {
-        Source::Combined(key) if s.float_texel => {
-            match float_class(cx, &ImageRef::Slot(key.texture), form) {
-                Some(f) => Some(f),
-                None => return Err(cx.fail("a `float` sample without its conversion routine")),
-            }
-        }
-        // A heap texture's by the class its handle carries; a depth texture's too.
-        Source::Heap { handle, .. } | Source::HeapSampler { handle, .. } if s.float_texel => {
-            match crate::lower::texture::heap_float_class(cx, fb, handle, form)? {
-                Some(f) => Some(f),
-                None => return Err(cx.fail("a `float` sample without its conversion routine")),
-            }
-        }
-        _ => None,
-    };
-    Ok(match (half, float) {
-        (Some(h), _) => {
+    Ok(match half {
+        Some(h) => {
             let access = match s.op {
                 SampleOp::Gather { .. } => HalfForm::Read,
                 _ => HalfForm::Sample,
@@ -2653,23 +2285,7 @@ pub(super) fn held_value(
             let lanes = sample_lanes(cx, fb, s)?;
             h.convert(fb, texel, (access, lanes), origin)?
         }
-        (None, Some(f)) => {
-            let lanes = sample_lanes(cx, fb, s)?;
-            // A depth sample's value is its texel's first lane (a scalar): converted as that lane
-            // of the texel, every lane of which it fills.
-            let ty = fb.value_ty(texel)?;
-            let lane = !matches!(fb.module().types().get(ty)?, SType::Vector { .. });
-            let x = if lane {
-                let four = fb.module().ty(SType::Vector { elem: ty, len: 4 })?;
-                let texel = fb.composite_construct(four, &[texel; 4])?;
-                let x = f.convert(fb, texel, lanes)?;
-                fb.composite_extract(x, &[0])?
-            } else {
-                f.convert(fb, texel, lanes)?
-            };
-            held_texel(fb, image.texel, form, x)?
-        }
-        (None, None) => held_texel(fb, image.texel, form, texel)?,
+        None => held_texel(fb, image.texel, form, texel)?,
     })
 }
 

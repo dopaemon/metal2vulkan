@@ -109,9 +109,8 @@
 //!
 //! `--policy NAMES` (`run` and `time`) opens the device with those `DevicePolicy` switches at their
 //! accurate forms, where it opens at the default policy otherwise: a comma-separated list of
-//! `exact-answers` (`DevicePolicy::exact_answers`) and field names (`sampling`, `ycbcr_filter`,
-//! `texel_conversion`), each set to its `Exact` form, so a making under an application's exact
-//! forms is timed as it makes them.
+//! `exact-answers` (`DevicePolicy::exact_answers`), so a making under an application's exact forms
+//! is timed as it makes them.
 //!
 //! `--device-type` names the device the draw runs on, as validation's other device commands do
 //! (`cpu` matches only a CPU implementation such as lavapipe); the device opens through
@@ -148,7 +147,7 @@
 
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::{
-    DevicePolicy, SamplingPolicy, TexelConversionPolicy, YCbCrFilterPolicy,
+    DevicePolicy,
 };
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::CompareFunction;
@@ -313,12 +312,9 @@ fn policy(options: &BTreeMap<String, String>) -> Result<DevicePolicy, String> {
     for name in names.split(',').filter(|name| !name.is_empty()) {
         match name {
             "exact-answers" => policy = policy.exact_answers(),
-            "sampling" => policy.sampling = SamplingPolicy::Exact,
-            "ycbcr_filter" => policy.ycbcr_filter = YCbCrFilterPolicy::Exact,
-            "texel_conversion" => policy.texel_conversion = TexelConversionPolicy::Exact,
             _ => {
                 return Err(format!(
-                    "--policy {name:?}: exact-answers, sampling, ycbcr_filter or texel_conversion"
+                    "--policy {name:?}: exact-answers"
                 ))
             }
         }

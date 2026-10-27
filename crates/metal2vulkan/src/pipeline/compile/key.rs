@@ -214,11 +214,6 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.snapshot_textures).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
-    if !inputs.ycbcr_textures.is_empty() {
-        h.bytes(b"ycbcr-textures")
-            .bytes(format!("{:?}", inputs.ycbcr_textures).as_bytes());
-    }
-    // Appended only when set, as `storage_view_slots`.
     if !inputs.ycbcr_in_place.is_empty() {
         h.bytes(b"ycbcr-in-place")
             .bytes(format!("{:?}", inputs.ycbcr_in_place).as_bytes());

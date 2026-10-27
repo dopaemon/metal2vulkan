@@ -197,7 +197,6 @@ mod serde_round_trips {
             storage_view_slots: BTreeSet::from([buffer(3)]),
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
             srgb_twins: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
-            ycbcr_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 6)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 7)]),
             flat_grid: true,
             replay_bindings: true,
@@ -330,7 +329,6 @@ mod serde_round_trips {
                 slot(Stage::Fragment, SlotClass::Texture, 3),
                 crate::pipeline::SnapshotForm::Half,
             )]),
-            ycbcr_textures: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 8)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 9)]),
             viewport_index_varying: true,
             // An emulated post-tessellation vertex function's state.

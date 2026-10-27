@@ -127,14 +127,11 @@ pub fn requested_generated_commands() -> bool {
 }
 
 /// The policy an engine `Device` of this process is created under: the default policy with
-/// Metal's sampler emulated exactly (`SamplingPolicy::Exact`), and Metal's answer wherever the policy offers the
-/// device's instead (`DevicePolicy::exact_answers`, Metal's texel conversions; its maths; its
-/// `half` rounding; its NaN and minimum and maximum and its rounding order), as Metal's answers are
-/// what the candidate is compared with.
+/// Metal's answer wherever the policy offers the device's instead (`DevicePolicy::exact_answers`,
+/// Metal's maths; its `half` rounding; its NaN and minimum and maximum and its rounding order), as
+/// Metal's answers are what the candidate is compared with.
 pub fn requested_policy() -> DevicePolicy {
-    let mut policy = DevicePolicy::default().exact_answers();
-    policy.sampling = metal2vulkan::device::SamplingPolicy::Exact;
-    policy
+    DevicePolicy::default().exact_answers()
 }
 
 /// Write every validation-layer message that fails a row to stderr as the layer reports it, for

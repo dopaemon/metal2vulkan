@@ -224,12 +224,6 @@ surface! {
         struct StageSimd N;
         enum ContainmentPolicy N;
         struct DevicePolicy N;
-        enum Unorm8LinearFilterPolicy N;
-        enum SamplingPolicy N;
-        enum YCbCrFilterPolicy N;
-        enum TexelConversionPolicy N;
-        enum VertexNormalizedPolicy N;
-        enum DecodedTexelsPolicy N;
         enum HeapCompressionPolicy N;
         enum CompletionPolicy N;
         enum BatchOrderPolicy N;

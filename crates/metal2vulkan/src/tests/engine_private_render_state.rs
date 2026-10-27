@@ -761,12 +761,7 @@ fn the_depth_compare_clamp_mask_clamps_its_samplers_references() {
             ],
         ),
     ];
-    // Under exact sampling lavapipe's shader makes the constexpr comparison and the slot's gather
-    // itself (`compared::select`), which clamp alike.
-    let devices = STEMS.map(|stem| (stem, device(stem))).into_iter().chain([(
-        "lavapipe exact sampling",
-        device_with("lavapipe", crate::pipeline::testing::EXACT_SAMPLING),
-    )]);
+    let devices = STEMS.map(|stem| (stem, device(stem)));
     for (stem, dev) in devices {
         for (fragment, samplers, masks) in cases {
             let base = compile(&dev, &pipeline(fragment, 0), stem);

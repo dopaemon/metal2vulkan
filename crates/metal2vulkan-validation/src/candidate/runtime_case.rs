@@ -628,12 +628,11 @@ pub fn executor_layer_settings() -> Vec<LayerSetting> {
 }
 
 /// The options of a device validation makes through the runtime: the validation layer reporting
-/// to `messages`, its shader cache in `cache`, and the loader [`loader`] finds. Its policy emulates
-/// Metal's sampler exactly (`SamplingPolicy::Exact`) and takes Metal's answer wherever the policy
-/// offers the device's instead (`DevicePolicy::exact_answers`): it converts texels as Metal does,
-/// computes Metal's maths exactly, rounds `half` results as Metal does, and answers Metal's NaN,
-/// minimum and maximum and rounding order. Validation compares Metal's answers, which native device
-/// sampling and the device's forms answer only within their recorded bounds
+/// to `messages`, its shader cache in `cache`, and the loader [`loader`] finds. Its policy takes
+/// Metal's answer wherever the policy offers the device's instead (`DevicePolicy::exact_answers`):
+/// it computes Metal's maths exactly, rounds `half` results as Metal does, and answers Metal's NaN,
+/// minimum and maximum and rounding order. Validation compares Metal's answers, which the device's
+/// sampler and the device's forms answer only within their recorded bounds
 /// (`PrecisionNote::DeviceSampling`, `DeviceTexelConversion`; `NativeTranscendentals`,
 /// `NativeDivision`, `NativeFma`; `NativeHalfConversion`, `NativeHalfQuantize`;
 /// `NativeNanEncoding`, `NativeMinMax`; `NativeDot`, `NativeMix`). The lane of the device's forms
@@ -642,7 +641,6 @@ pub fn executor_layer_settings() -> Vec<LayerSetting> {
 pub fn validated_options(messages: &Messages, cache: &Path) -> DeviceOptions {
     let mut options = DeviceOptions::default();
     options.policy = options.policy.exact_answers();
-    options.policy.sampling = metal2vulkan::device::SamplingPolicy::Exact;
     options.shader_cache = ShaderCacheOptions::in_directory(cache);
     options.loader = loader();
     options.layers.push(VALIDATION_LAYER.to_owned());

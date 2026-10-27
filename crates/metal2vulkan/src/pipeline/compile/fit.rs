@@ -1,7 +1,7 @@
 //! The compiler-word-bound fit: a pipeline whose largest stage module passes the device's
 //! compiler word bound ([`DeviceProfile::module_word_bound`], where the driver faults compiling a
-//! module past it), translated again from its functions with the device policy's exact forms
-//! dropped until the largest fits, recording the forms dropped
+//! module past it), translated again from its functions with the device policy's module-growing
+//! exact forms made native, recording the forms dropped
 //! (`RuntimeFact::ExactFormsOverCompilerLimit`). Every pipeline kind is fitted by the one rule: a
 //! render pipeline of vertex and fragment stages, a mesh render pipeline (object, mesh and
 //! fragment stages, or the compute and synthesized vertex stages of an emulated mesh), a compute
@@ -13,7 +13,7 @@
 use crate::budget::{Budget, Meter};
 use crate::cache::VariantKey;
 use crate::device::policy::{
-    DevicePolicy, SamplingPolicy, TexelConversionPolicy, YCbCrFilterPolicy,
+    DevicePolicy,
 };
 use crate::device::{mechanism, Device, DeviceProfile};
 use crate::error::Error;
@@ -34,8 +34,7 @@ impl Device {
     /// be `Compiled`), held to the device's compiler word bound
     /// ([`DeviceProfile::module_word_bound`]): where the driver faults compiling a module past it
     /// and `pipeline`'s largest stage passes it, `d`'s stages translated again with the device
-    /// policy's exact forms dropped until the largest fits, in at most two steps (native sampling,
-    /// then every exact answer that grows a module native), recording the forms dropped
+    /// policy's module-growing exact answers made native, recording the forms dropped
     /// (`RuntimeFact::ExactFormsOverCompilerLimit`) and keeping `pipeline`'s key and profile
     /// fingerprint, so a cache finds it where it would find `pipeline`. The stages carry the
     /// reduced forms' own precision notes. `pipeline` itself where the device has no bound, it
@@ -169,10 +168,9 @@ impl Device {
 
     /// `pipeline` held to `bound`, every kind by the one rule: where its stages can be translated
     /// again (`translatable`) and its largest stage passes `bound`, `again` (the pipeline's compile
-    /// on a device of a reduced policy) under native sampling, then under every module-growing
-    /// exact answer native, stopping at the first that fits (the last where none does), with the
-    /// forms it dropped recorded and `pipeline`'s key and profile fingerprint kept. A step that
-    /// changes nothing of the policy is skipped.
+    /// on a device of a reduced policy) under every module-growing exact answer native, with the
+    /// forms it dropped recorded and `pipeline`'s key and profile fingerprint kept. A reduction
+    /// that changes nothing of the policy is skipped.
     fn held_to<P: Fitted>(
         &self,
         pipeline: P,
@@ -180,34 +178,22 @@ impl Device {
         translatable: bool,
         again: impl Fn(&Device) -> Result<P, Error>,
     ) -> Result<P, Error> {
-        let Some(bound) = bound.filter(|&w| translatable && pipeline.largest_stage_words() > w)
-        else {
+        if !bound.is_some_and(|w| translatable && pipeline.largest_stage_words() > w) {
             return Ok(pipeline);
-        };
-        let base = *self.policy();
-        let mut best: Option<P> = None;
-        for step in [ReducedForms::NativeSampling, ReducedForms::AllNative] {
-            let policy = step.of(base);
-            if policy == base {
-                continue;
-            }
-            // The lowering reads the profile, never the policy, and `Device::new` is the profile's
-            // one producer: the description kept, the policy reduced.
-            let device = Device::new(self.description().clone(), policy)?;
-            let mut reduced = again(&device)?;
-            reduced
-                .dependencies_mut()
-                .push(dropped_forms(base, &policy, device.profile()));
-            let fits = reduced.largest_stage_words() <= bound;
-            best = Some(reduced);
-            if fits {
-                break;
-            }
         }
-        Ok(match best {
-            Some(reduced) => reduced.named_as(&pipeline),
-            None => pipeline,
-        })
+        let base = *self.policy();
+        let policy = native_forms(base);
+        if policy == base {
+            return Ok(pipeline);
+        }
+        // The lowering reads the profile, never the policy, and `Device::new` is the profile's
+        // one producer: the description kept, the policy reduced.
+        let device = Device::new(self.description().clone(), policy)?;
+        let mut reduced = again(&device)?;
+        reduced
+            .dependencies_mut()
+            .push(dropped_forms(base, &policy, device.profile()));
+        Ok(reduced.named_as(&pipeline))
     }
 }
 
@@ -274,33 +260,14 @@ fn words(spirv: &[u32]) -> u32 {
     u32::try_from(spirv.len()).unwrap_or(u32::MAX)
 }
 
-/// A step of the compiler-word-bound fallback: the exact forms to drop from the consumer's policy.
-/// `NativeSampling` drops exact sampling, the single largest exact form, with Metal's filter of a
-/// two-plane YCbCr texture (`YCbCrFilterPolicy::Exact`, reported with it); `AllNative` drops every
-/// module-growing exact answer (the fast default's forms). Neither touches the policy's other
-/// choices (pointer and handle domains, containment, isolation, framebuffer fetch, the 8-bit
-/// filter, or the runtime's choices, which change no module), so a reduced device keeps them.
-#[derive(Clone, Copy)]
-enum ReducedForms {
-    NativeSampling,
-    AllNative,
-}
-
-impl ReducedForms {
-    /// `base` with this step's exact forms set to their native, module-smaller answers.
-    fn of(self, base: DevicePolicy) -> DevicePolicy {
-        let sampled = DevicePolicy {
-            sampling: SamplingPolicy::NativeDevice,
-            ycbcr_filter: YCbCrFilterPolicy::Device,
-            ..base
-        };
-        match self {
-            ReducedForms::NativeSampling => sampled,
-            ReducedForms::AllNative => DevicePolicy {
-                texel_conversion: TexelConversionPolicy::Device,
-                ..sampled
-            },
-        }
+/// The compiler-word-bound fallback's policy: `base` with every module-growing exact answer (the
+/// fast default's forms) set to its native, module-smaller answer. It does not touch the policy's
+/// other choices (pointer and handle domains, containment, isolation, framebuffer fetch, or the
+/// runtime's choices, which change no module), so a reduced device keeps them.
+fn native_forms(base: DevicePolicy) -> DevicePolicy {
+    DevicePolicy {
+        nan_and_min_max: NanMinMaxPolicy::Native,
+        ..base
     }
 }
 
@@ -313,8 +280,6 @@ fn dropped_forms(
     reduced: &DeviceProfile,
 ) -> RuntimeDependency {
     let fact = RuntimeFact::ExactFormsOverCompilerLimit {
-        sampling: base.sampling != policy.sampling || base.ycbcr_filter != policy.ycbcr_filter,
-        texel_conversion: base.texel_conversion != policy.texel_conversion,
     };
     RuntimeDependency {
         fact,

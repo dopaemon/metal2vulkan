@@ -159,7 +159,6 @@ fn options(notices: &Notices, directory: &str, exact: bool) -> DeviceOptions {
     let mut options = DeviceOptions::default();
     if exact {
         options.policy = options.policy.exact_answers();
-        options.policy.sampling = metal2vulkan::device::SamplingPolicy::Exact;
     }
     options.shader_cache = ShaderCacheOptions::in_directory(std::path::Path::new(directory));
     options.messages = Some(notices.sink());

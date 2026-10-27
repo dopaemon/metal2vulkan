@@ -65,9 +65,9 @@ const TEXEL_BYTES: usize = 16;
 /// The textures read per format, as the lane reads them.
 const ROUNDS: u64 = 4;
 
-/// The bound `docs/FAST-PATHS.md` states for `texel_conversion = TexelConversionPolicy::Device`:
-/// one `f32` ulp for 8- and 16-bit codes. It is the ledger's number, copied here so a run that
-/// exceeds it fails rather than being re-fitted to whatever a device answers.
+/// The bound `PrecisionNote::DeviceTexelConversion` states (`device-texel-conversion`): one `f32`
+/// ulp for 8- and 16-bit codes. It is the note's number, copied here so a run that exceeds it
+/// fails rather than being re-fitted to whatever a device answers.
 const LEDGERS_TEXEL_CONVERSION_ULPS: u32 = 1;
 
 /// How Metal decodes a format's block.
@@ -283,14 +283,13 @@ impl Case for CompressedDecode {
         // and the allowance fails the case if the notice did not fire. `compressed-texel-decode`
         // is deliberately absent — the lane asserts no BC1 to BC5 texture announces it, so a run
         // that does is a divergence to report rather than one to excuse.
-        // Under the default policy a texel's `float` value is the device's conversion of the
-        // twin's 8-bit codes, not Metal's exact one, which the runtime announces as
-        // `device-texel-conversion`. `docs/FAST-PATHS.md`'s row for
-        // `texel_conversion = TexelConversionPolicy::Device` bounds that at one `f32` ulp for 8-
-        // and 16-bit codes, so the bound here is the ledger's number and not a measurement of
-        // this chip: a run that exceeds one ulp is the ledger's claim failing, which is what this
-        // allowance exists to catch. Under `TexelConversionPolicy::Exact` the notice does not
-        // fire, the justification does not hold, and every texel is compared exactly.
+        // A texel's `float` value is the device's conversion of the twin's 8-bit codes, not
+        // Metal's exact one, which the runtime announces as `device-texel-conversion`, whose
+        // note bounds it at one `f32` ulp for 8- and 16-bit codes, so the bound here is the
+        // note's number and not a measurement of this chip: a run that exceeds one ulp is the
+        // note's claim failing, which is what this allowance exists to catch. On a device whose
+        // sampler is Metal's the notice does not fire, the justification does not hold, and every
+        // texel is compared exactly.
         // A CPU copy that fills such a texture (`replaceRegion`) is decoded on the CPU into that
         // twin and copied in, announced as `cpu-block-decode`: the host-copy arm of the very
         // mechanism the line above names, measured on lavapipe for every format of this family. It

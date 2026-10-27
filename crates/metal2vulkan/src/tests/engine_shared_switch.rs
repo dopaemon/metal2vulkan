@@ -1,7 +1,6 @@
 //! A switch-at-use whose every arm takes the same emulation emulates once (SEMANTICS 1012): a
 //! kernel samples one element of an array of `n` textures, chosen per lane, through one constexpr
-//! sampler whose sampling the translation emulates on a profile without `metalSampler` (lavapipe):
-//! Metal's linear filter, Metal's bicubic filter, or a snapped gather or nearest sample.
+//! sampler whose sampling the translation emulates on lavapipe: Metal's bicubic filter.
 //!
 //! - **The words do not scale with arms × emulation.** Each arm adds the same words whatever the
 //!   emulation's size (a repeating sampler's position against a pixel sampler's none), and less
@@ -18,15 +17,14 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::device::profile::DeviceProfile;
+use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
 use crate::metal::bicubic::BicubicTexels;
-use crate::metal::texel_format::texel_format;
 use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
-use crate::pipeline::testing::EXACT_SAMPLING;
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
@@ -60,7 +58,7 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 }
 
 fn lavapipe() -> DeviceProfile {
-    profile("lavapipe", EXACT_SAMPLING).expect("profile")
+    profile("lavapipe", DevicePolicy::default()).expect("profile")
 }
 
 const EDGE: u64 = 1;
@@ -87,74 +85,32 @@ fn bicubic(address: u64, pixel: bool) -> u64 {
     BASE | address | address << 3 | address << 6 | u64::from(pixel) << 15
 }
 
-/// What a kernel does with its texture.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Op {
-    /// `texture2d<half>::sample`: a `half4` result.
-    SampleHalf,
-    /// `texture2d<float>::sample`.
-    Sample,
-    /// `texture2d<float>::gather(s, uv, int2(0), component::y)`.
-    Gather,
-}
-
-/// A form of the tests: its operation through the constexpr sampler `words`.
+/// A form of the tests: a `texture2d<float>::sample` through the constexpr sampler `words`.
 #[derive(Clone, Copy, Debug)]
 struct Form {
     name: &'static str,
-    op: Op,
     words: u64,
 }
 
-/// Each emulation twice, as a pair whose emulations differ in size: through a repeating sampler,
-/// which reads Metal's position, and through a pixel sampler (a clamping one for the gather),
-/// which reads none (or a shorter one).
-fn forms() -> [(Form, Form); 3] {
+/// The emulation twice, as a pair whose emulations differ in size: through a repeating sampler,
+/// which reads Metal's position, and through a pixel sampler, which reads none.
+fn forms() -> [Form; 2] {
     [
-        (
-            Form {
-                name: "linear repeat",
-                op: Op::SampleHalf,
-                words: sampler(1, REPEAT, false),
-            },
-            Form {
-                name: "linear pixel edge",
-                op: Op::SampleHalf,
-                words: sampler(1, EDGE, true),
-            },
-        ),
-        (
-            Form {
-                name: "bicubic repeat",
-                op: Op::Sample,
-                words: bicubic(REPEAT, false),
-            },
-            Form {
-                name: "bicubic pixel edge",
-                op: Op::Sample,
-                words: bicubic(EDGE, true),
-            },
-        ),
-        (
-            Form {
-                name: "gather repeat",
-                op: Op::Gather,
-                words: sampler(1, REPEAT, false),
-            },
-            Form {
-                name: "gather edge",
-                op: Op::Gather,
-                words: sampler(1, EDGE, false),
-            },
-        ),
+        Form {
+            name: "bicubic repeat",
+            words: bicubic(REPEAT, false),
+        },
+        Form {
+            name: "bicubic pixel edge",
+            words: bicubic(EDGE, true),
+        },
     ]
 }
 
-/// The same operation without an emulation: a nearest sample or gather in pixel coordinates.
-fn plain(op: Op) -> Form {
+/// The same sample without an emulation: a nearest sample in pixel coordinates.
+fn plain() -> Form {
     Form {
         name: "plain",
-        op,
         words: sampler(0, EDGE, true),
     }
 }
@@ -163,20 +119,9 @@ fn plain(op: Op) -> Form {
 /// on element `ks[tid]` (`uint` buffer 2) of an array of `n` textures (the null texture where
 /// `ks[tid]` is past the array), or on one texture where `n` is `None`.
 fn kernel(n: Option<u32>, form: Form) -> String {
-    let (texel, vec4, suffix, size, vec_name) = match form.op {
-        Op::SampleHalf => ("half", "<4 x half>", "v4f16", 8, "half4"),
-        Op::Sample | Op::Gather => ("float", "<4 x float>", "v4f32", 16, "float4"),
-    };
-    let (call, decl) = match form.op {
-        Op::SampleHalf | Op::Sample => (
-            format!("@air.sample_texture_2d.{suffix}(ptr addrspace(1) %h, ptr addrspace(2) @__air_sampler_state, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)"),
-            format!("@air.sample_texture_2d.{suffix}(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)"),
-        ),
-        Op::Gather => (
-            format!("@air.gather_texture_2d.{suffix}(ptr addrspace(1) %h, ptr addrspace(2) @__air_sampler_state, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i32 1, i32 0)"),
-            format!("@air.gather_texture_2d.{suffix}(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i32, i32)"),
-        ),
-    };
+    let (texel, vec4, suffix, size, vec_name) = ("float", "<4 x float>", "v4f32", 16, "float4");
+    let call = format!("@air.sample_texture_2d.{suffix}(ptr addrspace(1) %h, ptr addrspace(2) @__air_sampler_state, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)");
+    let decl = format!("@air.sample_texture_2d.{suffix}(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)");
     let (param, pick, count, tex_ty) = match n {
         // An index past the array names the null texture (the switch's null arm).
         Some(n) => (
@@ -240,45 +185,44 @@ fn words(n: Option<u32>, form: Form) -> Option<usize> {
 
 /// An arm of a switch-at-use whose arms take one emulation costs its image's reads, not the
 /// emulation. Between 16 and 32 candidates each arm adds the same words whether the emulation reads
-/// Metal's position (a repeating sampler) or not (a pixel or clamping one), and an arm's words past
-/// the plain sample's or gather's are less than a quarter of the emulation's own.
+/// Metal's position (a repeating sampler) or not (a pixel one), and an arm's words past the plain
+/// sample's are less than a quarter of the emulation's own.
 #[test]
 fn the_switch_words_do_not_scale_with_arms_times_emulation() {
-    for (big, small) in forms() {
-        let mut slopes = Vec::new();
-        // The 16 arms from 16 to 32 candidates (and one more interned constant at most, the
-        // same for both forms of a pair).
-        for form in [big, small] {
-            let (Some(w16), Some(w32)) = (words(Some(16), form), words(Some(32), form)) else {
-                return;
-            };
-            slopes.push((w32 - w16) / 16);
-        }
-        let plain = plain(big.op);
-        let (Some(p16), Some(p32)) = (words(Some(16), plain), words(Some(32), plain)) else {
+    let [big, small] = forms();
+    let mut slopes = Vec::new();
+    // The 16 arms from 16 to 32 candidates (and one more interned constant at most, the same
+    // for both forms).
+    for form in [big, small] {
+        let (Some(w16), Some(w32)) = (words(Some(16), form), words(Some(32), form)) else {
             return;
         };
-        let plain_slope = (p32 - p16) / 16;
-        let (Some(one), Some(one_plain)) = (words(None, big), words(None, plain)) else {
-            return;
-        };
-        let emulation = one - one_plain;
-        eprintln!(
-            "{}: per arm {} ({}: {}), plain {plain_slope}, emulation {emulation}",
-            big.name, slopes[0], small.name, slopes[1]
-        );
-        assert_eq!(
-            slopes[0], slopes[1],
-            "{} and {}: an arm's words depend on the emulation's",
-            big.name, small.name
-        );
-        assert!(
-            4 * slopes[0].saturating_sub(plain_slope) < emulation,
-            "{}: an arm adds {} words past the plain {plain_slope}, against an emulation of {emulation}",
-            big.name,
-            slopes[0]
-        );
+        slopes.push((w32 - w16) / 16);
     }
+    let plain = plain();
+    let (Some(p16), Some(p32)) = (words(Some(16), plain), words(Some(32), plain)) else {
+        return;
+    };
+    let plain_slope = (p32 - p16) / 16;
+    let (Some(one), Some(one_plain)) = (words(None, big), words(None, plain)) else {
+        return;
+    };
+    let emulation = one - one_plain;
+    eprintln!(
+        "{}: per arm {} ({}: {}), plain {plain_slope}, emulation {emulation}",
+        big.name, slopes[0], small.name, slopes[1]
+    );
+    assert_eq!(
+        slopes[0], slopes[1],
+        "{} and {}: an arm's words depend on the emulation's",
+        big.name, small.name
+    );
+    assert!(
+        4 * slopes[0].saturating_sub(plain_slope) < emulation,
+        "{}: an arm adds {} words past the plain {plain_slope}, against an emulation of {emulation}",
+        big.name,
+        slopes[0]
+    );
 }
 
 /// The combined image-sampler bindings of `m`, by texture slot.
@@ -423,21 +367,12 @@ fn image(slot: ResourceSlot, k: u32, class: u32) -> Image {
 }
 
 /// Every lane of the shared emulation over `n` candidates of different sizes and formats is its
-/// candidate's own lane, and the null texture reads zero, for Metal's linear and bicubic filters on
-/// the interpreter.
+/// candidate's own lane, and the null texture reads zero, for Metal's bicubic filter on the
+/// interpreter.
 #[test]
 fn the_shared_emulation_answers_each_candidates_own_lane() {
     let p = lavapipe();
-    let linear: Vec<u32> = [
-        PixelFormat::RGBA8Unorm,
-        PixelFormat::RGBA16Float,
-        PixelFormat::RGBA32Float,
-        PixelFormat::RGBA16Unorm,
-    ]
-    .iter()
-    .map(|pf| texel_format(*pf).0)
-    .collect();
-    let bicubic_classes: Vec<u32> = [
+    let classes: Vec<u32> = [
         PixelFormat::RGBA8Unorm,
         PixelFormat::RGBA32Float,
         PixelFormat::R8Unorm,
@@ -449,13 +384,7 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
             .0
     })
     .collect();
-    let cases = [
-        (forms()[0].0, &linear, true),
-        (forms()[0].1, &linear, true),
-        (forms()[1].0, &bicubic_classes, false),
-        (forms()[1].1, &bicubic_classes, false),
-    ];
-    for (form, classes, half) in cases {
+    for form in forms() {
         for n in [3u32, 4] {
             let what = format!("{} n={n}", form.name);
             let Some(one) = assemble(&what, &kernel(None, form)) else {
@@ -479,12 +408,9 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
             }
             let index: Vec<u32> = (0..lanes).map(|l| l % (n + 1)).collect();
             let ks: Vec<u8> = index.iter().flat_map(|k| k.to_le_bytes()).collect();
-            let size = if half { 8 } else { 16 };
+            let size = 16;
             let out = vec![0xabu8; size * lanes as usize];
-            let key = |slot: u32| match half {
-                true => SpecKey::TexelFormat(texture(slot)),
-                false => SpecKey::BicubicTexels(texture(slot)),
-            };
+            let key = |slot: u32| SpecKey::BicubicTexels(texture(slot));
             let class_of = |k: u32| classes[k as usize % classes.len()];
             // Each candidate alone.
             let (plan, m) = typed_module(&one, "k", &p).expect("typed module");
@@ -535,13 +461,12 @@ fn the_shared_estimate_bounds_its_emission() {
     use crate::lower::select::LowerInputs;
     use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
     use crate::pipeline::testing::meter;
-    let profiles = crate::spirv::testing::committed_exact_profiles().expect("profiles");
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
     let nearest = Form {
         name: "nearest repeat",
-        op: Op::Sample,
         words: sampler(0, REPEAT, false),
     };
-    let mut all: Vec<Form> = forms().iter().flat_map(|(a, b)| [*a, *b]).collect();
+    let mut all = forms().to_vec();
     all.push(nearest);
     for form in all {
         for n in [2u32, 8, 32] {

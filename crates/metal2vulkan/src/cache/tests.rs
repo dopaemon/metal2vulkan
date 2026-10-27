@@ -454,12 +454,10 @@ fn the_ulong_atomic_view_fact_round_trips() {
 }
 
 /// The members format version 178 appends encode and decode, and each decodes as itself:
-/// `VkFeature::Maintenance5`, the three framebuffer `VkLimit`s, and
-/// `PrecisionNote::DeviceGatherFootprint`.
+/// `VkFeature::Maintenance5` and the three framebuffer `VkLimit`s.
 #[test]
 fn the_version_178_members_round_trip() {
     use crate::device::requirements::{VkFeature, VkLimit};
-    use crate::pipeline::artifact::PrecisionNote;
     let feature = VkFeature::Maintenance5;
     assert_eq!(decode::<VkFeature>(&encode(&feature)), Ok(feature));
     for limit in [
@@ -469,8 +467,6 @@ fn the_version_178_members_round_trip() {
     ] {
         assert_eq!(decode::<VkLimit>(&encode(&limit)), Ok(limit));
     }
-    let note = PrecisionNote::DeviceGatherFootprint;
-    assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
 }
 
 /// The members format version 179 appends encode and decode, and each decodes as itself:
@@ -494,15 +490,6 @@ fn the_version_179_members_round_trip() {
     assert_eq!(decode::<VkExtension>(&encode(&extension)), Ok(extension));
 }
 
-/// The member format version 182 appends encodes and decodes as itself:
-/// `PrecisionNote::CubeFaceReciprocal`.
-#[test]
-fn the_version_182_members_round_trip() {
-    use crate::pipeline::artifact::PrecisionNote;
-    let note = PrecisionNote::CubeFaceReciprocal;
-    assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
-}
-
 /// The member format version 197 appends encodes and decodes as itself:
 /// `PrecisionNote::FunctionStorageAssumed`.
 #[test]
@@ -518,24 +505,6 @@ fn the_version_197_members_round_trip() {
 fn the_version_209_members_round_trip() {
     use crate::pipeline::artifact::PrecisionNote;
     let note = PrecisionNote::QuadsCountedBeforeDiscard;
-    assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
-}
-
-/// The member format version 210 appends encodes and decodes as itself:
-/// `PrecisionNote::DeviceDepthComparison`.
-#[test]
-fn the_version_210_members_round_trip() {
-    use crate::pipeline::artifact::PrecisionNote;
-    let note = PrecisionNote::DeviceDepthComparison;
-    assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
-}
-
-/// The member format version 212 appends encodes and decodes as itself:
-/// `PrecisionNote::DeviceTexelDenormals`.
-#[test]
-fn the_version_212_members_round_trip() {
-    use crate::pipeline::artifact::PrecisionNote;
-    let note = PrecisionNote::DeviceTexelDenormals;
     assert_eq!(decode::<PrecisionNote>(&encode(&note)), Ok(note));
 }
 

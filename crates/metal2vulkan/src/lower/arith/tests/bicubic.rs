@@ -485,86 +485,6 @@ fn the_exact_quad_answers_metals_pinned_lanes() {
     );
 }
 
-/// The corner routine of a linear cube sample is Metal's made-up texel for every exact format and
-/// an 8-bit sRGB format's raw steps: per lane `⌊(6 X + 5 Y + 5 Z + 8) / 16⌋` of the three texels'
-/// codes (a signed format's least code read as the next one, an sRGB color lane's steps), as its
-/// value on the grid, on random codes and the ranges' ends. A float format's corner is its `x`
-/// face's texel, whatever the others.
-#[test]
-fn the_cube_corner_is_metals_made_up_texel() {
-    let ins = vec![v4(), v4(), v4(), u()];
-    let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
-        let c = routines::define_cube(fb.module())?;
-        Ok(fb.call(c.corner, x)?.expect("corner"))
-    };
-    let mut rng = Rng(0x00c0_be5e_ed02_2001);
-    let mut formats: Vec<[Exact; 4]> = EXACT_FORMATS.iter().map(|f| [*f; 4]).collect();
-    formats.push(srgb_lanes());
-    for lanes in formats {
-        let mut cases = Vec::new();
-        for _ in 0..600 {
-            let cs: [[i64; 3]; 4] = std::array::from_fn(|l| {
-                let c = codes(lanes[l], &mut rng, 3);
-                [c[0], c[1], c[2]]
-            });
-            let mut case: Case = (0..3)
-                .map(|t| (0..4).map(|l| lanes[l].value(cs[l][t])).collect())
-                .collect();
-            case.push(vec![u64::from(lanes[0].flags)]);
-            cases.push((case, cs));
-        }
-        let reference = |c: &Case| {
-            let (_, cs) = cases.iter().find(|(k, _)| k == c)?;
-            let lanes = (0..4).map(|l| {
-                let f = lanes[l];
-                let [x, y, z] = cs[l].map(|c| c.max(-f.scale));
-                let made = (6 * x + 5 * y + 5 * z + 8).div_euclid(16);
-                f.result(made * (f.d / f.scale), false)
-            });
-            Some(lanes.collect())
-        };
-        let only: Vec<Case> = cases.iter().map(|(c, _)| c.clone()).collect();
-        check(
-            &format!("corner {:?}", lanes[0]),
-            &ins,
-            v4(),
-            &body,
-            &only,
-            &reference,
-            false,
-        );
-    }
-    // A float format's corner is the `x` face's texel, bit for bit (a NaN, an infinity, and a
-    // `-0` included).
-    let mut floats = Vec::new();
-    for flags in [T::LINEAR, T::HALF] {
-        for n in 0..64u64 {
-            let mut texel = |k: u64| -> Vec<u64> {
-                (0..4)
-                    .map(|l| match (n + k + l) % 9 {
-                        0 => u64::from(f32::NAN.to_bits()),
-                        1 => u64::from(f32::NEG_INFINITY.to_bits()),
-                        2 => u64::from((-0.0f32).to_bits()),
-                        _ => rng.next() & 0xffff_ffff,
-                    })
-                    .collect()
-            };
-            let mut case: Case = vec![texel(0), texel(3), texel(5)];
-            case.push(vec![u64::from(flags)]);
-            floats.push(case);
-        }
-    }
-    check(
-        "corner float",
-        &ins,
-        v4(),
-        &body,
-        &floats,
-        &|c: &Case| Some(c[0].clone()),
-        false,
-    );
-}
-
 /// A float texel: finite in `[-4, 4]`, or, one tap in `special` lanes, a NaN or an infinity.
 fn float_texel(rng: &mut Rng, half: bool) -> f32 {
     let x = (rng.next() % 8001) as f32 / 1000.0 - 4.0;
@@ -1227,62 +1147,6 @@ fn the_float_quad_is_metals_accumulator() {
             let only: Vec<Case> = cases.iter().map(|(c, _)| c.clone()).collect();
             check(
                 &format!("float quad flags={flags:#x} half={half}"),
-                &ins,
-                v4(),
-                &body,
-                &only,
-                &reference,
-                false,
-            );
-        }
-    }
-}
-
-/// The accumulated linear 1D routine is Metal's accumulator ([`metal_linear`]) on random straining
-/// taps, with Metal's non-finite rule on the taps of nonzero weight and the `half` result's
-/// conversion.
-#[test]
-fn the_float_span_is_metals_accumulator() {
-    let ins = [v4(), v4(), u(), u()];
-    let mut rng = Rng(0x00b1_c0b1_c5ee_d007);
-    for flags in [T::LINEAR, T::HALF] {
-        let half_format = flags & T::HALF != 0;
-        let mut cases = Vec::new();
-        for (n, taps) in accumulated_cases(&mut rng, half_format, 2, 2000)
-            .into_iter()
-            .enumerate()
-        {
-            let k = match n % 4 {
-                0 => [64, 128, 192][(rng.next() % 3) as usize],
-                _ => fraction(&mut rng),
-            };
-            let mut c: Case = taps
-                .iter()
-                .map(|t| t.iter().map(|x| u64::from(x.to_bits())).collect())
-                .collect();
-            c.extend([vec![k], vec![u64::from(flags)]]);
-            cases.push((c, taps));
-        }
-        for half in [false, true] {
-            let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
-                let s = routines::define_span(fb.module())?;
-                let h = ops::splat(fb, boolean(), u64::from(half))?;
-                Ok(fb
-                    .call(s.float, &[x[0], x[1], x[2], x[3], h])?
-                    .expect("float"))
-            };
-            let reference = |c: &Case| {
-                let (_, taps) = cases.iter().find(|(k, _)| k == c)?;
-                let w = span_weights(arg(c, 2) as u32);
-                let lanes = (0..4).map(|l| {
-                    let t = [(taps[0][l], w[0]), (taps[1][l], w[1])];
-                    u64::from(metal_linear(&t, flags, half).to_bits())
-                });
-                Some(lanes.collect())
-            };
-            let only: Vec<Case> = cases.iter().map(|(c, _)| c.clone()).collect();
-            check(
-                &format!("float span flags={flags:#x} half={half}"),
                 &ins,
                 v4(),
                 &body,
@@ -2126,15 +1990,6 @@ fn the_accumulator_answers_metals_pinned_lanes() {
             Some((c, p))
         })
         .collect();
-    let spans: Vec<(Case, &Pinned)> = lanes
-        .iter()
-        .filter(|p| p.ky.is_none())
-        .map(|p| {
-            let mut c: Case = p.taps[..2].iter().map(|x| splat4(*x)).collect();
-            c.extend([vec![u64::from(p.kx)], vec![u64::from(p.flags)]]);
-            (c, p)
-        })
-        .collect();
     let want = |set: &[(Case, &Pinned)], c: &Case| {
         let (_, p) = set.iter().find(|(k, _)| k == c)?;
         Some(vec![u64::from(p.want.to_bits()); 4])
@@ -2156,24 +2011,6 @@ fn the_accumulator_answers_metals_pinned_lanes() {
         &quad,
         &only,
         &|c| want(&quads, c),
-        false,
-    );
-    let span = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
-        let s = routines::define_span(fb.module())?;
-        let h = ops::splat(fb, boolean(), 0)?;
-        Ok(fb
-            .call(s.float, &[x[0], x[1], x[2], x[3], h])?
-            .expect("float"))
-    };
-    let only: Vec<Case> = spans.iter().map(|(c, _)| c.clone()).collect();
-    let ins = [v4(), v4(), u(), u()];
-    check(
-        "pinned span lanes",
-        &ins,
-        v4(),
-        &span,
-        &only,
-        &|c| want(&spans, c),
         false,
     );
 }
@@ -2199,21 +2036,13 @@ fn bicubic_routines_words_bound_their_emission() {
         routines::define_quad(fb.module())?;
         Ok(x[0])
     }) - without;
-    let span = size(&|fb, x| {
-        routines::define_span(fb.module())?;
-        Ok(x[0])
-    }) - without;
     let block = size(&|fb, x| {
         routines::define_block(fb.module())?;
         Ok(x[0])
     }) - without;
-    let cube = size(&|fb, x| {
-        routines::define_cube(fb.module())?;
-        Ok(x[0])
-    }) - without;
     eprintln!(
-        "bicubic routines: plane {plane} words, line {line} words, quad {quad} words, span {span} \
-         words, block {block} words, cube {cube} words"
+        "bicubic routines: plane {plane} words, line {line} words, quad {quad} words, block \
+         {block} words"
     );
     assert!(
         plane <= Routine::Plane.words() as usize,
@@ -2231,19 +2060,9 @@ fn bicubic_routines_words_bound_their_emission() {
         Routine::Quad.words()
     );
     assert!(
-        span <= Routine::Span.words() as usize,
-        "the linear 1D routines are {span} words, bound {}",
-        Routine::Span.words()
-    );
-    assert!(
         block <= Routine::Block.words() as usize,
         "the linear 3D routines are {block} words, bound {}",
         Routine::Block.words()
-    );
-    assert!(
-        cube <= Routine::Cube.words() as usize,
-        "the linear cube routines are {cube} words, bound {}",
-        Routine::Cube.words()
     );
 }
 

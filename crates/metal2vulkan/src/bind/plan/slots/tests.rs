@@ -741,7 +741,6 @@ fn only_a_map_that_moves_a_constexpr_mode_enters_the_variant() {
 /// A slot that states the in-place form enters `VariantKey::ycbcr_in_place` only where the bound
 /// texture's planes are read in place and each runtime sampler the slot samples through states a
 /// filter the form reads: one filter, no anisotropy, cubic filter, comparison or other reduction.
-/// Such a slot leaves `VariantKey::ycbcr_textures`, whose image it no longer reads.
 #[test]
 fn the_in_place_variant_takes_a_slot_its_texture_and_samplers_read() {
     use crate::bind::state::{BoundSampler, SamplerDescriptor, TextureFacts};
@@ -783,17 +782,11 @@ fn the_in_place_variant_takes_a_slot_its_texture_and_samplers_read() {
         fact: RuntimeFact::YCbCrInPlace { slot, samplers },
         mechanism: Mechanism::Variant,
     };
-    let image = |slot| RuntimeDependency {
-        fact: RuntimeFact::YCbCrTexture { slot },
-        mechanism: Mechanism::Variant,
-    };
     // Slot 0 samples through constexpr samplers alone, slot 1 also through `[[sampler(3)]]`.
     let deps = [
         fact(texture(0), 0),
         fact(texture(1), 1 << 3),
         fact(texture(2), 0),
-        image(texture(0)),
-        image(texture(2)),
     ];
     let linear = SamplerDescriptor {
         min_filter: F::Linear,
@@ -804,10 +797,6 @@ fn the_in_place_variant_takes_a_slot_its_texture_and_samplers_read() {
     let s = shape(linear);
     let in_place = ycbcr_in_place_variant(&deps, &s);
     assert_eq!(in_place, both);
-    assert_eq!(
-        ycbcr_variant(&deps, &s, &in_place),
-        std::collections::BTreeSet::from([texture(2)])
-    );
     assert_eq!(
         ycbcr_in_place_variant(&deps, &shape(SamplerDescriptor::new())),
         both
@@ -843,8 +832,8 @@ fn the_in_place_variant_takes_a_slot_its_texture_and_samplers_read() {
             "{sampler:?}"
         );
     }
-    // A slot that states no form takes none, whatever its texture.
-    assert!(ycbcr_in_place_variant(&[image(texture(0))], &s).is_empty());
+    // A stage that states no form takes none, whatever its textures.
+    assert!(ycbcr_in_place_variant(&[], &s).is_empty());
 }
 
 /// A stage's dropped-store word reaches the shape over the slots it binds a buffer at, and is

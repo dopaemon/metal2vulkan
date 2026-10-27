@@ -426,32 +426,6 @@ pub(crate) fn cross_variant(
         .collect()
 }
 
-/// The texture slots whose linear samples the function emulates where the slot is bound in a
-/// YCbCr format, on a profile that takes the variant (`RuntimeFact::YCbCrTexture`,
-/// `ProfileFields::ycbcr_variant`), at which `shape` binds a texture of a two-plane YCbCr format
-/// (`metal::format::ycbcr_format`), whose view Metal's sampler filters as the view's format, not as
-/// Metal's filter of the YCbCr format: the plan's `VariantKey::ycbcr_textures`. A slot whose
-/// planes the function reads in place (`in_place`, [`ycbcr_in_place_variant`]) reads no image
-/// there, and its in-place variant's compile states no such fact, so it is not one. The variant's
-/// compile states the same facts, so its plan for the same shape states the same key.
-pub(crate) fn ycbcr_variant(
-    dependencies: &[RuntimeDependency],
-    shape: &BindShape,
-    in_place: &std::collections::BTreeSet<SlotRef>,
-) -> std::collections::BTreeSet<SlotRef> {
-    dependencies
-        .iter()
-        .filter_map(|d| match d.fact {
-            RuntimeFact::YCbCrTexture { slot } if !in_place.contains(&slot) => Some(slot),
-            _ => None,
-        })
-        .filter(|slot| {
-            matches!(bound_texture(shape, *slot), Some(TextureShape::Texture { pixel_format, .. })
-                if metal::format::ycbcr_format(*pixel_format).is_some())
-        })
-        .collect()
-}
-
 /// The texture slots whose function reads a two-plane YCbCr texture only as its in-place form
 /// reads it (`RuntimeFact::YCbCrInPlace`) at which `shape` binds a texture whose planes are read
 /// in place (`TextureShape::Texture::ycbcr_in_place`), and each runtime sampler the function

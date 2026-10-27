@@ -3,12 +3,11 @@
 //! own tests).
 //!
 //! On a device without a format's ASTC block ([`decodes_astc`]) the texture holds its blocks in a
-//! carrier and its reads go through a decoded twin, announced `carried-decoded-twin` once and, under
-//! `DecodedTexelsPolicy::Compact`, `decoded-texel-precision` once ([`ASTC_TWINS`]). Every format's
-//! texels read as Metal's after every kind of write ([`astc_texels_read_as_metal_s`], and
-//! [`astc_texels_read_exactly_as_metal_s_under_exact`]): exactly under `DecodedTexelsPolicy::Exact`,
-//! within 1/510 under the default, an sRGB form's exactly under either (its twin's 8-bit codes read
-//! raw and decoded through Metal's table); a new texture's zero blocks as magenta; then blocks a CPU copy
+//! carrier and its reads go through a decoded twin, announced `carried-decoded-twin` once and
+//! `decoded-texel-precision` once ([`ASTC_TWINS`]). Every format's texels read as Metal's after
+//! every kind of write ([`astc_texels_read_as_metal_s`]): an LDR form's within 1/510, an sRGB
+//! form's exactly (its twin's 8-bit codes read raw and decoded through Metal's table); a new
+//! texture's zero blocks as magenta; then blocks a CPU copy
 //! wrote, a blit from a buffer, a fill of one block, and a copy from another ASTC texture, each
 //! read by a command buffer after the write's, each decoded into the twin by a GPU decode pass (a
 //! blit's always; a CPU copy's where it goes through a submission, else on the CPU, counted in
@@ -27,23 +26,23 @@
 //! another decode are refused, and creation with `ShaderWrite` and `RenderTarget` usage is not
 //! ([`astc_textures_the_runtime_does_not_hold_are_refused`]).
 
-use super::degrade_notices::{counts, on_device, on_device_with};
+use super::degrade_notices::{counts, on_device};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{AstcDecode, AstcTexels};
-use metal2vulkan::device::{DecodedTexelsPolicy, FormatUsage};
+use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::format::{vk_format, FormatEmulation};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitCommandEncoder, BlitOption, Buffer, CommandBufferStatus, ComputePipelineState, Degradation,
-    Device, DeviceOptions, Error, HeapDescriptor, HeapType, Origin, PipelineOptions, Region,
-    ResourceOptions, RuntimeGap, Size, Texture, TextureDescriptor,
+    Device, Error, HeapDescriptor, HeapType, Origin, PipelineOptions, Region, ResourceOptions,
+    RuntimeGap, Size, Texture, TextureDescriptor,
 };
 
 /// The kinds an ASTC texture announces on a device without its ASTC block: the decoded twin, and
-/// an LDR form's 8-bit codes under `DecodedTexelsPolicy::Compact`.
+/// an LDR form's 8-bit codes.
 pub(super) const ASTC_TWINS: [Degradation; 2] = [
     Degradation::CarriedDecodedTwin,
     Degradation::DecodedTexelPrecision,
@@ -281,12 +280,12 @@ pub(super) fn download(
     read_buffer(&out, 0, length).unwrap()
 }
 
-/// Every ASTC LDR format's texels read as Metal's on a device without its block, under `policy`
-/// (the module docs): a new texture's, then after a CPU copy, a blit from a buffer, a fill and a
-/// copy from another texture, the blocks of each coming back unchanged.
-fn astc_texels_under(policy: DecodedTexelsPolicy) {
-    let adjust = |options: &mut DeviceOptions| options.policy.decoded_texels = policy;
-    on_device_with(adjust, |device, messages| {
+/// Every ASTC LDR format's texels read as Metal's on a device without its block (the module
+/// docs): a new texture's, then after a CPU copy, a blit from a buffer, a fill and a copy from
+/// another texture, the blocks of each coming back unchanged.
+#[test]
+fn astc_texels_read_as_metal_s() {
+    on_device(|device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
@@ -326,7 +325,7 @@ fn astc_texels_under(policy: DecodedTexelsPolicy) {
                     for c in 0..4 {
                         let off = (got[c] - want[c]).abs();
                         most = most.max(off);
-                        let fits = reads_as(policy, decode, got[c], want[c]);
+                        let fits = reads_as(decode, got[c], want[c]);
                         if !fits && wrong.len() < 24 {
                             wrong.push(format!(
                                 "{pf:?} {what} texel {t} channel {c}: {} against Metal's {}",
@@ -335,7 +334,7 @@ fn astc_texels_under(policy: DecodedTexelsPolicy) {
                         }
                     }
                 }
-                eprintln!("ASTCREAD {name} {policy:?} {pf:?} {what}: at most {most} off Metal's");
+                eprintln!("ASTCREAD {name} {pf:?} {what}: at most {most} off Metal's");
             };
             let texture = texture(device, pf, TextureUsage::SHADER_READ);
             // A new texture's zero blocks are error blocks: magenta.
@@ -390,36 +389,22 @@ fn astc_texels_under(policy: DecodedTexelsPolicy) {
         assert!(undecoded.is_empty(), "on {name}:\n{}", undecoded.join("\n"));
         let counts = counts(&messages.take_notices());
         let announced = |kind| counts.get(&kind).copied().unwrap_or(0);
-        let precision = twinned && policy == DecodedTexelsPolicy::Compact;
         assert_eq!(
             (announced(ASTC_TWINS[0]), announced(ASTC_TWINS[1])),
-            (usize::from(twinned), usize::from(precision)),
+            (usize::from(twinned), usize::from(twinned)),
             "on {name}"
         );
     });
 }
 
-/// Whether `got` reads as Metal's `want` for a channel of a texel of `decode` under `policy` (the
-/// module docs): bit for bit under `DecodedTexelsPolicy::Exact`, and an sRGB form's under either
-/// (its twin's codes, decoded through Metal's table); an LDR form's within 1/510 under the
-/// default.
-fn reads_as(policy: DecodedTexelsPolicy, decode: AstcDecode, got: f32, want: f32) -> bool {
-    match (policy, decode.srgb) {
-        (DecodedTexelsPolicy::Exact, _) | (_, true) => got.to_bits() == want.to_bits(),
-        _ => (got - want).abs() <= UNORM8_BOUND,
+/// Whether `got` reads as Metal's `want` for a channel of a texel of `decode` (the module docs):
+/// an sRGB form's bit for bit (its twin's codes, decoded through Metal's table); an LDR form's
+/// within 1/510.
+fn reads_as(decode: AstcDecode, got: f32, want: f32) -> bool {
+    match decode.srgb {
+        true => got.to_bits() == want.to_bits(),
+        false => (got - want).abs() <= UNORM8_BOUND,
     }
-}
-
-/// [`astc_texels_under`] the default, `DecodedTexelsPolicy::Compact`.
-#[test]
-fn astc_texels_read_as_metal_s() {
-    astc_texels_under(DecodedTexelsPolicy::Compact);
-}
-
-/// [`astc_texels_under`] `DecodedTexelsPolicy::Exact`, which `DevicePolicy::exact_answers` selects.
-#[test]
-fn astc_texels_read_exactly_as_metal_s_under_exact() {
-    astc_texels_under(DecodedTexelsPolicy::Exact);
 }
 
 /// The other colour space's form of an ASTC LDR format: its sRGB form's LDR one, and the other
@@ -447,7 +432,6 @@ fn astc_views_in_the_other_colour_space_read_as_metal_s() {
     on_device(|device, _messages| {
         let name = device.name().to_owned();
         let state = reader(device);
-        let policy = DecodedTexelsPolicy::Compact;
         let mut wrong = Vec::new();
         let formats = [
             PixelFormat::ASTC4x4SRGB,
@@ -474,7 +458,7 @@ fn astc_views_in_the_other_colour_space_read_as_metal_s() {
                 let want = metal_texels(decode, blocks);
                 for (t, (got, want)) in got.iter().zip(&want).enumerate() {
                     for c in 0..4 {
-                        let fits = reads_as(policy, decode, got[c], want[c]);
+                        let fits = reads_as(decode, got[c], want[c]);
                         if !fits && wrong.len() < 24 {
                             wrong.push(format!(
                                 "{pf:?} as {:?} {what} texel {t} channel {c}: {} against Metal's {}",

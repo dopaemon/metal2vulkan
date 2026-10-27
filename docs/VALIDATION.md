@@ -302,8 +302,7 @@ cargo run -p metal2vulkan-validation --bin corpus-status
 
 `crates/metal2vulkan/src/tests/golden_hashes.rs` pins a hash of the final SPIR-V (or the refusal
 class) of every public fixture entry point on every committed profile, and, in a second table, of
-every fixture that samples under every exact form (Metal's sampler emulated and
-`DevicePolicy::exact_answers`). A behavior-preserving change keeps every cell; a change that moves
+every fixture that samples under every exact form (`DevicePolicy::exact_answers`). A behavior-preserving change keeps every cell; a change that moves
 one bumps `SEMANTICS_VERSION` and re-blesses
 ([CONTRIBUTING.md](../CONTRIBUTING.md#golden-output-hashes-and-semantics_version)). The fixture
 inventory (`crates/metal2vulkan/tests/public_fixture_expectations_engine.tsv`) pins which

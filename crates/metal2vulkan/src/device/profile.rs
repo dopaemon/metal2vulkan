@@ -235,22 +235,6 @@ impl DeviceProfile {
             .then_some(REGISTER_ALLOCATOR_MODULE_WORD_BOUND)
     }
 
-    /// Whether the profile's device answers samples, gathers and comparisons with its own
-    /// sampler, with no emulation of Metal's in the module: a device that samples through Metal's
-    /// own sampler (`VkProperty::MetalSampler`, MoltenVK on Apple's GPU), whose answers are
-    /// Metal's, or one that samples natively (`VkProperty::DeviceSampling`,
-    /// `SamplingPolicy::NativeDevice`, the default), whose answers are the device's
-    /// ([`PrecisionNote::DeviceSampling`]). The translation's sampler sites and the runtime's
-    /// sampler objects (`metal::sampler`) ask it alike.
-    ///
-    /// [`PrecisionNote::DeviceSampling`]: crate::pipeline::PrecisionNote::DeviceSampling
-    pub(crate) fn device_samples(&self) -> bool {
-        use crate::device::requirements::VkProperty;
-        let properties = &self.fields.enabled.properties;
-        properties.contains(&VkProperty::MetalSampler)
-            || properties.contains(&VkProperty::DeviceSampling)
-    }
-
     /// Whether the profile takes the driver deviation `deviation` (`device::driver_facts`): its
     /// driver is measured with it on the device's GPU, so the translation relies on it. A
     /// profile that does not take it compiles the conservative route the deviation's
@@ -500,11 +484,6 @@ pub struct ProfileFields {
     pub handle_domain: HandleDomain,
     pub containment: Containment,
     pub isolation: GuestIsolation,
-    /// Whether a texel's value is the device's conversion or Metal's (the policy's).
-    pub texel_conversion: crate::device::policy::TexelConversionPolicy,
-    /// Whether a normalized vertex attribute is converted by fixed-function vertex input or
-    /// pulled and divided exactly in the shader (the policy's).
-    pub vertex_normalized: crate::device::policy::VertexNormalizedPolicy,
     pub leaf: LeafCaps,
     pub subgroup: SubgroupModel,
     pub images: ImageCaps,
@@ -540,13 +519,6 @@ pub struct ProfileFields {
     /// or the device's own, which the module records where Metal answers a NaN. Either way the
     /// translation leaves every NaN's bits to the device.
     pub nan_encoding: NanEncoding,
-    /// Whether a linear sample the device's sampler answers (`DeviceProfile::device_samples`)
-    /// takes Metal's filter of a two-plane YCbCr texture bound at its slot, through the slot's
-    /// YCbCr variant (`RuntimeFact::YCbCrTexture`): under the policy's `YCbCrFilterPolicy::Exact`,
-    /// and on a device that samples through Metal's own sampler also under `SamplingPolicy::Exact`.
-    /// Elsewhere the device filters such a texture as any other. Derived, so a profile that answers
-    /// alike under both policies keys the same.
-    pub ycbcr_variant: bool,
     /// Whether a two-plane YCbCr texture's planes may be read in place
     /// (`bind::YCbCrInPlace`): on a device whose GPU reads the planes' memory with no bus between
     /// (`VkPhysicalDeviceType` integrated or CPU), a texture slot whose function reads such a
@@ -1453,7 +1425,7 @@ pub enum DriverWorkaround {
     TessellatorNotMetals,
     /// The driver's shader compiler faults creating a pipeline from a stage module past a word
     /// bound, so a module the consumer's exact forms grow beyond it is retranslated with those
-    /// forms dropped until its largest stage fits ([`DeviceProfile::module_word_bound`]): the one
+    /// forms made native ([`DeviceProfile::module_word_bound`]): the one
     /// workaround that changes no leaf encoding and refuses nothing, but bounds a module's size by
     /// trading exactness for the fast form, device by device.
     ///
@@ -1466,8 +1438,8 @@ pub enum DriverWorkaround {
     /// and faulted `W` = 60,000, 65,000 and 92,000 (900,107 words and up); and with the consumer's
     /// fragments, where a module carrying exact sampling alone (455,402 words) compiled but one
     /// carrying every exact answer faulted. The bound is 400,000 words, below the smallest module
-    /// observed to combine enough exact forms to fault, with margin: a module carrying exact
-    /// sampling alone above it is reduced too, since the fault point for a module's register
+    /// observed to combine enough exact forms to fault, with margin: a module above it is reduced,
+    /// since the fault point for a module's register
     /// pressure is not known exactly and the fault is unrecoverable, where the reduction is a
     /// logged precision note. Keyed on the driver whatever its GPU, whatever its release, in
     /// `device::derive`; a release that fixes the overflow keeps it until a measurement raises or

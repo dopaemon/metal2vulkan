@@ -174,7 +174,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             early_tests: false,
             early_variant: true,
         },
-        RuntimeFact::YCbCrTexture { slot },
         RuntimeFact::TileThreadgroup { tile_sized: true },
         RuntimeFact::ConstexprSampled {
             slot,
@@ -265,8 +264,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             payload: None,
         },
         RuntimeFact::ExactFormsOverCompilerLimit {
-            sampling: true,
-            texel_conversion: false,
         },
     ]
 }
@@ -340,7 +337,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::ConstantLanes { .. } => 62,
         RuntimeFact::FunctionTableRange { .. } => 63,
         RuntimeFact::TestedStorageWrites { .. } => 64,
-        RuntimeFact::YCbCrTexture { .. } => 65,
         RuntimeFact::TileThreadgroup { .. } => 66,
         RuntimeFact::ConstexprSampled { .. } => 67,
         RuntimeFact::CubicSampler { .. } => 68,
@@ -367,8 +363,8 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::QuadPrimitiveIds => 90,
         RuntimeFact::RotatedWeights => 91,
         RuntimeFact::PrivateList => 92,
-        RuntimeFact::MeshLastFirst => 93,
-        RuntimeFact::YCbCrInPlace { .. } => 71,
+        RuntimeFact::MeshLastFirst => 71,
+        RuntimeFact::YCbCrInPlace { .. } => 65,
     }
 }
 
@@ -376,7 +372,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..94).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..93).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -458,7 +454,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::MeshLastFirst
                 | RuntimeFact::TestedStorageWrites { .. }
                 | RuntimeFact::MovableStorageWrites { .. }
-                | RuntimeFact::YCbCrTexture { .. }
                 | RuntimeFact::ConstexprSampled { .. }
                 | RuntimeFact::CubicSampler { .. }
                 | RuntimeFact::AnisotropicSampler { .. }

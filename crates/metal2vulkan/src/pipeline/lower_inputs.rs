@@ -172,13 +172,6 @@ pub struct LoweringInputs {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>,
-    /// Texture slots bound in a YCbCr format (`VariantKey::ycbcr_textures`,
-    /// `RuntimeFact::YCbCrTexture`): on a profile that takes the variant
-    /// (`ProfileFields::ycbcr_variant`), each such slot's linear samples take the emulation of
-    /// Metal's filter a device without it takes, and the samples it does not reach are noted.
-    /// Ignored on any other profile, and for a slot of no such sample.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub ycbcr_textures: BTreeSet<SlotRef>,
     /// Texture slots bound to a two-plane YCbCr texture whose planes are read in place
     /// (`VariantKey::ycbcr_in_place`, `RuntimeFact::YCbCrInPlace`): each is declared as the
     /// planes' uniform texel buffer, and its samples, reads and size queries read the codes and

@@ -113,8 +113,7 @@
 //! UNORM view of the same image ([`srgb_raw_view`]): the `RuntimeFact::SrgbTexture` variant of a
 //! function. Its [`texel_format`] is [`UNORM`](BicubicTexels::UNORM) and
 //! [`SRGB`](BicubicTexels::SRGB) with its channels, never [`EXACT`](BicubicTexels::EXACT): a
-//! conversion of the device's value keeps its rounding, and the emulated linear filter reads the
-//! raw codes under the variant alone, adding `EXACT` there. A gather's `float` value is not
+//! conversion of the device's value keeps its rounding. A gather's `float` value is not
 //! measured, so it keeps the device's decode (`PrecisionNote::SrgbTexelDecode`). `RGBA8Unorm_sRGB`
 //! was read, and so were `BGRA8Unorm_sRGB`, `R8Unorm_sRGB`, and `RG8Unorm_sRGB` (the probe): they
 //! take its rule ([`srgb_raw`]). So do the sRGB forms of BC1 to BC3 and BC7 (an Apple M4: every
@@ -303,18 +302,6 @@ pub enum CubeCorner {
 }
 
 impl CubeCorner {
-    /// Every corner, in field order.
-    pub const ALL: [CubeCorner; 8] = [
-        CubeCorner::XFace,
-        CubeCorner::Grid255,
-        CubeCorner::Grid1023,
-        CubeCorner::Grid565,
-        CubeCorner::Grid2047,
-        CubeCorner::Signed1023,
-        CubeCorner::Grid16320,
-        CubeCorner::Signed8128,
-    ];
-
     /// The corner of `pf`'s cube gather, where it is measured outside the families (the
     /// probes, Apple M4 on macOS 27.0.1). ASTC's HDR formats were read
     /// through `ASTC_4x4_HDR`'s void-extent blocks; the other block sizes and blocks take its
@@ -358,21 +345,6 @@ impl CubeCorner {
             P::BC4RUnorm | P::BC5RGUnorm => CubeCorner::Grid16320,
             P::BC4RSnorm | P::BC5RGSnorm => CubeCorner::Signed8128,
             _ => return None,
-        })
-    }
-
-    /// The made-up texel's grid `D` per channel (red to alpha), or `None` for the `x` face's
-    /// texel. A signed grid's codes read from `-D`.
-    pub fn grids(self) -> Option<[u32; 4]> {
-        Some(match self {
-            CubeCorner::XFace => return None,
-            CubeCorner::Grid255 => [255; 4],
-            CubeCorner::Grid1023 => [1023, 1023, 1023, 255],
-            CubeCorner::Grid565 => [1023, 4095, 1023, 255],
-            CubeCorner::Grid2047 => [2047; 4],
-            CubeCorner::Signed1023 => [1023; 4],
-            CubeCorner::Grid16320 => [16320; 4],
-            CubeCorner::Signed8128 => [8128; 4],
         })
     }
 
@@ -578,17 +550,6 @@ impl PackedTexels {
             self,
             PackedTexels::YCbCr2048 | PackedTexels::YCbCr8192 | PackedTexels::YCbCrExtended8192
         )
-    }
-
-    /// Whether every texture of the field's formats has one level: the two-plane YCbCr fields'
-    /// ([`ycbcr`](Self::ycbcr)), whose formats Metal makes a texture of only over an IOSurface
-    /// plane, which takes one level, as do its views. Metal's linear sample of such a texture
-    /// through a mip filter is its sample through none, bit for bit, whatever the level, bias or
-    /// gradient (an Apple M4 on macOS 27.0.1 and an Apple M3 Max on macOS
-    /// 26.7): the emulation of a runtime sampler's linear sample reaches its mip filter on such a
-    /// class (`lower::sampler::linear`).
-    pub fn one_level(self) -> bool {
-        self.ycbcr()
     }
 
     /// Whether the filter's codes and steps are signed and reach `±2D`
@@ -1197,18 +1158,21 @@ mod tests {
             assert!(!alone.has_channels(), "{pf:?}");
             seen.insert(corner as u32);
         }
-        for (k, corner) in CubeCorner::ALL.into_iter().enumerate() {
+        let every = [
+            CubeCorner::XFace,
+            CubeCorner::Grid255,
+            CubeCorner::Grid1023,
+            CubeCorner::Grid565,
+            CubeCorner::Grid2047,
+            CubeCorner::Signed1023,
+            CubeCorner::Grid16320,
+            CubeCorner::Signed8128,
+        ];
+        for (k, corner) in every.into_iter().enumerate() {
             assert_eq!(corner as u32, k as u32 + 1);
             assert_eq!(corner.class().0 >> TexelFormat::CORNER, corner as u32);
             assert!(corner.class().0 & TexelFormat::CORNER_MASK == corner.class().0);
-            for d in corner.grids().into_iter().flatten() {
-                assert!((1..1 << 16).contains(&d), "{corner:?}");
-            }
             assert!(seen.contains(&(corner as u32)), "{corner:?} has no format");
-        }
-        // The emission takes every field after `XFace` for a corner with grids.
-        for corner in CubeCorner::ALL {
-            assert_eq!(corner.grids().is_none(), corner == CubeCorner::XFace);
         }
         // The measured families keep no corner field.
         for pf in [

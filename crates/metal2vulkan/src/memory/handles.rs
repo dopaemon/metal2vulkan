@@ -48,13 +48,6 @@
 //! read selects its out-of-bounds alpha by. An element is below [`TABLE_CAPACITY`], so the bit is
 //! never an element's.
 //!
-//! **The depth class**. A texture entry's flags carry [`FLAG_DEPTH_CODES`] when the resident
-//! texture's pixel format is `Depth16Unorm`, and [`FLAG_DEPTH_VALUES`] when it is `Depth32Float` or
-//! `Depth32Float_Stencil8`: how Metal compares its texels against a reference. A module whose heap
-//! depth comparison the shader makes carries them in the handle's bits 29 and 30
-//! ([`HANDLE_DEPTH_CODES`], [`HANDLE_DEPTH_VALUES`]), beside the alpha where it reads that too, and
-//! compares in the shader where one is set. Every other module's handle is the element alone.
-//!
 //! **Heap samplers** (the sampler half). A sampler handle loaded from an argument buffer is the
 //! guest's resource id of an `MTLSamplerState`, searched in the stage's **sampler table**
 //! (`Synthetic(SamplerTable)`), the handle table's layout over the argument buffers' samplers: a
@@ -389,27 +382,18 @@ pub const ENTRY_ID_HI: u32 = 1;
 pub const ENTRY_ELEMENT: u32 = 2;
 /// Word of an entry holding the flags: for a sampler, its
 /// [`SamplerWord`](crate::metal::sampler::SamplerWord); for a texture,
-/// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], [`FLAG_DEPTH_CODES`] or [`FLAG_DEPTH_VALUES`], and the index
-/// of its texel class in [`FLAG_TEXEL_CLASS`], every other bit 0.
+/// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], and the index of its texel class in [`FLAG_TEXEL_CLASS`], every other bit 0.
 pub const ENTRY_FLAGS: u32 = 3;
 /// The flag of a texture entry whose pixel format has no alpha
 /// (`metal::format::out_of_bounds_alpha_one`): Metal's out-of-bounds read of such a texture
 /// bound to a slot returns alpha 1 (MSL 4.1 section 2.9.1), which a read through the table takes
 /// too; no heap texture was measured.
 pub const FLAG_OUT_OF_BOUNDS_ALPHA_ONE: u32 = 1 << 1;
-/// The flag of a texture entry whose pixel format a depth comparison compares as codes,
-/// `Depth16Unorm`: Metal compares the texel's code against the code of the reference clamped
-/// into `[0, 1]`, which the shader compares where the module reads the flag.
-pub const FLAG_DEPTH_CODES: u32 = 1 << 2;
-/// The flag of a texture entry whose pixel format a depth comparison compares as values,
-/// `Depth32Float` and `Depth32Float_Stencil8`: Metal compares the texel and the reference as
-/// given, which the shader compares where the module reads the flag. A depth format with neither
-/// flag (`Depth24Unorm_Stencil8`) is compared by the device.
-pub const FLAG_DEPTH_VALUES: u32 = 1 << 3;
 /// The field of a texture entry's flags holding the index of its texel class in
 /// `metal::texel_format::heap_classes`: the class a slot bound to the texture would state in its
 /// `TexelFormat` specialization, `OTHER` (index 0) for a swizzled texture, by which a function
-/// emulates Metal's linear filter of the texture's texels where the module reads it. A heap handle
+/// converts or reads the texture's texels where the module reads it (a `half` conversion on Metal's
+/// own sampler, a fetched gather, a NaN texel's rule, a raw-held form's emulation). A heap handle
 /// carries it in place, in a module whose search carries it ([`Lookup::Flagged`]'s `class`), so
 /// [`HANDLE_TEXEL_CLASS`] is this field.
 pub const FLAG_TEXEL_CLASS: u32 = 0x1fff << 16;
@@ -419,23 +403,11 @@ pub const HANDLE_TEXEL_CLASS: u32 = FLAG_TEXEL_CLASS;
 /// The bit of a heap handle that carries its entry's [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], in a
 /// module whose search carries it ([`Lookup::Flagged`]'s `alpha`).
 pub const HANDLE_ALPHA_ONE: u32 = 1 << 31;
-/// The bit of a heap handle that carries its entry's [`FLAG_DEPTH_CODES`], in a module whose
-/// search carries the depth flags ([`Lookup::Flagged`]'s `depth`).
-pub const HANDLE_DEPTH_CODES: u32 = FLAG_DEPTH_CODES << DEPTH_SHIFT;
-/// The bit of a heap handle that carries its entry's [`FLAG_DEPTH_VALUES`], in a module whose
-/// search carries the depth flags ([`Lookup::Flagged`]'s `depth`).
-pub const HANDLE_DEPTH_VALUES: u32 = FLAG_DEPTH_VALUES << DEPTH_SHIFT;
-/// The left shift that moves a texture entry's depth flags into the handle's bits 29 and 30.
-const DEPTH_SHIFT: u32 = 27;
 // Every element is below the table's capacity, so no carried bit is an element's, and the
 // carried fields do not overlap.
 const _: () = assert!(TABLE_CAPACITY <= 1 << HANDLE_TEXEL_CLASS.trailing_zeros());
-const _: () = assert!(
-    HANDLE_TEXEL_CLASS & (HANDLE_DEPTH_CODES | HANDLE_DEPTH_VALUES | HANDLE_ALPHA_ONE) == 0
-);
-const _: () = assert!(
-    FLAG_TEXEL_CLASS & (FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_DEPTH_CODES | FLAG_DEPTH_VALUES) == 0
-);
+const _: () = assert!(HANDLE_TEXEL_CLASS & HANDLE_ALPHA_ONE == 0);
+const _: () = assert!(FLAG_TEXEL_CLASS & FLAG_OUT_OF_BOUNDS_ALPHA_ONE == 0);
 
 /// Unrolled steps of the handle-table search.
 pub const SEARCH_STEPS: u32 = 16;
@@ -1327,16 +1299,9 @@ pub enum Lookup {
     Element,
     /// The entry's element with flags of its entry beside it: where `alpha`, its
     /// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`] in [`HANDLE_ALPHA_ONE`], the handle of a module whose
-    /// shader-checked heap read observes the alpha; where `depth`, its [`FLAG_DEPTH_CODES`] and
-    /// [`FLAG_DEPTH_VALUES`] in [`HANDLE_DEPTH_CODES`] and [`HANDLE_DEPTH_VALUES`], the handle of a
-    /// module whose heap depth comparison the shader makes; where `class`, its [`FLAG_TEXEL_CLASS`]
-    /// in [`HANDLE_TEXEL_CLASS`], the handle of a module that emulates Metal's linear filter of a
-    /// heap texture. Every heap access masks them off ([`Lookup::element_mask`]).
-    Flagged {
-        alpha: bool,
-        depth: bool,
-        class: bool,
-    },
+    /// shader-checked heap read observes the alpha; where `class`, its [`FLAG_TEXEL_CLASS`] in
+    /// [`HANDLE_TEXEL_CLASS`], the handle of a module that reads a heap texture's texel class. Every heap access masks them off ([`Lookup::element_mask`]).
+    Flagged { alpha: bool, class: bool },
     /// The index of the entry found, 0 (the null entry) for a miss: the handle of an argument
     /// buffer's sampler, whose uses read the entry's element and word ([`entry_field`]).
     Entry,
@@ -1346,21 +1311,15 @@ impl Lookup {
     /// The entry flags this form carries into the handle, each with the left shift that moves it
     /// there.
     fn carried(self) -> Vec<(u32, u32)> {
-        let Lookup::Flagged {
-            alpha,
-            depth,
-            class,
-        } = self
-        else {
+        let Lookup::Flagged { alpha, class } = self else {
             return Vec::new();
         };
         let alpha = alpha.then_some((
             FLAG_OUT_OF_BOUNDS_ALPHA_ONE,
             HANDLE_ALPHA_ONE.trailing_zeros() - FLAG_OUT_OF_BOUNDS_ALPHA_ONE.trailing_zeros(),
         ));
-        let depth = depth.then_some((FLAG_DEPTH_CODES | FLAG_DEPTH_VALUES, DEPTH_SHIFT));
         let class = class.then_some((FLAG_TEXEL_CLASS, 0));
-        alpha.into_iter().chain(depth).chain(class).collect()
+        alpha.into_iter().chain(class).collect()
     }
 
     /// The bits of a handle this form yields that are its element, where it carries flags beside
@@ -1798,25 +1757,18 @@ mod tests {
     /// several sizes up to [`TABLE_CAPACITY`] entries (the null id, present ids, absent ids between
     /// and beyond them) gets [`lookup_host`]'s element, through an entry array (`u64` ids) and a
     /// word view. [`Lookup::Flagged`] also carries a found entry's [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`]
-    /// in [`HANDLE_ALPHA_ONE`] where it carries the alpha, and its [`FLAG_DEPTH_CODES`] and
-    /// [`FLAG_DEPTH_VALUES`] in [`HANDLE_DEPTH_CODES`] and [`HANDLE_DEPTH_VALUES`] where it carries
-    /// the depth class, carrying no other bit of the entry, and [`Lookup::Entry`] yields the index
+    /// in [`HANDLE_ALPHA_ONE`] where it carries the alpha, and its texel class where it carries
+    /// that, carrying no other bit of the entry, and [`Lookup::Entry`] yields the index
     /// of the last entry of the key's id, 0 for a miss.
     #[test]
     fn the_emitted_search_matches_the_host_model() {
         for int64 in [true, false] {
-            let flagged = |alpha, depth, class| Lookup::Flagged {
-                alpha,
-                depth,
-                class,
-            };
+            let flagged = |alpha, class| Lookup::Flagged { alpha, class };
             for form in [
                 Lookup::Element,
-                flagged(true, false, false),
-                flagged(false, true, false),
-                flagged(true, true, false),
-                flagged(false, false, true),
-                flagged(true, true, true),
+                flagged(true, false),
+                flagged(false, true),
+                flagged(true, true),
                 Lookup::Entry,
             ] {
                 emitted_search_matches_the_host_model(int64, form);
@@ -1827,30 +1779,16 @@ mod tests {
     /// Each flagged form's element mask clears exactly the bits it carries.
     #[test]
     fn a_flagged_handle_masks_off_the_bits_it_carries() {
-        let flagged = |alpha, depth, class| {
-            Lookup::Flagged {
-                alpha,
-                depth,
-                class,
-            }
-            .element_mask()
-        };
+        let flagged = |alpha, class| Lookup::Flagged { alpha, class }.element_mask();
         assert_eq!(Lookup::Element.element_mask(), None);
         assert_eq!(Lookup::Entry.element_mask(), None);
-        assert_eq!(flagged(false, false, false), None);
-        assert_eq!(flagged(true, false, false), Some(!HANDLE_ALPHA_ONE));
-        let depth = HANDLE_DEPTH_CODES | HANDLE_DEPTH_VALUES;
-        assert_eq!(depth, 0b11 << 29);
-        assert_eq!(flagged(false, true, false), Some(!depth));
-        assert_eq!(
-            flagged(true, true, false),
-            Some(!(HANDLE_ALPHA_ONE | depth))
-        );
+        assert_eq!(flagged(false, false), None);
+        assert_eq!(flagged(true, false), Some(!HANDLE_ALPHA_ONE));
         assert_eq!(HANDLE_TEXEL_CLASS, 0x1fff << 16);
-        assert_eq!(flagged(false, false, true), Some(!HANDLE_TEXEL_CLASS));
+        assert_eq!(flagged(false, true), Some(!HANDLE_TEXEL_CLASS));
         assert_eq!(
-            flagged(true, true, true),
-            Some(!(HANDLE_ALPHA_ONE | depth | HANDLE_TEXEL_CLASS)),
+            flagged(true, true),
+            Some(!(HANDLE_ALPHA_ONE | HANDLE_TEXEL_CLASS)),
             "every carried field is masked off, and the element's 16 bits stay"
         );
     }
@@ -1930,14 +1868,8 @@ mod tests {
                     };
                     let want = match form {
                         Lookup::Element => e,
-                        Lookup::Flagged {
-                            alpha,
-                            depth,
-                            class,
-                        } => {
+                        Lookup::Flagged { alpha, class } => {
                             e | carried(alpha, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, HANDLE_ALPHA_ONE)
-                                | carried(depth, FLAG_DEPTH_CODES, HANDLE_DEPTH_CODES)
-                                | carried(depth, FLAG_DEPTH_VALUES, HANDLE_DEPTH_VALUES)
                                 | match class {
                                     true => flags(e) & FLAG_TEXEL_CLASS,
                                     false => 0,

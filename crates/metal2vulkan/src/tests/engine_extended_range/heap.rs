@@ -188,45 +188,6 @@ fn heap_reads_reach_a_raw_member_through_the_unsigned_twin() {
     }
 }
 
-/// A heap texture's `float` read converts its texel by the class its handle carries, as a slot's
-/// does by its bound format's: on every committed profile with a sampled heap but Metal's own
-/// sampler (`VkProperty::MetalSampler`, whose device value is Metal's), the module defines the
-/// `float` routine, which it calls with the class read from the handle, and passes L3; there it
-/// does not.
-#[test]
-fn a_heap_float_read_converts_by_its_handle_s_class() {
-    use crate::device::requirements::VkProperty;
-    use crate::lower::texture::float_texel;
-    let consts = FunctionConstantValues::defaults();
-    let entry = EntryRef::Name("k");
-    let inputs = LowerInputs::new();
-    let Some(bc) = assemble("heap", &kernel(Use::Float)) else {
-        return;
-    };
-    let mut converted = 0;
-    let profiles = crate::spirv::testing::committed_exact_profiles();
-    for (stem, p) in profiles.expect("profiles") {
-        let a = match compile_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter(), SPIRV_WORDS) {
-            Ok(a) => a,
-            Err(Error::Unsupported(Unsupported {
-                feature: Feature::ArgumentBufferTextures,
-                ..
-            })) => continue,
-            Err(e) => panic!("{stem}: {e}"),
-        };
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        let metal = p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
-        let routine = a.strategies.entries.contains_key(float_texel::CENSUS_NAME);
-        assert_eq!(routine, !metal, "{stem}");
-        converted += usize::from(!metal);
-    }
-    assert!(converted > 0, "no committed profile converts a heap read");
-}
-
 /// How [`sampling_kernel`] samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sampling {

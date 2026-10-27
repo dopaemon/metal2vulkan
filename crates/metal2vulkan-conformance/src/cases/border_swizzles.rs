@@ -52,8 +52,8 @@ use metal2vulkan_runtime::Degradation;
 /// The fixture the case runs, whose entry point is its own name.
 const FIXTURE: &str = "a2_clamp_to_zero";
 
-/// The bound `docs/FAST-PATHS.md` states for `texel_conversion = TexelConversionPolicy::Device`,
-/// one `f32` ulp for 8- and 16-bit codes, as these sites hold it: a word of the float's bits, where
+/// The bound `PrecisionNote::DeviceTexelConversion` states (`device-texel-conversion`), one `f32`
+/// ulp for 8- and 16-bit codes, as these sites hold it: a word of the float's bits, where
 /// one ulp of a positive finite float is a difference of one in the word.
 const LEDGERS_TEXEL_CONVERSION_ULPS_AS_WORDS: f64 = 1.0;
 
@@ -305,14 +305,15 @@ impl Case for BorderSwizzles {
         // notices differs, and the two notice allowances cover that site.
         //
         // The sampled words themselves may differ too. These samplers filter nearest, so the
-        // ledger's linear-filter row is not what bounds them: the bound is the one
-        // `docs/FAST-PATHS.md` states for `texel_conversion = TexelConversionPolicy::Device`, one
-        // `f32` ulp for 8- and 16-bit codes, which is what every format here holds. The words are
-        // recorded as the `u32` bit patterns of those floats, so one ulp is a difference of one in
-        // the word -- `every_recorded_word_is_a_positive_finite_float` pins the range that makes
-        // the two the same thing. The bound is the ledger's number: a run that exceeds it is the
-        // ledger's claim failing, which is what this allowance exists to catch. Under the exact
-        // policy neither notice fires, no justification holds, and every word is compared exactly.
+        // linear filter's bound is not what bounds them: the bound is the one
+        // `device-texel-conversion` states, one `f32` ulp for 8- and 16-bit codes, which is what
+        // every format here holds. The words are recorded as the `u32` bit patterns of those
+        // floats, so one ulp is a difference of one in the word --
+        // `every_recorded_word_is_a_positive_finite_float` pins the range that makes the two the
+        // same thing. The bound is the note's number: a run that exceeds it is the note's claim
+        // failing, which is what this allowance exists to catch. On a device whose sampler is
+        // Metal's neither notice fires, no justification holds, and every word is compared
+        // exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -677,8 +678,8 @@ mod tests {
     ///
     /// That range is what makes this case's bounded allowance mean what it says. The words are
     /// recorded as `u32`, so the allowance bounds `|a - b|` on the words, and over this range a
-    /// difference of one in the word is exactly one `f32` ulp -- the bound `docs/FAST-PATHS.md`
-    /// states for the device's texel conversion. Outside it (a negative value, an infinity, a NaN)
+    /// difference of one in the word is exactly one `f32` ulp -- the bound
+    /// `device-texel-conversion` states for the device's texel conversion. Outside it (a negative value, an infinity, a NaN)
     /// the two would stop being the same thing, so this test fails rather than letting the
     /// allowance quietly mean something else.
     ///

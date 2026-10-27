@@ -8,17 +8,357 @@
 //! (`bind::YCbCrInPlace::words`). Each texel the samples read is Metal's (`ycbcr_convert`'s module
 //! docs: the luma code, the chroma pairs' 9/3/3/1 filter, the range's and the matrix's
 //! conversion), and a linear sample is Metal's filter of those steps on the grid `2048`
-//! (`super::ycbcr`'s rule); a nearest sample is the texel at Metal's position. The texel buffer
+//! (`metal_step`); a nearest sample is the texel at Metal's position. The texel buffer
 //! traps every fetch outside it, so each tap's elements lie within the planes.
 
-use super::ycbcr::{metal_step, result_bits};
-use super::*;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::bind::ycbcr_convert::{ycbcr_read, YCbCrCodes, YCbCrMatrix, YCbCrPlanes, YCbCrRange};
 use crate::bind::YCbCrInPlace;
-use crate::lower::select::LowerInputs;
+use crate::device::profile::DeviceProfile;
+use crate::device::DevicePolicy;
+use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::format::ycbcr_format;
+use crate::metal::sampler::SamplerWord;
+use crate::metal::{PixelFormat, SamplerAddressMode};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::testing::{compile_with, typed_module_with};
+use crate::pipeline::interface::PushLoc;
+use crate::pipeline::sym::{
+    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
+};
+use crate::pipeline::testing::{
+    compile_with, link_and_validate, llvm_assemble, profile, typed_module_with, AssembleError,
+};
+use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
+use crate::spirv::ir::{GlobalKind, TypedModule};
+
+const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
+
+/// Bitcode of the module `body` (after the AIR header), or `None` without `llvm-as`.
+fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "m2v-linear-half-{}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+        name.replace(' ', "-")
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let ll = dir.join("k.ll");
+    std::fs::write(&ll, format!("{HEADER}{body}")).expect("write");
+    let r = llvm_assemble(&ll);
+    let _ = std::fs::remove_dir_all(&dir);
+    match r {
+        Ok(x) => Some(x),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            None
+        }
+        Err(AssembleError::Rejected(why)) => panic!("{name}: {why}"),
+    }
+}
+
+fn lavapipe() -> DeviceProfile {
+    profile("lavapipe", DevicePolicy::default()).expect("profile")
+}
+
+fn m3() -> DeviceProfile {
+    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+}
+
+/// The words of `constexpr sampler(filter::linear, ...)`: minification and magnification
+/// `filter` (AIR code: 0 nearest, 1 linear), mip filter `mip` (0 none, 2 linear), every axis
+/// addressed by `address` (0 zero or border, 1 edge, 2 repeat, 3 mirrored repeat), `pixel`
+/// coordinates, and border color code `border` (0 transparent black, 2 opaque white), with the
+/// fields Apple's compiler writes for the rest (the `hlf_half_address` fixture's sampler).
+fn sampler_words(filter: u64, mip: u64, address: u64, pixel: bool, border: u64) -> u64 {
+    const BASE: u64 = 0x007b_ff00_0008_0000;
+    BASE | address
+        | address << 3
+        | address << 6
+        | filter << 9
+        | filter << 11
+        | mip << 13
+        | u64::from(pixel) << 15
+        | border << 56
+}
+
+fn linear(address: u64, pixel: bool, border: u64) -> u64 {
+    sampler_words(1, 0, address, pixel, border)
+}
+
+/// How a test kernel samples its `half` texture.
+#[derive(Clone, Copy, Debug)]
+enum Form {
+    /// `texture2d<half>`: `t.sample(s, coord[tid], offset)` with constant `offset`.
+    Plain { offset: (i32, i32) },
+    /// `texture2d<half>` with `min_lod_clamp(1)`.
+    MinLodClamp,
+    /// `texture2d<half>` with lane `tid`'s dynamic `int2` offset (buffer 2).
+    DynamicOffset,
+    /// `texture3d<half>` at `float4` buffer 0's lane `tid`'s `xyz`, with constant `offset`.
+    ThreeD { offset: (i32, i32, i32) },
+    /// `texture2d<float>`: a `float` result.
+    Float,
+}
+
+/// A kernel sampling texture slot 0 through sampler `sampler` (a constexpr sampler's words, or
+/// `None` for the runtime `[[sampler(0)]]`) at `float2` buffer 0's lane `tid`, storing the
+/// `half4` (`float4` for [`Form::Float`]) to buffer 1.
+fn kernel(sampler: Option<u64>, form: Form) -> String {
+    kernel_of(sampler, form, matches!(form, Form::Float))
+}
+
+/// [`kernel`] with a `float` result when `float`, whatever the form.
+fn kernel_of(sampler: Option<u64>, form: Form, float: bool) -> String {
+    let half = !float;
+    let (texel, vec4, size) = if half {
+        ("half", "<4 x half>", 8)
+    } else {
+        ("float", "<4 x float>", 16)
+    };
+    let suffix = if half { "v4f16" } else { "v4f32" };
+    let s = if sampler.is_some() {
+        "@__air_sampler_state"
+    } else {
+        "%s"
+    };
+    let (tex_ty, name, args, call_args) = match form {
+        Form::Plain { offset: (ox, oy) } => (
+            format!("texture2d<{texel}, sample>"),
+            "2d",
+            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
+            format!("<2 x float> %uv, i1 true, <2 x i32> <i32 {ox}, i32 {oy}>, i1 false, float 0.0, float 0.0, i32 0"),
+        ),
+        Form::Float => (
+            format!("texture2d<{texel}, sample>"),
+            "2d",
+            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
+            "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+        ),
+        Form::MinLodClamp => (
+            format!("texture2d<{texel}, sample>"),
+            "2d",
+            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
+            "<2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 1.0, i32 0".to_string(),
+        ),
+        Form::DynamicOffset => (
+            format!("texture2d<{texel}, sample>"),
+            "2d",
+            "ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32",
+            "<2 x float> %uv, i1 true, <2 x i32> %o, i1 false, float 0.0, float 0.0, i32 0".to_string(),
+        ),
+        Form::ThreeD { offset: (ox, oy, oz) } => (
+            format!("texture3d<{texel}, sample>"),
+            "3d",
+            "ptr addrspace(1), ptr addrspace(2), <3 x float>, i1, <3 x i32>, i1, float, float, i32",
+            format!("<3 x float> %uvw, i1 true, <3 x i32> <i32 {ox}, i32 {oy}, i32 {oz}>, i1 false, float 0.0, float 0.0, i32 0"),
+        ),
+    };
+    let dynamic = matches!(form, Form::DynamicOffset);
+    let runtime = sampler.is_none();
+    // Parameters after `out`: the offsets buffer, then the runtime sampler.
+    let mut params = String::new();
+    let mut mds = Vec::new();
+    let mut next = 3;
+    if dynamic {
+        params.push_str(", ptr addrspace(1) %offs");
+        mds.push(format!("!{{i32 {next}, !\"air.buffer\", !\"air.location_index\", i32 2, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 8, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"int2\", !\"air.arg_name\", !\"offs\"}}"));
+        next += 1;
+    }
+    if runtime {
+        params.push_str(", ptr addrspace(2) %s");
+        mds.push(format!("!{{i32 {next}, !\"air.sampler\", !\"air.location_index\", i32 0, i32 1, !\"air.arg_type_name\", !\"sampler\", !\"air.arg_name\", !\"s\"}}"));
+        next += 1;
+    }
+    mds.push(format!("!{{i32 {next}, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"tid\"}}"));
+    let first = 7;
+    let arg_mds: Vec<String> = (0..mds.len()).map(|i| format!("!{}", first + i)).collect();
+    let tail: String = mds
+        .iter()
+        .enumerate()
+        .map(|(i, m)| format!("!{} = {m}\n", first + i))
+        .collect();
+    let load_offset = if dynamic {
+        "  %po = getelementptr inbounds <2 x i32>, ptr addrspace(1) %offs, i64 %i\n  %o = load <2 x i32>, ptr addrspace(1) %po, align 8\n"
+    } else {
+        ""
+    };
+    let state = match sampler {
+        Some(w) => format!(
+            "@__air_sampler_state = internal addrspace(2) constant [2 x i64] [i64 {w}, i64 0], align 8\n\n"
+        ),
+        None => String::new(),
+    };
+    let (states, state_md) = if sampler.is_some() {
+        (
+            "!air.sampler_states = !{!6}\n",
+            "!6 = !{!\"air.sampler_state\", ptr addrspace(2) @__air_sampler_state}\n",
+        )
+    } else {
+        ("", "")
+    };
+    let half_name = if half { "half4" } else { "float4" };
+    // A 3D sample's coordinates are a `float4`'s `xyz`, every other's a `float2`.
+    let (load_coord, coord_size, coord_name) = if matches!(form, Form::ThreeD { .. }) {
+        (
+            "  %p = getelementptr inbounds <4 x float>, ptr addrspace(1) %c, i64 %i\n  %c4 = load <4 x float>, ptr addrspace(1) %p, align 16\n  %uvw = shufflevector <4 x float> %c4, <4 x float> zeroinitializer, <3 x i32> <i32 0, i32 1, i32 2>\n",
+            16,
+            "float4",
+        )
+    } else {
+        (
+            "  %p = getelementptr inbounds <2 x float>, ptr addrspace(1) %c, i64 %i\n  %uv = load <2 x float>, ptr addrspace(1) %p, align 8\n",
+            8,
+            "float2",
+        )
+    };
+    format!(
+        r#"{state}define void @k(ptr addrspace(1) %t, ptr addrspace(1) %c, ptr addrspace(1) %out{params}, i32 %tid) {{
+  %i = zext i32 %tid to i64
+{load_coord}{load_offset}  %r = call {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}(ptr addrspace(1) %t, ptr addrspace(2) {s}, {call_args})
+  %v = extractvalue {{ {vec4}, i8 }} %r, 0
+  %q = getelementptr inbounds {vec4}, ptr addrspace(1) %out, i64 %i
+  store {vec4} %v, ptr addrspace(1) %q, align {size}
+  ret void
+}}
+
+declare {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}({args})
+
+!air.kernel = !{{!0}}
+{states}!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, !5, {arg_mds}}}
+!3 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"{tex_ty}", !"air.arg_name", !"t"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 {coord_size}, !"air.arg_type_align_size", i32 {coord_size}, !"air.arg_type_name", !"{coord_name}", !"air.arg_name", !"c"}}
+!5 = !{{i32 2, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 {size}, !"air.arg_type_align_size", i32 {size}, !"air.arg_type_name", !"{half_name}", !"air.arg_name", !"out"}}
+{state_md}{tail}"#,
+        arg_mds = arg_mds.join(", "),
+    )
+}
+
+const TEXTURE: SlotRef = SlotRef {
+    stage: Stage::Kernel,
+    class: SlotClass::Texture,
+    index: 0,
+};
+
+/// `res` with each `SamplerState` specialization artifact `a` declares valued by runtime sampler
+/// word `word`, masked by its fields; unchanged without a word.
+fn with_word(
+    mut res: Resources,
+    a: &crate::library::FunctionArtifact,
+    word: Option<u32>,
+) -> Resources {
+    let Some(word) = word else {
+        return res;
+    };
+    let mut declared = 0;
+    for key in a.interface.read_keys() {
+        if let SpecKey::SamplerState { fields, .. } = key {
+            res.spec.insert(key, u64::from(word & fields));
+            declared += 1;
+        }
+    }
+    assert_eq!(
+        declared, 1,
+        "the runtime sampler's `SamplerState` specialization"
+    );
+    res
+}
+
+/// `m` over `groups` one-thread threadgroups with `image` bound, in both scheduling orders, which
+/// must agree: buffer 1's `half4`s (`float4`s unless `half`), as bits.
+fn run(m: &TypedModule, res: &Resources, image: &Image, groups: u32, half: bool) -> Vec<[u32; 4]> {
+    run_images(m, res, std::slice::from_ref(image), groups, half)
+}
+
+/// [`run`] with `images` bound.
+fn run_images(
+    m: &TypedModule,
+    res: &Resources,
+    images: &[Image],
+    groups: u32,
+    half: bool,
+) -> Vec<[u32; 4]> {
+    let mut outs = Vec::new();
+    for order in [Order::Forward, Order::Reverse] {
+        let cfg = Config {
+            workgroups: [groups, 1, 1],
+            order,
+            ..Config::default()
+        };
+        let (o, _) = run_with_images(m, &cfg, res.clone(), images.to_vec())
+            .unwrap_or_else(|e| panic!("interpreter: {e:?}"));
+        outs.push(o.buffers);
+    }
+    assert_eq!(outs[0], outs[1], "the scheduling orders disagree");
+    let size = if half { 2 } else { 4 };
+    outs[0][1]
+        .chunks_exact(4 * size)
+        .map(|c| {
+            std::array::from_fn(|k| {
+                let mut b = [0u8; 4];
+                b[..size].copy_from_slice(&c[size * k..size * (k + 1)]);
+                u32::from_le_bytes(b)
+            })
+        })
+        .collect()
+}
+
+/// A deterministic source: a 64-bit LCG.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 >> 11
+    }
+}
+
+/// Metal's step of a 2D linear sample of a YCbCr format: the taps' steps `k` (`(i, j)`, `(i + 1,
+/// j)`, `(i, j + 1)`, `(i + 1, j + 1)`) under the fractions `a` and `b` in 1/256 steps, a merged
+/// axis's 0; a signed term and sum floored.
+fn metal_step(taps: [i64; 4], a: i64, b: i64) -> i64 {
+    let w = [(256 - a) * (256 - b), a * (256 - b), (256 - a) * b, a * b];
+    let t: i64 = taps.iter().zip(w).map(|(k, w)| (k * w) >> 7).sum();
+    (t + 256) >> 9
+}
+
+/// The `half` bits of `k / d` (`d` a power of two, `1 <= |k| / d`'s binade above `2^-14`, or `k
+/// = 0`), rounded with ties away from zero.
+fn half_away(k: i64, d: i64) -> u16 {
+    if k == 0 {
+        return 0;
+    }
+    let sign = if k < 0 { 0x8000 } else { 0 };
+    let m = k.unsigned_abs();
+    let lead = i64::from(63 - m.leading_zeros());
+    let e = lead - i64::from(d.trailing_zeros());
+    assert!(e >= -14, "{k} / {d} is below the normal halves");
+    // The significand's 11 bits: the magnitude rounded half up there, a carry raising `e`.
+    let shift = lead - 10;
+    let q = match shift > 0 {
+        true => (m + (1 << (shift - 1))) >> shift,
+        false => m << -shift,
+    };
+    let (q, e) = if q == 2048 { (1024, e + 1) } else { (q, e) };
+    sign | ((e + 15) as u16) << 10 | (q as u16 - 1024)
+}
+
+/// The result lanes of steps `steps` on grid `d` (alpha 1): `k / d` as `f32` bits (exact), or as
+/// `half` bits rounded with ties away from zero when `half`.
+fn result_bits(steps: [i64; 3], half: bool, d: i64) -> [u32; 4] {
+    let lanes = [steps[0], steps[1], steps[2], d];
+    lanes.map(|k| match half {
+        true => u32::from(half_away(k, d)),
+        false => (k as f32 / d as f32).to_bits(),
+    })
+}
 
 /// The texture's width and height: odd, so the chroma plane's last pair serves one column and one
 /// row alone.
@@ -426,7 +766,7 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
             ("moltenvk-m3", true),
             ("nvidia-rtx5080-laptop", false),
         ] {
-            let p = profile(stem, EXACT_SAMPLING).expect("profile");
+            let p = profile(stem, DevicePolicy::default()).expect("profile");
             assert_eq!(p.fields().ycbcr_in_place, takes, "{stem}");
             let what = format!("{name} on {stem}");
             let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(false))

@@ -203,18 +203,9 @@ impl UlpTable {
 /// - `FloatSampleFilter`: unbounded: a filtered `float` sample the emulation does not reach is the
 ///   device's filter, whose footprint, weights, and sum Vulkan bounds only by its precision rules,
 ///   so a lane can differ from Metal's by any amount.
-/// - `DeviceGatherFootprint`: unbounded: a gather the module leaves to the device (a cube's, a
-///   runtime or argument-buffer sampler's, a pixel-coordinate sampler's) can read the next 2x2
-///   block, which changes whole texels, not lanes.
-/// - `CubeFaceReciprocal`: unbounded: a nearest cube sample handed the texel of Metal's position
-///   with the correctly rounded reciprocal reads the next texel where Apple's texture unit's
-///   reciprocal is the other neighbour and the position lies near a texel edge, which changes whole
-///   texels, not lanes.
 /// - `QuadsCountedBeforeDiscard`: unbounded: a non-quad simdgroup operation before a discard, in a
 ///   shape whose placement by Metal's compiler is not known, takes, among its lanes, the quads the
 ///   discard drops, which moves a count, a ballot, or a reduction by whole lanes.
-/// - `DeviceDepthComparison`: unbounded: a depth comparison the device makes passes or fails a
-///   whole tap where Metal's does not.
 /// - `DeviceInterpolation`: unbounded: the device's interpolation of a varying is measured up to
 ///   about `3e-4` off Metal's on the probes (more where the varying's range is wider), and the
 ///   interpolated value is ordinary data later words use, so no word's difference is bounded by
@@ -241,9 +232,6 @@ impl UlpTable {
 ///   performs is exposed to both; a `half` texel's NaN is the device's decode where Metal hands
 ///   back the texel's own: a difference they cause stays a mismatch for review, never accepted or
 ///   explained by the class. C3 tells which differing values they cause ([`value_difference`]).
-/// - `DeviceTexelDenormals`: [`Allowance::Recorded`]. A device's sample or gather may read a
-///   denormal 32-bit float texel as zero where Metal's keeps it, and every `float` sample or gather
-///   whose texels the device reads is exposed to it: a difference stays a mismatch for review.
 /// - `FunctionStorageAssumed`: [`Allowance::Recorded`]. A vertex or fragment function's private
 ///   memory passes the floor of a device not measured, resting on no measurement; a difference is
 ///   a mismatch for review, never accepted or explained by the note.
@@ -274,7 +262,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         N::DeviceDenormals
         | N::DeviceNanEncoding
         | N::FunctionStorageAssumed
-        | N::DeviceTexelDenormals
         | N::ViewBaseTexelOffset => Allowance::Recorded,
         N::DeviceColorConversion => Allowance::Recorded,
         N::LinkedSamplerNumbering | N::ColorAttachmentGroups => Allowance::Recorded,
@@ -306,10 +293,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::HalfSampleFilter
         | N::SrgbTexelDecode
         | N::FloatSampleFilter
-        | N::DeviceGatherFootprint
-        | N::CubeFaceReciprocal
         | N::QuadsCountedBeforeDiscard
-        | N::DeviceDepthComparison
         | N::DeviceInterpolation
         | N::ComputedSampleDepth
         | N::QuadsSplitByClipping
@@ -326,7 +310,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DevicePointSize
         | N::ClippedCoverageSplit
         | N::LoopedSampleOutputs
-        | N::DeviceUnorm8LinearFilter
         | N::HalfOutputFastMathBlend
         | N::DeviceSampling
         | N::NativeTranscendentals

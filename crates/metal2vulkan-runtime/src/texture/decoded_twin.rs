@@ -44,9 +44,9 @@
 //! those texels would.
 //!
 //! **ASTC** (`astc.rs`): on a device without a texture's ASTC LDR format its blocks lie in a
-//! carrier image and its twin holds Metal's decode in the texels `DevicePolicy::decoded_texels` names
-//! (`TwinDecode::Astc`; an sRGB form's 8-bit codes under either, which its slots read raw and
-//! decode through Metal's table), kept in step as a BC image's twin is (`bind::astc_decode_module`
+//! carrier image and its twin holds Metal's decode as 8-bit codes (`TwinDecode::Astc`; an LDR
+//! form's the code nearest Metal's 12-bit value, an sRGB form's its own codes, which its slots read
+//! raw and decode through Metal's table), kept in step as a BC image's twin is (`bind::astc_decode_module`
 //! on the GPU, `AstcDecode::decode_into` on the CPU): a pass's bands are of the texture's texels,
 //! each band's blocks copied out of the carrier's texels over them. A new one's zero blocks read
 //! magenta (an error block).
@@ -57,7 +57,7 @@
 //! bit for bit, footprints 4x4, 6x5 and 12x12). The two forms widen the endpoints apart
 //! (`bind::AstcDecode`), so neither's texels follow from the other's: the first view of the
 //! texture in its other colour space makes the carrier a second twin ([`Image::make_second_twin`]),
-//! of that form's decode in the texels the policy names, in memory of its own, which the CPU
+//! of that form's decode in 8-bit codes, in memory of its own, which the CPU
 //! never writes. Its decodes are the GPU's, each recorded by a batch's submission
 //! ([`SecondDecode`]): its whole decode as it is made, and a host write's, queued for the
 //! device's next batch with work, which records them before its work, their uses joined to its
@@ -81,8 +81,9 @@
 //! **ETC2 and EAC** (`etc.rs`): on a device without the formats their blocks lie in a carrier of
 //! the texture's shape, and the twin holds Metal's decode (`TwinDecode::Etc`): an 8-bit format's
 //! codes (`R8G8B8A8_UNORM`; an sRGB form's slots read them raw and decode them through Metal's
-//! table), which serve the views of its linear and sRGB forms alike, and an 11-bit format's texels
-//! `DevicePolicy::decoded_texels` names (`bind::EtcTexels`). Each is kept in step as a BC image's
+//! table), which serve the views of its linear and sRGB forms alike, and an 11-bit format's 16-bit
+//! normalized codes, or its values where the device does not take those (`bind::EtcTexels`). Each
+//! is kept in step as a BC image's
 //! twin is (`bind::etc_decode_module` on the GPU, `EtcDecode::decode_into` on the CPU). A new
 //! one's zero blocks read grey of codes 2 (`ETC2_RGB8`, and `EAC_RGBA8`'s colour, its alpha 0),
 //! opaque black (`RGB8A1`), or an 11-bit value of 1 (signed -3), not zeros: the twin starts
@@ -137,7 +138,6 @@ use metal2vulkan::bind::{
     AstcDecode, AstcTexels, BlockDecode, BlockDecodeModule, ChromaDecode, EtcDecode, EtcTexels,
     ImageViewDesc, PvrtcDecode,
 };
-use metal2vulkan::device::DecodedTexelsPolicy;
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::error::{Capability, Feature, Unsupported};
 use metal2vulkan::metal::format::FormatMapping;
@@ -158,11 +158,10 @@ const TWIN_FEATURES: FormatFeatureFlags2 = FormatFeatureFlags2::SAMPLED_IMAGE
 pub(crate) const BAND_BYTES: u64 = 32 << 20;
 
 /// How a decoded twin's blocks decode: a BC1 to BC5 format's (`BlockDecode`), an ASTC LDR
-/// format's held in a carrier (`astc.rs`) into the texels the device's policy names, a PVRTC
-/// format's held in a carrier (`pvrtc.rs`) into its codes (its linear form's decode, which its
-/// sRGB form's is too), an ETC2 or EAC format's held in a carrier (`etc.rs`) into its codes or
-/// an 11-bit format's texels the policy names (its unorm form's decode, which its sRGB form's is
-/// too), or a 4:2:2 format's pairs held in a carrier (`chroma_pairs.rs`) into its codes.
+/// format's held in a carrier (`astc.rs`) into 8-bit codes, a PVRTC format's held in a carrier
+/// (`pvrtc.rs`) into its codes (its linear form's decode, which its sRGB form's is too), an ETC2
+/// or EAC format's held in a carrier (`etc.rs`) into its codes or an 11-bit format's texels
+/// (`Device::etc_texels`; its unorm form's decode, which its sRGB form's is too), or a 4:2:2 format's pairs held in a carrier (`chroma_pairs.rs`) into its codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TwinDecode {
     Block(BlockDecode),
@@ -471,45 +470,36 @@ impl Device {
         (!measured && layout.samples == 1).then_some(decode)
     }
 
-    /// The texels of the decoded twin of an ASTC texture of `decode` on this device: an sRGB
-    /// form's 8-bit codes either way, which its slots read raw and decode through Metal's table,
-    /// exactly (`metal::texel_format::srgb_raw_on`); an LDR form's Metal's exact values where
-    /// `DevicePolicy::decoded_texels` asks for them and the device samples, filters and copies
-    /// into their format, else 8-bit codes. Refused where the device does not even take the
-    /// codes' format so (no conformant device).
+    /// The texels of the decoded twin of an ASTC texture of `decode` on this device: 8-bit codes,
+    /// an LDR form's each the code nearest Metal's 12-bit value (`decoded-texel-precision`), an
+    /// sRGB form's its own, which its slots read raw and decode through Metal's table, exactly
+    /// (`metal::texel_format::srgb_raw_on`). Refused where the device does not take the codes'
+    /// format so (no conformant device).
     fn astc_texels(&self, decode: AstcDecode) -> Result<AstcTexels, Error> {
         let facts = self
             .shared()
             .textures
             .facts(self.compile_device().profile());
-        let takes = |texels: AstcTexels| {
-            facts
-                .optimal(decode.texel_format(texels))
-                .contains(TWIN_FEATURES)
-        };
-        let wanted = match self.compile_device().policy().decoded_texels {
-            DecodedTexelsPolicy::Exact if !decode.srgb => AstcTexels::Float,
-            _ => AstcTexels::Unorm8,
-        };
-        [wanted, AstcTexels::Unorm8]
-            .into_iter()
-            .find(|&texels| takes(texels))
-            .ok_or_else(|| {
-                Error::Unsupported(Unsupported::needs(
-                    Feature::Format,
-                    Capability::Format {
-                        format: decode.texel_format(AstcTexels::Unorm8),
-                        usage: FormatUsage::SampledImageFilterLinear,
-                    },
-                ))
-            })
+        let texels = AstcTexels::Unorm8;
+        if facts
+            .optimal(decode.texel_format(texels))
+            .contains(TWIN_FEATURES)
+        {
+            return Ok(texels);
+        }
+        Err(Error::Unsupported(Unsupported::needs(
+            Feature::Format,
+            Capability::Format {
+                format: decode.texel_format(texels),
+                usage: FormatUsage::SampledImageFilterLinear,
+            },
+        )))
     }
 
     /// The texels of the decoded twin of an ETC2 or EAC texture of `decode` on this device: an
-    /// 8-bit format's codes either way; an 11-bit format's values exactly where
-    /// `DevicePolicy::decoded_texels` asks for them, else 16-bit normalized codes, each where the
-    /// device samples, filters and copies into their format, else the other. Refused where the
-    /// device takes neither so.
+    /// 8-bit format's codes; an 11-bit format's 16-bit normalized codes where the device samples,
+    /// filters and copies into their format, else its values exactly. Refused where the device
+    /// takes neither so.
     fn etc_texels(&self, decode: EtcDecode) -> Result<EtcTexels, Error> {
         if !decode.eleven_bit() {
             return Ok(EtcTexels::Compact);
@@ -523,10 +513,7 @@ impl Device {
                 .optimal(decode.texel_format(texels))
                 .contains(TWIN_FEATURES)
         };
-        let order = match self.compile_device().policy().decoded_texels {
-            DecodedTexelsPolicy::Exact => [EtcTexels::Float, EtcTexels::Compact],
-            _ => [EtcTexels::Compact, EtcTexels::Float],
-        };
+        let order = [EtcTexels::Compact, EtcTexels::Float];
         order
             .into_iter()
             .find(|&texels| takes(texels))

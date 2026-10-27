@@ -19,9 +19,10 @@
 //!   of the blocks, decoded after each write as a BC texture's twin is, on the GPU
 //!   (`bind::etc_decode_module`), or a host write's on the CPU. An 8-bit format's twin holds its
 //!   codes, exact (an sRGB form's slots read them raw and decode them through Metal's table,
-//!   `metal::texel_format::srgb_raw`); an 11-bit format's holds the texels
-//!   `DevicePolicy::decoded_texels` names (`bind::EtcTexels`: 16-bit normalized codes, announced
-//!   `decoded-texel-precision`, or Metal's values exactly). Announced `carried-decoded-twin`.
+//!   `metal::texel_format::srgb_raw`); an 11-bit format's holds 16-bit normalized codes
+//!   (`bind::EtcTexels::Compact`, announced `decoded-texel-precision`), or Metal's values exactly
+//!   where the device does not take those codes' format (`EtcTexels::Float`). Announced
+//!   `carried-decoded-twin`.
 //!   Refused: a view of another decode (an `R11` or `RG11` format's other signedness;
 //!   `Feature::TextureView`) and a sparse heap's texture (`RuntimeGap::DecodedHeapTexture`). A
 //!   texture without a twin (a heap's over the caller's host pages or laid out apart from the

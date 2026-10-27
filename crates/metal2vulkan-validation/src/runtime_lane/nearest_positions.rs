@@ -304,48 +304,36 @@ const BELOW_ZERO: [(usize, u32); 3] = [(289, 0x8000_0001), (291, 0x8000_0002), (
 const METAL_BELOW_ZERO: [f32; 2] = [80.0, 40.0];
 
 /// Both constexpr clamp-to-zero samplers read Metal's value one, two and three units in the last
-/// place below `+0.0`, under native device sampling (the default) and under the exact emulation
-/// alike: the module flushes a subnormal coordinate on a border axis as Metal's texture unit
-/// reads it (`lower::sampler::position::subnormal_flush`), so the device's own border test is
-/// handed Metal's coordinate.
+/// place below `+0.0`: the module flushes a subnormal coordinate on a border axis as Metal's
+/// texture unit reads it (`lower::sampler::position::subnormal_flush`), so the device's own border
+/// test is handed Metal's coordinate.
 #[test]
 fn clamp_to_zero_samples_just_below_zero_read_metal_s_texels() {
-    use metal2vulkan::device::SamplingPolicy;
     let us = lanes();
     for &(lane, bits) in &BELOW_ZERO {
         assert_eq!(us[lane].to_bits(), bits, "lane {lane}");
     }
-    for sampling in [SamplingPolicy::NativeDevice, SamplingPolicy::Exact] {
-        super::degrade_notices::on_device_with(
-            |options| options.policy.sampling = sampling,
-            |device, _| {
-                let float = texture(device, PixelFormat::R32Float, (WIDTH, HEIGHT), |x, y| {
-                    ((x + 16 * y) as f32).to_le_bytes()
-                });
-                let read = reds(device, &float, SamplerAddressMode::Repeat, &us);
-                let mut wrong = Vec::new();
-                for &(lane, bits) in &BELOW_ZERO {
-                    for (column, metal) in METAL_BELOW_ZERO.into_iter().enumerate() {
-                        let got = read[lane][column];
-                        println!(
-                            "BELOW-ZERO {} {sampling:?} lane {lane} ({bits:08x}) column \
-                             {column}: read {got}, Metal {metal}",
-                            device.name()
-                        );
-                        if got.to_bits() != metal.to_bits() {
-                            wrong.push(format!(
-                                "lane {lane} ({bits:08x}) column {column}: read {got}, Metal \
-                                 {metal}"
-                            ));
-                        }
-                    }
-                }
-                assert!(
-                    wrong.is_empty(),
-                    "{} under {sampling:?} sampling: {wrong:#?}",
+    super::degrade_notices::on_device(|device, _| {
+        let float = texture(device, PixelFormat::R32Float, (WIDTH, HEIGHT), |x, y| {
+            ((x + 16 * y) as f32).to_le_bytes()
+        });
+        let read = reds(device, &float, SamplerAddressMode::Repeat, &us);
+        let mut wrong = Vec::new();
+        for &(lane, bits) in &BELOW_ZERO {
+            for (column, metal) in METAL_BELOW_ZERO.into_iter().enumerate() {
+                let got = read[lane][column];
+                println!(
+                    "BELOW-ZERO {} lane {lane} ({bits:08x}) column {column}: read {got}, Metal \
+                     {metal}",
                     device.name()
                 );
-            },
-        );
-    }
+                if got.to_bits() != metal.to_bits() {
+                    wrong.push(format!(
+                        "lane {lane} ({bits:08x}) column {column}: read {got}, Metal {metal}"
+                    ));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}: {wrong:#?}", device.name());
+    });
 }

@@ -204,7 +204,6 @@ impl Drop for Span {
 fn options(notices: &Notices, directory: &str) -> DeviceOptions {
     let mut options = DeviceOptions::default();
     options.policy = options.policy.exact_answers();
-    options.policy.sampling = metal2vulkan::device::SamplingPolicy::Exact;
     options.announce_each = Degradation::ALL.iter().copied().collect();
     options.shader_cache = ShaderCacheOptions::in_directory(std::path::Path::new(directory));
     options.messages = Some(notices.sink());

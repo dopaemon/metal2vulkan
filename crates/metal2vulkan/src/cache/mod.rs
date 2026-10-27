@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1879;
+pub const SEMANTICS_VERSION: u32 = 1880;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 1879;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 462;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 463;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 462;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1661;
+pub const RUNTIME_VERSION: u32 = 1662;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -209,12 +209,6 @@ pub struct VariantKey {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>,
-    /// Texture slots bound in a YCbCr format whose linear samples the function emulates on a
-    /// device that samples through Metal's own sampler: every slot of a
-    /// `RuntimeFact::YCbCrTexture` the shape binds in a two-plane YCbCr format
-    /// (`metal::format::ycbcr_format`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub ycbcr_textures: BTreeSet<SlotRef>,
     /// Texture slots whose function reads the two-plane YCbCr texture the shape binds there in
     /// place: every slot of a `RuntimeFact::YCbCrInPlace` the shape binds a texture whose planes
     /// are read so (`TextureShape::Texture::ycbcr_in_place`). Each such slot binds the planes'
@@ -536,7 +530,6 @@ impl VariantKey {
             && self.srgb_textures.is_empty()
             && self.srgb_twins.is_empty()
             && self.snapshot_textures.is_empty()
-            && self.ycbcr_textures.is_empty()
             && self.ycbcr_in_place.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
@@ -649,12 +642,6 @@ impl VariantKey {
             .iter()
             .filter(|(s, _)| s.stage == stage)
             .map(|(s, form)| (*s, *form))
-            .collect();
-        out.ycbcr_textures = self
-            .ycbcr_textures
-            .iter()
-            .filter(|s| s.stage == stage)
-            .copied()
             .collect();
         out.ycbcr_in_place = self
             .ycbcr_in_place

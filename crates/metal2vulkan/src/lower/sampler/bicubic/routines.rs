@@ -33,9 +33,6 @@
 //!   taps through Metal's linear accumulator (`accumulate`), and any other format's in `f32`
 //!   operations. Its non-finite results follow IEEE on the taps of nonzero weight: read for a
 //!   32-bit float format, inferred for a half one.
-//! - [`Span`] (a linear 1D sample's emulation, bilinear over taps `i` and `i + 1`). `exact` is
-//!   [`Line::exact`]. `float` is a 32-bit float or half format's sum through Metal's linear
-//!   accumulator (`accumulate`), and Metal's non-finite results on the taps of nonzero weight.
 //! - [`Quad`] (a linear 2D sample's emulation, bilinear over the footprint's taps `(i, j)`, `(i +
 //!   1, j)`, `(i, j + 1)`, and `(i + 1, j + 1)`). `exact` weighs each tap `wx · wy` in units of
 //!   `2^-16`, the integer weights `256 - k` and `k` per axis (a merged axis's fraction arrives as
@@ -49,9 +46,6 @@
 //!   non-finite results on the taps of nonzero weight. [`define_quad_steps`] is `exact` over taps
 //!   given as the integers `exact` recovers from their values, an extended-range sample's grid
 //!   steps from its codes ([`Routine::QuadSteps`]).
-//! - [`Cube`] (a linear cube sample's emulation, beside [`Quad`]'s sums): `fold` is the texel a tap
-//!   reads across the faces' edges, and `corner` the tap past both edges of its face, Metal's
-//!   made-up texel of an exact format's codes.
 //! - [`Block`] (a linear 3D sample's emulation, over the footprint's eight corners). Both routines
 //!   weigh each tap `wx · wy · wz / 256` rounded to nearest in units of `2^-16`, a tie up on the
 //!   `t` axis's first tap in Metal's frame (`block_weights`). `exact` truncates each code's term
@@ -103,7 +97,7 @@ use crate::lower::arith::ops::splat;
 use crate::lower::arith::texel_round::{self, HalfRounding};
 use crate::lower::arith::wide::{self, Pair};
 use crate::metal::bicubic::BicubicTexels;
-use crate::metal::texel_format::{CubeCorner, PackedTexels, TexelFormat};
+use crate::metal::texel_format::{PackedTexels, TexelFormat};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
@@ -119,13 +113,8 @@ pub enum Routine {
     Line,
     /// A linear 2D (or 2D array) sample's emulation: [`Quad`].
     Quad,
-    /// A linear 1D (or 1D array) sample's emulation: [`Span`].
-    Span,
     /// A linear 3D sample's emulation: [`Block`].
     Block,
-    /// A linear cube sample's taps across the faces' edges: [`Cube`], beside [`Routine::Quad`]'s
-    /// sums.
-    Cube,
     /// A linear mip filter's blend of an extended-range sample's two levels: [`define_levels`].
     Levels,
     /// A linear 2D (or 2D array) extended-range sample's exact sum of its taps' grid steps:
@@ -136,16 +125,14 @@ pub enum Routine {
 impl Routine {
     /// An upper estimate of the routines' SPIR-V words, counted once per module. Measured 9062
     /// words for [`Routine::Plane`] and 3663 for [`Routine::Line`] since the extended-range grids,
-    /// and 5218 for [`Routine::Quad`], 4014 for [`Routine::Span`], and 8103 for [`Routine::Block`]
+    /// and 5218 for [`Routine::Quad`] and 8103 for [`Routine::Block`]
     /// since `RGB10A2Unorm_sRGB`'s field (`bicubic_routines_words_bound_their_emission`).
     pub fn words(self) -> u32 {
         match self {
             Routine::Plane => 9216,
             Routine::Line => 3712,
             Routine::Quad => 5440,
-            Routine::Span => 4224,
             Routine::Block => BLOCK_WORDS,
-            Routine::Cube => CUBE_WORDS,
             Routine::Levels => LEVELS_WORDS,
             Routine::QuadSteps => 5440,
         }
@@ -157,9 +144,7 @@ impl Routine {
             Routine::Plane => "sampler.bicubic.plane",
             Routine::Line => "sampler.bicubic.line",
             Routine::Quad => "sampler.linear.quad",
-            Routine::Span => "sampler.linear.span",
             Routine::Block => "sampler.linear.block",
-            Routine::Cube => "sampler.linear.cube",
             Routine::Levels => "sampler.linear.levels",
             Routine::QuadSteps => "sampler.linear.quad_steps",
         }
@@ -442,23 +427,6 @@ pub fn define_line(mb: &mut ModuleBuilder) -> BResult<Line> {
     })
 }
 
-/// A linear 1D sample's routines (module docs).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Span {
-    /// `fn(t0: vec4, t1: vec4, k: u32, flags: u32, half: bool) -> vec4`: the exact sum.
-    pub exact: FuncId,
-    /// `fn(t0: vec4, t1: vec4, k: u32, flags: u32, half: bool) -> vec4`: Metal's accumulated sum.
-    pub float: FuncId,
-}
-
-/// Define a linear 1D sample's routines in `mb`.
-pub fn define_span(mb: &mut ModuleBuilder) -> BResult<Span> {
-    Ok(Span {
-        exact: define_exact_line(mb, Packed::Field, Calls::Kept)?,
-        float: define_float_span(mb)?,
-    })
-}
-
 /// A linear 2D sample's routines (module docs). The taps are the footprint's row `j`, then row `j +
 /// 1`, each from column `i`; `kx` and `ky` are the fractions' 1/256 steps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -505,28 +473,6 @@ pub fn define_block(mb: &mut ModuleBuilder) -> BResult<Block> {
 
 /// [`Routine::words`] of [`Routine::Block`].
 const BLOCK_WORDS: u32 = 8320;
-
-/// A linear cube sample's routines, beside [`Quad`]'s sums of the four taps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Cube {
-    /// `fn(face: u32, ti: i32, tj: i32, n: i32, pick: u32, base: u32) -> uvec3`: the 2D-array
-    /// coordinate of the texel a tap reads, across the faces' edges (`face::define_fold`).
-    pub fold: FuncId,
-    /// `fn(x: vec4, y: vec4, z: vec4, flags: u32) -> vec4`: the tap past both edges of a face,
-    /// from the texels of the three faces at the cube's corner (`define_corner`).
-    pub corner: FuncId,
-}
-
-/// Define a linear cube sample's routines in `mb`.
-pub fn define_cube(mb: &mut ModuleBuilder) -> BResult<Cube> {
-    Ok(Cube {
-        fold: super::super::face::define_fold(mb)?,
-        corner: define_corner(mb)?,
-    })
-}
-
-/// [`Routine::words`] of [`Routine::Cube`] (1,523 measured since the extended-range grids).
-const CUBE_WORDS: u32 = 1536;
 
 // ---- Types and constants ----
 
@@ -717,7 +663,6 @@ fn define_weights(mb: &mut ModuleBuilder) -> BResult<FuncId> {
 /// (`PackedTexels::filter_truncation`), which [`Truncation::of`] takes there. A field whose steps
 /// reach `±2D` (`PackedTexels::filter_extended`) bounds its codes by `±2S` and divides by `2D`.
 struct Grid {
-    d: Value,
     scale: Value,
     per: Option<Value>,
     cap: Value,
@@ -731,8 +676,7 @@ struct Grid {
 }
 
 /// Whether a routine's treatment may name a packed normalized format's grids: a `TexelFormat`
-/// class's routine (the linear filter's), not a `BicubicTexels` one's nor the cube corner's,
-/// whose `CubeCorner` grids a packed class's corner takes.
+/// class's routine (the linear filter's), not a `BicubicTexels` one's.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Packed {
     Field,
@@ -777,7 +721,6 @@ fn grid(fb: &mut FunctionBuilder<'_>, t: Tys, flags: Value, packed: Packed) -> B
     let Some(p) = packed_grids(fb, t, flags, packed)? else {
         let cap = fb.convert(ConvOp::ConvertUToF, divisor, t.vf)?;
         return Ok(Grid {
-            d,
             scale: fb.convert(ConvOp::ConvertUToF, d, t.vf)?,
             per: None,
             cap,
@@ -806,7 +749,6 @@ fn grid(fb: &mut FunctionBuilder<'_>, t: Tys, flags: Value, packed: Packed) -> B
     let neg_cap = fb.unary(UnOp::FNegate, cap)?;
     let ones = u4(fb, 1)?;
     let per = Some(fb.select(packed, p.per, ones)?);
-    let d = fb.select(packed, p.d, d)?;
     let field_divisor = bin(fb, BinOp::IMul, p.d, span)?;
     let divisor = fb.select(packed, field_divisor, divisor)?;
     let span = fb.convert(ConvOp::ConvertUToF, span, t.vf)?;
@@ -814,7 +756,6 @@ fn grid(fb: &mut FunctionBuilder<'_>, t: Tys, flags: Value, packed: Packed) -> B
     let rounds_away = bin(fb, BinOp::LogicalAnd, packed, p.away)?;
     let away = fb.select(rounds_away, color_lanes, away)?;
     Ok(Grid {
-        d,
         scale,
         per,
         cap,
@@ -1259,90 +1200,6 @@ impl Truncation {
         let signed = bin(fb, BinOp::ShiftRightArithmetic, total, self.shift)?;
         fb.select(self.signed, signed, unsigned)
     }
-}
-
-/// `fn(x, y, z, flags) -> vec4` ([`Cube::corner`]): the tap a linear cube sample reads past both
-/// edges of its face, from `x`, `y`, and `z`, the texels at the cube's corner of the faces of the
-/// `x`, `y`, and `z` axes. An `EXACT` format's tap is a texel Metal makes up: on each lane `⌊(6 X +
-/// 5 Y + 5 Z + 8) / 16⌋` of the three texels' codes (an sRGB color lane's table steps, a signed
-/// format's least code read as the next one, as [`code`] reads it), handed on as its value on the
-/// format's grid, which the sums recover exactly. In grid units an 8-bit lane's code is `16 ·
-/// code`, so its sum is shifted by 4 more and back. A format of a `CubeCorner` with grids (its
-/// `TexelFormat::CORNER` field) makes up the same texel of its codes on each lane's grid. Any other
-/// format's is `x`.
-fn define_corner(mb: &mut ModuleBuilder) -> BResult<FuncId> {
-    let t = types(mb)?;
-    let mut fb = mb.routine(t.vf)?;
-    let x = fb.param(t.vf)?;
-    let y = fb.param(t.vf)?;
-    let z = fb.param(t.vf)?;
-    let flags = fb.param(t.u)?;
-    let fb_ = &mut fb;
-    let g = grid(fb_, t, flags, Packed::No)?;
-    let wide16 = flag(fb_, flags, BicubicTexels::WIDE16)?;
-    let srgb = flag(fb_, flags, BicubicTexels::SRGB)?;
-    // A cube corner outside the families: its codes on each lane's grid `D` of the field's
-    // `CubeCorner` (`RoundEven(v · D)`, clamped into `[-D, D]`), whose made-up code is the texel.
-    let (coded, corner_d) = corner_grids(fb_, &t, flags)?;
-    let d = fb_.select(coded, corner_d, g.d)?;
-    let df = fb_.convert(ConvOp::ConvertUToF, d, t.vf)?;
-    let neg_df = fb_.unary(UnOp::FNegate, df)?;
-    // Per lane, the constant of a 16-bit lane or an sRGB color lane (`fine`), of an 8-bit lane
-    // (`coarse`), or of a cube corner's lane (`corner`).
-    let lanes = |fb: &mut FunctionBuilder<'_>, fine: u32, coarse: u32, corner: u32| {
-        let (f, c) = (u1(fb, fine)?, u1(fb, coarse)?);
-        let plain = fb.select(wide16, f, c)?;
-        let plain = broadcast(fb, t.vu, plain)?;
-        let steps = fb.composite_construct(t.vu, &[f, f, f, c])?;
-        let family = fb.select(srgb, steps, plain)?;
-        let corner = u4(fb, corner)?;
-        fb.select(coded, corner, family)
-    };
-    let mut sum = lanes(fb_, 1 << 3, 1 << 7, 1 << 3)?;
-    for (v, w) in [(x, 6), (y, 5), (z, 5)] {
-        let c = texel_round::grid_step(fb_, fform(LANES), v, df, neg_df)?;
-        let w = u4(fb_, w)?;
-        let term = bin(fb_, BinOp::IMul, c, w)?;
-        sum = bin(fb_, BinOp::IAdd, sum, term)?;
-    }
-    let shift = lanes(fb_, 4, 8, 4)?;
-    let back = lanes(fb_, 0, 4, 0)?;
-    let n = bin(fb_, BinOp::ShiftRightArithmetic, sum, shift)?;
-    let n = bin(fb_, BinOp::ShiftLeftLogical, n, back)?;
-    let made = texel_round::grid_value(fb_, uform(LANES), n, d, |fb, m, d| {
-        texel_round::ratio_to_f32(fb, uform(LANES), m, d)
-    })?;
-    let exact = flag(fb_, flags, BicubicTexels::EXACT)?;
-    let made_up = bin(fb_, BinOp::LogicalOr, exact, coded)?;
-    let r = fb_.select(made_up, made, x)?;
-    finish(fb, r)
-}
-
-/// Whether treatment `flags` states a `CubeCorner` with grids in its `TexelFormat::CORNER` field
-/// (every corner after `CubeCorner::XFace`), and that corner's grid `D` per lane (`uvec4`; each
-/// lane 1 for any other field).
-fn corner_grids(fb: &mut FunctionBuilder<'_>, t: &Tys, flags: Value) -> BResult<(Value, Value)> {
-    let shift = u1(fb, TexelFormat::CORNER)?;
-    let field = bin(fb, BinOp::ShiftRightLogical, flags, shift)?;
-    let four_bits = u1(fb, 0xF)?;
-    let field = bin(fb, BinOp::BitwiseAnd, field, four_bits)?;
-    let x_face = u1(fb, CubeCorner::XFace as u32)?;
-    let coded = bin(fb, BinOp::UGreaterThan, field, x_face)?;
-    let mut d = u4(fb, 1)?;
-    for corner in CubeCorner::ALL {
-        let Some(grids) = corner.grids() else {
-            continue;
-        };
-        let k = u1(fb, corner as u32)?;
-        let is = bin(fb, BinOp::IEqual, field, k)?;
-        let mut lanes = Vec::with_capacity(4);
-        for g in grids {
-            lanes.push(u1(fb, g)?);
-        }
-        let g = fb.composite_construct(t.vu, &lanes)?;
-        d = fb.select(is, g, d)?;
-    }
-    Ok((coded, d))
 }
 
 /// A packed field's grids ([`packed_grids`]), each `uvec4` lanes.
@@ -2554,30 +2411,5 @@ fn define_float_block(mb: &mut ModuleBuilder) -> BResult<FuncId> {
     }
     let specials = weighed_specials(fb_, t, &weighed)?;
     let r = accumulated_result(fb_, t, kind, (r, specials), p.half)?;
-    finish(fb, r)
-}
-
-/// `fn(t0, t1, k, flags, half) -> vec4` (module docs, [`Span::float`]): Metal's accumulator
-/// ([`accumulate`]) over the two taps under the weights `(256 - k) · 256` and `k · 256`; Metal's
-/// non-finite results on the taps of nonzero weight; and the `half` result's conversion.
-fn define_float_span(mb: &mut ModuleBuilder) -> BResult<FuncId> {
-    let t = types(mb)?;
-    let mut fb = mb.texel_routine(t.vf)?;
-    let t0 = fb.param(t.vf)?;
-    let t1 = fb.param(t.vf)?;
-    let k = fb.param(t.u)?;
-    let flags = fb.param(t.u)?;
-    let half = fb.param(t.b)?;
-    let fb_ = &mut fb;
-    let (k256, k8) = (u1(fb_, 256)?, u1(fb_, 8)?);
-    let rest = bin(fb_, BinOp::ISub, k256, k)?;
-    let w0 = bin(fb_, BinOp::ShiftLeftLogical, rest, k8)?;
-    let w1 = bin(fb_, BinOp::ShiftLeftLogical, k, k8)?;
-    let kind = Kind::of(fb_, flags)?;
-    let r = accumulate(fb_, t, &[(t0, w0), (t1, w1)], kind.half)?;
-    let z = u1(fb_, 0)?;
-    let zero = bin(fb_, BinOp::IEqual, k, z)?;
-    let specials = weighed_specials(fb_, t, &[(t0, None), (t1, Some(zero))])?;
-    let r = accumulated_result(fb_, t, kind, (r, specials), half)?;
     finish(fb, r)
 }

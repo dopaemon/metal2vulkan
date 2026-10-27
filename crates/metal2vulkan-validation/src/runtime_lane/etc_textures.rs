@@ -4,12 +4,10 @@
 //!
 //! On a device without the formats ([`holds_etc`] false: desktop GPUs and lavapipe) the texture
 //! holds its blocks in a carrier and its reads go through a decoded twin, announced
-//! `carried-decoded-twin` once and, for an 11-bit format under `DecodedTexelsPolicy::Compact`,
-//! `decoded-texel-precision` once. Every format's texels read as Metal's after every kind of
-//! write ([`etc_texels_read_as_metal_s`], [`etc_texels_read_exactly_as_metal_s_under_exact`]): an
-//! 8-bit format's exactly under either policy (an sRGB form's colour through Metal's table, read
-//! from the twin's codes), an 11-bit format's exactly under `DecodedTexelsPolicy::Exact` and within
-//! half a 16-bit step under the default; a new texture's zero blocks, then blocks a CPU copy wrote,
+//! `carried-decoded-twin` once and, for an 11-bit format, `decoded-texel-precision` once. Every
+//! format's texels read as Metal's after every kind of write ([`etc_texels_read_as_metal_s`]): an
+//! 8-bit format's exactly (an sRGB form's colour through Metal's table, read from the twin's
+//! codes), an 11-bit format's within half a 16-bit step; a new texture's zero blocks, then blocks a CPU copy wrote,
 //! a blit from a buffer, a fill of one block and a copy from another texture, each read by a
 //! command buffer after the write's, each decoded into the twin (a blit's by a GPU decode pass, a
 //! CPU copy's by one or on the CPU, counted in `WorkCounts`), and an 8-bit format's view as its
@@ -19,14 +17,12 @@
 //! through its own decode (not compared), announcing neither kind.
 
 use super::astc_textures::{blit, download, read_whole, reader, texture, upload};
-use super::degrade_notices::{counts, on_device_with};
+use super::degrade_notices::{counts, on_device};
 use metal2vulkan::bind::{EtcDecode, EtcTexels, PvrtcDecode};
-use metal2vulkan::device::{DecodedTexelsPolicy, FormatUsage};
+use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::format::{srgb_raw_twin, vk_format, FormatEmulation};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use metal2vulkan_runtime::{
-    Degradation, Device, DeviceOptions, Error, Origin, Region, Size, Texture,
-};
+use metal2vulkan_runtime::{Degradation, Device, Error, Origin, Region, Size, Texture};
 
 /// The ten ETC2 and EAC formats.
 const FORMATS: [PixelFormat; 10] = [
@@ -122,12 +118,12 @@ fn other_form(pf: PixelFormat) -> PixelFormat {
     }
 }
 
-/// Every ETC2 and EAC format's texels read as Metal's on a device without the formats, under
-/// `policy` (the module docs): a new texture's, then after a CPU copy, a blit from a buffer, a
-/// fill and a copy from another texture, the blocks of each coming back unchanged.
-fn etc_texels_under(policy: DecodedTexelsPolicy) {
-    let adjust = |options: &mut DeviceOptions| options.policy.decoded_texels = policy;
-    on_device_with(adjust, |device, messages| {
+/// Every ETC2 and EAC format's texels read as Metal's on a device without the formats (the module
+/// docs): a new texture's, then after a CPU copy, a blit from a buffer, a fill and a copy from
+/// another texture, the blocks of each coming back unchanged.
+#[test]
+fn etc_texels_read_as_metal_s() {
+    on_device(|device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
@@ -169,7 +165,7 @@ fn etc_texels_under(policy: DecodedTexelsPolicy) {
                 }
                 let got = read_whole(device, &state, texture);
                 let want = metal_texels(read_as, blocks);
-                let exact = !decode.eleven_bit() || policy == DecodedTexelsPolicy::Exact;
+                let exact = !decode.eleven_bit();
                 for (t, (got, want)) in got.iter().zip(&want).enumerate() {
                     for c in 0..4 {
                         let fits = match exact {
@@ -247,26 +243,13 @@ fn etc_texels_under(policy: DecodedTexelsPolicy) {
         assert!(undecoded.is_empty(), "on {name}:\n{}", undecoded.join("\n"));
         let counts = counts(&messages.take_notices());
         let announced = |kind| counts.get(&kind).copied().unwrap_or(0);
-        let precision = eleven && policy == DecodedTexelsPolicy::Compact;
         assert_eq!(
             (
                 announced(Degradation::CarriedDecodedTwin),
                 announced(Degradation::DecodedTexelPrecision)
             ),
-            (usize::from(twinned), usize::from(precision)),
+            (usize::from(twinned), usize::from(eleven)),
             "on {name}"
         );
     });
-}
-
-/// [`etc_texels_under`] the default, `DecodedTexelsPolicy::Compact`.
-#[test]
-fn etc_texels_read_as_metal_s() {
-    etc_texels_under(DecodedTexelsPolicy::Compact);
-}
-
-/// [`etc_texels_under`] `DecodedTexelsPolicy::Exact`, which `DevicePolicy::exact_answers` selects.
-#[test]
-fn etc_texels_read_exactly_as_metal_s_under_exact() {
-    etc_texels_under(DecodedTexelsPolicy::Exact);
 }

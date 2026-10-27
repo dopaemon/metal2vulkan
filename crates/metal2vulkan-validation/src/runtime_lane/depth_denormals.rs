@@ -826,8 +826,8 @@ fn passed(color: &[u8]) -> usize {
 /// the value was stored as given (a blit's denormal is a zero on a driver without
 /// `DriverFact::DepthImageKeepsDenormals`, and `get_bytes` reads it so; a host copy's is read as a
 /// zero by such a driver's GPU copies and reads, announced as `depth-denormals`, and a sample or
-/// comparison whose making records `device-texel-denormals` or `device-depth-comparison` may read
-/// it so), and each depth test too where the device's test is Metal's own
+/// comparison whose making records `device-sampling`, the device's sampler's answer, may read it
+/// so), and each depth test too where the device's test is Metal's own
 /// (`DriverFact::DepthTestComparesMagnitudes`). There, a pass with depth writes over a texture
 /// holding such values stores its draw's depth where it passed and every other texel without its
 /// sign, as Metal's (probe `depthstore`), and one that sets a state with depth writes but draws
@@ -888,12 +888,9 @@ fn a_stored_depth_reads_samples_and_compares_as_metal_s() {
         };
         let denormals = facts.contains(&DriverFact::DepthImageKeepsDenormals);
         let sampled_denormals =
-            denormals && !kinds("sd_sample").contains(&Degradation::DeviceTexelDenormals);
-        let compared_denormals = denormals
-            && kinds("sd_compare").is_disjoint(&BTreeSet::from([
-                Degradation::DeviceTexelDenormals,
-                Degradation::DeviceDepthComparison,
-            ]));
+            denormals && !kinds("sd_sample").contains(&Degradation::DeviceSampling);
+        let compared_denormals =
+            denormals && !kinds("sd_compare").contains(&Degradation::DeviceSampling);
         let readers = Readers::new(&device, &library);
         let lane = Lane::new(device);
         first.extend(made_render_kinds(

@@ -3760,7 +3760,6 @@ mod blend_packed;
 mod color_write;
 mod divide;
 mod fast;
-mod float_texel;
 mod fused;
 mod half_texel;
 mod libm;

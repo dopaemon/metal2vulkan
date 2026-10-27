@@ -1369,16 +1369,6 @@ fn a_cube_gradient_footprint_row_is_deferred_and_never_a_reviewed_reading() {
     );
 }
 
-/// A nearest cube sample's texel from a correctly rounded reciprocal (`CubeFaceReciprocal`) is
-/// deferred the same way, with its measured bound.
-#[test]
-fn a_cube_face_reciprocal_row_is_deferred_and_never_a_reviewed_reading() {
-    deferred_and_never_reviewed(
-        PrecisionNote::CubeFaceReciprocal,
-        "CubeFaceReciprocal:a nearest cube texel",
-    );
-}
-
 /// A bicubic sample's unpinned arithmetic (`BicubicFilterArithmetic`) is deferred the same way,
 /// with its measured bound: no model of Apple's 2D rounding fitted.
 #[test]

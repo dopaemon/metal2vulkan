@@ -240,14 +240,6 @@ pub fn committed_profiles() -> Result<Vec<(String, DeviceProfile)>, String> {
     committed_profiles_under(DevicePolicy::default())
 }
 
-/// Every committed device profile, as [`committed_profiles`], with Metal's sampler emulated
-/// exactly (`crate::pipeline::testing::EXACT_SAMPLING`): the profiles of a test of the sampler's
-/// emulation, which native device sampling, the default, skips on a device whose sampler is not
-/// Metal's.
-pub fn committed_exact_profiles() -> Result<Vec<(String, DeviceProfile)>, String> {
-    committed_profiles_under(crate::pipeline::testing::EXACT_SAMPLING)
-}
-
 /// [`committed_profiles`] under `policy` (the tests of Metal's NaN and `half` rounding take
 /// [`crate::pipeline::testing::exact_maths`]).
 pub fn committed_profiles_with(

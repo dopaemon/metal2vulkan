@@ -1969,7 +1969,7 @@ fn decoded_twins_are_planned_in_their_texels_format() {
 /// texels take at most the budget together, so a pass in the device's decode scratch
 /// (`PassScratch::Device`, of the budget and an alignment) holds any band; only a single block
 /// row of one image past the budget is a band alone. Regions of BC decodes, of ASTC ones
-/// (blocks of 12 x 10 and 4 x 4, texels of 16 and 4 bytes), PVRTC ones, ETC2 and EAC ones
+/// (blocks of 12 x 10 and 4 x 4, texels of 4 bytes), PVRTC ones, ETC2 and EAC ones
 /// (texels of 2, 8 and 4 bytes) and 4:2:2 ones (pairs of 2 x 1), square and narrow, of sides off a
 /// multiple of the block, of layers and of depth slices, under the band budget and two small ones
 /// that make them band.
@@ -1993,7 +1993,7 @@ fn decode_bands_cover_each_texel_once_within_the_budget() {
         TwinDecode::Block(BlockDecode::Bc1),
         TwinDecode::Block(BlockDecode::Bc3),
         TwinDecode::Block(BlockDecode::Bc5Unorm),
-        TwinDecode::Astc(astc(PixelFormat::ASTC12x10LDR), AstcTexels::Float),
+        TwinDecode::Astc(astc(PixelFormat::ASTC12x10LDR), AstcTexels::Unorm8),
         TwinDecode::Astc(astc(PixelFormat::ASTC4x4SRGB), AstcTexels::Unorm8),
         TwinDecode::Pvrtc(PvrtcDecode::of(PixelFormat::PVRTCRGBA2BPP).expect("a PVRTC decode")),
         TwinDecode::Pvrtc(PvrtcDecode::of(PixelFormat::PVRTCRGB4BPP).expect("a PVRTC decode")),

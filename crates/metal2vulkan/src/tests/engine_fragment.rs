@@ -5226,63 +5226,39 @@ fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups
     }
 }
 
-/// A selection whose condition every invocation of a draw computes alike (a constant block's flag,
-/// or a sampler's specialization constants) holds no branch only helper invocations take, so an
-/// `optnone` call in its arm is neither guarded nor noted. The owned fixture `rch_uniform_branch`
-/// samples a `half` texture through a runtime sampler after a branch on a constant block's flag and
-/// writes a buffer; under the sampler's YCbCr variant the emulated linear filter branches on the
-/// sampler's specialization constants, and its device-sample arm converts the texel through a
-/// rounded add, which SPIRV-Cross writes as an `optnone` call. On `moltenvk-m3` under Metal's
-/// filter of the format (`YCbCrFilterPolicy::Exact`), with and without the variant: no helper
-/// census entry, no guard, no `HelperBranchDropsSimdgroupStores`, the emulated filter only under
-/// the variant, and L3.
+/// A selection whose condition every invocation of a draw computes alike (a constant block's flag)
+/// holds no branch only helper invocations take, so an `optnone` call in its arm is neither guarded
+/// nor noted. The owned fixture `rch_uniform_branch` samples a `half` texture through a runtime
+/// sampler after a branch on a constant block's flag and writes a buffer. On `moltenvk-m3`: no
+/// helper census entry, no guard, no `HelperBranchDropsSimdgroupStores`, no emulated filter, and
+/// L3.
 #[test]
 fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
-    use crate::pipeline::sym::{SlotClass, SlotRef, Stage};
     let Some(bc) = fixture("rch_uniform_branch") else {
         return;
     };
-    let policy = DevicePolicy {
-        ycbcr_filter: crate::device::YCbCrFilterPolicy::Exact,
-        ..DevicePolicy::default()
-    };
-    let p = profile("moltenvk-m3", policy).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
     let noted = PrecisionNote::HelperBranchDropsSimdgroupStores;
-    for ycbcr in [false, true] {
-        let what = format!("rch_uniform_branch on moltenvk-m3, YCbCr variant {ycbcr}");
-        let mut inputs = LoweringInputs::new();
-        if ycbcr {
-            inputs.ycbcr_textures.insert(SlotRef {
-                stage: Stage::Fragment,
-                class: SlotClass::Texture,
-                index: 0,
-            });
-        }
-        let (_, m) = typed_module_with(&bc, "rch_uniform_branch", &p, &inputs)
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        let a = compile_with(&bc, "rch_uniform_branch", &p, &inputs)
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        let helper: Vec<_> = a
-            .strategies
-            .entries
-            .keys()
-            .filter(|k| k.starts_with("fragment.helper"))
-            .collect();
-        eprintln!(
-            "observed: {what}: {helper:?}, note {}, linear emulation {}",
-            a.precision.contains(&noted),
-            a.strategies.entries.contains_key("sampler.linear")
-        );
-        assert_eq!(
-            a.strategies.entries.contains_key("sampler.linear"),
-            ycbcr,
-            "{what}: the emulated filter"
-        );
-        assert!(helper.is_empty(), "{what}: {helper:?}");
-        assert_eq!(helper_guards(&m), 0, "{what}");
-        assert!(!a.precision.contains(&noted), "{what}: the note");
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-    }
+    let what = "rch_uniform_branch on moltenvk-m3";
+    let inputs = LoweringInputs::new();
+    let (_, m) = typed_module_with(&bc, "rch_uniform_branch", &p, &inputs)
+        .unwrap_or_else(|e| panic!("{what}: {e}"));
+    let a = compile_with(&bc, "rch_uniform_branch", &p, &inputs)
+        .unwrap_or_else(|e| panic!("{what}: {e}"));
+    let helper: Vec<_> = a
+        .strategies
+        .entries
+        .keys()
+        .filter(|k| k.starts_with("fragment.helper"))
+        .collect();
+    assert!(
+        !a.strategies.entries.contains_key("sampler.linear"),
+        "{what}: the emulated filter"
+    );
+    assert!(helper.is_empty(), "{what}: {helper:?}");
+    assert_eq!(helper_guards(&m), 0, "{what}");
+    assert!(!a.precision.contains(&noted), "{what}: the note");
+    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
 }
 
 /// Apple's compiler loses nothing after an `optnone` call only helper invocations make where they

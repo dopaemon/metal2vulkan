@@ -256,7 +256,7 @@ fn loader() -> Option<PathBuf> {
 /// and asks for tests of both settings, so the command can select either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Policy {
-    /// `DevicePolicy::exact_answers()`, with exact sampling: the accurate form of every choice.
+    /// `DevicePolicy::exact_answers()`: the accurate form of every choice.
     Exact,
     /// The runtime's own defaults: the fast form of every choice, which is what a consumer runs.
     Default,
@@ -276,7 +276,6 @@ pub fn options_under(policy: Policy, notices: &Notices, cache: &ScratchCache) ->
     let mut options = DeviceOptions::default();
     if policy == Policy::Exact {
         options.policy = options.policy.exact_answers();
-        options.policy.sampling = metal2vulkan::device::SamplingPolicy::Exact;
     }
     options.announce_each = Degradation::ALL.iter().copied().collect();
     options.shader_cache = ShaderCacheOptions::in_directory(cache.path());

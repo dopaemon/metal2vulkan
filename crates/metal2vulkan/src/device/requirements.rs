@@ -782,9 +782,8 @@ pub enum VkProperty {
     Unorm8LinearFilter,
     /// Native device sampling: the module hands its samples, gathers and comparisons to the
     /// device's own sampler as a device that samples through Metal's
-    /// ([`VkProperty::MetalSampler`]) would, on a device that does not, under
-    /// [`SamplingPolicy::NativeDevice`](crate::device::SamplingPolicy::NativeDevice), the
-    /// default. No Vulkan query reports it: the profile takes it from the policy. A module that
+    /// ([`VkProperty::MetalSampler`]) would, on a device that does not. No Vulkan query reports
+    /// it: the profile takes it wherever it lacks `VkProperty::MetalSampler`. A module that
     /// leaves a sample to the device's sampler there requires it and records
     /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling).
     DeviceSampling,

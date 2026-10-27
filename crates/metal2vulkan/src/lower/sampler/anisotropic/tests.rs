@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::air::abi::{Filter, MipFilter};
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
-use crate::device::{Device, DevicePolicy, SamplingPolicy};
+use crate::device::{Device, DevicePolicy};
 use crate::library::FunctionArtifact;
 use crate::metal::sampler::SamplerWord;
 use crate::pipeline::artifact::PrecisionNote;
@@ -20,7 +20,7 @@ use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::sym::SpecKey;
 use crate::pipeline::sym::{SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
-    compile, compile_with, link_and_validate, llvm_assemble, profile, AssembleError, EXACT_SAMPLING,
+    compile, compile_with, link_and_validate, llvm_assemble, profile, AssembleError,
 };
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
@@ -122,8 +122,22 @@ declare { <4 x float>, i8 } @air.sample_texture_2d_grad.v4f32(ptr addrspace(1), 
 !6 = !{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"gid"}
 "#;
 
+/// Committed profile `stem` without `samplerAnisotropy`: every Vulkan sampler is isotropic there,
+/// so Metal's anisotropic filter is emulated (the emulation's home besides a cube's unmeasured
+/// gradient route), the profile the emulation's shape tests compile under.
 fn p(stem: &str) -> DeviceProfile {
-    profile(stem, EXACT_SAMPLING).expect(stem)
+    let mut desc = crate::pipeline::testing::description(stem).expect(stem);
+    desc.features.remove(&VkFeature::SamplerAnisotropy);
+    Device::new(desc, DevicePolicy::default())
+        .expect(stem)
+        .profile()
+        .clone()
+}
+
+/// Committed profile `stem` as described, `samplerAnisotropy` included: the device's own
+/// anisotropic filter.
+fn full(stem: &str) -> DeviceProfile {
+    profile(stem, DevicePolicy::default()).expect(stem)
 }
 
 fn ok(bc: &[u8], entry: &str, p: &DeviceProfile) -> std::sync::Arc<FunctionArtifact> {
@@ -189,9 +203,9 @@ fn dont_unroll_loops(a: &FunctionArtifact) -> usize {
 }
 
 /// A fragment's implicit-level sample through a constexpr sampler of `maxAnisotropy` 3, 8 and 16
-/// under a linear mip filter, on devices without Metal's own sampler, is Metal's filter emulated:
+/// under a linear mip filter, on devices without `samplerAnisotropy`, is Metal's filter emulated:
 /// no implicit-level sample, two explicit-level samples a tap, the level count queried, and
-/// `AnisotropicFilter` recorded. Through Metal's own sampler (MoltenVK) the device's sample stays,
+/// `AnisotropicFilter` recorded. With the feature (MoltenVK's here) the device's sample stays,
 /// unrecorded. Whatever the degree Metal rounds the anisotropy to (4, 8, 16), the code holds tap 0
 /// and one loop of the others that asks the driver not to unroll it.
 #[test]
@@ -222,7 +236,7 @@ fn a_constexpr_anisotropic_sample_takes_metals_filter() {
                 "{what}"
             );
         }
-        let a = ok(&bc, "k", &p("moltenvk-m3"));
+        let a = ok(&bc, "k", &full("moltenvk-m3"));
         assert_eq!(
             count(&a, OP_IMAGE_SAMPLE_IMPLICIT_LOD),
             1,
@@ -250,8 +264,9 @@ fn a_constexpr_anisotropic_sample_takes_metals_filter() {
 /// alone: no `SamplerAnisotropy` specialization, no taps, no note. Under the variant naming the
 /// slot it reads the slot's `SamplerAnisotropy` specialization and its word's anisotropy and mip
 /// filter: the emulation (its taps' explicit-level samples) where the word states anisotropy, the
-/// plain sample elsewhere, and `AnisotropicFilter` recorded under that word alone. On Metal's own
-/// sampler nothing of it is compiled, and no fact is stated.
+/// plain sample elsewhere, and `AnisotropicFilter` recorded under that word alone; each on a
+/// device without `samplerAnisotropy`. With the feature (MoltenVK's here) nothing of it is
+/// compiled, and no fact is stated.
 #[test]
 fn a_runtime_slot_takes_metals_filter_where_its_word_states_anisotropy() {
     let Some(bc) = assemble("runtime", RUNTIME_KERNEL) else {
@@ -300,7 +315,7 @@ fn a_runtime_slot_takes_metals_filter_where_its_word_states_anisotropy() {
         assert!(a.module.words.len() > base.module.words.len(), "{stem}");
         assert!(noted(&a), "{stem}");
     }
-    let a = ok(&bc, "k", &p("moltenvk-m3"));
+    let a = ok(&bc, "k", &full("moltenvk-m3"));
     assert!(!degree(&a));
     assert!(!a.facts.contains(&fact));
 }
@@ -308,7 +323,8 @@ fn a_runtime_slot_takes_metals_filter_where_its_word_states_anisotropy() {
 /// The binder names a slot of the `AnisotropicSampler` fact in the plan's variant where the shape
 /// binds a sampler whose word states anisotropy (`maxAnisotropy` above 1), whatever its filters,
 /// and nowhere else; the variant's own plan for that shape states the same key, so a draw or
-/// dispatch settles on it. Its compiled pipeline round trips as the cached form.
+/// dispatch settles on it. Its compiled pipeline round trips as the cached form. On lavapipe
+/// without `samplerAnisotropy`, where the emulation runs.
 #[test]
 fn a_bound_anisotropic_sampler_asks_for_the_variant() {
     use crate::bind::{
@@ -327,8 +343,9 @@ fn a_bound_anisotropic_sampler_asks_for_the_variant() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(&path).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::new(desc, EXACT_SAMPLING).expect("device");
+    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    assert!(desc.features.remove(&VkFeature::SamplerAnisotropy));
+    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
     let pipeline = |inputs: &LoweringInputs| {
         let function = Library::from_air(&bc)
             .and_then(|lib| lib.function("k"))
@@ -459,9 +476,9 @@ const CUBE_DECL: &str = "{ <4 x float>, i8 } @air.sample_texture_cube.v4f32(ptr 
 
 /// An implicit-level sample out of the emulation's reach (a cube, a 3D texture, a depth texture, a
 /// comparison) through a constexpr sampler of `maxAnisotropy` 8 is the device's own filter, and
-/// records `DeviceAnisotropicFilter` (never `AnisotropicFilter`) on every device without Metal's
-/// own sampler: the sample stays at its implicit level, with no tap. Through Metal's own sampler
-/// (MoltenVK) neither note is recorded. The same samples through an isotropic sampler record
+/// records `DeviceAnisotropicFilter` (never `AnisotropicFilter`) on every device without
+/// `samplerAnisotropy`: the sample stays at its implicit level, with no tap. With the feature
+/// (MoltenVK's here) neither note is recorded. The same samples through an isotropic sampler record
 /// neither.
 #[test]
 fn an_anisotropic_sample_out_of_reach_records_the_device_filter() {
@@ -530,7 +547,7 @@ fn an_anisotropic_sample_out_of_reach_records_the_device_filter() {
             assert_eq!(count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD), 0, "{what}");
             assert_eq!(dont_unroll_loops(&a), 0, "{what}");
         }
-        let a = ok(&bc, "k", &p("moltenvk-m3"));
+        let a = ok(&bc, "k", &full("moltenvk-m3"));
         assert!(
             !a.precision
                 .contains(&PrecisionNote::DeviceAnisotropicFilter),
@@ -562,16 +579,15 @@ fn anisotropy_of(stem: &str, policy: DevicePolicy, withheld: bool) -> DeviceProf
 }
 
 /// Without `samplerAnisotropy` every Vulkan sampler is isotropic, so Metal's anisotropic filter is
-/// emulated where its reach takes the sample under either sampling policy, the default native
-/// sampling included, and the device's isotropic filter is recorded elsewhere. On lavapipe with the
-/// feature withheld, a fragment's implicit-level sample through a constexpr sampler of
+/// emulated where its reach takes the sample, and the device's isotropic filter is recorded
+/// elsewhere. On lavapipe with the feature withheld, a fragment's implicit-level sample through a constexpr sampler of
 /// `maxAnisotropy` 8 takes the taps (`AnisotropicFilter`), a runtime slot's sample states its
 /// `AnisotropicSampler` fact and takes the taps under the variant (`AnisotropicFilter` under its
-/// word), and a cube's implicit-level sample records `DeviceAnisotropicFilter`. With the feature,
-/// native sampling compiles none of it, as before: the device's own sample, no fact, no note. An
-/// isotropic sampler's sample is the device's under every setting.
+/// word), and a cube's implicit-level sample records `DeviceAnisotropicFilter`. With the feature
+/// the module compiles none of it: the device's own sample, no fact, no note. An isotropic
+/// sampler's sample is the device's either way.
 #[test]
-fn without_sampler_anisotropy_metals_filter_is_emulated_under_every_sampling() {
+fn without_sampler_anisotropy_metals_filter_is_emulated() {
     let Some(constexpr) = assemble(
         "constexpr",
         &constexpr_fragment(words(MipFilter::Linear, 8)),
@@ -597,52 +613,48 @@ fn without_sampler_anisotropy_metals_filter_is_emulated_under_every_sampling() {
         return;
     };
     let fact = RuntimeFact::AnisotropicSampler { slot: SLOT };
-    let native = DevicePolicy::UNTRUSTED;
-    assert_eq!(native.sampling, SamplingPolicy::NativeDevice);
-    for (policy, sampling) in [(native, "native"), (EXACT_SAMPLING, "exact")] {
-        for withheld in [false, true] {
-            let what = format!("{sampling} sampling, samplerAnisotropy withheld {withheld}");
-            let p = anisotropy_of("lavapipe", policy, withheld);
-            let device = policy.sampling == SamplingPolicy::NativeDevice && !withheld;
-            let a = ok(&constexpr, "k", &p);
-            assert_eq!(
-                count(&a, OP_IMAGE_SAMPLE_IMPLICIT_LOD),
-                usize::from(device),
-                "{what}"
-            );
-            assert_eq!(dont_unroll_loops(&a), usize::from(!device), "{what}");
-            assert_eq!(
-                a.precision.contains(&PrecisionNote::AnisotropicFilter),
-                !device,
-                "{what}: {:?}",
-                a.precision
-            );
-            let i = ok(&isotropic, "k", &p);
-            assert_eq!(count(&i, OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
+    for withheld in [false, true] {
+        let what = format!("samplerAnisotropy withheld {withheld}");
+        let p = anisotropy_of("lavapipe", DevicePolicy::default(), withheld);
+        let device = !withheld;
+        let a = ok(&constexpr, "k", &p);
+        assert_eq!(
+            count(&a, OP_IMAGE_SAMPLE_IMPLICIT_LOD),
+            usize::from(device),
+            "{what}"
+        );
+        assert_eq!(dont_unroll_loops(&a), usize::from(!device), "{what}");
+        assert_eq!(
+            a.precision.contains(&PrecisionNote::AnisotropicFilter),
+            !device,
+            "{what}: {:?}",
+            a.precision
+        );
+        let i = ok(&isotropic, "k", &p);
+        assert_eq!(count(&i, OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
+        assert!(
+            !i.precision.contains(&PrecisionNote::AnisotropicFilter),
+            "{what}"
+        );
+        let base = ok(&runtime, "k", &p);
+        assert_eq!(base.facts.contains(&fact), !device, "{what}");
+        if !device {
+            let v = ok_with(&runtime, &variant(), &p);
+            assert_eq!(dont_unroll_loops(&v), 1, "{what}");
             assert!(
-                !i.precision.contains(&PrecisionNote::AnisotropicFilter),
+                (v.specialized.iter()).any(|n| n.note == PrecisionNote::AnisotropicFilter),
                 "{what}"
             );
-            let base = ok(&runtime, "k", &p);
-            assert_eq!(base.facts.contains(&fact), !device, "{what}");
-            if !device {
-                let v = ok_with(&runtime, &variant(), &p);
-                assert_eq!(dont_unroll_loops(&v), 1, "{what}");
-                assert!(
-                    (v.specialized.iter()).any(|n| n.note == PrecisionNote::AnisotropicFilter),
-                    "{what}"
-                );
-            }
-            let c = ok(&cube, "k", &p);
-            assert_eq!(
-                c.precision
-                    .contains(&PrecisionNote::DeviceAnisotropicFilter),
-                !device,
-                "{what}: {:?}",
-                c.precision
-            );
-            assert_eq!(dont_unroll_loops(&c), 0, "{what}");
         }
+        let c = ok(&cube, "k", &p);
+        assert_eq!(
+            c.precision
+                .contains(&PrecisionNote::DeviceAnisotropicFilter),
+            !device,
+            "{what}: {:?}",
+            c.precision
+        );
+        assert_eq!(dont_unroll_loops(&c), 0, "{what}");
     }
 }
 
@@ -683,20 +695,26 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_cube_grad.v4f32(ptr addrspace(
 fn unmeasured_moltenvk() -> DeviceProfile {
     let desc = crate::pipeline::testing::description("moltenvk-m3").expect("moltenvk-m3");
     let route = crate::error::DriverDeviation::CubeGradientRoute;
-    crate::device::Device::with_deviation(desc, EXACT_SAMPLING, route, false)
-        .expect("device")
-        .profile()
-        .clone()
+    crate::device::Device::with_deviation(
+        desc,
+        crate::device::DevicePolicy::default(),
+        route,
+        false,
+    )
+    .expect("device")
+    .profile()
+    .clone()
 }
 
-/// A cube's explicit gradients through a constexpr sampler under a linear mip filter take Metal's
-/// footprint in the shader on every device without Metal's own sampler: through `maxAnisotropy` 8,
-/// Metal's level and taps (no gradient sample, the level count queried, tap 0 and the loop's tap
-/// of two explicit levels each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not);
-/// through an isotropic sampler, Metal's level and its one tap (two explicit levels, no loop,
-/// neither note). Through Metal's own sampler on a measured route (`moltenvk-m3`, whose kernels
-/// hand Metal's own gradients) the device's gradient sample stays, unrecorded; on a route the
-/// description does not state, the shader takes the footprint as off it, where the refusal was.
+/// A cube's explicit gradients through a constexpr sampler of `maxAnisotropy` 8 under a linear
+/// mip filter take Metal's footprint in the shader on every device without `samplerAnisotropy`,
+/// and on MoltenVK where its kernel cube-gradient route is not measured: Metal's level and taps
+/// (no gradient sample, the level count queried, tap 0 and the loop's tap of two explicit levels
+/// each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not). Through an isotropic
+/// sampler the unmeasured route alone takes Metal's level and its one tap (two explicit levels, no
+/// loop, neither note), where the refusal was; a device without the feature keeps its own gradient
+/// sample there, at the footprint the cube's form hands it. On a measured route (`moltenvk-m3`, whose kernels hand Metal's own gradients) the
+/// device's gradient sample stays, unrecorded.
 #[test]
 fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
     const GRAD: u32 = 0x4;
@@ -709,12 +727,14 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
             return;
         };
         let explicit = 2 * if taps { WRITTEN_TAPS as usize } else { 1 };
-        let shader = [
-            ("lavapipe", p("lavapipe")),
-            ("amd-rdna3-radv", p("amd-rdna3-radv")),
-            ("intel-irisxe-anv", p("intel-irisxe-anv")),
-            ("unmeasured MoltenVK", unmeasured_moltenvk()),
-        ];
+        let mut shader = vec![("unmeasured MoltenVK", unmeasured_moltenvk())];
+        let mut device = vec![("moltenvk-m3", full("moltenvk-m3"))];
+        for stem in ["lavapipe", "amd-rdna3-radv", "intel-irisxe-anv"] {
+            match taps {
+                true => shader.push((stem, p(stem))),
+                false => device.push((stem, p(stem))),
+            }
+        }
         for (stem, profile) in shader {
             let what = format!("{what}, {stem}");
             let a = ok(&bc, "k", &profile);
@@ -734,23 +754,25 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
                 assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
             }
         }
-        let a = ok(&bc, "k", &p("moltenvk-m3"));
-        assert_eq!(
-            count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD),
-            1,
-            "{what}, MoltenVK"
-        );
-        assert_eq!(count(&a, OP_IMAGE_QUERY_LEVELS), 0, "{what}, MoltenVK");
-        assert_eq!(gradient_masks(&a), vec![GRAD], "{what}, MoltenVK");
-        for note in [
-            PrecisionNote::AnisotropicFilter,
-            PrecisionNote::CubeGradientFootprint,
-        ] {
+        for (stem, profile) in device {
+            let what = format!("{what}, {stem}");
+            let a = ok(&bc, "k", &profile);
+            assert_eq!(count(&a, OP_IMAGE_SAMPLE_EXPLICIT_LOD), 1, "{what}");
+            assert_eq!(count(&a, OP_IMAGE_QUERY_LEVELS), 0, "{what}");
+            assert_eq!(gradient_masks(&a), vec![GRAD], "{what}");
             assert!(
-                !a.precision.contains(&note),
-                "{what}, MoltenVK: {:?}",
+                !a.precision.contains(&PrecisionNote::AnisotropicFilter),
+                "{what}: {:?}",
                 a.precision
             );
+            // Metal's own sampler on a measured route takes Metal's own gradients.
+            if stem == "moltenvk-m3" {
+                assert!(
+                    !a.precision.contains(&PrecisionNote::CubeGradientFootprint),
+                    "{what}: {:?}",
+                    a.precision
+                );
+            }
         }
     }
 }

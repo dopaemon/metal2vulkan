@@ -3,13 +3,13 @@
 
 use crate::device::profile::{GuestIsolation, HandleDomain, PointerDomain};
 
-/// Policy inputs of `Device::new`. Every field but `decoded_texels`, `heap_compression`,
-/// `completion`, `batch_order`, `render_lowering` and `host_page_textures` can change emitted
-/// code, so the profile carries it (containment as the encoding it selects) and its fingerprint
-/// covers it; those six are the runtime's alone (the texels of a carried texture's decoded twin, a
-/// heap's compressed texture's image, when the host sees a command buffer complete, how a batch
-/// begins after the earlier ones of its queue, where a render encoder's calls are lowered, and
-/// what holds a sampled texture over host pages), and no profile carries them.
+/// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
+/// `batch_order`, `render_lowering` and `host_page_textures` can change emitted code, so the
+/// profile carries it (containment as the encoding it selects) and its fingerprint covers it; those
+/// five are the runtime's alone (a heap's compressed texture's image, when the host sees a command
+/// buffer complete, how a batch begins after the earlier ones of its queue, where a render
+/// encoder's calls are lowered, and what holds a sampled texture over host pages), and no profile
+/// carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -22,29 +22,7 @@ pub struct DevicePolicy {
     pub containment: ContainmentPolicy,
     /// Whether guest shaders are isolated from each other's resources.
     pub isolation: GuestIsolation,
-    /// Whether an 8-bit unsigned normalized texture's linear sample may be the device's own
-    /// filter on a device measured within one code of Metal; by default it is Metal's filter,
-    /// emulated exactly.
-    pub unorm8_linear_filter: Unorm8LinearFilterPolicy,
-    /// Whether a device that does not sample through Metal's own sampler samples natively (the
-    /// default) or emulates Metal's sampler exactly.
-    pub sampling: SamplingPolicy,
-    /// Whether, under native device sampling, a linear sample of a texture slot bound to a
-    /// two-plane YCbCr texture is the device's own filter of its texels (the default) or Metal's
-    /// filter of the format, emulated in a variant of the pipeline the draw binding it makes.
-    pub ycbcr_filter: YCbCrFilterPolicy,
-    /// Whether a texel's `float` or `half` value is the device's conversion of its codes (native
-    /// device sampling, the default off Apple's GPUs) or Metal's, converted exactly in the
-    /// shader.
-    pub texel_conversion: TexelConversionPolicy,
-    /// Whether a normalized vertex attribute's value is the device's fixed-function conversion of
-    /// its codes (the default) or Metal's, divided exactly in the shader.
-    pub vertex_normalized: VertexNormalizedPolicy,
 
-    /// Whether a texture whose format the device lacks, held in a carrier (an ASTC LDR texture,
-    /// or an EAC 11-bit one), samples a decoded twin of compact codes (the default) or of Metal's
-    /// values exactly. The runtime's choice alone: no emitted code changes.
-    pub decoded_texels: DecodedTexelsPolicy,
     /// Whether a heap's colour texture that Metal keeps losslessly compressed, on a driver whose
     /// compressed images hide writes through an alias, is the driver's compressed image (the
     /// default) or one the driver keeps uncompressed in the heap's bytes. The runtime's choice
@@ -74,24 +52,16 @@ pub struct DevicePolicy {
 }
 
 impl DevicePolicy {
-    /// The untrusted-guest production policy: containment and isolation on, Metal's 8-bit linear
-    /// filter emulated exactly where the emulation runs, native device sampling (a two-plane YCbCr texture's samples among them),
-    /// the device's own texel conversions, compact codes in a carried texture's decoded twin, the
-    /// driver's compressed image of a heap's texture Metal keeps compressed, command buffers ready
-    /// together in one kernel submission, batches of one queue ordered by their ends where the
-    /// driver runs them one after another, and a sampled
+    /// The untrusted-guest production policy: containment and isolation on, the driver's
+    /// compressed image of a heap's texture Metal keeps compressed, command buffers ready together
+    /// in one kernel submission, batches of one queue ordered by their ends where the driver runs
+    /// them one after another, and a sampled
     /// texture over host pages in place where the device's check passed.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
         containment: ContainmentPolicy::Contained,
         isolation: GuestIsolation::On,
-        unorm8_linear_filter: Unorm8LinearFilterPolicy::Exact,
-        sampling: SamplingPolicy::NativeDevice,
-        ycbcr_filter: YCbCrFilterPolicy::Device,
-        texel_conversion: TexelConversionPolicy::Device,
-        vertex_normalized: VertexNormalizedPolicy::Device,
-        decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
         completion: CompletionPolicy::Grouped,
         batch_order: BatchOrderPolicy::Ends,
@@ -99,26 +69,18 @@ impl DevicePolicy {
         host_page_textures: HostPageTexturePolicy::InPlace,
     };
 
-    /// This policy with Metal's answer wherever the choices offer it: its texel conversions
-    /// ([`TexelConversionPolicy::Exact`]), its normalized vertex attributes
-    /// ([`VertexNormalizedPolicy::Exact`]), its filter of a
-    /// two-plane YCbCr texture
-    /// ([`YCbCrFilterPolicy::Exact`]), its decode of a carried texture's texels
-    /// ([`DecodedTexelsPolicy::Exact`]), a heap's texture whose bytes alias the heap's
+    /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
+    /// alias the heap's
     /// as written ([`HeapCompressionPolicy::Uncompressed`]), each command buffer seen complete
     /// at its own end ([`CompletionPolicy::Exact`]), each batch ordered after the earlier ones of
     /// its queue by
     /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), each render encoder
     /// call lowered inside the call, which returns every refusal
     /// ([`RenderLoweringPolicy::AtCall`]), and every texture over host pages a shadow, whose
-    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]). Sampling and every
-    /// other field are kept.
+    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]). Every other field is
+    /// kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
-            ycbcr_filter: YCbCrFilterPolicy::Exact,
-            texel_conversion: TexelConversionPolicy::Exact,
-            vertex_normalized: VertexNormalizedPolicy::Exact,
-            decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
             completion: CompletionPolicy::Exact,
             batch_order: BatchOrderPolicy::Exact,
@@ -146,174 +108,6 @@ pub enum ContainmentPolicy {
     Contained,
     /// No containment. Only valid with `GuestIsolation::Off`; recorded in the fingerprint.
     UnsafeOff,
-}
-
-/// How an 8-bit unsigned normalized texture's linear sample is filtered: a 2D texture's or 2D
-/// array's sample of a slot bound in `R8Unorm`, `RG8Unorm`, `RGBA8Unorm` or `BGRA8Unorm`, through a
-/// constexpr sampler with normalized coordinates or a runtime sampler slot, without comparison or
-/// offset.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Unorm8LinearFilterPolicy {
-    /// Metal's filter, emulated exactly: the default (the owner's ruling of 2026-10-11; on the
-    /// consumer's fragments the device's filter bought no GPU time and cost module size and
-    /// making time).
-    #[default]
-    Exact,
-    /// The device's own filter at the centre of Metal's 1/256 footprint step, on a device
-    /// measured to filter the class within one code (1/255) of Metal
-    /// ([`DriverDeviation::Unorm8LinearFilter`](crate::error::DriverDeviation::Unorm8LinearFilter)):
-    /// such a sample records
-    /// [`PrecisionNote::DeviceUnorm8LinearFilter`](crate::pipeline::PrecisionNote::DeviceUnorm8LinearFilter)
-    /// and requires `VkProperty::Unorm8LinearFilter`. An unmeasured device keeps Metal's filter.
-    DeviceWithinOneCode,
-}
-
-/// How a device that does not sample through Metal's own sampler (MoltenVK on Apple's GPU,
-/// `DriverDeviation::MetalSampler`) answers a module's samples, gathers and comparisons: natively,
-/// its own sampler's answer (the default: the owner's ruling of 2026-10-11, making time before
-/// exactness), or Metal's sampler, emulated exactly. A device that samples through Metal's own
-/// sampler answers as Metal under either.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum SamplingPolicy {
-    /// Native device sampling: each sample, gather and comparison goes to the device's sampler
-    /// as on a device whose sampler is Metal's, with no emulation of Metal's filters, footprint,
-    /// level selection, anisotropy or comparisons in the module. Such a module records
-    /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling), whose
-    /// docs state the bound measured against Metal, and requires `VkProperty::DeviceSampling`.
-    #[default]
-    NativeDevice,
-    /// Metal's sampler, emulated exactly where the device's differs: the module's size and the
-    /// driver's making time grow with each sample.
-    Exact,
-}
-
-/// How a linear sample of a texture slot bound to a two-plane YCbCr texture
-/// (`metal::format::ycbcr_format`) is filtered where the module leaves the slot's samples to the
-/// device's sampler: on a device that samples natively ([`SamplingPolicy::NativeDevice`], the
-/// module requiring `VkProperty::DeviceSampling`), and on one that samples through Metal's own
-/// sampler (MoltenVK on Apple's GPU) under native sampling. The texture's image holds Metal's reads
-/// of the planes exactly, steps of `1/2048` or `1/8192`; Metal's filter sums those steps on their
-/// grid, each term truncated, at its own weights, so the device's filter of the same texels lands
-/// off Metal's answer: natively within the bound `PrecisionNote::DeviceSampling` states, through
-/// Metal's own sampler within one step of the grid (`ycbcr-filter-not-exact`). Under
-/// [`SamplingPolicy::Exact`] every sample is Metal's, through the slot's variant on MoltenVK.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum YCbCrFilterPolicy {
-    /// The device's filter of the texture's texels, as for every other format (the default: the
-    /// owner's ruling, making time before exactness, recorded and announced): the pipeline a draw
-    /// binding such a texture takes is the one a draw binding any other texture takes, so the draw
-    /// makes none. A natively sampling module records
-    /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling), whose
-    /// docs state the bound measured against Metal; through Metal's own sampler the module records
-    /// its filter note under the bound format, which the runtime announces as
-    /// `ycbcr-filter-not-exact` where a draw binds such a texture, and a `half` sample's one texel
-    /// on the grid `8192` through a runtime sampler rounds to nearest even
-    /// ([`PrecisionNote::HalfTexelConversion`](crate::pipeline::PrecisionNote::HalfTexelConversion)).
-    #[default]
-    Device,
-    /// Metal's filter of the format, emulated: a draw that binds such a texture at a slot the
-    /// function samples linearly takes the slot's YCbCr variant (`RuntimeFact::YCbCrTexture`), a
-    /// pipeline of its own, made at that draw.
-    Exact,
-}
-
-/// How a texel's value reaches a read, sample or gather with a `float` or `half` result on a
-/// device that does not sample through Metal's own texture unit (`VkProperty::MetalSampler`). On
-/// such a device Metal's conversion of a texel is emulated by a routine that tells the bound
-/// format's class apart at every access, and the class is data, so no driver folds it: on the
-/// consumer's fragments those routines were most of the driver's making time (296 calls
-/// in `Xgc`, 311 in `A2Xghfc`).
-///
-/// The choice is made per access. A read's texel is this policy's. A sample's or gather's is too
-/// where Metal's sampler is emulated ([`SamplingPolicy::Exact`]); under native device sampling
-/// ([`SamplingPolicy::NativeDevice`], the module requiring `VkProperty::DeviceSampling`) it is the
-/// device's under either policy: the device's sampler decodes its samples and gathers, and an exact
-/// conversion of a sample's texel reads the runtime sampler's filter to tell one texel from a
-/// filtered sum, which splits the pipeline by the bound sampler state. Measured on the RTX 5080
-/// Laptop GPU, `Exact`'s reads cost the consumer's `Xgc` 3 to 5% of its making and 4 to 18% of its
-/// GPU time per draw.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TexelConversionPolicy {
-    /// Native device sampling, the default (the owner's ruling of 2026-10-11: making time before
-    /// exactness off Apple's GPUs, with the bound recorded and announced): the device's `float`
-    /// value of each texel, and its `half` rounded to nearest even. Such an access records
-    /// [`PrecisionNote::DeviceTexelConversion`](crate::pipeline::PrecisionNote::DeviceTexelConversion)
-    /// (`float`) or
-    /// [`PrecisionNote::HalfTexelConversion`](crate::pipeline::PrecisionNote::HalfTexelConversion)
-    /// (`half`), whose docs state the bound.
-    #[default]
-    Device,
-    /// Metal's conversion, emulated exactly by the bound format's class, of every read, and of
-    /// every sample and gather where Metal's sampler is emulated: what validation compares against
-    /// Metal's answers.
-    Exact,
-}
-
-/// Who converts a **normalized** vertex attribute: the Metal vertex and attribute formats whose
-/// fetch asks for a code divided by its own maximum (`UCharNormalized` through
-/// `Short4Normalized`, `UChar4Normalized_BGRA`, `Int1010102Normalized`, `UInt1010102Normalized`).
-///
-/// Metal's conversion is `c / (2^b - 1)` unsigned and `max(c / (2^(b-1) - 1), -1)` signed, each
-/// correctly rounded, which is what Vulkan's `UNORM` and `SNORM` fixed-function vertex input
-/// states as well. A driver whose conversion multiplies by the reciprocal instead is one `f32`
-/// ulp off at some codes, and nothing in the attribute's own Vulkan format says to correct it
-/// after the load, so the exact form moves the fetch into the shader, where
-/// `lower::stage_io::fetch`'s `div_exact` computes the quotient in integer arithmetic.
-///
-/// The choice is per attribute, and it is a variant count as much as a cost: every format the
-/// device fetches in fixed function shares one module, while a pulled attribute's decode is its
-/// own program. Over `cases::vertex_formats`' 45-format sweep on an Apple M3 Max
-/// (`moltenvk-m3`, `tests::engine_vertex_variants`) the `float4` entry compiles 2 modules under
-/// [`VertexNormalizedPolicy::Device`] and 21 under [`VertexNormalizedPolicy::Exact`], and the
-/// `half4` entry 1 against 20. The runtime's own counter reads the same over the whole case on an
-/// Apple M3 Max: `shader_modules_made` 2 of 45 creations against 21, and 1 against 20.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum VertexNormalizedPolicy {
-    /// The device's, by fixed-function vertex input of the attribute's own `UNORM` or `SNORM`
-    /// format (the default): one module for every format the device fetches, and the conversion
-    /// the driver implements.
-    #[default]
-    Device,
-    /// Metal's, computed exactly in the shader: the attribute is pulled from its vertex buffer
-    /// and its codes divided by `lower::stage_io::fetch`'s integer sequence, as a format the
-    /// fixed-function path cannot fetch at all already is. One module per format.
-    Exact,
-}
-
-/// What texels the runtime holds in the decoded twin of a texture whose blocks it holds in a
-/// carrier on a device without the format (the runtime's `texture/decoded_twin.rs`), which the
-/// texture's samples, reads and gathers read: an ASTC LDR texture's (`bind::AstcDecode`), and an
-/// EAC 11-bit texture's (`bind::EtcDecode`). Metal reads an ASTC LDR channel as a 12-bit value,
-/// `(C >> 4) / 4095` of the decode's 16-bit result, which no 8- or 16-bit texel holds; it reads
-/// an EAC 11-bit channel as `c / 2047` (signed `c / 1023`), which no 16-bit normalized code
-/// holds. (An ASTC sRGB texture's twin holds the 8-bit codes `C >> 8` under either, which its
-/// slots read raw and decode through Metal's table, exact; so does a PVRTC texture's twin, and an
-/// 8-bit ETC2 or EAC texture's.) The runtime's choice alone: no emitted code changes.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum DecodedTexelsPolicy {
-    /// Compact texels (the default): an ASTC LDR texture's `R8G8B8A8_UNORM` codes, 4 bytes a
-    /// texel, each channel the code nearest Metal's value, at most `1/510` off it. An EAC 11-bit
-    /// texture's 16-bit normalized codes (`R16_UNORM`, `R16_SNORM` and their two-channel forms),
-    /// 2 bytes a channel, each nearest Metal's value, at most half a 16-bit step off it.
-    /// Announced `decoded-texel-precision` where such a texture is made.
-    #[default]
-    Compact,
-    /// Metal's values exactly, an ASTC LDR texture's in `R32G32B32A32_SFLOAT`, 16 bytes a texel
-    /// (an EAC 11-bit texture's in `R32_SFLOAT` or `R32G32_SFLOAT`, 4 bytes a channel), where the
-    /// device samples, filters and copies into the format (else the compact texels, announced).
-    Exact,
 }
 
 /// The image of a heap's colour texture that Metal keeps losslessly compressed (with

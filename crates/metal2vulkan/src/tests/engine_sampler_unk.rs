@@ -6,14 +6,10 @@
 //!
 //! - gradient samples of 3D, cube, and cube array textures and of depth 2D, 2D array, cube, and
 //!   cube array textures, with and without comparison, are explicit-LOD samples with the `Grad`
-//!   operand (a comparison's with its reference, but a depth 2D or 2D array texture's through a
-//!   nearest sampler on a device without `VkProperty::MetalSampler`, which the shader compares); a
-//!   depth cube array's sample and a depth cube and cube array's comparison at level 0 are
+//!   operand (a comparison's with its reference); a depth cube array's sample and a depth cube and cube array's comparison at level 0 are
 //!   explicit-LOD samples with the `Lod` operand;
 //! - gathers of cube and cube array textures read their component, depth gathers component 0, and
-//!   comparison gathers are `OpImageDrefGather`, none with an offset (a cube takes none), except a
-//!   depth 2D or 2D array texture's on a device without `VkProperty::MetalSampler`, which reads
-//!   component 0 for the shader to compare;
+//!   comparison gathers are `OpImageDrefGather`, none with an offset (a cube takes none);
 //! - the clamped and unclamped LOD queries of 2D array, 3D, cube, and cube array textures and of
 //!   depth 2D, 2D array, cube, and cube array textures are `OpImageQueryLod`;
 //! - a cube's explicit gradients take Metal's footprint (`sampler.sample_cube_grad`, with
@@ -30,16 +26,16 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::device::profile::{CubeGradientRoute, DeviceProfile};
-use crate::device::requirements::{VkFeature, VkProperty};
+use crate::device::requirements::VkFeature;
+use crate::device::DevicePolicy;
 use crate::device::{Device, DeviceDescription};
 use crate::error::{Error, Needs};
 use crate::library::FunctionArtifact;
-use crate::pipeline::testing::EXACT_SAMPLING;
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, AssembleError,
 };
 use crate::pipeline::PrecisionNote;
-use crate::spirv::testing::{committed_descriptions, committed_exact_profiles};
+use crate::spirv::testing::{committed_descriptions, committed_profiles};
 
 const OP_EXT_INST: u16 = 12;
 const OP_CONSTANT: u16 = 43;
@@ -110,7 +106,7 @@ fn unrobust(stem: &str) -> DeviceProfile {
     ] {
         desc.features.remove(&f);
     }
-    Device::new(desc, EXACT_SAMPLING)
+    Device::new(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -118,7 +114,7 @@ fn unrobust(stem: &str) -> DeviceProfile {
 
 /// Every committed profile, and `moltenvk-m3` and `lavapipe` without robustness.
 fn profiles() -> Vec<(String, DeviceProfile)> {
-    let mut out = committed_exact_profiles().expect("profiles");
+    let mut out = committed_profiles().expect("profiles");
     for stem in ["moltenvk-m3", "lavapipe"] {
         out.push((format!("{stem} unrobust"), unrobust(stem)));
     }
@@ -191,25 +187,7 @@ fn each(name: &str, entry: &str, check: impl Fn(&str, &FunctionArtifact)) -> Opt
 
 #[test]
 fn gradient_and_level_samples_of_3d_cube_and_depth_textures() {
-    let metal: Vec<String> = profiles()
-        .into_iter()
-        .filter(|(_, p)| {
-            p.fields()
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalSampler)
-        })
-        .map(|(stem, _)| stem)
-        .collect();
     let Some((compiled, _)) = each("unk_sample_grad", "unk_sample_grad", |stem, a| {
-        // The depth 2D and 2D array gradient comparisons through the nearest sampler compare in
-        // the shader off `VkProperty::MetalSampler`: the device reads their texel by a plain
-        // gradient sample, as it would compare it, at the device's level.
-        let compared = if metal.iter().any(|m| m == stem) {
-            0
-        } else {
-            2
-        };
         // A kernel samples nothing implicitly.
         for op in [
             OP_IMAGE_SAMPLE_IMPLICIT_LOD,
@@ -218,26 +196,23 @@ fn gradient_and_level_samples_of_3d_cube_and_depth_textures() {
             assert_eq!(count(a, op), 0, "{stem}: {op}");
         }
         let lod = |m: &u32| m & (LOD | GRAD);
-        // Three color and four depth gradient samples, and the compared ones; the depth cube
-        // array's at level 0, twice. Off `VkProperty::MetalSampler` the color cube and cube
-        // array take Metal's level in the shader: each its one tap's two explicit levels.
-        let emulated = 2 * compared;
+        // Three color and four depth gradient samples; the depth cube array's at level 0, twice.
         let mut plain: Vec<u32> = masks(a, OP_IMAGE_SAMPLE_EXPLICIT_LOD, 5)
             .iter()
             .map(lod)
             .collect();
         plain.sort();
-        let mut expected = vec![LOD; 2 + emulated];
-        expected.extend(vec![GRAD; 7 + compared - emulated / 2]);
+        let mut expected = vec![LOD; 2];
+        expected.extend(vec![GRAD; 7]);
         assert_eq!(plain, expected, "{stem}");
-        // Four gradient comparisons, less the compared ones, and two at level 0.
+        // Four gradient comparisons and two at level 0.
         let mut dref: Vec<u32> = masks(a, OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD, 6)
             .iter()
             .map(lod)
             .collect();
         dref.sort();
         let mut expected = vec![LOD, LOD];
-        expected.extend(vec![GRAD; 4 - compared]);
+        expected.extend(vec![GRAD; 4]);
         assert_eq!(dref, expected, "{stem}");
     }) else {
         return;
@@ -247,23 +222,7 @@ fn gradient_and_level_samples_of_3d_cube_and_depth_textures() {
 
 #[test]
 fn cube_depth_and_comparison_gathers() {
-    let metal: Vec<String> = profiles()
-        .into_iter()
-        .filter(|(_, p)| {
-            p.fields()
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalSampler)
-        })
-        .map(|(stem, _)| stem)
-        .collect();
     let Some((compiled, _)) = each("unk_gather", "unk_gather", |stem, a| {
-        // The 2D and 2D array comparison gathers the shader compares.
-        let compared = if metal.iter().any(|m| m == stem) {
-            0
-        } else {
-            2
-        };
         let words = &a.module.words;
         // The component operand is a constant id: its value.
         let constant = |id: u32| {
@@ -280,11 +239,11 @@ fn cube_depth_and_comparison_gathers() {
             .collect();
         let mut components: Vec<u32> = gathers.iter().map(|w| constant(w[5])).collect();
         components.sort();
-        // Cube x and w, cube array z, the two depth gathers' component 0, and the compared ones'.
-        let mut expected = vec![0; 3 + compared];
+        // Cube x and w, cube array z, and the two depth gathers' component 0.
+        let mut expected = vec![0; 3];
         expected.extend([2, 3]);
         assert_eq!(components, expected, "{stem}");
-        assert_eq!(count(a, OP_IMAGE_DREF_GATHER), 4 - compared, "{stem}");
+        assert_eq!(count(a, OP_IMAGE_DREF_GATHER), 4, "{stem}");
         for (op, at) in [(OP_IMAGE_GATHER, 6), (OP_IMAGE_DREF_GATHER, 6)] {
             for m in masks(a, op, at) {
                 assert_eq!(m & (CONST_OFFSET | OFFSET), 0, "{stem}: an offset on {op}");
@@ -320,33 +279,18 @@ fn glsl(a: &FunctionArtifact, number: u32) -> usize {
 
 /// Each of the fixture's six explicit cube gradient samples (color, depth, and comparison; cube and
 /// cube array) takes Metal's footprint: its gradients are Metal's length of the two tangent
-/// components on one tangent (two `GLSL.std.450` `FMax` per gradient, no `Length`), or off
-/// `VkProperty::MetalSampler` the color samples' Metal's level in the shader of the same lengths,
-/// its census name is `sampler.sample_cube_grad`, and the module records `CubeGradientFootprint`
-/// (for the depth and comparison samples, which the shader's level does not reach). The 3D and
+/// components on one tangent (two `GLSL.std.450` `FMax` per gradient, no `Length`), its census
+/// name is `sampler.sample_cube_grad`, and the module records `CubeGradientFootprint`. The 3D and
 /// depth 2D and 2D array gradient samples pass their gradients unchanged (`sampler.sample_grad`),
-/// and a module whose gradients are all 2D records no such note. The depth samples without
-/// comparison read through a sampler that filters nearest with no mip filter, so on a device
-/// without `VkProperty::MetalSampler` their directions are snapped onto Metal's texel instead
-/// (`sampler.cube.snapped`): the two gradient samples and the two at level 0. The 2D fixture's
-/// gradient sample reads a runtime sampler, so on a device without the property the linear
-/// emulation plans it (`sampler.linear`, its word selecting the device's sample). On a driver that
+/// and a module whose gradients are all 2D (the 2D fixture's, through a runtime sampler) records no
+/// such note. On a driver that
 /// hands a compute pipeline's cube gradients to Metal's `gradientcube`
 /// (`CubeGradientRoute::Metal`), the kernel hands Metal's own gradients, exactly: no note.
 #[test]
 fn explicit_cube_gradients_take_metals_footprint() {
     let handed = handed_metal();
     let Some((compiled, _)) = each("unk_sample_grad", "unk_sample_grad", |stem, a| {
-        let snapped = match a
-            .requirements
-            .properties
-            .contains(&VkProperty::MetalSampler)
-        {
-            true => 0,
-            false => 2,
-        };
-        assert_eq!(uses(a, "sampler.sample_cube_grad"), 6 - snapped, "{stem}");
-        assert_eq!(uses(a, "sampler.cube.snapped"), 2 * snapped, "{stem}");
+        assert_eq!(uses(a, "sampler.sample_cube_grad"), 6, "{stem}");
         assert_eq!(uses(a, "sampler.sample_grad"), 5, "{stem}");
         let metal = handed.iter().any(|m| m == stem);
         assert_eq!(glsl(a, GLSL_LENGTH), 0, "{stem}");
@@ -367,15 +311,7 @@ fn explicit_cube_gradients_take_metals_footprint() {
     assert!(!handed.is_empty(), "no profile hands Metal's gradients");
     let Some((compiled, _)) = each("a4_sample_grad", "a4_sample_grad", |stem, a| {
         assert_eq!(uses(a, "sampler.sample_cube_grad"), 0, "{stem}");
-        let census = match a
-            .requirements
-            .properties
-            .contains(&VkProperty::MetalSampler)
-        {
-            true => "sampler.sample_grad",
-            false => "sampler.linear",
-        };
-        assert!(uses(a, census) > 0, "{stem}");
+        assert!(uses(a, "sampler.sample_grad") > 0, "{stem}");
         assert_eq!(glsl(a, GLSL_LENGTH), 0, "{stem}");
         assert!(
             !a.precision.contains(&PrecisionNote::CubeGradientFootprint),
@@ -394,13 +330,13 @@ const CUBE_GRAD_TEXTURES: usize = 2;
 
 /// An anisotropic constexpr sampler (`max_anisotropy(2)`, bits 20-23 of the state's first word) on
 /// a cube's explicit gradients takes Metal's footprint on every profile that compiles the isotropic
-/// fixture, with `samplerAnisotropy` or without it (whose Vulkan sampler is isotropic, the taps
-/// the emulation's). Off `VkProperty::MetalSampler` the shader takes Metal's level and taps: each
-/// texture's routine, which its samples call, queries the level count and loops over its taps,
-/// `AnisotropicFilter` is recorded and `CubeGradientFootprint` is not; through the isotropic
-/// sampler, Metal's level and one tap: no loop, neither note. On a driver that hands a compute pipeline's cube gradients to
-/// Metal's `gradientcube`, the kernel hands Metal's own through either sampler: no level query, no
-/// note. Neither module has a `Length`.
+/// fixture. Without `samplerAnisotropy`, whose Vulkan sampler is isotropic, the shader takes
+/// Metal's level and taps: each texture's routine, which its samples call, queries the level count
+/// and loops over its taps, `AnisotropicFilter` is recorded and `CubeGradientFootprint` is not;
+/// with the feature, and through the isotropic sampler on every profile, the device's sample at
+/// Metal's footprint: no loop, no level query, `CubeGradientFootprint` recorded. On a driver that
+/// hands a compute pipeline's cube gradients to Metal's `gradientcube`, the kernel hands Metal's
+/// own through either sampler: no note. Neither module has a `Length`.
 #[test]
 fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
     let path = engine_dir().join("unk_cube_grad_lod.ll");
@@ -430,23 +366,15 @@ fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
             continue;
         };
         let metal = handed.contains(&stem);
-        let shader = !p
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler);
+        let shader = !p.fields().images.sampler_anisotropy;
         assert_eq!(glsl(&i, GLSL_LENGTH), 0, "{stem}");
         let samples = uses(&i, "sampler.sample_cube_grad") as usize;
         assert!(samples > 0, "{stem}");
-        assert_eq!(
-            count(&i, OP_IMAGE_QUERY_LEVELS),
-            if shader { CUBE_GRAD_TEXTURES } else { 0 },
-            "{stem}"
-        );
+        assert_eq!(count(&i, OP_IMAGE_QUERY_LEVELS), 0, "{stem}");
         assert_eq!(count(&i, OP_LOOP_MERGE), 0, "{stem}");
         assert_eq!(
             i.precision.contains(&PrecisionNote::CubeGradientFootprint),
-            !metal && !shader,
+            !metal,
             "{stem}"
         );
         assert!(
@@ -518,7 +446,7 @@ fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
     let measured = DeviceDescription::from_khronos_json(&profile_text, None).expect("description");
     let profile = |d: DeviceDescription, taken: bool| {
         let route = DriverDeviation::CubeGradientRoute;
-        Device::with_deviation(d, EXACT_SAMPLING, route, taken)
+        Device::with_deviation(d, DevicePolicy::default(), route, taken)
             .expect("device")
             .profile()
             .clone()
@@ -589,7 +517,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
     else {
         return;
     };
-    let all = committed_exact_profiles().expect("profiles");
+    let all = committed_profiles().expect("profiles");
     let of = |stem: &str| {
         all.iter()
             .find(|(s, _)| s == stem)
@@ -605,7 +533,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         .expect("moltenvk-m3");
     let mut m3_macos26 = m3_macos27.clone();
     m3_macos26.device_id = crate::device::driver_facts::APPLE_M3_MAX;
-    let m3 = Device::new(m3_macos26, EXACT_SAMPLING)
+    let m3 = Device::new(m3_macos26, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();
@@ -624,7 +552,7 @@ fn the_graphics_cube_route_is_measured_per_macos_identity() {
         (CubeGradientRoute::AppleProjected, CubeGradientRoute::Metal)
     );
     let tangents = DriverDeviation::GraphicsCubeGradientTangents;
-    let unmeasured = Device::with_deviation(m3_macos27, EXACT_SAMPLING, tangents, false)
+    let unmeasured = Device::with_deviation(m3_macos27, DevicePolicy::default(), tangents, false)
         .expect("device")
         .profile()
         .clone();
@@ -716,7 +644,7 @@ fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
     let unmeasured =
         DeviceDescription::from_khronos_json(&profile_text, None).expect("description");
     let route = crate::error::DriverDeviation::CubeGradientRoute;
-    let unmeasured = Device::with_deviation(unmeasured, EXACT_SAMPLING, route, false)
+    let unmeasured = Device::with_deviation(unmeasured, DevicePolicy::default(), route, false)
         .expect("device")
         .profile()
         .clone();

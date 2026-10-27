@@ -535,8 +535,8 @@ impl Case for ArgumentEncoderCase {
     /// sampled component is exactly 0.0 or 1.0 wherever the sampling happens, and a filter, a
     /// denormal or a decode a device does its own way cannot move a word of that.
     ///
-    /// The three codes were measured, not guessed: Apple Metal announces none of them for this
-    /// work and llvmpipe announces all three, so a run on either venue alone would have left the
+    /// The two codes were measured, not guessed: Apple Metal announces neither for this work and
+    /// llvmpipe announces both, so a run on either venue alone would have left the
     /// other's set undeclared. Only the two cases that dispatch declare them; the three that
     /// encode and read back never sample, so a declaration there would never fire.
     fn allowances(&self) -> Vec<Allowance> {
@@ -554,13 +554,9 @@ impl Case for ArgumentEncoderCase {
         let mut named = vec![crate::replay::shared_memory_notice()];
         if self.dispatches {
             named.extend(
-                [
-                    Degradation::DeviceTexelDenormals,
-                    Degradation::FloatSampleFilter,
-                    Degradation::SrgbTexelDecode,
-                ]
-                .into_iter()
-                .map(|notice| crate::replay::notice_allowance(notice.code())),
+                [Degradation::FloatSampleFilter, Degradation::SrgbTexelDecode]
+                    .into_iter()
+                    .map(|notice| crate::replay::notice_allowance(notice.code())),
             );
         }
         named

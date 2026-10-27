@@ -67,8 +67,8 @@
 //! next face, as the device projects it). Through an isotropic constexpr sampler the module takes
 //! Metal's level alone, its major axis's (an isotropic cube's measured so: a footprint past
 //! `1 + 3/2048` minifies, `unk_cube_grad_table`'s turning points), and one tap, where no exact
-//! path of the sample's own answers it (Metal's linear filter emulated, a snapped or centred
-//! coordinate): its levels are Metal's, each the device's filter.
+//! path of the sample's own answers it (a snapped, fetched or centred coordinate): its levels are
+//! Metal's, each the device's filter.
 //!
 //! **The loop**. Tap 0 is written out, and taps 1 to `n - 1` are one loop's body, which asks the
 //! driver not to unroll it (`LoopControl` `DontUnroll`): each tap's arithmetic and the sum's order
@@ -102,14 +102,13 @@
 //! `half` texels, at the fragment's implicit level (with a bias, through Metal's biased minor
 //! axis) or with explicit gradients, or of a cube or cube array with explicit gradients, through a
 //! constexpr sampler whose `maxAnisotropy` is above 1 (a cube's isotropic one too) or a runtime
-//! sampler slot whose word states anisotropy, on a device that does not sample natively
-//! (`DeviceProfile::device_samples`). A cube's also on one that samples through Metal's own
-//! sampler where its stage's cube-gradient route is not measured
-//! (`CubeGradientRoute::Unmeasured`): its explicit levels are Metal's own, which no route alters,
-//! so the emulation goes where the refusal of an anisotropic sampler was. An anisotropic
-//! sampler's also on a device without `samplerAnisotropy`, whatever its sampling: every Vulkan
-//! sampler is isotropic there (`metal::sampler::device_anisotropy`), so the emulation goes where
-//! that feature's refusal was, the device's own sampling unchanged where the feature is. A runtime
+//! sampler slot whose word states anisotropy, on a device without `samplerAnisotropy`: every
+//! Vulkan sampler is isotropic there (`metal::sampler::device_anisotropy`), so the emulation goes
+//! where that feature's refusal was, the device's own sampling unchanged where the feature is. A
+//! cube's also on a device that samples through Metal's own sampler where its stage's
+//! cube-gradient route is not measured (`CubeGradientRoute::Unmeasured`): its explicit levels are
+//! Metal's own, which no route alters, so the emulation goes where the refusal of an anisotropic
+//! sampler was. A runtime
 //! slot's degree is its `SpecKey::SamplerAnisotropy` specialization; where its word states no
 //! anisotropy, the sample is the plain one. Elsewhere (a cube's implicit level, a 3D texture, a
 //! comparison, an observed residency, an argument buffer's sampler) the device filters, recorded
@@ -316,7 +315,6 @@ pub(super) fn select(
     use_: SamplerUse,
     m: &mut Meter,
 ) -> Result<Option<Anisotropic>, Error> {
-    let device_samples = cx.profile.device_samples();
     // Without `samplerAnisotropy` every Vulkan sampler is isotropic
     // (`metal::sampler::device_anisotropy`): the emulation goes where it reaches an anisotropic
     // sampler's sample there on every device, and the device's isotropic filter is recorded
@@ -338,7 +336,7 @@ pub(super) fn select(
     let cube = matches!(lod, Lod::CubeGrad(..));
     let unmeasured =
         cube && cx.profile.fields().cube_gradients.route(cx.stage) == CubeGradientRoute::Unmeasured;
-    let native = device_samples && !unmeasured;
+    let native = !unmeasured;
     if native && anisotropy {
         cx.families.sampler.device_sampling = true;
         if let Some(SamplerRef::Constexpr(words)) = sampler {
@@ -393,7 +391,7 @@ pub(super) fn select(
         && matches!(image, ImageRef::Slot(_));
     // Out of reach on Metal's own sampler, the device's filter is Metal's, at the footprint the
     // cube's form hands it (`PrecisionNote::CubeGradientFootprint`).
-    if device_samples && anisotropy && !reached {
+    if anisotropy && !reached {
         return Ok(None);
     }
     let note = match reached {

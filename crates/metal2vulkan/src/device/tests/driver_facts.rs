@@ -189,15 +189,14 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
 /// and first-vertex indices; lavapipe's `float` color NaNs and half-float storage writes; RADV's on
 /// the Radeon 780M, ANV's on the Iris Xe of RPL-P and the UHD 770 of RPL-S, and NVIDIA's on the
 /// RTX 3090 and the RTX 5080 Laptop GPU, as measured there; the 8-bit linear filter's bound where
-/// measured, under a policy that accepts it (`Unorm8LinearFilterPolicy::DeviceWithinOneCode`; the
-/// default takes it nowhere). Every other committed profile takes none. MoltenVK on another
+/// measured. Every other committed profile takes none. MoltenVK on another
 /// vendor's GPU takes none, its cube routes unmeasured; another driver on Apple's vendor takes its
 /// own driver's rows, with Vulkan's cube rule. `InterpolateAtOffsetCentered` follows the driver alone.
 #[test]
 fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
     use crate::device::profile::{CubeGradientRoute, CubeGradients};
     use crate::device::requirements::VkProperty;
-    use crate::device::{Device, DevicePolicy, Unorm8LinearFilterPolicy};
+    use crate::device::{Device, DevicePolicy};
     use crate::error::DriverDeviation as D;
     use crate::spirv::testing::is_moltenvk_capture;
     // The nineteen of every Apple GPU measured, and the M3 Max's graphics cube route.
@@ -261,14 +260,12 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         crate::device::driver_facts::APPLE_M4 => m4_measured.clone(),
         _ => apple_all.clone(),
     };
-    // Under a policy that accepts the 8-bit linear filter's bound, so its rows are taken where
-    // measured; the default policy takes it nowhere (checked with the committed profiles).
-    let accepting = DevicePolicy {
-        unorm8_linear_filter: Unorm8LinearFilterPolicy::DeviceWithinOneCode,
-        ..DevicePolicy::default()
+    let profile_of = |d: DeviceDescription| {
+        Device::new(d, DevicePolicy::default())
+            .expect("device")
+            .profile()
+            .clone()
     };
-    let profile_of =
-        |d: DeviceDescription| Device::new(d, accepting).expect("device").profile().clone();
     let centered = |p: &crate::device::DeviceProfile| {
         p.fields()
             .enabled
@@ -327,16 +324,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         };
         assert_eq!(taken(&p), want, "{stem}");
         assert_eq!(centered(&p), !moltenvk, "{stem}");
-        // The default policy keeps Metal's 8-bit linear filter exact on every device.
-        let exact = Device::new(super::profile(stem), DevicePolicy::default())
-            .expect("device")
-            .profile()
-            .clone();
-        let want: Vec<D> = want
-            .into_iter()
-            .filter(|&d| d != D::Unorm8LinearFilter)
-            .collect();
-        assert_eq!(taken(&exact), want, "{stem} under the default policy");
     }
     let m3 = super::profile("moltenvk-m3");
     assert_eq!(

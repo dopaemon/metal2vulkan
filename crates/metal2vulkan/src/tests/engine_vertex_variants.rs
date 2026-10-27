@@ -21,10 +21,9 @@
 //!   attribute's stage. `link::vertex::narrow_float_of_f32_reads` keeps it out of the projection
 //!   there, and `a_half_read_compiles_one_module_for_the_whole_sweep` holds the projections and
 //!   the modules at the same count.
-//! - **one module per pulled format.** A format the fixed-function path cannot fetch, or one the
-//!   profile asks the shader to convert (`VertexNormalizedPolicy::Exact`), is decoded in the
-//!   shader, and each decode is its own code. Necessary, and the count of it is what the exact
-//!   form costs: 2 modules against 21 over the 45-format sweep.
+//! - **one module per pulled format.** A format the fixed-function path cannot fetch is decoded in
+//!   the shader, and each decode is its own code. Necessary: no format of the 45-format sweep is
+//!   pulled on the suite's venue.
 //! - **the step function: nothing, where the device fetches it.** Metal's constant step is a
 //!   Vulkan binding of divisor 0 and stride 0 (`metal::vertex::attribute_fetch`,
 //!   `link::vertex::binding_stride`), which is `VertexAttribute` and `VertexBinding` state and
@@ -39,7 +38,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::{DevicePolicy, DeviceProfile, VertexNormalizedPolicy};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::library::FunctionConstantValues;
 use crate::metal::{VertexFormat, VertexStepFunction};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
@@ -79,16 +78,6 @@ fn fixture() -> Option<Vec<u8>> {
 
 fn prof() -> DeviceProfile {
     profile(PROFILE, DevicePolicy::default()).expect("committed profile")
-}
-
-/// The same profile under Metal's own normalized vertex conversion
-/// (`VertexNormalizedPolicy::Exact`, which `DevicePolicy::exact_answers` selects).
-fn exact_prof() -> DeviceProfile {
-    let policy = DevicePolicy {
-        vertex_normalized: VertexNormalizedPolicy::Exact,
-        ..DevicePolicy::default()
-    };
-    profile(PROFILE, policy).expect("committed profile")
 }
 
 /// Every format of the SDK table a float-class attribute can read, as `cases::vertex_formats`
@@ -203,31 +192,6 @@ fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) ->
     }
 }
 
-/// The normalized formats, whose conversion `VertexNormalizedPolicy::Exact` moves into the
-/// shader and the default leaves to fixed-function vertex input: the 8- and 16-bit `Normalized`
-/// formats of either sign, the BGRA one, and the two packed words.
-const NORMALIZED: [&str; 19] = [
-    "MTLVertexFormatUCharNormalized",
-    "MTLVertexFormatUChar2Normalized",
-    "MTLVertexFormatUChar3Normalized",
-    "MTLVertexFormatUChar4Normalized",
-    "MTLVertexFormatUChar4Normalized_BGRA",
-    "MTLVertexFormatCharNormalized",
-    "MTLVertexFormatChar2Normalized",
-    "MTLVertexFormatChar3Normalized",
-    "MTLVertexFormatChar4Normalized",
-    "MTLVertexFormatUShortNormalized",
-    "MTLVertexFormatUShort2Normalized",
-    "MTLVertexFormatUShort3Normalized",
-    "MTLVertexFormatUShort4Normalized",
-    "MTLVertexFormatShortNormalized",
-    "MTLVertexFormatShort2Normalized",
-    "MTLVertexFormatShort3Normalized",
-    "MTLVertexFormatShort4Normalized",
-    "MTLVertexFormatInt1010102Normalized",
-    "MTLVertexFormatUInt1010102Normalized",
-];
-
 /// `vertex-format-float4`'s own sweep under the default: the device fetches every one of the 45
 /// formats in fixed function, and the whole sweep is **two** modules -- one per `narrow_float`,
 /// which is the only thing of the format the module's instructions name.
@@ -261,56 +225,6 @@ fn a_half_read_compiles_one_module_for_the_whole_sweep() {
         (1, 1),
         "projections and modules of {} creations",
         got.creations
-    );
-}
-
-/// Under `VertexNormalizedPolicy::Exact` every normalized format is pulled and divided in the
-/// shader, one module each: both forms are kept and the switch is what picks between them. The
-/// count is the exact form's cost, and `NORMALIZED` is exactly what moves.
-#[test]
-fn metals_own_normalized_conversion_pulls_every_normalized_format() {
-    let Some(bc) = fixture() else { return };
-    let p = exact_prof();
-    let float4 = count(&bc, &p, TO_FLOAT4, VertexStepFunction::PerVertex);
-    let mut pulled = float4.pulled.clone();
-    pulled.sort_unstable();
-    let mut expected = NORMALIZED;
-    expected.sort_unstable();
-    assert_eq!(
-        pulled, expected,
-        "the formats the shader pulls under VertexNormalizedPolicy::Exact"
-    );
-    assert_eq!(
-        (float4.projections, float4.modules),
-        (2 + NORMALIZED.len(), 2 + NORMALIZED.len()),
-        "projections and modules of {} creations",
-        float4.creations
-    );
-    let half4 = count(&bc, &p, TO_HALF4, VertexStepFunction::PerVertex);
-    assert_eq!(
-        (half4.projections, half4.modules),
-        (1 + NORMALIZED.len(), 1 + NORMALIZED.len()),
-        "the `half` read keeps its one fixed-function module beside them"
-    );
-    assert_eq!(
-        count(&bc, &prof(), TO_FLOAT4, VertexStepFunction::PerVertex).pulled,
-        Vec::<&str>::new(),
-        "the default fetches every format of the sweep in fixed function"
-    );
-}
-
-/// `DevicePolicy::exact_answers` selects Metal's normalized vertex conversion, so the exact form
-/// is reached by the one switch the owner's rule names and not field by field alone.
-#[test]
-fn exact_answers_selects_metals_normalized_vertex_conversion() {
-    assert_eq!(
-        DevicePolicy::default().exact_answers().vertex_normalized,
-        VertexNormalizedPolicy::Exact
-    );
-    assert_eq!(
-        DevicePolicy::default().vertex_normalized,
-        VertexNormalizedPolicy::Device,
-        "the fast form is the default"
     );
 }
 

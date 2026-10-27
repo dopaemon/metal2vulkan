@@ -2754,9 +2754,9 @@ fn compile_kept<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::SimdgroupLockstep);
     }
-    // A filtered `half` sample left to the device's filter because it is Metal's. On a device that
-    // samples natively, every sample left to the device's sampler requires that instead, and the
-    // stage records it.
+    // Every sample, gather and comparison is the device's sampler's: Metal's own on a device
+    // that samples through it, whose answers the stage claims as Metal's, else the device's own,
+    // which the stage records. The module requires whichever it is.
     let sampling = &plan.families.sampler;
     if sampling.metal_sampler || sampling.device_sampling {
         use crate::device::requirements::VkProperty;
@@ -2765,18 +2765,10 @@ fn compile_kept<K>(
             .enabled
             .properties
             .contains(&VkProperty::DeviceSampling);
-        if native {
-            requirements.properties.insert(VkProperty::DeviceSampling);
-        } else if sampling.metal_sampler {
-            requirements.properties.insert(VkProperty::MetalSampler);
-        }
-    }
-    // An 8-bit unsigned normalized linear sample left to the device's filter because it lands
-    // within one code of Metal's at Metal's footprint step.
-    if plan.families.sampler.native_filter {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::Unorm8LinearFilter);
+        requirements.properties.insert(match native {
+            true => VkProperty::DeviceSampling,
+            false => VkProperty::MetalSampler,
+        });
     }
     // A `half` fused multiply-add left to the device's 16-bit `Fma` because it is Metal's.
     if plan.families.arith.f16_fma {

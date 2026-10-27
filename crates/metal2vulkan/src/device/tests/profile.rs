@@ -306,57 +306,6 @@ fn below_1_2_and_contradictory_policies_are_refused() {
     assert_eq!(dev.profile().fields().containment, Containment::UnsafeOff);
 }
 
-/// Each of the policy's choices between the device's answer and Metal's, with a function that
-/// flips it alone: the texel conversions, a normalized vertex attribute's conversion, and the filter
-/// of a two-plane YCbCr texture.
-fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 3] {
-    use crate::device::{
-        TexelConversionPolicy as T, VertexNormalizedPolicy as V, YCbCrFilterPolicy as Y,
-    };
-    [
-        ("texel_conversion", |p| DevicePolicy {
-            texel_conversion: match p.texel_conversion {
-                T::Device => T::Exact,
-                T::Exact => T::Device,
-            },
-            ..p
-        }),
-        ("vertex_normalized", |p| DevicePolicy {
-            vertex_normalized: match p.vertex_normalized {
-                V::Device => V::Exact,
-                V::Exact => V::Device,
-            },
-            ..p
-        }),
-        ("ycbcr_filter", |p| DevicePolicy {
-            ycbcr_filter: match p.ycbcr_filter {
-                Y::Device => Y::Exact,
-                Y::Exact => Y::Device,
-            },
-            ..p
-        }),
-    ]
-}
-
-/// On MoltenVK on the M3, each choice still moves the key: the texel conversions' is the policy's
-/// own field there, and the YCbCr filter's moves whether a two-plane YCbCr slot takes its variant
-/// (`ProfileFields::ycbcr_variant`), Metal's sampler filtering such a texture's converted texels
-/// otherwise.
-#[test]
-fn each_choice_keys_apart_on_moltenvk() {
-    let desc = profile("moltenvk-m3");
-    let fp = |p: DevicePolicy| {
-        Device::new(desc.clone(), p)
-            .unwrap()
-            .profile()
-            .fingerprint()
-    };
-    let base = DevicePolicy::default();
-    for (name, flip) in exactness_flips() {
-        assert_ne!(fp(flip(base)), fp(base), "{name}");
-    }
-}
-
 #[test]
 fn fingerprint_covers_every_policy_field() {
     let desc = profile("lavapipe");
@@ -374,53 +323,12 @@ fn fingerprint_covers_every_policy_field() {
     variants.push(("isolation", p));
     p.containment = ContainmentPolicy::UnsafeOff;
     variants.push(("containment", p));
-    // Metal's sampler emulated exactly in place of native device sampling.
-    let mut p = base;
-    p.sampling = crate::device::SamplingPolicy::Exact;
-    variants.push(("sampling", p));
-    // Each choice between the device's answer and Metal's flipped alone, whichever the default
-    // takes (lavapipe measures none of Metal's forms).
-    for (name, flip) in exactness_flips() {
-        variants.push((name, flip(base)));
-    }
     let mut seen = vec![reference];
     for (name, p) in variants {
         let h = fp(p);
         assert!(!seen.contains(&h), "{name} did not change the fingerprint");
         seen.push(h);
     }
-    // The 8-bit linear filter's policy changes the profile, and so the fingerprint, on a device
-    // measured within its bound (lavapipe's capture, the RTX 5080 Laptop GPU's), through the
-    // property it decides; on a GPU not measured (the RTX 50 desktop GPU's capture) it changes
-    // nothing.
-    let accepting = DevicePolicy {
-        unorm8_linear_filter: crate::device::Unorm8LinearFilterPolicy::DeviceWithinOneCode,
-        ..base
-    };
-    assert_ne!(fp(accepting), reference);
-    let unmeasured = profile("nvidia-rtx50-linux");
-    assert_eq!(
-        Device::new(unmeasured.clone(), base)
-            .unwrap()
-            .profile()
-            .fingerprint(),
-        Device::new(unmeasured, accepting)
-            .unwrap()
-            .profile()
-            .fingerprint(),
-    );
-    let measured = profile("nvidia-rtx5080-laptop");
-    assert_ne!(
-        Device::new(measured.clone(), base)
-            .unwrap()
-            .profile()
-            .fingerprint(),
-        Device::new(measured, accepting)
-            .unwrap()
-            .profile()
-            .fingerprint(),
-        "unorm8_linear_filter did not change the fingerprint"
-    );
     // Description-derived fields are covered too.
     let mut fewer = desc.clone();
     fewer.features.remove(&VkFeature::ShaderInt8);

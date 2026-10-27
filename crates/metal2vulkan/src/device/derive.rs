@@ -13,7 +13,7 @@ use crate::device::description::{
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::{
-    ContainmentPolicy, DevicePolicy, SamplingPolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
+    ContainmentPolicy, DevicePolicy,
 };
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
@@ -114,7 +114,6 @@ impl Device {
                 },
             ));
         }
-        let deviations = accepted(deviations, &policy);
         let fields = derive_fields(&desc, &policy, &deviations);
         let profile = DeviceProfile::of(fields);
         let metal = MetalDeviceProperties::derive(&profile, &desc.allocation);
@@ -177,19 +176,6 @@ impl Device {
     pub fn allocation(&self) -> &AllocationLimits {
         &self.0.allocation
     }
-}
-
-/// The measured `deviations` the profile takes under `policy`: each, but the 8-bit linear
-/// filter's where the policy keeps Metal's filter exact (`Unorm8LinearFilterPolicy::Exact`, the
-/// default), so the translation emulates it as on an unmeasured device.
-fn accepted(
-    mut deviations: BTreeSet<DriverDeviation>,
-    policy: &DevicePolicy,
-) -> BTreeSet<DriverDeviation> {
-    if policy.unorm8_linear_filter == Unorm8LinearFilterPolicy::Exact {
-        deviations.remove(&DriverDeviation::Unorm8LinearFilter);
-    }
-    deviations
 }
 
 fn derive_fields(
@@ -337,8 +323,6 @@ fn derive_fields(
         handle_domain: policy.handle_domain,
         containment,
         isolation: policy.isolation,
-        texel_conversion: policy.texel_conversion,
-        vertex_normalized: policy.vertex_normalized,
         leaf,
         subgroup: subgroup_model(desc, deviates(DriverDeviation::MetalVertexSimdgroups)),
         images,
@@ -356,7 +340,7 @@ fn derive_fields(
         // The feature, which both description readers list from 1.3 (core without a member),
         // so the extended dynamic states a pipeline makes are exactly what it requires.
         dynamic_vertex_stride: has(VkFeature::ExtendedDynamicState),
-        enabled: enabled_caps(desc, deviations, policy),
+        enabled: enabled_caps(desc, deviations),
         // The measured deviation; unmeasured, the device's own functions.
         float_functions: if deviates(DriverDeviation::MetalFloatFunctions) {
             FloatFunctions::Metal
@@ -368,20 +352,6 @@ fn derive_fields(
             NanEncoding::MetalCanonical
         } else {
             NanEncoding::Native
-        },
-        // Metal's filter of a two-plane YCbCr texture through the slot's variant where the policy
-        // asks for it: on a device that samples through Metal's own sampler, under the YCbCr
-        // filter's switch or Metal's sampling; on one that samples natively, under the switch. A
-        // device that emulates Metal's sampler answers it in every module.
-        ycbcr_variant: match deviates(DriverDeviation::MetalSampler) {
-            true => {
-                policy.ycbcr_filter == YCbCrFilterPolicy::Exact
-                    || policy.sampling == SamplingPolicy::Exact
-            }
-            false => {
-                policy.sampling == SamplingPolicy::NativeDevice
-                    && policy.ycbcr_filter == YCbCrFilterPolicy::Exact
-            }
         },
         // The planes of a two-plane YCbCr texture read in place where the GPU reads host memory
         // with no bus between: an integrated GPU's, a CPU device's.
@@ -707,11 +677,7 @@ pub(crate) fn usage_class(usage: FormatUsage) -> UsageClass {
     }
 }
 
-fn enabled_caps(
-    desc: &DeviceDescription,
-    deviations: &BTreeSet<DriverDeviation>,
-    policy: &DevicePolicy,
-) -> EnabledCaps {
+fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>) -> EnabledCaps {
     let sg = &desc.subgroup;
     let mut properties = BTreeSet::new();
     for (stage, bit) in STAGE_BITS {
@@ -790,8 +756,8 @@ fn enabled_caps(
     }
     if deviations.contains(&DriverDeviation::MetalSampler) {
         properties.insert(VkProperty::MetalSampler);
-    } else if policy.sampling == SamplingPolicy::NativeDevice {
-        // Native device sampling, the policy's default, where the device's sampler is not Metal's.
+    } else {
+        // Native device sampling, where the device's sampler is not Metal's.
         properties.insert(VkProperty::DeviceSampling);
     }
     if deviations.contains(&DriverDeviation::MetalColorWrites) {

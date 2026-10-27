@@ -1,22 +1,15 @@
-//! The coordinates a device's gathers and repeating nearest samples read. On a device without
-//! `VkProperty::MetalSampler`, a gather through a constexpr normalized sampler of a 2D texture or
-//! array (with or without a comparison or an offset) hands the device a coordinate snapped onto
-//! Metal's 2x2 block (`sampler.gather.snapped`, `sampler.gather_compare.snapped`), and a runtime
-//! sampler's behind its word; every other gather (a cube's) keeps the device's footprint under
-//! `PrecisionNote::DeviceGatherFootprint`; a nearest sample through a constexpr normalized sampler
-//! with a repeating or mirrored axis that reads the base level snaps those axes
-//! (`sampler.nearest.snapped`), and such a nearest sample of a cube its direction onto the centre
-//! of Metal's texel (`sampler.cube.snapped`) under `PrecisionNote::CubeFaceReciprocal`. On a device
-//! with the property all are the device's, Metal's own sampler, and the module requires it. A
-//! constexpr pixel sampler's position is the coordinate as given, on every device: its gather snaps
-//! from it, and its linear sample is emulated from it or, with the property, snapped onto its
-//! footprint cell (`sampler.linear.snapped`), none of them noted `PixelSamplerScaling`; and a cube
-//! reads it as a normalized sampler. Every module validates on every committed profile, and the
-//! plan's word estimate bounds what it emits.
+//! The coordinates a device's gathers and samples read. A gather and a sample through a constexpr
+//! normalized sampler are the device's sampler's on every device (Metal's own on MoltenVK). A
+//! constexpr pixel sampler's position is the coordinate as given, on every device: its gather
+//! snaps from it (`sampler.gather.snapped`), and its linear sample snaps onto its footprint cell
+//! (`sampler.linear.snapped`), none of them noted `PixelSamplerScaling`; and a cube reads it as a
+//! normalized sampler. A runtime sampler's gather snaps behind its word where the word states pixel
+//! coordinates. Every module requires the device's sampler (`VkProperty::MetalSampler` or
+//! `VkProperty::DeviceSampling`) and validates on every committed profile, and the plan's word
+//! estimate bounds what it emits.
 //!
 //! The snapped coordinate's arithmetic is checked bit for bit on the interpreter by
-//! `lower::sampler::position`'s and `lower::sampler::face`'s tests (the interpreter has no gather
-//! or sample).
+//! `lower::sampler::position`'s tests (the interpreter has no gather or sample).
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -209,261 +202,150 @@ fn uses(a: &FunctionArtifact, name: &str) -> u32 {
     a.strategies.entries.get(name).map_or(0, |u| u.uses)
 }
 
-fn metal_sampler(p: &DeviceProfile) -> bool {
-    p.fields()
+/// Whether compiled `a` requires the device's sampler: `VkProperty::MetalSampler` on a profile
+/// that samples through Metal's own sampler, `VkProperty::DeviceSampling` on any other.
+fn requires_the_sampler(a: &FunctionArtifact, p: &DeviceProfile) -> bool {
+    let property = match p
+        .fields()
         .enabled
         .properties
         .contains(&VkProperty::MetalSampler)
+    {
+        true => VkProperty::MetalSampler,
+        false => VkProperty::DeviceSampling,
+    };
+    a.requirements.properties.contains(&property)
 }
 
-/// How a kernel's one access compiles on a device without `VkProperty::MetalSampler`: its census
-/// name, and which of the notes `NOTES` the module records.
-struct Expect {
-    name: &'static str,
-    note: Option<PrecisionNote>,
-}
-
-/// The notes of an access the module leaves to the device's position, or snaps near Metal's.
-const NOTES: [PrecisionNote; 2] = [
-    PrecisionNote::DeviceGatherFootprint,
-    PrecisionNote::CubeFaceReciprocal,
-];
-
-/// The kernels of the selection tests, with what each compiles to on a device without the
-/// property; on one with it, each `*.snapped` or noted access is the device's (`plain`) and the
-/// module requires the property.
-fn cases() -> Vec<(&'static str, Op, Option<u64>, Expect, &'static str)> {
+/// The kernels of the selection test, each with its access's census name.
+fn cases() -> Vec<(&'static str, Op, Option<u64>, &'static str)> {
     let near = |a: [u64; 3]| Some(sampler(0, 0, a, false));
     let gather = Op::Gather { offset: (0, 0) };
-    let snapped = |name| Expect { name, note: None };
     vec![
-        (
-            "gather edge",
-            gather,
-            near([EDGE; 3]),
-            snapped("sampler.gather.snapped"),
-            "sampler.gather",
-        ),
-        (
-            "gather zero",
-            gather,
-            near([ZERO; 3]),
-            snapped("sampler.gather.snapped"),
-            "sampler.gather",
-        ),
+        ("gather edge", gather, near([EDGE; 3]), "sampler.gather"),
+        ("gather zero", gather, near([ZERO; 3]), "sampler.gather"),
         (
             "gather repeat offset",
             Op::Gather { offset: (1, -1) },
             near([REPEAT; 3]),
-            snapped("sampler.gather.snapped"),
             "sampler.gather",
         ),
-        (
-            "gather mirror",
-            gather,
-            near([MIRROR; 3]),
-            snapped("sampler.gather.snapped"),
-            "sampler.gather",
-        ),
+        ("gather mirror", gather, near([MIRROR; 3]), "sampler.gather"),
         (
             "gather linear sampler",
             gather,
             Some(sampler(1, 0, [EDGE; 3], false)),
-            snapped("sampler.gather.snapped"),
             "sampler.gather",
         ),
         (
             "gather array",
             Op::GatherArray,
             near([EDGE; 3]),
-            snapped("sampler.gather.snapped"),
             "sampler.gather",
         ),
-        (
-            // Snapped behind its word, under the operation's own name.
-            "gather runtime sampler",
-            gather,
-            None,
-            snapped("sampler.gather"),
-            "sampler.gather",
-        ),
+        // Snapped behind its word, under the operation's own name.
+        ("gather runtime sampler", gather, None, "sampler.gather"),
         (
             "nearest repeat 2d",
             Op::Sample2D,
             near([REPEAT; 3]),
-            snapped("sampler.nearest.snapped"),
             "sampler.sample",
         ),
         (
             "nearest mirror s, edge t",
             Op::Sample2D,
             near([MIRROR, EDGE, EDGE]),
-            snapped("sampler.nearest.snapped"),
             "sampler.sample",
         ),
         (
             "nearest repeat 1d",
             Op::Sample1D,
             near([REPEAT; 3]),
-            snapped("sampler.nearest.snapped"),
             "sampler.sample",
         ),
         (
             "nearest repeat r only 3d",
             Op::Sample3D,
             near([EDGE, EDGE, REPEAT]),
-            snapped("sampler.nearest.snapped"),
             "sampler.sample",
         ),
         (
             "nearest repeat, nearest mip filter, level 0",
             Op::Sample2D,
             Some(sampler(0, 1, [REPEAT; 3], false)),
-            snapped("sampler.nearest.snapped"),
-            "sampler.sample",
-        ),
-        (
-            "nearest repeat, linear mip filter, level 0",
-            Op::Sample2D,
-            Some(sampler(0, 2, [REPEAT; 3], false)),
-            snapped("sampler.sample"),
             "sampler.sample",
         ),
         (
             "nearest edge",
             Op::Sample2D,
             near([EDGE; 3]),
-            snapped("sampler.sample"),
             "sampler.sample",
         ),
         (
             "nearest repeat, nearest mip filter, dynamic level",
             Op::SampleLevel,
             Some(sampler(0, 1, [REPEAT; 3], false)),
-            snapped("sampler.sample"),
             "sampler.sample",
         ),
+        // A runtime sampler's sample snaps onto its footprint cell where its word states a
+        // linear pixel sampler, under the operation's own name.
         (
-            // A runtime sampler's sample is planned for the linear emulation, which its word
-            // selects; a nearest word selects the device's sample.
             "nearest repeat runtime sampler",
             Op::Sample2D,
             None,
-            snapped("sampler.linear"),
             "sampler.sample",
         ),
         (
             "nearest cube",
             Op::SampleCube,
             near([EDGE; 3]),
-            Expect {
-                name: "sampler.cube.snapped",
-                note: Some(PrecisionNote::CubeFaceReciprocal),
-            },
             "sampler.sample",
         ),
         (
-            "nearest cube, nearest mip filter, level 0",
-            Op::SampleCube,
-            Some(sampler(0, 1, [REPEAT; 3], false)),
-            Expect {
-                name: "sampler.cube.snapped",
-                note: Some(PrecisionNote::CubeFaceReciprocal),
-            },
-            "sampler.sample",
-        ),
-        (
-            "nearest cube, linear mip filter, level 0",
-            Op::SampleCube,
-            Some(sampler(0, 2, [EDGE; 3], false)),
-            snapped("sampler.sample"),
-            "sampler.sample",
-        ),
-        (
-            // Emulated on Metal's position.
             "linear cube",
             Op::SampleCube,
             Some(sampler(1, 0, [EDGE; 3], false)),
-            Expect {
-                name: "sampler.linear",
-                note: Some(PrecisionNote::CubeFaceReciprocal),
-            },
             "sampler.sample",
         ),
         (
             "nearest cube runtime sampler",
             Op::SampleCube,
             None,
-            Expect {
-                name: "sampler.linear",
-                note: Some(PrecisionNote::CubeFaceReciprocal),
-            },
             "sampler.sample",
         ),
     ]
 }
 
-/// On every committed profile, each kernel compiles to its expected access and notes, and
-/// validates; on a device with `VkProperty::MetalSampler` every gather and every snapped nearest
-/// sample through a constexpr normalized sampler requires the property instead, as does a sample at
-/// a dynamic level through one, whose level is Metal's there.
+/// On every committed profile, each kernel's gather or sample through a normalized or runtime
+/// sampler is the device's sampler's, under its census name, requires the device's sampler, and
+/// validates.
 #[test]
-fn gathers_and_repeating_nearest_samples_snap_where_metal_reads_them() {
-    let profiles = crate::spirv::testing::committed_exact_profiles().expect("profiles");
-    for (name, op, words, expect, plain) in cases() {
+fn normalized_gathers_and_samples_are_the_device_s_sampler_s() {
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
+    for (name, op, words, census) in cases() {
         let Some(bc) = assemble(name, &kernel(op, words)) else {
             return;
         };
-        let snapped = expect.name.ends_with(".snapped");
         for (stem, p) in &profiles {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let noted = |n: &PrecisionNote| a.precision.contains(n);
-            let required = a
-                .requirements
-                .properties
-                .contains(&VkProperty::MetalSampler);
-            if metal_sampler(p) {
-                assert_eq!(uses(&a, plain), 1, "{what}");
-                assert!(!NOTES.iter().any(noted), "{what}");
-                // A runtime sampler's or a pixel sampler's gather requires it too: every gather
-                // is Metal's own there; and so does a sample that filters or may, a linear mip
-                // filter's and a runtime sampler's included.
-                let gathers = matches!(op, Op::Gather { .. } | Op::GatherArray);
-                let filtered = words.is_none_or(|w| (w >> 9) & 0xf != 0 || (w >> 13) & 3 == 2);
-                // A sample at a dynamic level through a constexpr normalized sampler reads Metal's
-                // level, the device's own there.
-                let leveled =
-                    matches!(op, Op::SampleLevel) && words.is_some_and(|w| w >> 15 & 1 == 0);
-                assert_eq!(
-                    required,
-                    snapped || gathers || filtered || leveled,
-                    "{what}"
-                );
-            } else {
-                assert_eq!(uses(&a, expect.name), 1, "{what}");
-                for n in &NOTES {
-                    assert_eq!(noted(n), expect.note == Some(*n), "{what}: {n:?}");
-                }
-                assert!(!required, "{what}");
-            }
+            assert_eq!(uses(&a, census), 1, "{what}");
+            assert!(requires_the_sampler(&a, p), "{what}");
         }
     }
 }
 
-/// Over an owned fixture: `unk_gather`'s comparison gathers of a depth 2D texture and array through
-/// a constexpr sampler snap; its five gathers of cubes (three color, two depth) and two comparison
-/// gathers of cubes take Metal's footprint by fetches (`sampler.gather.cube` and
-/// `sampler.gather_compare.cube`), and keep the device's under the note where the bound format's
-/// rule is not measured.
+/// Over an owned fixture: `unk_gather`'s five gathers of cubes (three color, two depth) and its
+/// four comparison gathers (of cubes, and of a depth 2D texture and array) are the device's
+/// sampler's on every committed profile that compiles it.
 #[test]
-fn the_fixture_cube_gathers_take_metals_footprint() {
+fn the_fixture_cube_gathers_are_the_device_s() {
     let Ok(bc) = llvm_assemble(&engine_dir().join("unk_gather.ll")) else {
         eprintln!("SKIPPED: llvm-as");
         return;
     };
-    for (stem, p) in crate::spirv::testing::committed_exact_profiles().expect("profiles") {
+    for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
         let a = match compile(&bc, "unk_gather", &p) {
             Ok(a) => a,
             // A profile without cube arrays refuses the fixture.
@@ -473,29 +355,19 @@ fn the_fixture_cube_gathers_take_metals_footprint() {
             }
         };
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let noted = a.precision.contains(&PrecisionNote::DeviceGatherFootprint);
-        if metal_sampler(&p) {
-            assert!(!noted, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather"), 5, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather_compare"), 4, "{stem}");
-        } else {
-            assert!(noted, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather"), 0, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather.cube"), 5, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather_compare"), 0, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather_compare.cube"), 2, "{stem}");
-            assert_eq!(uses(&a, "sampler.gather_compare.snapped"), 2, "{stem}");
-        }
+        assert_eq!(uses(&a, "sampler.gather"), 5, "{stem}");
+        assert_eq!(uses(&a, "sampler.gather_compare"), 4, "{stem}");
+        assert!(requires_the_sampler(&a, &p), "{stem}");
     }
 }
 
 /// The kernels of the pixel sampler test: each through a constexpr pixel sampler, with its census
-/// name on a device without `VkProperty::MetalSampler` and on one with it (`None`: a cube's,
-/// which compiles as through the same sampler with normalized coordinates).
-fn pixel_cases() -> Vec<(&'static str, Op, u64, Option<(&'static str, &'static str)>)> {
+/// name (`None`: a cube's, which compiles as through the same sampler with normalized
+/// coordinates).
+fn pixel_cases() -> Vec<(&'static str, Op, u64, Option<&'static str>)> {
     let pixel = |filter, address| sampler(filter, 0, address, true);
-    let snapped = Some(("sampler.gather.snapped", "sampler.gather.snapped"));
-    let linear = Some(("sampler.linear", "sampler.linear.snapped"));
+    let snapped = Some("sampler.gather.snapped");
+    let linear = Some("sampler.linear.snapped");
     vec![
         (
             "pixel gather edge",
@@ -545,14 +417,12 @@ fn pixel_cases() -> Vec<(&'static str, Op, u64, Option<(&'static str, &'static s
 }
 
 /// On every committed profile, a constexpr pixel sampler's gather and linear sample compile to
-/// their census names (a linear one requiring `VkProperty::MetalSampler` where it snaps), validate,
-/// and record neither `PixelSamplerScaling` nor `DeviceGatherFootprint`, but a linear sample's
-/// `PixelSamplerScaling` where the bound format's class hands it to the device's filter at the
-/// scaled coordinate (a specialized note); a cube through a pixel sampler compiles as through the
-/// same sampler with normalized coordinates, to the same census, notes, and requirements.
+/// their census names, require the device's sampler, validate, and record no
+/// `PixelSamplerScaling`; a cube through a pixel sampler compiles as through the same sampler with
+/// normalized coordinates, to the same census, notes, and requirements.
 #[test]
 fn pixel_samplers_read_metals_position_on_every_device() {
-    let profiles = crate::spirv::testing::committed_exact_profiles().expect("profiles");
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
     for (name, op, words, expect) in pixel_cases() {
         let Some(bc) = assemble(name, &kernel(op, Some(words))) else {
             return;
@@ -565,26 +435,14 @@ fn pixel_samplers_read_metals_position_on_every_device() {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let required = a
-                .requirements
-                .properties
-                .contains(&VkProperty::MetalSampler);
             match (expect, &normalized) {
-                (Some((without, with)), _) => {
-                    let census = if metal_sampler(p) { with } else { without };
+                (Some(census), _) => {
                     assert_eq!(uses(&a, census), 1, "{what}");
-                    let gather = matches!(op, Op::Gather { .. } | Op::GatherArray);
-                    for n in [
-                        PrecisionNote::PixelSamplerScaling,
-                        PrecisionNote::DeviceGatherFootprint,
-                    ] {
-                        let device_arm = n == PrecisionNote::PixelSamplerScaling
-                            && !gather
-                            && !metal_sampler(p)
-                            && a.specialized.iter().any(|s| s.note == n);
-                        assert!(!a.precision.contains(&n) || device_arm, "{what}: {n:?}");
-                    }
-                    assert_eq!(required, metal_sampler(p) && !gather, "{what}");
+                    assert!(
+                        !a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                        "{what}"
+                    );
+                    assert!(requires_the_sampler(&a, p), "{what}");
                 }
                 (None, Some(nbc)) => {
                     let b = compile(nbc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -613,16 +471,14 @@ fn sampler_fields(a: &FunctionArtifact) -> u32 {
 
 /// On every committed profile, a runtime sampler's gather of a 2D texture or array snaps behind its
 /// word (`position::SnapKind::WordGather`): the function reads the word's coordinates and its `s`
-/// and `t` modes, and records neither `PixelSamplerScaling` nor `DeviceGatherFootprint`, every
-/// word's gather reading Metal's block. On a device with `VkProperty::MetalSampler` it requires the
-/// property (a normalized word's gather is Metal's own). A runtime sampler's 2D sample on a device
-/// with the property reads whether the word states a linear pixel sampler
-/// (`position::SnapKind::WordCell`; elsewhere the linear emulation reads it), and keeps
-/// `PixelSamplerScaling`.
+/// and `t` modes, and records no `PixelSamplerScaling`, every word's gather reading Metal's block.
+/// A runtime sampler's 2D sample reads whether the word states a linear pixel sampler
+/// (`position::SnapKind::WordCell`), and keeps `PixelSamplerScaling`. Each requires the device's
+/// sampler.
 #[test]
 fn a_runtime_samplers_gather_snaps_behind_its_word() {
     use crate::metal::sampler::SamplerWord;
-    let profiles = crate::spirv::testing::committed_exact_profiles().expect("profiles");
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
     let gather = SamplerWord::PIXEL_COORDINATES | SamplerWord::ADDRESS[0] | SamplerWord::ADDRESS[1];
     let cell = SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
     for (name, op) in [
@@ -639,22 +495,15 @@ fn a_runtime_samplers_gather_snaps_behind_its_word() {
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let fields = sampler_fields(&a);
-            let noted = |n: PrecisionNote| a.precision.contains(&n);
-            let metal = metal_sampler(p);
+            let scaled = a.precision.contains(&PrecisionNote::PixelSamplerScaling);
+            assert!(requires_the_sampler(&a, p), "{what}");
             if matches!(op, Op::Sample2D) {
-                // Elsewhere the linear emulation reads those fields and more.
                 assert_eq!(fields & cell, cell, "{what}: {fields:#x}");
-                assert!(noted(PrecisionNote::PixelSamplerScaling), "{what}");
+                assert!(scaled, "{what}");
                 continue;
             }
             assert_eq!(fields & gather, gather, "{what}: {fields:#x}");
-            assert!(!noted(PrecisionNote::PixelSamplerScaling), "{what}");
-            assert!(!noted(PrecisionNote::DeviceGatherFootprint), "{what}");
-            let required = a
-                .requirements
-                .properties
-                .contains(&VkProperty::MetalSampler);
-            assert_eq!(required, metal, "{what}");
+            assert!(!scaled, "{what}");
         }
     }
 }
@@ -668,13 +517,13 @@ fn the_snapped_estimate_bounds_its_emission() {
     use crate::lower::select::LowerInputs;
     use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
     use crate::pipeline::testing::meter;
-    let profiles = crate::spirv::testing::committed_exact_profiles().expect("profiles");
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
     let pixel = pixel_cases()
         .into_iter()
         .map(|(n, o, w, _)| (n, o, Some(w)));
     for (name, op, words) in cases()
         .into_iter()
-        .map(|(n, o, w, _, _)| (n, o, w))
+        .map(|(n, o, w, _)| (n, o, w))
         .chain(pixel)
     {
         let Some(bc) = assemble(name, &kernel(op, words)) else {

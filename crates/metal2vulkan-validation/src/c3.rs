@@ -718,18 +718,11 @@ pub struct SlotRow {
 ///   Euclidean length of the gradient's two counted components where Apple combines them by its own
 ///   rule, so near a level or filter boundary a sample selects another level or filter than
 ///   Metal's, and the sampled value is ordinary data later words use.
-/// - A nearest cube sample's texel (`CubeFaceReciprocal`): the product computes Metal's position
-///   with the correctly rounded reciprocal of the major magnitude where Apple's texture unit uses
-///   an approximate one, so near a texel edge a sample reads the next texel, and the sampled value
-///   is ordinary data later words use.
 /// - A non-quad simdgroup operation before a discard (`QuadsCountedBeforeDiscard`), in a shape
 ///   whose placement by Metal's compiler is not known: its lanes include the quads the discard
 ///   drops, which Metal's may leave out, and the count, ballot, or reduction is ordinary data later
 ///   words use. Where Metal's placement was measured, the module makes it (a sum moved past the
 ///   discard, or counted ahead of it) and records no note.
-/// - A depth comparison the device makes (`DeviceDepthComparison`): a tap passes or fails where
-///   Metal's does not, and the comparison's value is ordinary data later words use. Open until the
-///   shader makes those comparisons on texels it fetches.
 /// - A bicubic sample's unpinned arithmetic (`BicubicFilterArithmetic`): a 2D normalized sum near a
 ///   rounding tie lands one grid step from Metal's, whose 2D rounding no model fitted, and the
 ///   sampled value is ordinary data later words use.
@@ -769,13 +762,11 @@ pub struct SlotRow {
 /// denormal, a `half` rounding) belongs in a per-word judgement of a reading's differing words,
 /// beside the check of each against Apple's bound, never in this list: a row-level match would
 /// reopen every signed-off reading whose row merely records the note.
-pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 13] = [
+pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 11] = [
     PrecisionNote::RasterizationRateMap,
     PrecisionNote::SparseResidency,
     PrecisionNote::CubeGradientFootprint,
-    PrecisionNote::CubeFaceReciprocal,
     PrecisionNote::QuadsCountedBeforeDiscard,
-    PrecisionNote::DeviceDepthComparison,
     PrecisionNote::BicubicFilterArithmetic,
     PrecisionNote::VertexSimdgroupGrouping,
     PrecisionNote::FragmentSimdgroupGrouping,
@@ -841,19 +832,6 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              device's own threshold above 0, where Apple's minifies from a footprint of \
              1 + 3/2048: a sample near a level or filter boundary can take another level or \
              filter"
-        }
-        PrecisionNote::CubeFaceReciprocal => {
-            "a nearest cube texel from Metal's position floor(RN(RN(1 + sc * r) / 2 * n)) with r \
-             the correctly rounded reciprocal of the major magnitude, where Apple M3 Max's and \
-             M4's texture unit's is one or two ulps off on 208 of 2,001 majors measured (204 up, 4 \
-             down, each within about 0.2 ulp of a rounding midpoint): on such a major a position \
-             within about n * 2^-23 of a texel edge reads the next texel; no exact form of Apple's \
-             reciprocal is known"
-        }
-        PrecisionNote::DeviceDepthComparison => {
-            "a depth comparison the device makes differs from Apple M4's on up to 584 of 9,024 \
-             Depth16Unorm comparisons (ANV; RADV 71, the RTX 3090 474, lavapipe 1,203); every \
-             comparison the shader makes is Metal's, on texels it fetches or the device reads"
         }
         PrecisionNote::QuadsCountedBeforeDiscard => {
             "a non-quad simdgroup operation before a discard, in a shape whose placement by \

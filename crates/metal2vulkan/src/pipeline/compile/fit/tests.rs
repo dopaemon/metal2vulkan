@@ -11,10 +11,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{Fitted, ReducedForms};
+use super::{native_forms, Fitted};
 use crate::budget::{Budget, Meter};
 use crate::cache::VariantKey;
-use crate::device::policy::SamplingPolicy;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::library::Library;
 use crate::metal;
@@ -50,12 +49,9 @@ fn description(stem: &str) -> DeviceDescription {
     DeviceDescription::from_khronos_json(&text, None).expect("description")
 }
 
-/// Every exact form, Metal's sampler emulated among them.
+/// Every exact form.
 fn exact() -> DevicePolicy {
-    DevicePolicy {
-        sampling: SamplingPolicy::Exact,
-        ..DevicePolicy::default().exact_answers()
-    }
+    DevicePolicy::default().exact_answers()
 }
 
 /// Committed profile `stem` as a device under `policy`.
@@ -65,12 +61,9 @@ fn device(stem: &str, policy: DevicePolicy) -> Device {
 
 /// The forms a fitted pipeline's `dependencies` record it dropped, in the fact's field order;
 /// `None` where it records none.
-fn dropped(dependencies: &[RuntimeDependency]) -> Option<[bool; 2]> {
+fn dropped(dependencies: &[RuntimeDependency]) -> Option<[bool; 1]> {
     dependencies.iter().find_map(|d| match d.fact {
-        RuntimeFact::ExactFormsOverCompilerLimit {
-            sampling,
-            texel_conversion,
-        } => Some([sampling, texel_conversion]),
+        RuntimeFact::ExactFormsOverCompilerLimit { nan_and_min_max } => Some([nan_and_min_max]),
         _ => None,
     })
 }
@@ -80,8 +73,6 @@ fn dropped(dependencies: &[RuntimeDependency]) -> Option<[bool; 2]> {
 /// bound gives it: recording that it dropped every exact form, named as `compiled` is.
 fn fitted_as<P: Fitted>(reduced: P, compiled: &P) -> P {
     let fact = RuntimeFact::ExactFormsOverCompilerLimit {
-        sampling: true,
-        texel_conversion: true,
     };
     let mut reduced = reduced;
     reduced
@@ -91,8 +82,8 @@ fn fitted_as<P: Fitted>(reduced: P, compiled: &P) -> P {
 }
 
 /// A render pipeline whose largest stage module passes a device's compiler word bound is
-/// translated again with the device policy's exact forms dropped until it fits: native sampling
-/// first, then every exact answer that grows a module native, recording which forms it dropped
+/// translated again with every exact answer that grows a module native, recording which forms it
+/// dropped
 /// (`RuntimeFact::ExactFormsOverCompilerLimit`) and keeping the compile's key and profile
 /// fingerprint. A pipeline compiled from stages compiled ahead (the runtime's shape) is fitted from
 /// its functions' descriptor ([`Device::fit_render_variant`]), and is left as it is from its
@@ -132,12 +123,8 @@ fn a_module_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
     }
 
     let w_exact = words(exact());
-    let w_sampling_native = words(DevicePolicy::default().exact_answers());
     let w_fast = words(DevicePolicy::default());
-    assert!(
-        w_fast <= w_sampling_native && w_sampling_native <= w_exact,
-        "fast {w_fast} <= sampling-native {w_sampling_native} <= exact {w_exact}"
-    );
+    assert!(w_fast <= w_exact, "fast {w_fast} <= exact {w_exact}");
 
     let dev = device(stem, exact());
     let first = || {
@@ -161,21 +148,9 @@ fn a_module_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
     assert_eq!(largest(&pipe), w_fast, "reduced to the fast default");
     assert_eq!(
         dropped(&pipe.dependencies),
-        Some([true; 2]),
+        Some([true; 1]),
         "every exact form dropped"
     );
-
-    // Over the bound by exact sampling alone (where it grows the module): sampling is dropped
-    // first, and nothing more, because native sampling already fits.
-    if w_sampling_native < w_exact {
-        let pipe = fit(w_sampling_native);
-        assert_eq!(largest(&pipe), w_sampling_native);
-        assert_eq!(
-            dropped(&pipe.dependencies),
-            Some([true, false]),
-            "only sampling dropped"
-        );
-    }
 
     // Within the bound, or on a device without one: no fallback, no fact, the exact forms kept.
     for pipe in [
@@ -224,7 +199,7 @@ fn a_module_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         .expect("fitted from the functions");
     assert_eq!(fitted.key, keys.pipeline);
     assert_eq!(largest(&fitted), w_fast);
-    assert_eq!(dropped(&fitted.dependencies), Some([true; 2]));
+    assert_eq!(dropped(&fitted.dependencies), Some([true; 1]));
 }
 
 /// A mesh render pipeline is fitted as a vertex and fragment pipeline is: past the bound, its
@@ -285,7 +260,7 @@ fn a_mesh_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         let stages: Vec<ShaderStage> = compiled.stages.iter().map(|s| s.stage).collect();
         assert_eq!(stages, kinds, "{stem}");
 
-        let fast = device(stem, ReducedForms::AllNative.of(exact()));
+        let fast = device(stem, native_forms(exact()));
         let reduced = fast
             .mesh_pipeline(&descriptor(), &v, &mut Meter::new(&b))
             .expect(stem);
@@ -378,7 +353,7 @@ fn a_tile_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         assert_eq!(compiled, unfitted, "{stem}: within the device's own bound");
         assert_eq!(dropped(&compiled.dependencies), None, "{stem}");
 
-        let fast = device(stem, ReducedForms::AllNative.of(exact()));
+        let fast = device(stem, native_forms(exact()));
         let reduced = fast
             .tile_pipeline(&d, &inputs, &mut Meter::new(&b))
             .expect(stem);
@@ -436,8 +411,7 @@ fn a_tile_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
 /// inputs it was compiled under, and one within the bound translates exactly as before the fit:
 /// on ANV's UHD 770 profile, whose own bound the kernel fits, and on a device without a bound,
 /// under every exact form and under the fast default, `compile_compute_pipeline` is the unfitted
-/// compile, word for word. Past the bound every exact form is dropped; past it by exact sampling
-/// alone, sampling alone. In the runtime's shape (the kernel compiled ahead and linked from the
+/// compile, word for word. Past the bound every exact form is dropped. In the runtime's shape (the kernel compiled ahead and linked from the
 /// `Compiled` stage) it is fitted from the function's descriptor and left as it is from the
 /// `Compiled` one. Uses the owned `a2_kernel_lod_filter` fixture, a kernel that samples.
 #[test]
@@ -473,9 +447,7 @@ fn a_compute_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         let dev = device(stem, exact());
         let compiled = dev.compile_compute_pipeline(&d, &b).expect(stem);
         let w_exact = compiled.largest_stage_words();
-        let sampled = unfitted(&device(stem, ReducedForms::NativeSampling.of(exact())));
-        let w_sampling_native = sampled.largest_stage_words();
-        let reduced = unfitted(&device(stem, ReducedForms::AllNative.of(exact())));
+        let reduced = unfitted(&device(stem, native_forms(exact())));
         let w_fast = device(stem, DevicePolicy::default())
             .compile_compute_pipeline(&d, &b)
             .expect(stem)
@@ -486,8 +458,8 @@ fn a_compute_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
             "{stem}: the fast forms"
         );
         assert!(
-            w_fast <= w_sampling_native && w_sampling_native < w_exact,
-            "{stem}: fast {w_fast} <= sampling-native {w_sampling_native} < exact {w_exact}"
+            w_fast <= w_exact,
+            "{stem}: fast {w_fast} <= exact {w_exact}"
         );
         let expected = fitted_as(reduced, &compiled);
         let fit = |d: &ComputePipelineDescriptor, pipeline, bound| {
@@ -498,19 +470,6 @@ fn a_compute_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
             fit(&d, compiled.clone(), Some(0)),
             expected,
             "{stem}: past the bound"
-        );
-        // Over the bound by exact sampling alone: sampling alone dropped.
-        let pipe = fit(&d, compiled.clone(), Some(w_sampling_native));
-        assert_eq!(pipe.stage, sampled.stage, "{stem}: native sampling");
-        assert_eq!(
-            dropped(&pipe.dependencies),
-            Some([true, false]),
-            "{stem}: only sampling dropped"
-        );
-        assert_eq!(
-            (pipe.key, pipe.profile),
-            (compiled.key, compiled.profile),
-            "{stem}"
         );
         for bound in [Some(w_exact), Some(u32::MAX), None] {
             assert_eq!(fit(&d, compiled.clone(), bound), compiled, "{stem}: within");

@@ -782,13 +782,7 @@ pub struct AccessPlan {
     /// the ids as this states, and the heap's function-table array, or, on a device without the
     /// array's features, the stage's function-table snapshot, one more again.
     pub function_tables: Option<function_table::TableReads>,
-    /// A heap depth comparison the shader makes reads its texture's depth class
-    /// (`lower::sampler::compared`): the handle-table search carries the depth flags
-    /// (`memory::handles::Lookup::Flagged`), so every heap handle carries its entry's depth flags
-    /// beside its element.
-    pub heap_depth: bool,
-    /// A heap texture's linear sample the function emulates reads its texel class
-    /// (`lower::sampler::linear`): the handle-table search carries the class's index
+    /// A heap texture's access reads its texel class: the handle-table search carries the class's index
     /// (`memory::handles::Lookup::Flagged`), so every heap handle carries it beside its element.
     pub heap_class: bool,
     /// A heap texture's float write the function makes tests its texel class's index
@@ -820,10 +814,9 @@ impl AccessPlan {
 
     /// What the function's handle-table search yields.
     pub fn lookup(&self) -> crate::memory::handles::Lookup {
-        if self.heap_alpha || self.heap_depth || self.carries_class() {
+        if self.heap_alpha || self.carries_class() {
             crate::memory::handles::Lookup::Flagged {
                 alpha: self.heap_alpha,
-                depth: self.heap_depth,
                 class: self.carries_class(),
             }
         } else {

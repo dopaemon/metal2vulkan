@@ -169,8 +169,7 @@ impl Bicubic {
     /// ([`PINNED_WORDS`]), and Metal's offset rule on each axis a constant offset moves
     /// (`position::OFFSET_RULE_WORDS`). The estimate bounds every public bicubic fixture
     /// (`the_estimate_bounds_the_bicubic_fixtures`), every raw form
-    /// (`the_raw_estimate_bounds_its_emission`), and the mirrored and small-level forms
-    /// (`mirrored_axes_and_small_levels`).
+    /// (`the_raw_estimate_bounds_its_emission`), and the mirrored forms (`mirrored_axes`).
     pub(super) fn words(&self) -> u32 {
         let (base, taps) = if self.linear_only() {
             (448, 2)
@@ -1083,23 +1082,6 @@ impl At {
             offset: None,
         })
     }
-}
-
-/// The footprint of sample `s` of sampled image `si` (image facts `image`) over `taps`, the
-/// border color seen through the channels of the bound format's treatment `bits` (a
-/// [`BicubicTexels`] specialization or a `TexelFormat` one, whose bits are the same, or a heap
-/// element's class's bits), and the image its taps are fetched from.
-pub(super) fn footprint(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    t: &Tys,
-    s: &Sampling,
-    (si, image): (SValue, CombinedImage),
-    bits: Bits,
-    taps: &Taps<'_>,
-) -> BResult<(Footprint, SValue)> {
-    let at = At::of(cx, fb, s)?;
-    footprint_from(fb, t, &at, (si, image), bits, taps)
 }
 
 /// [`footprint`] of a sample whose plain data is `at`.

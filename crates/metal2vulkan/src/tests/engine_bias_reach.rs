@@ -3,7 +3,10 @@
 //! Vulkan clamps an implicit sample's `Bias` operand (with the sampler's own `mipLodBias`) into
 //! `±maxSamplerLodBias`; Metal applies the whole bias: an Apple M3 Max magnifies with biases of
 //! -17.5, -100, and -1000 at a level of 17 before the bias (authored case `3ec31bc4`,
-//! `a2_fragment_bias_clamp`), where RADV, clamping at 16, minifies. So:
+//! `a2_fragment_bias_clamp`), where RADV, clamping at 16, minifies. Through a sampler without a
+//! bias of its own every bias is the `Bias` operand, the device's sampler's answer (MoltenVK hands
+//! it to Metal whole). Through a constexpr sampler with its own bias, whose sum with the operand's
+//! no measurement has read:
 //!
 //! - a constant bias whose sum with the sampler's is within the limit stays the `Bias` operand of
 //!   an implicit sample, unchanged;
@@ -26,9 +29,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::device::profile::DeviceProfile;
+use crate::device::DevicePolicy;
 use crate::library::FunctionArtifact;
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::testing::EXACT_SAMPLING;
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, profile, AssembleError,
 };
@@ -45,8 +48,6 @@ const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u16 = 88;
 const OP_F_ORD_GREATER_THAN: u16 = 186;
 const OP_DPDX: u16 = 207;
 const OP_DPDY: u16 = 208;
-const OP_BRANCH_CONDITIONAL: u16 = 250;
-const OP_IMAGE_QUERY_SIZE_LOD: u16 = 103;
 const GLSL_EXP2: u32 = 29;
 const GLSL_FCLAMP: u32 = 43;
 const GLSL_FREXP_STRUCT: u32 = 52;
@@ -121,33 +122,8 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
     )
 }
 
-/// [`biased_fragment`] through runtime sampler slot 0.
-fn runtime_biased_fragment(bias: &str) -> String {
-    format!(
-        r#"define <4 x float> @k(<4 x float> %pos, ptr addrspace(1) %t, ptr addrspace(2) %s) {{
-  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
-  %uv = fmul <2 x float> %xy, <float 6.250000e-02, float 6.250000e-02>
-  %r = call {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float {bias}, float 0.000000e+00, i32 0)
-  %v = extractvalue {{ <4 x float>, i8 }} %r, 0
-  ret <4 x float> %v
-}}
-
-declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)
-
-!air.fragment = !{{!0}}
-!0 = !{{ptr @k, !1, !3}}
-!1 = !{{!2}}
-!2 = !{{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}}
-!3 = !{{!4, !5, !6}}
-!4 = !{{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"position"}}
-!5 = !{{i32 1, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"texture2d<float, sample>", !"air.arg_name", !"t"}}
-!6 = !{{i32 2, !"air.sampler", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"sampler", !"air.arg_name", !"s"}}
-"#
-    )
-}
-
 fn p(stem: &str) -> DeviceProfile {
-    profile(stem, EXACT_SAMPLING).expect(stem)
+    profile(stem, DevicePolicy::default()).expect(stem)
 }
 
 fn max_bias(p: &DeviceProfile) -> f32 {
@@ -335,60 +311,15 @@ impl Shape {
     }
 }
 
-/// The dynamic bias of `a2_fragment_bias_clamp` samples implicitly with `Bias` and, where `|bias| >
-/// maxSamplerLodBias` (the profile's own limit), with the derivatives scaled by `2^bias`: on every
-/// profile that does not sample through Metal's own sampler, whatever its limit (2 to 16).
+/// Through a sampler without a bias of its own every fragment bias is the `Bias` operand alone, the
+/// device's sampler's: on MoltenVK (`VkProperty::MetalSampler`) the device hands it to Metal whole,
+/// so Metal applies its own rule (the bias rounded to `half`, floored onto `1/64` and clamped into
+/// `[-32, 31.984375]`); elsewhere the device clamps it into `±maxSamplerLodBias`
+/// (`VkProperty::DeviceSampling`). A dynamic bias and a constant past the limit alike take no
+/// derivatives and no branch, record no `PrecisionNote::GradFromBias`, and require the property.
 #[test]
-fn a_dynamic_bias_takes_scaled_derivatives_past_the_limit() {
-    let Some(bc) = assemble_file("a2_fragment_bias_clamp.ll") else {
-        return;
-    };
-    for stem in ["amd-rdna3-radv", "lavapipe", "vk12-floor"] {
-        let prof = p(stem);
-        let a = ok(&bc, "a2_fragment_bias_clamp", &prof);
-        let s = shape(&a);
-        assert_eq!(
-            a.strategies
-                .entries
-                .get("sampler.sample_implicit.bias_gradients")
-                .map(|u| u.uses),
-            Some(1),
-            "{stem}: {:?}",
-            a.strategies
-        );
-        assert!(!a.strategies.entries.contains_key("sampler.sample_implicit"));
-        assert_eq!(s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{stem}");
-        assert_eq!(s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), 1, "{stem}");
-        assert_eq!((s.count(OP_DPDX), s.count(OP_DPDY)), (1, 1), "{stem}");
-        assert!(s.count(OP_BRANCH_CONDITIONAL) >= 1, "{stem}");
-        s.scales_finitely(1, 0, stem);
-        s.reads_metals_bias(1, stem);
-        // The test is `|bias| > maxSamplerLodBias` (the sampler carries no bias of its own).
-        assert!(
-            s.greater
-                .iter()
-                .any(|(_, y)| s.constant(*y) == Some(max_bias(&prof))),
-            "{stem}: no `> {}` test",
-            max_bias(&prof)
-        );
-        assert!(a.precision.contains(&PrecisionNote::GradFromBias), "{stem}");
-    }
-}
-
-/// On a device that samples through Metal's own sampler (`VkProperty::MetalSampler`, MoltenVK),
-/// every fragment bias is the `Bias` operand alone, which the device hands to Metal whole, so Metal
-/// applies its own rule (the bias rounded to `half`, floored onto `1/64` and clamped into `[-32,
-/// 31.984375]`): a dynamic bias and a constant past `maxSamplerLodBias` alike take no derivatives
-/// and no branch, record no `PrecisionNote::GradFromBias`, and require the property. A device
-/// without it keeps the scaled derivatives past its limit (above, and the constant test below).
-#[test]
-fn on_metals_own_sampler_every_bias_is_the_bias_operand() {
-    let prof = p("moltenvk-m3");
-    assert!(prof
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler));
+fn a_bias_without_the_samplers_own_is_the_bias_operand() {
+    use crate::device::requirements::VkProperty;
     let mut fixtures = Vec::new();
     if let Some(bc) = assemble_file("a2_fragment_bias_clamp.ll") {
         fixtures.push(("dynamic", bc, "a2_fragment_bias_clamp"));
@@ -401,40 +332,48 @@ fn on_metals_own_sampler_every_bias_is_the_bias_operand() {
             fixtures.push((what, bc, "k"));
         }
     }
-    for (what, bc, entry) in fixtures {
-        let a = ok(&bc, entry, &prof);
-        let s = shape(&a);
-        let uses = |name: &str| a.strategies.entries.get(name).map_or(0, |u| u.uses);
-        assert_eq!(
-            uses("sampler.sample_implicit"),
-            1,
-            "{what}: {:?}",
-            a.strategies
-        );
-        assert_eq!(uses("sampler.sample_implicit.bias_gradients"), 0, "{what}");
-        assert_eq!(uses("sampler.sample_bias_gradients"), 0, "{what}");
-        assert_eq!(s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
-        assert_eq!(s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), 0, "{what}");
-        assert_eq!((s.count(OP_DPDX), s.count(OP_DPDY)), (0, 0), "{what}");
-        assert_eq!(s.glsl_count(GLSL_EXP2), 0, "{what}");
-        s.reads_metals_bias(0, what);
-        assert!(
-            !a.precision.contains(&PrecisionNote::GradFromBias),
-            "{what}"
-        );
-        assert!(
-            a.requirements
-                .properties
-                .contains(&crate::device::requirements::VkProperty::MetalSampler),
-            "{what}"
-        );
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "vk12-floor"] {
+        let prof = p(stem);
+        let property = match prof
+            .fields()
+            .enabled
+            .properties
+            .contains(&VkProperty::MetalSampler)
+        {
+            true => VkProperty::MetalSampler,
+            false => VkProperty::DeviceSampling,
+        };
+        for (what, bc, entry) in &fixtures {
+            let what = format!("{stem}, {what}");
+            let a = ok(bc, entry, &prof);
+            let s = shape(&a);
+            let uses = |name: &str| a.strategies.entries.get(name).map_or(0, |u| u.uses);
+            assert_eq!(
+                uses("sampler.sample_implicit"),
+                1,
+                "{what}: {:?}",
+                a.strategies
+            );
+            assert_eq!(uses("sampler.sample_implicit.bias_gradients"), 0, "{what}");
+            assert_eq!(uses("sampler.sample_bias_gradients"), 0, "{what}");
+            assert_eq!(s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
+            assert_eq!(s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), 0, "{what}");
+            assert_eq!((s.count(OP_DPDX), s.count(OP_DPDY)), (0, 0), "{what}");
+            assert_eq!(s.glsl_count(GLSL_EXP2), 0, "{what}");
+            s.reads_metals_bias(0, &what);
+            assert!(
+                !a.precision.contains(&PrecisionNote::GradFromBias),
+                "{what}"
+            );
+            assert!(a.requirements.properties.contains(&property), "{what}");
+        }
     }
 }
 
-/// A constant bias whose sum with the sampler's own bias is within the limit is the `Bias` operand
-/// alone (no derivatives, no note); past it, the scaled derivatives alone. The sampler's own bias
-/// counts: on amd-rdna3-radv (limit 16) a constexpr sampler bias of 10 with a shader bias of 4 is
-/// within, with 8 past. (MoltenVK's portability subset withholds a sampler bias, so it refuses such
+/// Through a constexpr sampler with a bias of its own, a constant bias whose sum with the
+/// sampler's is within the limit is the `Bias` operand alone (no derivatives, no note); past it,
+/// the scaled derivatives alone. The sampler's own bias counts: on amd-rdna3-radv (limit 16) a
+/// constexpr sampler bias of 10 with a shader bias of 4 is within, with 8 or -30 past. (MoltenVK's portability subset withholds a sampler bias, so it refuses such
 /// a sampler.)
 #[test]
 fn a_constant_bias_is_decided_at_compile_time_with_the_samplers_own() {
@@ -442,11 +381,19 @@ fn a_constant_bias_is_decided_at_compile_time_with_the_samplers_own() {
     assert_eq!(max_bias(&radv), 16.0);
     // Half 10.0 is 0x4900.
     for (what, bias, half_bias, past) in [
-        ("within", "2.000000e+00", 0u16, false),
-        ("past", "-2.000000e+01", 0, true),
-        ("past, positive", "1.000000e+03", 0, true),
-        ("within with the sampler's", "4.000000e+00", 0x4900, false),
+        (
+            "within with the sampler's",
+            "4.000000e+00",
+            0x4900u16,
+            false,
+        ),
         ("past with the sampler's", "8.000000e+00", 0x4900, true),
+        (
+            "past below with the sampler's",
+            "-3.000000e+01",
+            0x4900,
+            true,
+        ),
     ] {
         let Some(bc) = assemble(what, &biased_fragment(bias, half_bias)) else {
             return;
@@ -538,125 +485,58 @@ const ANISOTROPIC_WORDS: u64 = (SAMPLER_WORDS & !(0xf << 20)) | (15 << 20);
 /// and its loop's one (two explicit-level samples each under a linear mip filter).
 const WRITTEN_TAPS: u32 = 2;
 
-/// Through an anisotropic constexpr sampler of a 2D texture, Metal's bias shifts the footprint's
-/// minor axis alone, which neither the `Bias` operand nor `2^B` derivatives give: a fragment bias,
-/// within the device's limit or past it, samples with the axis gradients alone (the coordinate's
-/// derivatives, their lengths in texels of the level-0 size, and `Exp2` of Metal's reading of the
-/// bias), with `PrecisionNote::GradFromBias`. Off Metal's own sampler they are the footprint of
-/// Metal's anisotropic filter, emulated: its taps' samples at explicit levels, two a tap under the
-/// sampler's linear mip filter, in the emulation's routine, which queries the level-0 size the
-/// site's axis gradients read again (one query each).
+/// Through an anisotropic constexpr sampler of a 2D texture with a bias of its own, Metal's bias
+/// shifts the footprint's minor axis alone, which neither the `Bias` operand nor `2^B` derivatives
+/// give: a fragment bias, within the device's limit or past it, samples with the axis gradients
+/// alone (the coordinate's derivatives, their lengths in texels of the level-0 size, and `Exp2` of
+/// Metal's reading of the bias), with `PrecisionNote::GradFromBias`. With `samplerAnisotropy` the
+/// device's anisotropic filter samples at them; without it they are the footprint of Metal's
+/// anisotropic filter, emulated: its taps' samples at explicit levels, two a tap under the
+/// sampler's linear mip filter, `AnisotropicFilter` recorded.
 #[test]
 fn an_anisotropic_sampler_takes_the_axis_gradients() {
     for stem in ["amd-rdna3-radv", "lavapipe"] {
-        let prof = p(stem);
-        for (what, bias) in [("within", "2.000000e+00"), ("past", "-2.000000e+01")] {
-            let what = format!("{stem}, {what}");
-            let Some(bc) = assemble(&what, &biased_fragment_of(ANISOTROPIC_WORDS, bias, 0)) else {
-                return;
+        for withheld in [false, true] {
+            let prof = {
+                let mut desc = crate::pipeline::testing::description(stem).expect(stem);
+                if withheld {
+                    assert!(desc
+                        .features
+                        .remove(&crate::device::requirements::VkFeature::SamplerAnisotropy));
+                }
+                crate::device::Device::new(desc, DevicePolicy::default())
+                    .expect(stem)
+                    .profile()
+                    .clone()
             };
-            let a = ok(&bc, "k", &prof);
-            let s = shape(&a);
-            let uses = |name: &str| a.strategies.entries.get(name).map_or(0, |u| u.uses);
-            assert_eq!(uses("sampler.sample_bias_gradients"), 1, "{what}");
-            assert_eq!(s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 0, "{what}");
-            assert_eq!(
-                s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD),
-                2 * WRITTEN_TAPS as usize,
-                "{what}"
-            );
-            assert_eq!((s.count(OP_DPDX), s.count(OP_DPDY)), (1, 1), "{what}");
-            assert_eq!(s.count(OP_IMAGE_QUERY_SIZE_LOD), 2, "{what}");
-            assert_eq!(s.glsl_count(GLSL_LENGTH), 2, "{what}");
-            s.scales_finitely_beside(0, 1, 1, &what);
-            s.reads_metals_bias(1, &what);
-            assert!(a.precision.contains(&PrecisionNote::GradFromBias), "{what}");
-            assert!(
-                a.precision.contains(&PrecisionNote::AnisotropicFilter),
-                "{what}"
-            );
-        }
-    }
-}
-
-/// Through a runtime sampler slot, whose anisotropy is its bound sampler's, a fragment bias,
-/// constant or not, is decided per invocation: the implicit sample with the `Bias` operand `B`,
-/// replaced where `|B|` passes the device's limit by the sample with `2^B` derivatives, and
-/// wherever the slot's word (its `SamplerState` specialization, which reads
-/// `SamplerWord::ANISOTROPIC`) states anisotropy, by the sample with the axis gradients. Off
-/// Metal's own sampler, where the word states anisotropy, Metal's anisotropic filter, emulated,
-/// replaces all of that: its footprint of the axis gradients (the bias read once more), and its
-/// taps' samples at explicit levels, two a tap under the word's linear mip filter.
-#[test]
-fn a_runtime_samplers_word_chooses_the_axis_gradients() {
-    use crate::metal::sampler::SamplerWord;
-    use crate::pipeline::sym::SpecKey;
-    for stem in ["amd-rdna3-radv", "lavapipe", "vk12-floor"] {
-        let prof = p(stem);
-        for (what, bias) in [("within", "2.000000e+00"), ("past", "-2.000000e+01")] {
-            let what = format!("{stem}, {what}");
-            let Some(bc) = assemble(&what, &runtime_biased_fragment(bias)) else {
-                return;
-            };
-            // Compiled without the slot named, the function is the variant's other arm alone.
-            let base = shape(&ok(&bc, "k", &prof));
-            let a = ok_with(&bc, "k", &prof, &anisotropic_slot_0());
-            let s = shape(&a);
-            // The same sample without a bias: the slot's linear sample, which Metal's filter
-            // emulated by fetches answers where the word states no mip filter, names the sample
-            // `sampler.linear` and queries the texture's size for its taps; the device's sample in
-            // its other arm is the one the bias reaches.
-            let Some(plain) = assemble(&what, &runtime_biased_fragment("0.000000e+00")) else {
-                return;
-            };
-            let plain_base = shape(&ok(&plain, "k", &prof));
-            let plain = shape(&ok_with(&plain, "k", &prof, &anisotropic_slot_0()));
-            let taps = 2 * WRITTEN_TAPS as usize;
-            assert_eq!(plain_base.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
-            assert_eq!(plain_base.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), 0, "{what}");
-            assert_eq!(base.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
-            assert_eq!(
-                base.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD) + taps,
-                s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD),
-                "{what}"
-            );
-            assert_eq!(plain.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 1, "{what}");
-            assert_eq!(plain.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), taps, "{what}");
-            // The device's sample keeps its `Bias` operand, and where the word's test holds the
-            // sample with the gradients replaces it; the axis gradients of each arm query the
-            // level-0 size once more (the emulation's routine queries its own).
-            assert_eq!(
-                s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD),
-                1,
-                "{what}: {:?} {:?}",
-                s.ops,
-                s.glsl
-            );
-            assert_eq!(s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), taps + 1, "{what}");
-            assert_eq!(
-                s.count(OP_IMAGE_QUERY_SIZE_LOD),
-                plain.count(OP_IMAGE_QUERY_SIZE_LOD) + 2,
-                "{what}"
-            );
-            // The axis gradients of both arms, and the emulation's spacing.
-            assert_eq!(s.glsl_count(GLSL_LENGTH), 4, "{what}");
-            s.scales_finitely_beside(1, 2, 1, &what);
-            s.reads_metals_bias(2, &what);
-            let fields = a.interface.read_keys().into_iter().find_map(|k| match k {
-                SpecKey::SamplerState { fields, .. } => Some(fields),
-                _ => None,
-            });
-            assert!(
-                fields.is_some_and(|f| f & SamplerWord::ANISOTROPIC != 0),
-                "{what}: {fields:?}"
-            );
-            assert!(a.precision.contains(&PrecisionNote::GradFromBias), "{what}");
-            assert!(
-                a.specialized
-                    .iter()
-                    .any(|n| n.note == PrecisionNote::AnisotropicFilter),
-                "{what}"
-            );
+            // Half 10.0 is 0x4900: the sampler's own bias.
+            for (what, bias) in [("within", "2.000000e+00"), ("past", "-3.000000e+01")] {
+                let what = format!("{stem}, samplerAnisotropy withheld {withheld}, {what}");
+                let Some(bc) =
+                    assemble(&what, &biased_fragment_of(ANISOTROPIC_WORDS, bias, 0x4900))
+                else {
+                    return;
+                };
+                let a = ok(&bc, "k", &prof);
+                let s = shape(&a);
+                let uses = |name: &str| a.strategies.entries.get(name).map_or(0, |u| u.uses);
+                assert_eq!(uses("sampler.sample_bias_gradients"), 1, "{what}");
+                assert_eq!(s.count(OP_IMAGE_SAMPLE_IMPLICIT_LOD), 0, "{what}");
+                let explicit = match withheld {
+                    true => 2 * WRITTEN_TAPS as usize,
+                    false => 1,
+                };
+                assert_eq!(s.count(OP_IMAGE_SAMPLE_EXPLICIT_LOD), explicit, "{what}");
+                assert_eq!((s.count(OP_DPDX), s.count(OP_DPDY)), (1, 1), "{what}");
+                assert_eq!(s.glsl_count(GLSL_LENGTH), 2, "{what}");
+                s.reads_metals_bias(1, &what);
+                assert!(a.precision.contains(&PrecisionNote::GradFromBias), "{what}");
+                assert_eq!(
+                    a.precision.contains(&PrecisionNote::AnisotropicFilter),
+                    withheld,
+                    "{what}"
+                );
+            }
         }
     }
 }

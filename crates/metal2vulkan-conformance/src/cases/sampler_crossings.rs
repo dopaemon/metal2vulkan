@@ -961,18 +961,11 @@ impl Case for SamplerCrossings {
         // - the `Shared` buffer each row writes its samples into, for all eight rows (the RTX
         //   5080);
         // - `float-sample-filter`, where the device filters a float texture its own way, for the
-        //   address-mode triples and the three mip-filter rows (llvmpipe and the 5080);
-        // - `device-texel-denormals`, where the device's texel decode keeps a denormal Metal
-        //   flushes, for the three mip-filter rows alone (llvmpipe and the 5080).
+        //   address-mode triples and the three mip-filter rows (llvmpipe and the 5080).
         let mut named = vec![crate::replay::shared_memory_notice()];
         if matches!(self.family, Family::Axes | Family::MipFilters(_)) {
             named.push(crate::replay::notice_allowance(
                 Degradation::FloatSampleFilter.code(),
-            ));
-        }
-        if matches!(self.family, Family::MipFilters(_)) {
-            named.push(crate::replay::notice_allowance(
-                Degradation::DeviceTexelDenormals.code(),
             ));
         }
         named

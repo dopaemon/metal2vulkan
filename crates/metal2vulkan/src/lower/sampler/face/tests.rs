@@ -1,7 +1,7 @@
 //! `metal_ties` on the interpreter against Metal's rule. Each kernel invocation reads a direction's
-//! bits and writes the bits of the direction the device is handed. `snap` checks `snapped`, and
-//! `fold` a linear cube filter's taps across the faces' edges. `anisotropic` checks
-//! `emit::cube_footprint`'s gradients through a constexpr anisotropic sampler.
+//! bits and writes the bits of the direction the device is handed. `anisotropic` checks
+//! `emit::cube_footprint`'s gradients through a constexpr anisotropic sampler, and `routines` the
+//! sampling routines' function controls.
 
 use super::metal_ties;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
@@ -599,6 +599,4 @@ fn the_estimate_bounds_the_emitted_words() {
 }
 
 mod anisotropic;
-mod fold;
 mod routines;
-mod snap;

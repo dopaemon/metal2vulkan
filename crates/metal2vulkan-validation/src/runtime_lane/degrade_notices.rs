@@ -232,7 +232,6 @@ use crate::candidate::engine::variants::compile_compute_for_shape;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::{AstcDecode, SamplerDescriptor};
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::device::DecodedTexelsPolicy;
 use metal2vulkan::device::VkExtension;
 use metal2vulkan::device::{DriverFact, DriverWorkaround, OpBits, VkFeature, VkProperty};
 use metal2vulkan::device::{SimdClass, Tier};
@@ -345,7 +344,7 @@ const RAGGED: &str = "a-ragged-thread-grid-observes-each-threadgroups-size-and-p
 /// Shuffles in threadgroups of 8 threads: partial simdgroups.
 const PARTIAL_SIMDGROUPS: &str = "dsm2-shuffle-past-the-thread-count-eight";
 /// Kernels of float functions and arithmetic, and one of a nearest cube sample, whose stages
-/// record precision notes (the cube's `CubeFaceReciprocal` on a device without
+/// record precision notes (the cube's `DeviceSampling` on a device without
 /// `VkProperty::MetalSampler`).
 const NOTED: [&str; 3] = [
     "anchor-three-transcendentals-where-rounding-cannot-reach",
@@ -2150,8 +2149,8 @@ pub(super) fn draws_depth_copies(device: &Device) -> bool {
 /// (`carried-decoded-twin`), and whether the twin's codes announce `decoded-texel-precision`: an
 /// ASTC format the device has no block for (`astc_textures::decodes_astc`), a PVRTC, ETC2 or
 /// EAC format it has no format for, or a 4:2:2 format (every device); the notice for an ASTC LDR
-/// format's 8-bit codes and an EAC 11-bit format's 16-bit ones under
-/// `DecodedTexelsPolicy::Compact`, and for no other twin, whose codes are exact (an ASTC sRGB
+/// format's 8-bit codes and an EAC 11-bit format's 16-bit ones, and for no other twin, whose codes
+/// are exact (an ASTC sRGB
 /// format's, a PVRTC format's, an 8-bit ETC2 or EAC format's, a 4:2:2 format's).
 pub(super) fn twins_carried(device: &Device, pf: PixelFormat) -> [bool; 2] {
     let astc = AstcDecode::of(pf).filter(|_| !decodes_astc(device, pf));
@@ -2163,11 +2162,10 @@ pub(super) fn twins_carried(device: &Device, pf: PixelFormat) -> [bool; 2] {
     let etc = metal2vulkan::bind::EtcDecode::of(pf).filter(|_| decoded);
     let chroma = metal2vulkan::bind::ChromaDecode::of(pf).is_some() && decoded;
     let eleven = etc.is_some_and(metal2vulkan::bind::EtcDecode::eleven_bit);
-    let compact = device.compile_device().policy().decoded_texels == DecodedTexelsPolicy::Compact;
     let ldr = astc.is_some_and(|decode| !decode.srgb);
     [
         astc.is_some() || pvrtc || etc.is_some() || chroma,
-        (ldr || eleven) && compact,
+        ldr || eleven,
     ]
 }
 

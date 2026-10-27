@@ -58,16 +58,6 @@
 //!    position, where the function reads the vertex its index names. The layouts it pulls are not a
 //!    pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
-//! 9. a **normalized** format (the 8- and 16-bit `Normalized` formats of either sign,
-//!    `UChar4Normalized_BGRA`, `Int1010102Normalized`, `UInt1010102Normalized`) is pulled where
-//!    the profile asks for Metal's own division (`VertexNormalizedPolicy::Exact`,
-//!    [`normalized_exactly`]): Metal divides a code by its own maximum, correctly rounded, and
-//!    `lower::stage_io::fetch`'s `div_exact` computes that in integer arithmetic, while a driver
-//!    that multiplies by the reciprocal in fixed-function input is one `f32` ulp off at some
-//!    codes. Under the default the device's `UNORM` or `SNORM` conversion delivers it, which is
-//!    the conversion Vulkan states and Metal states, and every such format then shares the one
-//!    fixed-function module (`docs/FAST-PATHS.md`).
-//!
 //! A fixed-function entry then keeps of the format only what the module's own instructions depend
 //! on, which is `narrow_float` and nothing else, and that bit only for an attribute the function
 //! reads as a 32-bit `float` ([`narrow_float_of_f32_reads`]): every other format the device
@@ -80,7 +70,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::device::policy::VertexNormalizedPolicy;
 use crate::device::requirements::VkFeature;
 use crate::device::DeviceProfile;
 use crate::error::{DescriptorError, Error, InternalError, InternalKind};
@@ -139,26 +128,6 @@ fn class_format(
                 ))
             }),
     }
-}
-
-/// Whether `format` is a normalized format whose conversion the shader must compute (item 9 of
-/// the module docs): the profile asks for Metal's normalized vertex conversion
-/// (`VertexNormalizedPolicy::Exact`) and the format's codes are divided by their own maximum --
-/// the 8- and 16-bit `Normalized` formats of either sign, `UChar4Normalized_BGRA`, and the two
-/// `1010102Normalized` words. Under the default the device's fixed-function `UNORM` or `SNORM`
-/// conversion delivers it, which Vulkan states as Metal states it.
-fn normalized_exactly(format: VertexFormat, p: &DeviceProfile) -> Result<bool, Error> {
-    if p.fields().vertex_normalized != VertexNormalizedPolicy::Exact {
-        return Ok(false);
-    }
-    Ok(matches!(
-        encoding(format)?,
-        Encoding::Int {
-            normalized: true,
-            ..
-        } | Encoding::Bgra8Unorm
-            | Encoding::Rgb10A2 { .. }
-    ))
 }
 
 /// The stride the Vulkan binding of `fetch` on `layout` is emitted with (`None`: set per bind, a
@@ -230,7 +199,6 @@ fn resolve<'a>(
             _ => false,
         };
         let pulled = !fits
-            || normalized_exactly(attr.format, p)?
             || (beyond_stride
                 && p.fields()
                     .enabled

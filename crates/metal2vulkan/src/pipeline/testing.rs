@@ -66,17 +66,6 @@ impl Drop for Scratch {
     }
 }
 
-/// The default policy with Metal's sampler emulated exactly (`SamplingPolicy::Exact`): the policy
-/// of a test of the sampler's emulation, which native device sampling, the default, skips on a
-/// device whose sampler is not Metal's. Every other answer is Metal's too
-/// (`DevicePolicy::exact_answers`): the emulation's arithmetic (its cube face reciprocal and fused
-/// multiply-adds), its texels and a read's, its `half` roundings, and its NaNs, minimum and maximum
-/// and rounding order.
-pub const EXACT_SAMPLING: DevicePolicy = DevicePolicy {
-    sampling: crate::device::SamplingPolicy::Exact,
-    ..DevicePolicy::UNTRUSTED.exact_answers()
-};
-
 /// The description of committed profile `stem` (`validation/profiles/<stem>.json`).
 pub fn description(stem: &str) -> Result<DeviceDescription, String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -161,13 +150,9 @@ pub fn storage_buffers(a: &FunctionArtifact) -> u32 {
 }
 
 /// The default policy with Metal's answers wherever a choice still offers them
-/// ([`DevicePolicy::exact_answers`]) but the texel conversions, which are the default's.
+/// ([`DevicePolicy::exact_answers`]).
 pub fn exact_maths() -> DevicePolicy {
-    let native = DevicePolicy::default();
-    DevicePolicy {
-        texel_conversion: native.texel_conversion,
-        ..native.exact_answers()
-    }
+    DevicePolicy::default().exact_answers()
 }
 
 /// A fresh per-attempt meter with the standard caps and no deadline.

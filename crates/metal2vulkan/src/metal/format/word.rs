@@ -388,9 +388,13 @@ mod tests {
 
     #[test]
     fn a_word_view_serves_where_the_device_holds_but_cannot_render_the_format() {
-        use crate::pipeline::testing::{profile, EXACT_SAMPLING};
-        let nvidia = profile("nvidia-rtx5080-laptop", EXACT_SAMPLING).unwrap();
-        let lavapipe = profile("lavapipe", EXACT_SAMPLING).unwrap();
+        use crate::pipeline::testing::profile;
+        let nvidia = profile(
+            "nvidia-rtx5080-laptop",
+            crate::device::DevicePolicy::default(),
+        )
+        .unwrap();
+        let lavapipe = profile("lavapipe", crate::device::DevicePolicy::default()).unwrap();
         for pf in [
             PixelFormat::A1BGR5Unorm,
             PixelFormat::ABGR4Unorm,
@@ -416,7 +420,7 @@ mod tests {
             WordAttachment::of(PixelFormat::RGB9E5Float, &nvidia),
             Some(WordAttachment::Rgb9e5)
         );
-        let radv = profile("amd-rdna3-radv", EXACT_SAMPLING).unwrap();
+        let radv = profile("amd-rdna3-radv", crate::device::DevicePolicy::default()).unwrap();
         assert_eq!(WordAttachment::of(PixelFormat::RGB9E5Float, &radv), None);
         // Vulkan makes `R5G6B5` and `A1R5G5B5` attachments mandatory.
         for pf in [PixelFormat::B5G6R5Unorm, PixelFormat::BGR5A1Unorm] {
