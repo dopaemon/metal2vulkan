@@ -154,10 +154,7 @@ where the belief that Metal refuses that input comes from and cites its evidence
 not settled is `Basis: unknown (why)`, never nothing). `docs/FAST-PATHS.md` must name every
 `DevicePolicy` accuracy choice and the notes it records (`tests::fast_paths`); `docs/API.md` must list every degrade code
 with its category and quote `examples/api_preview.rs` verbatim in its `rust` blocks; and
-`docs/METAL-COVERAGE.md` must carry the coverage table's totals. A new degrade code also goes in
-`crates/metal2vulkan-runtime/src/tests/degradation_codes.txt`, every code ever issued, which a test
-holds equal to the live codes and `Degradation::RETIRED_CODES`; a removed kind's code moves to
-`RETIRED_CODES` and to `docs/API.md`'s retired lines, and stays in the list.
+`docs/METAL-COVERAGE.md` must carry the coverage table's totals.
 
 ## Changes
 

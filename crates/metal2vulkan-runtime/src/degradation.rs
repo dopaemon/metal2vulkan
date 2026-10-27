@@ -11,13 +11,9 @@
 //!   and cost, in `degradations!`; its precision kinds include one per
 //!   [`PrecisionNote`](metal2vulkan::pipeline::PrecisionNote), named alike, which the macro maps both
 //!   ways, so a note without a kind (or two kinds of one note) does not compile. docs/API.md's
-//!   catalogue lists every code, and every retired one, closed both ways by a test, and every
-//!   code ever issued is in `tests/degradation_codes.txt`, live or retired, so a kind removed
-//!   without retiring its code fails that test.
-//! - **Codes are a contract.** `metal2vulkan-degrade-<kind>`, never renamed or reused; a new
-//!   degradation is a new kind. A kind that no longer fires is retired before the API freezes:
-//!   its code stays in [`Degradation::RETIRED_CODES`], with the notices that replace it (or, where
-//!   the degradation is gone, why none does), so no kind takes it.
+//!   catalogue lists every code, closed both ways by a test.
+//! - **Codes are a contract.** `metal2vulkan-degrade-<kind>`, never renamed; a new degradation is
+//!   a new kind. A kind that no longer fires is removed, with its code.
 //! - **The payload.** The object degraded (the first one the device met), the reason (with that
 //!   object's numbers), and the kind's fixed cost. A consumer decodes a notice by its
 //!   [`Degradation`], never by parsing its text.
@@ -168,8 +164,7 @@ macro_rules! degradations {
         }
     ) => {
         /// A kind of degradation the runtime announces (the module docs). Its
-        /// [`code`](Degradation::code) is a stable contract: never renamed or reused, and a
-        /// retired kind's stays in [`Degradation::RETIRED_CODES`].
+        /// [`code`](Degradation::code) is a stable contract: never renamed.
         #[non_exhaustive]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum Degradation {
@@ -2321,165 +2316,6 @@ degradations! {
 }
 
 impl Degradation {
-    /// The codes of retired kinds, each with the notices that replace it, or `none: ` and why no
-    /// notice does where the degradation itself is gone: never announced again, and never a code
-    /// of another kind (the module docs). A consumer that meets one in an older log reads its
-    /// meaning here.
-    pub const RETIRED_CODES: &'static [(&'static str, &'static str)] = &[
-        (
-            // A texture with a depth twin announced it when made, whether or not the device ever
-            // compared it. Every comparison that reads the twin is a device comparison, which its
-            // pipeline announces.
-            "metal2vulkan-degrade-depth-twin-comparison",
-            "metal2vulkan-degrade-device-depth-comparison and, on a device without \
-             VK_EXT_depth_range_unrestricted, metal2vulkan-degrade-restricted-depth-range, which \
-             the pipeline whose stage makes the device's depth comparison announces",
-        ),
-        (
-            // A stage rounded a `half` through the device's `OpQuantizeToF16`, in the device's
-            // rounding mode. Every `half` rounding is Metal's conversion now, on every device.
-            "metal2vulkan-degrade-device-half-rounding",
-            "none: every half rounding is Metal's conversion to half, on every device",
-        ),
-        (
-            // Retired: a map's parameter data copied into a buffer announced it, its bytes this
-            // crate's layout. The bytes are Metal's now, Apple's layout of 24,624 bytes, and a
-            // translated decoder reads them as Apple's GPU does.
-            "metal2vulkan-degrade-rate-map-parameter-data",
-            "none: a rasterization-rate map's parameter data is Metal's bytes, which a translated \
-             decoder reads with Apple's arithmetic",
-        ),
-        (
-            // Retired: every linear sample of a `YCBCR8_420_2P` texture announced it at bind. The
-            // function emulates Metal's filter of the format on every device, and announces a
-            // sample that does not take it.
-            "metal2vulkan-degrade-ycbcr-linear-filter",
-            "metal2vulkan-degrade-ycbcr-filter-not-exact, which the pipeline whose stage filters \
-             a two-plane YCbCr texture otherwise than Metal's exact filter of the format announces",
-        ),
-        (
-            // A texture made after a texture reservation that followed the device's first command
-            // queue or indirect command buffer passed over an ID Metal hands out a second time.
-            // Plain allocation hands it out as Metal does now.
-            "metal2vulkan-degrade-reissued-resource-id",
-            "none: plain allocation hands out an ID a live texture holds where Metal does",
-        ),
-        (
-            // Retired: a draw in a pass that loads a padded 10-bit color attachment the load pass
-            // did not take announced it, a rotated texture's last. The load pass rewrites a rotated
-            // texture's frame now, and takes every padded attachment.
-            "metal2vulkan-degrade-padded-bits-kept",
-            "metal2vulkan-degrade-unreached-tiles-rewritten, which a pass whose load pass \
-             rewrites a padded attachment's every tile announces where that is not Metal's, and \
-             metal2vulkan-degrade-extended-range-bits-kept, which names an attachment the load \
-             pass does not take",
-        ),
-        (
-            // Retired: a draw whose fragment function read an 8-bit four-channel sRGB color
-            // attachment through framebuffer fetch as an input attachment (lavapipe) announced it,
-            // the device's decode not Metal's table. The function snaps what the device decodes to
-            // Metal's decode of the same code now, so the value is Metal's.
-            "metal2vulkan-degrade-input-attachment-srgb-decode",
-            "none: an 8-bit four-channel sRGB color read through an input attachment is Metal's \
-             decode of its code",
-        ),
-        (
-            // A device whose driver release was newer than the last one measured took the driver
-            // facts measured on earlier releases and announced it. An unmeasured identity takes no
-            // answer fact now, only the exact path, and assumes its driver's defects.
-            "metal2vulkan-degrade-beyond-measured-driver-release",
-            "none: a device whose driver, GPU and release were not measured takes the exact path \
-             in place of an answer measured elsewhere, which degrades nothing; it says so in the \
-             informational message metal2vulkan-unmeasured-driver",
-        ),
-        (
-            // A device whose identity was not measured announced it as a performance degradation.
-            // The paths it takes are exact, so nothing is degraded, and a consumer that ends on a
-            // degrade notice would end on a driver update.
-            "metal2vulkan-degrade-unmeasured-driver",
-            "none: the paths an unmeasured identity takes are exact; the device says so in the \
-             informational message metal2vulkan-unmeasured-driver",
-        ),
-        (
-            // A stage that kept a `half` result's `float` value under the opt-in
-            // `HalfRoundingPolicy::Deferred` announced it. The policy is gone, so every `half`
-            // result rounds where it is computed.
-            "metal2vulkan-degrade-deferred-half-rounding",
-            "none: the opt-in deferred half rounding is removed; every half result rounds where it \
-             is computed, under native half rounding (metal2vulkan-degrade-native-half-conversion \
-             or metal2vulkan-degrade-native-half-quantize) or Metal's",
-        ),
-        (
-            // A shadow copied back over bytes the CPU may write, under the default
-            // `ShadowHostWritesPolicy::CopyBack`, announced it: a CPU write made while the command
-            // buffer ran, beside the commands' writes, could be undone. The policy is gone, and
-            // such a shadow is always merged back.
-            "metal2vulkan-degrade-shadow-copy-back-race",
-            "none: a shadow over bytes the CPU may write is always merged back, so the CPU's \
-             writes beside the commands' stay, as Metal keeps them",
-        ),
-        (
-            // A no-copy buffer's release, under the default `ImportReleasePolicy::Background`,
-            // announced it: its deallocator ran on a handler thread after the release returned.
-            // The policy is gone, and a deallocator waiting for the import's free runs in the
-            // release.
-            "metal2vulkan-degrade-deallocator-after-release",
-            "none: a no-copy buffer's deallocator runs in its release, on the releasing thread, \
-             as Metal runs it",
-        ),
-        (
-            // A stage compiled under the opt-in `FramebufferFetchPolicy::AcceptUnordered` read a
-            // color attachment unordered where the device has no ordered form, and announced it.
-            // The policy is gone: such a fetch is refused.
-            "metal2vulkan-degrade-unordered-framebuffer-fetch",
-            "none: the opt-in unordered framebuffer fetch is removed; a fetch no ordered form \
-             serves on the device is refused (Unsupported FramebufferFetch)",
-        ),
-        (
-            // An aliasing image's first move over a no-copy buffer's host pages changed bytes the
-            // host kept across it, on pages the process maps read-only. The host keeps no bytes
-            // across a first move: an image is bound to host pages only where the device's check
-            // showed its first move keeping every byte (`in_place.rs`), and elsewhere a texture
-            // over them is a shadow, which writes no byte its commands do not write.
-            "metal2vulkan-degrade-unrestored-first-move-bytes",
-            "none: a texture over host pages takes a first move over them only where the device's \
-             check showed that move keeping every byte; elsewhere it is a shadow, which takes none",
-        ),
-        (
-            // A sampler state made while a committed command buffer that listed the argument
-            // samplers had not completed announced it. Each batch's submission lists the states
-            // live then, so a state made before the wait that orders its ID's write is the one
-            // its function reads, as Metal's.
-            "metal2vulkan-degrade-resource-id-takeover",
-            "none: a command reads the sampler states live as its batch is submitted, so a state \
-             made before the event wait that orders its ID's write is the one its function reads, \
-             as on Metal",
-        ),
-        (
-            // A device made with no Metal level named, on a macOS host whose release had no
-            // measured level, answered as the newest measured release below it and announced it.
-            // Every device answers as one release now, whatever release the host runs.
-            "metal2vulkan-degrade-metal-level-below-host",
-            "none: every device answers as the one release the runtime imitates \
-             (metal2vulkan_runtime::MACOS_RELEASE), on every host, whatever release it runs",
-        ),
-        (
-            // A device made off macOS with no Metal level named answered as the newest measured
-            // release and announced it. Every device answers as one release now, on every host.
-            "metal2vulkan-degrade-metal-level-not-macos",
-            "none: every device answers as the one release the runtime imitates \
-             (metal2vulkan_runtime::MACOS_RELEASE), on every host, macOS or not",
-        ),
-        (
-            // `generate_mipmaps` under an older release's rule, whose Apple M3 Max passes were not
-            // known for some chains, announced the levels it computed by an Apple M4's filter.
-            // Every device makes the release's mipmaps now, every level the M3 Max's filter.
-            "metal2vulkan-degrade-mipmaps-as-apple-m4",
-            "none: every level of every chain is the Apple M3 Max's filter of the level above, \
-             the rule of the release every device answers as",
-        ),
-    ];
-
     /// The kind of `code`, if any.
     pub fn from_code(code: &str) -> Option<Degradation> {
         Degradation::ALL

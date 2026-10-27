@@ -3571,8 +3571,8 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
 /// A deferred near-equivalent the run announced as a degradation, which no executed module's notes
 /// record (the runtime makes a rate-mapped pass's map and announces it), keeps the row open with
 /// its reason, as a note its comparison class records does, even where the list holds a reading at
-/// it; a cost, a note C3 judges word by word, a retired code, or a code the vocabulary does not
-/// know leaves an ordinary mismatch, which the list reviews.
+/// it; a cost, a note C3 judges word by word, or a code the vocabulary does not know leaves an
+/// ordinary mismatch, which the list reviews.
 #[test]
 fn an_announced_deferred_near_equivalent_stays_open_with_its_reason() {
     use crate::observation::{EXECUTOR_DEGRADES, RUNTIME_DEGRADES};
@@ -3638,7 +3638,6 @@ fn an_announced_deferred_near_equivalent_stays_open_with_its_reason() {
             &[
                 cost,
                 Degradation::DeviceDenormals.code(),
-                Degradation::RETIRED_CODES[0].0,
                 "metal2vulkan-degrade-no-such-kind",
             ],
         )),

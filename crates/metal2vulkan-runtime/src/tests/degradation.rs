@@ -58,22 +58,6 @@ fn codes_are_distinct_and_decode() {
         assert!(!kind.cost().is_empty(), "{kind:?}");
     }
     assert_eq!(Degradation::from_code("metal2vulkan-degrade-"), None);
-    // A retired code is never a kind's again, and names the notices that replace it, or says why
-    // none does.
-    let mut retired = BTreeSet::new();
-    for &(code, replaced_by) in Degradation::RETIRED_CODES {
-        assert!(code.starts_with("metal2vulkan-degrade-"), "{code}");
-        assert!(!seen.contains_key(code), "{code} is retired and a kind's");
-        assert_eq!(Degradation::from_code(code), None, "{code}");
-        assert!(
-            replaced_by.contains("metal2vulkan-degrade-")
-                || replaced_by
-                    .strip_prefix("none: ")
-                    .is_some_and(|why| !why.is_empty()),
-            "{code}"
-        );
-        assert!(retired.insert(code), "{code} is retired twice");
-    }
 }
 
 #[test]
@@ -115,14 +99,12 @@ fn notices_are_warnings_named_by_code() {
     }
 }
 
-/// docs/API.md's catalogue lists every kind's code once, with its category, every retired code
-/// once as retired, and no other code.
+/// docs/API.md's catalogue lists every kind's code once, with its category, and no other code.
 #[test]
 fn the_catalogue_lists_every_kind_and_only_them() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/API.md");
     let guide = std::fs::read_to_string(path).unwrap();
     let mut listed = BTreeMap::new();
-    let mut retired = BTreeSet::new();
     for line in guide.lines() {
         let Some(entry) = line.strip_prefix("- `metal2vulkan-degrade-") else {
             continue;
@@ -135,20 +117,11 @@ fn the_catalogue_lists_every_kind_and_only_them() {
             DegradationCategory::Precision
         } else if after.starts_with(" (validity)") {
             DegradationCategory::Validity
-        } else if after.starts_with(" (retired)") {
-            assert!(!retired.contains(&code), "{code} twice");
-            retired.insert(code);
-            continue;
         } else {
             panic!("{code}: no category: {line}");
         };
         assert_eq!(listed.insert(code.clone(), category), None, "{code} twice");
     }
-    let retired_codes: BTreeSet<String> = Degradation::RETIRED_CODES
-        .iter()
-        .map(|&(code, _)| code.to_owned())
-        .collect();
-    assert_eq!(retired, retired_codes);
     for &kind in Degradation::ALL {
         assert_eq!(
             listed.remove(kind.code()),
@@ -158,28 +131,6 @@ fn the_catalogue_lists_every_kind_and_only_them() {
         );
     }
     assert!(listed.is_empty(), "codes of no kind: {listed:?}");
-}
-
-/// Every code ever issued, in `degradation_codes.txt`, is a kind's or retired, and no other code
-/// is either: a kind removed without retiring its code, or a new kind not added to the list,
-/// fails here. The list only grows, since a code is never reused.
-#[test]
-fn every_code_ever_issued_is_live_or_retired() {
-    let issued: BTreeSet<&str> = include_str!("degradation_codes.txt").lines().collect();
-    let mut known: BTreeSet<&str> = Degradation::ALL.iter().map(|kind| kind.code()).collect();
-    for &(code, _) in Degradation::RETIRED_CODES {
-        assert!(known.insert(code), "{code} is both a kind's and retired");
-    }
-    let unaccounted: Vec<_> = issued.difference(&known).collect();
-    assert!(
-        unaccounted.is_empty(),
-        "issued codes neither a kind's nor retired: {unaccounted:?}"
-    );
-    let unlisted: Vec<_> = known.difference(&issued).collect();
-    assert!(
-        unlisted.is_empty(),
-        "codes missing from degradation_codes.txt: {unlisted:?}"
-    );
 }
 
 /// A kind asked for at every occurrence may be announced on the program's own threads, in a

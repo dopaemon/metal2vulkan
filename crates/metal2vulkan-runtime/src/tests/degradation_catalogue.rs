@@ -30,8 +30,7 @@ use crate::Degradation;
 use std::collections::BTreeMap;
 
 /// docs/API.md's catalogue, each code's entry as one line of text: the words after the code and
-/// its category (`- \`<code>\` (<category>). `), with every continuation line, retired codes among
-/// them.
+/// its category (`- \`<code>\` (<category>). `), with every continuation line.
 fn catalogue() -> BTreeMap<String, String> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/API.md");
     let guide = std::fs::read_to_string(path).unwrap();

@@ -1182,7 +1182,7 @@ How a notice reaches you:
   (`DegradeNotice::call`: its Metal selector and its index among the encoder's calls); `None`
   elsewhere.
 - Decode a notice by its `Degradation` or its code, never its text. The codes are a contract: none
-  is renamed or reused, and a retired code stays listed below.
+  is renamed.
 - `Degradation::exactness()` says whether the program still gets Metal's answer: `Exact` (most
   performance and validity kinds), `ExactWithinPool` (Metal's answer while a command buffer's pool
   holds it, else the command buffer fails), `OneOfMetals` (Metal's own answer is not one value, and
@@ -3123,58 +3123,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   `Invariant`; Vulkan promises no more across pipelines of other fragment modules and attachments.
   Groups past the first may differ at discard or depth edges if the driver compiles the variants
   differently.
-
-- `metal2vulkan-degrade-depth-twin-comparison` (retired). Replaced by
-  metal2vulkan-degrade-device-depth-comparison and, on a device without
-  VK_EXT_depth_range_unrestricted, metal2vulkan-degrade-restricted-depth-range, which the pipeline
-  whose stage makes the device's depth comparison announces.
-- `metal2vulkan-degrade-device-half-rounding` (retired). No replacement: every half rounding is
-  Metal's conversion to half, on every device.
-- `metal2vulkan-degrade-rate-map-parameter-data` (retired). No replacement: a rasterization-rate
-  map's parameter data is Metal's bytes, which a translated decoder reads with Apple's arithmetic.
-- `metal2vulkan-degrade-ycbcr-linear-filter` (retired). Replaced by
-  metal2vulkan-degrade-ycbcr-filter-not-exact, which the pipeline whose stage filters a two-plane
-  YCbCr texture otherwise than Metal's exact filter of the format announces.
-- `metal2vulkan-degrade-reissued-resource-id` (retired). No replacement: plain allocation hands out
-  an ID a live texture holds where Metal does.
-- `metal2vulkan-degrade-padded-bits-kept` (retired). Replaced by
-  metal2vulkan-degrade-unreached-tiles-rewritten, which a pass whose load pass rewrites a padded
-  attachment's every tile announces where that is not Metal's, and
-  metal2vulkan-degrade-extended-range-bits-kept, which names an attachment the load pass does not
-  take.
-- `metal2vulkan-degrade-input-attachment-srgb-decode` (retired). No replacement: an 8-bit
-  four-channel sRGB color read through an input attachment is Metal's decode of its code.
-- `metal2vulkan-degrade-beyond-measured-driver-release` (retired). No replacement: a device whose
-  driver, GPU and release were not measured takes the exact path in place of an answer measured
-  elsewhere, which degrades nothing; it says so in the informational message
-  metal2vulkan-unmeasured-driver.
-- `metal2vulkan-degrade-unmeasured-driver` (retired). No replacement: the paths an unmeasured
-  identity takes are exact; the device says so in the informational message
-  metal2vulkan-unmeasured-driver.
-- `metal2vulkan-degrade-deferred-half-rounding` (retired). No replacement: the opt-in deferred half
-  rounding is removed; every half result rounds where it is computed, under native half rounding
-  (metal2vulkan-degrade-native-half-conversion or metal2vulkan-degrade-native-half-quantize) or
-  Metal's.
-- `metal2vulkan-degrade-shadow-copy-back-race` (retired). No replacement: a shadow over bytes the
-  CPU may write is always merged back, so the CPU's writes beside the commands' stay, as Metal
-  keeps them.
-- `metal2vulkan-degrade-deallocator-after-release` (retired). No replacement: a no-copy buffer's
-  deallocator runs in its release, on the releasing thread, as Metal runs it.
-- `metal2vulkan-degrade-unordered-framebuffer-fetch` (retired). No replacement: the opt-in
-  unordered framebuffer fetch is removed; a fetch no ordered form serves on the device is refused
-  (Unsupported FramebufferFetch).
-- `metal2vulkan-degrade-unrestored-first-move-bytes` (retired). No replacement: a texture over
-  host pages takes a first move over them only where the device's check showed that move keeping
-  every byte; elsewhere it is a shadow, which takes none.
-- `metal2vulkan-degrade-resource-id-takeover` (retired). No replacement: a command reads the
-  sampler states live as its batch is submitted, so a state made before the event wait that orders
-  its ID's write is the one its function reads, as on Metal.
-- `metal2vulkan-degrade-metal-level-below-host` (retired). No replacement: every device answers as
-  the one release the runtime imitates (`MACOS_RELEASE`), on every host, whatever release it runs.
-- `metal2vulkan-degrade-metal-level-not-macos` (retired). No replacement: every device answers as
-  the one release the runtime imitates (`MACOS_RELEASE`), on every host, macOS or not.
-- `metal2vulkan-degrade-mipmaps-as-apple-m4` (retired). No replacement: every level of every chain
-  is the Apple M3 Max's filter of the level above, the rule of the release every device answers as.
 
 ## 10. Accepted differences
 
