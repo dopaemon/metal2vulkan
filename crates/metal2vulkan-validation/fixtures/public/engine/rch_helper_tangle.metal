@@ -1,16 +1,16 @@
 // Owned fixture: fragment functions that read a coverage texture, sample a
 // texture at LOD 0, take a branch where the coverage is not 1 (where every covered pixel's
-// coverage is 1, only the quad helpers past a primitive's edges take it), round to `half` there
-// (a conversion SPIRV-Cross writes through its `optnone` `spvFAdd`) beside a tangled instruction,
-// and write a texture after the branch. In the `after` functions the tangled instruction reads
-// the rounded value: an implicit-LOD sample at the rounded coordinate, `dfdx` and `quad_sum` of
-// it, and the LOD a sample there would take, in the arm; an implicit-LOD sample after the
-// branch's merge at the coordinate the arm rounds (`rch_tangle_merge_after`); and one after a
-// loop that only the helpers run more than once, rounding a coordinate each time
-// (`rch_tangle_loop_after`). In the `before` functions it reads nothing the arm rounds and comes
-// first: `quad_sum` and an implicit-LOD sample of the pixel's own. In `rch_tangle_unread` the
-// sample comes after the rounding but reads none of it. `rch_tangle_vertex` draws the triangle
-// whose three corners `buffer(0)` holds, in clip space.
+// coverage is 1, only the quad helpers past a primitive's edges take it), take the high words of
+// products there (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes through its `optnone`
+// `spvMulExtended`) beside a tangled instruction, and write a texture after the branch. In the
+// `after` functions the tangled instruction reads the products: an implicit-LOD sample at the
+// coordinate they make, `dfdx` and `quad_sum` of them, and the LOD a sample there would take, in
+// the arm; an implicit-LOD sample after the branch's merge at the coordinate the arm makes
+// (`rch_tangle_merge_after`); and one after a loop that only the helpers run more than once,
+// making a coordinate each time (`rch_tangle_loop_after`). In the `before` functions it reads
+// nothing the arm makes and comes first: `quad_sum` and an implicit-LOD sample of the pixel's own.
+// In `rch_tangle_unread` the sample comes after the products but reads none of them.
+// `rch_tangle_vertex` draws the triangle whose three corners `buffer(0)` holds, in clip space.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -27,6 +27,12 @@ static float4 base(float4 position, texture2d<float> noise)
     return float4(1.0f, 0.5f, 0.25f, 1.0f) + n * 0.0078125f;
 }
 
+// The high words of the products of `v`'s bits and `c`'s, scaled into [0, 1).
+static float4 products(float4 v, float c)
+{
+    return float4(mulhi(as_type<uint4>(v), uint4(as_type<uint>(c)))) * 0x1p-32f;
+}
+
 fragment void rch_tangle_sample_after(float4 position [[position]],
                                       texture2d<float> noise [[texture(0)]],
                                       texture2d<float> coverage [[texture(1)]],
@@ -37,8 +43,8 @@ fragment void rch_tangle_sample_after(float4 position [[position]],
     float c = coverage.read(p).x;
     float4 out = base(position, noise);
     if (c != 1.0f) {
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        out = noise.sample(tangle_sampler, float2(m.xy));
+        float4 m = products(src[p.y * 64u + p.x], c);
+        out = noise.sample(tangle_sampler, m.xy);
     }
     dst.write(out, p);
 }
@@ -53,8 +59,8 @@ fragment void rch_tangle_dfdx_after(float4 position [[position]],
     float c = coverage.read(p).x;
     float4 out = base(position, noise);
     if (c != 1.0f) {
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        out = dfdx(float4(m));
+        float4 m = products(src[p.y * 64u + p.x], c);
+        out = dfdx(m);
     }
     dst.write(out, p);
 }
@@ -69,8 +75,8 @@ fragment void rch_tangle_quad_after(float4 position [[position]],
     float c = coverage.read(p).x;
     float4 out = base(position, noise);
     if (c != 1.0f) {
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        out = float4(quad_sum(float(m.x)));
+        float4 m = products(src[p.y * 64u + p.x], c);
+        out = float4(quad_sum(m.x));
     }
     dst.write(out, p);
 }
@@ -85,8 +91,8 @@ fragment void rch_tangle_lod_after(float4 position [[position]],
     float c = coverage.read(p).x;
     float4 out = base(position, noise);
     if (c != 1.0f) {
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        out = float4(noise.calculate_unclamped_lod(tangle_sampler, float2(m.xy)));
+        float4 m = products(src[p.y * 64u + p.x], c);
+        out = float4(noise.calculate_unclamped_lod(tangle_sampler, m.xy));
     }
     dst.write(out, p);
 }
@@ -102,8 +108,8 @@ fragment void rch_tangle_quad_before(float4 position [[position]],
     float4 out = base(position, noise);
     if (c != 1.0f) {
         float t = quad_sum(position.x);
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        out = float4(m) + t * 0.0078125f;
+        float4 m = products(src[p.y * 64u + p.x], c);
+        out = m + t * 0.0078125f;
     }
     dst.write(out, p);
 }
@@ -119,8 +125,8 @@ fragment void rch_tangle_sample_before(float4 position [[position]],
     float4 out = base(position, noise);
     if (c != 1.0f) {
         float4 t = noise.sample(tangle_sampler, position.xy * 0.5f);
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        out = float4(m) + t * 0.0078125f;
+        float4 m = products(src[p.y * 64u + p.x], c);
+        out = m + t * 0.0078125f;
     }
     dst.write(out, p);
 }
@@ -135,9 +141,9 @@ fragment void rch_tangle_unread(float4 position [[position]],
     float c = coverage.read(p).x;
     float4 out = base(position, noise);
     if (c != 1.0f) {
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
+        float4 m = products(src[p.y * 64u + p.x], c);
         float4 t = noise.sample(tangle_sampler, position.xy * 0.5f);
-        out = float4(m) + t * 0.0078125f;
+        out = m + t * 0.0078125f;
     }
     dst.write(out, p);
 }
@@ -153,8 +159,8 @@ fragment void rch_tangle_merge_after(float4 position [[position]],
     float4 out = base(position, noise);
     float2 at = position.xy * 0.5f;
     if (c != 1.0f) {
-        half4 m = half4(src[p.y * 64u + p.x]) * half(c);
-        at = float2(m.xy);
+        float4 m = products(src[p.y * 64u + p.x], c);
+        at = m.xy;
     }
     float4 t = noise.sample(tangle_sampler, at);
     dst.write(out * (t.w + 1.0f), p);
@@ -172,8 +178,8 @@ fragment void rch_tangle_loop_after(float4 position [[position]],
     float2 at = position.xy * 0.5f;
     uint k = 0u;
     do {
-        half4 m = half4(src[p.y * 64u + p.x + k]) * half(c);
-        at += float2(m.xy);
+        float4 m = products(src[p.y * 64u + p.x + k], c);
+        at += m.xy;
         k++;
     } while (k < uint((1.0f - c) * 4.0f));
     float4 t = noise.sample(tangle_sampler, at);

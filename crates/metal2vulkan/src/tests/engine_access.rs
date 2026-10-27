@@ -6,8 +6,9 @@
 //!   sub-word store and the padding, with a zero and a non-zero bind residual.
 //! - Generated kernels load and store every leaf path (aligned words, one word, byte by byte) at
 //!   offsets around the end of the buffer and at `0xFFFF_FFF0..=0xFFFF_FFFF`: with the in-shader
-//!   encoding no access traps, an in-bounds access is exact, and an out-of-bounds load is 0 and an
-//!   out-of-bounds store changes nothing.
+//!   encoding no access traps, an in-bounds access is exact (a `half` NaN loaded a NaN where the
+//!   module reads a `half` by the device's widening, `PrecisionNote::NativeHalfConversion`), and
+//!   an out-of-bounds load is 0 and an out-of-bounds store changes nothing.
 //! - Slot forms: the `constant` fixture gets a uniform view (`u32[]` with standard layout,
 //!   `uvec4[]` without) with robust descriptors and a storage view in shader, where an allocation
 //!   shorter than the window is contained; several slots are storage views decorated `Aliased`, a
@@ -517,7 +518,8 @@ fn leaf_kernels() -> Vec<LeafKernel> {
         k("load_uint4", "<4 x i32>", 16, 16),
         k("load_uchar4_bytes", "<4 x i8>", 4, 1),
         k("load_short2", "<2 x i16>", 4, 4),
-        // Narrow floats are held widened; their leaves round-trip the 16 format bits.
+        // Narrow floats are held widened; their leaves round-trip the 16 format bits, a `half`
+        // NaN's as the device's widening encodes it where the module reads a `half` so.
         k("load_half", "half", 2, 2),
         k("load_half_bytes", "half", 2, 1),
         k("load_half3", "<3 x half>", 6, 8),
@@ -745,7 +747,9 @@ fn offsets(size: u64) -> Vec<u64> {
 /// Every leaf path, in-shader encoding, at offsets around the end of a 32-byte buffer and near 2^32
 /// (with residuals 0 and 4 wrapping them further): no trap, exact in bounds, 0 or unchanged out of
 /// bounds. Probes are skipped where the offset breaks the access's stated alignment (undefined in
-/// Metal).
+/// Metal). A `half` NaN loaded need only come back a NaN where the module reads a `half` from its
+/// bits by the device's widening (`PrecisionNote::NativeHalfConversion`), whose NaN encoding is
+/// the device's.
 #[test]
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
@@ -757,6 +761,11 @@ fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
                 return;
             };
             check_l3(&bc, k.name, &p, &what);
+            let native_halves = k.ty.contains("half")
+                && compile(&bc, k.name, &p)
+                    .unwrap_or_else(|e| panic!("{what}: {e}"))
+                    .precision
+                    .contains(&PrecisionNote::NativeHalfConversion);
             let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             for r in [0u32, 4] {
                 for off in offsets(size) {
@@ -797,11 +806,15 @@ fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
                             } else {
                                 vec![0; k.bytes as usize]
                             };
-                            assert_eq!(
-                                out.buffers[1][..k.bytes as usize],
-                                want[..],
-                                "{what} r={r} off={off:#x}"
-                            );
+                            let got = &out.buffers[1][..k.bytes as usize];
+                            if native_halves {
+                                assert!(
+                                    same_halves(got, &want),
+                                    "{what} r={r} off={off:#x}: {got:?} for {want:?}"
+                                );
+                            } else {
+                                assert_eq!(got, &want[..], "{what} r={r} off={off:#x}");
+                            }
                         }
                         Some((_, bytes)) => {
                             let mut want = dbuf.bytes.clone();

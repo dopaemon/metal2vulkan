@@ -10,22 +10,28 @@
 //! whether the `float` functions are Metal's, and whether the device reads `f32` denormals as
 //! Metal does. Each artifact's notes are exactly what the exported function answers for that call
 //! in that entry's math mode. The loads and stores around it record none, but a `half` kernel's
-//! widening and rounding, which the module records once by the profile's own form
-//! (`narrow::native_rounding`), and the test sets aside.
+//! widening and rounding, which the module records once by the profile's own form: its rounding's
+//! note (`narrow::native_rounding`), which the test sets aside, and under the float controls
+//! (`QuantizeForm::Controlled`) a module's widening of a `half` from its bits by the device, whose
+//! NaN's bits are the device's (`narrow::widens_bits`, `NativeNanEncoding`), which the test adds
+//! to the operation's notes.
 //!
 //! `llvm-as` assembles the modules; without it the test skips visibly.
 
 use crate::air::intrinsics::{AirIntrinsic, Elem, Math, NumTy, Operand};
 use crate::air::ir::{BinOp, FastMath};
-use crate::device::profile::FloatFunctions;
+use crate::device::profile::{FloatFunctions, NanEncoding};
 use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
 use crate::error::DriverDeviation;
 use crate::lower::arith::fma::{self, Route};
 use crate::lower::arith::libm::Mode;
-use crate::lower::arith::{denormal, float_binop_notes, float_call_notes, narrow, FloatFmt};
+use crate::lower::arith::{denormal, float_binop_notes, float_call_notes, nan, narrow, FloatFmt};
 use crate::pipeline::artifact::{EntryMath, PrecisionNote};
-use crate::pipeline::testing::{compile, exact_maths, llvm_assemble, AssembleError, Scratch};
+use crate::pipeline::testing::{
+    compile, exact_maths, llvm_assemble, meter, typed_module, AssembleError, Scratch,
+};
+use crate::spirv::builder::QuantizeForm;
 use crate::spirv::testing::committed_profiles_with;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -352,13 +358,23 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                         Op::Binop { op, fmt, fmf } => float_binop_notes(*op, *fmt, *fmf, p)
                             .map(|notes| notes.in_entry(entry_mode(p, *fmf))),
                     };
-                    let want = want.unwrap_or_else(|| panic!("{what}: no exported notes"));
+                    let mut want = want.unwrap_or_else(|| panic!("{what}: no exported notes"));
                     let a =
                         compile(&bitcode, &k.name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
                     let mut got: BTreeSet<PrecisionNote> = a.precision.iter().copied().collect();
                     if matches!(elem, Elem::F16) {
-                        if let Some(own) = narrow::native_rounding(p, narrow::quantize_form(p)) {
+                        let form = narrow::quantize_form(p);
+                        if let Some(own) = narrow::native_rounding(p, form) {
                             got.remove(&own);
+                        }
+                        if form == QuantizeForm::Controlled {
+                            let (_, m) = typed_module(&bitcode, &k.name, p)
+                                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                            if narrow::widens_bits(&m, &mut meter())
+                                .unwrap_or_else(|e| panic!("{what}: {e:?}"))
+                            {
+                                want.insert(PrecisionNote::NativeNanEncoding);
+                            }
                         }
                     }
                     assert_eq!(got, want, "{what}");
@@ -379,13 +395,17 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
 /// the device's `OpFRem`, and with every flag Metal's `fast::fmod`, whose notes it records. Metal's
 /// fast division (an `fdiv` on `float` with `arcp`) is the device's `OpFDiv` too, and records the
 /// device's arithmetic, its division and its denormals, but where the profile's `float` functions
-/// are Metal's, in an entry Metal compiles with fast math, whose quotient is Metal's own. No
-/// operator leaves the device its NaN here (the policy keeps Metal's).
+/// are Metal's, in an entry Metal compiles with fast math, whose quotient is Metal's own. Metal
+/// answers its canonical NaN for a `float` or `half` `+ - * /` and a `float` remainder; each leaves
+/// that NaN to the device, noted `NativeNanEncoding` where the profile is not measured to answer
+/// Metal's (`NanEncoding::Native`), a fast `float` division but in Metal's own fast-math entry.
+/// No operator records `DeviceNanEncoding`.
 #[test]
 fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() {
     for (class, (stem, p)) in one_profile_per_class() {
         let (_, metal_functions, _) = class;
         let flushes = p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals);
+        let native_nans = nan::encoding(&p) == NanEncoding::Native;
         for (_, _, _, fmt) in ELEMS {
             for op in BinOp::ALL {
                 for fmf in [FastMath::NONE, FastMath::ARCP, every_flag()] {
@@ -404,6 +424,7 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
                             let want: BTreeSet<_> = [PrecisionNote::NativeDivision]
                                 .into_iter()
                                 .chain(single.then_some(PrecisionNote::DeviceDenormals))
+                                .chain(native_nans.then_some(PrecisionNote::NativeNanEncoding))
                                 .collect();
                             assert_eq!(notes, want, "{what}");
                             continue;
@@ -424,11 +445,14 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
                             let want = if metal == Some(Mode::Fast) {
                                 BTreeSet::new()
                             } else {
-                                BTreeSet::from([
+                                [
                                     PrecisionNote::DeviceArithmetic,
                                     PrecisionNote::NativeDivision,
                                     PrecisionNote::DeviceDenormals,
-                                ])
+                                ]
+                                .into_iter()
+                                .chain(native_nans.then_some(PrecisionNote::NativeNanEncoding))
+                                .collect()
                             };
                             assert_eq!(notes, want, "{what}");
                             continue;
@@ -436,6 +460,16 @@ fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() 
                         assert_eq!(
                             notes.contains(&PrecisionNote::DeviceArithmetic),
                             matches!(op, BinOp::FDiv | BinOp::FRem),
+                            "{what}"
+                        );
+                        // Metal's canonical NaN: a `float` or `half` `+ - *`, and a `float`
+                        // remainder.
+                        let canonical = (matches!(fmt, FloatFmt::F32 | FloatFmt::Half)
+                            && matches!(op, BinOp::FAdd | BinOp::FSub | BinOp::FMul))
+                            || (op == BinOp::FRem && single);
+                        assert_eq!(
+                            notes.contains(&PrecisionNote::NativeNanEncoding),
+                            native_nans && canonical,
                             "{what}"
                         );
                         assert_eq!(

@@ -5176,14 +5176,15 @@ fn helper_guards(m: &TypedModule) -> usize {
 /// On MoltenVK on an Apple GPU (`DriverWorkaround::DiscardDropsSimdgroupStores`), Apple's compiler
 /// loses a simdgroup's storage writes after an `optnone` call only its helper invocations make,
 /// with no discard: the quad helpers past a primitive's edges take a branch alone. The owned
-/// fixture `rch_helper_branch`'s functions sample, round `half` values (whose conversion barrier
-/// SPIRV-Cross writes as its `optnone` `spvFAdd`) in a branch where the coverage they read is not
-/// 1, and write a buffer after it. There the branch's helper invocations take its empty arm where
-/// nothing they compute differently reaches a derivative: `rch_helper_branch` (no implicit LOD) and
+/// fixture `rch_helper_branch`'s functions sample, blend `half` values with the high word of a
+/// product (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes as its `optnone`
+/// `spvMulExtended`) in a branch where the coverage they read is not 1, and write a buffer after
+/// it. There the branch's helper invocations take its empty arm where nothing they compute
+/// differently reaches a derivative: `rch_helper_branch` (no implicit LOD) and
 /// `rch_helper_branch_late` (an implicit-LOD sample after the branch at the pixel) are guarded,
 /// census `fragment.helper-guard`, and record no note. `rch_helper_branch_gradient`, whose
 /// implicit-LOD sample reads a coordinate the branch computes, is not guarded and records no note
-/// either: the sample reads the rounding after it. `rch_helper_branch_loop`, whose rounding is in a
+/// either: the sample reads the product after it. `rch_helper_branch_loop`, whose product is in a
 /// loop as long as the coverage, records `PrecisionNote::HelperBranchDropsSimdgroupStores`. One
 /// that samples nothing (`rch_helper_branch_unsampled`) is left as it is. A device without the
 /// defect (`intel-arl-anv`) guards nothing. Every module passes L3.
@@ -5264,15 +5265,15 @@ fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
 /// Apple's compiler loses nothing after an `optnone` call only helper invocations make where they
 /// make a tangled instruction (an implicit-LOD sample, a derivative, an LOD query, a simdgroup
 /// operation) after it, so such a call records no note where every path from it passes a tangled
-/// instruction reading what it computes. The owned fixture `rch_helper_tangle` rounds to `half` (a
-/// conversion SPIRV-Cross writes through its `optnone` `spvFAdd`) where only the quad helpers past
-/// a primitive's edges run more than once or at all, beside a tangled instruction, and writes a
-/// texture after it. On `moltenvk-m3` no arm is guarded; the `after` functions, whose tangled
-/// instruction reads the rounded value (in the arm an implicit-LOD sample at it, `dfdx`,
-/// `quad_sum`, the LOD query; a sample after the branch's merge; a sample after a loop only helpers
-/// repeat), record no `HelperBranchDropsSimdgroupStores`; the `before` functions and
-/// `rch_tangle_unread`, whose tangled instruction reads none of it, record it. Every module passes
-/// L3.
+/// instruction reading what it computes. The owned fixture `rch_helper_tangle` takes the high
+/// words of products (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes through its `optnone`
+/// `spvMulExtended`) where only the quad helpers past a primitive's edges run more than once or at
+/// all, beside a tangled instruction, and writes a texture after it. On `moltenvk-m3` no arm is
+/// guarded; the `after` functions, whose tangled instruction reads the products (in the arm an
+/// implicit-LOD sample at them, `dfdx`, `quad_sum`, the LOD query; a sample after the branch's
+/// merge; a sample after a loop only helpers repeat), record no
+/// `HelperBranchDropsSimdgroupStores`; the `before` functions and `rch_tangle_unread`, whose
+/// tangled instruction reads none of them, record it. Every module passes L3.
 #[test]
 fn a_tangled_instruction_reading_a_helper_call_keeps_the_note_away() {
     let Some(bc) = fixture("rch_helper_tangle") else {

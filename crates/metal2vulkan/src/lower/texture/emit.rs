@@ -1302,8 +1302,10 @@ pub fn held_texel(
 /// `I32`, `texture::native_form`), as the result `declared` a slot of another class declares
 /// (`LoweringInputs::cross_class`), as plain Metal hands it back: each 32-bit word as it is, a
 /// `float` or 32-bit integer one bitcast, a `half` one the low 16 bits of each word, held widened
-/// exactly with its bits noted (`narrow::from_bits`: every bit pattern, a NaN's payload
-/// included). A conversion `texture::native_form` makes no form for is an emission failure.
+/// with its bits noted (`narrow::from_bits`: every bit pattern exactly but a NaN's, whose encoding
+/// is the device's where the module widens a `half` by the device, as its
+/// `PrecisionNote::NativeHalfConversion` or `NativeNanEncoding` records). A conversion
+/// `texture::native_form` makes no form for is an emission failure.
 pub(crate) fn reinterpret(
     fb: &mut FunctionBuilder<'_>,
     native: TexelForm,

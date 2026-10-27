@@ -83,9 +83,9 @@
 //!   two roundings.
 //!
 //! The shader's operations read Metal's `float` denormals: each operand and result that is
-//! denormal is the zero of its sign (the module's `fadd`, `fsub`, `fmul`, and comparisons are
-//! lowered so, or left to a device measured to read them so), and a `NaN` result is Metal's
-//! `0x7fc00000`. Its horizontal table is the layer's, unclamped: layer `l` reads the words `l ·
+//! denormal is the zero of its sign, and a `NaN` result is Metal's `0x7fc00000` (the translated
+//! module's `fadd`, `fsub`, `fmul`, and comparisons leave both to the device, which answers so
+//! where it is measured to read denormals as Metal does). Its horizontal table is the layer's, unclamped: layer `l` reads the words `l ·
 //! 1026` past layer 0's, as Apple's GPU does (a map of one layer's layer 1 reads zeros, layer 2 the
 //! screen-to-physical tables as physical-to-screen ones); its vertical table is every layer's. The
 //! map's operations are IEEE `f32`, denormals kept, a `NaN` the input's. A read past the words
@@ -418,7 +418,8 @@ pub fn screen_to_physical(words: &[u32], layer: u32, c: [f32; 2], screen: [u32; 
 }
 
 /// A shader's `map_screen_to_physical_coordinates(c, layer)` over parameter data `words`, as
-/// Apple's GPU and the translated decoder compute it.
+/// Apple's GPU computes it, and the translated decoder on a device that reads `float` denormals as
+/// Metal does.
 pub fn shader_screen_to_physical(words: &[u32], layer: u32, c: [f32; 2]) -> [f32; 2] {
     let [x, y] = c;
     [
@@ -442,7 +443,8 @@ pub fn physical_to_screen(words: &[u32], layer: u32, c: [f32; 2], physical: [u32
 }
 
 /// A shader's `map_physical_to_screen_coordinates(c, layer)` over parameter data `words`, as
-/// Apple's GPU and the translated decoder compute it.
+/// Apple's GPU computes it, and the translated decoder on a device that reads `float` denormals as
+/// Metal does.
 pub fn shader_physical_to_screen(words: &[u32], layer: u32, c: [f32; 2]) -> [f32; 2] {
     let [x, y] = c;
     [

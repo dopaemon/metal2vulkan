@@ -10,8 +10,8 @@
 //! write landed, and color outputs landed in every form. SPIRV-Cross (MoltenVK 1.4.1's, as
 //! Homebrew's) writes these SPIR-V instructions as `optnone` calls ([`optnone`]): an `OpFAdd`,
 //! `OpFSub` or `OpFMul` decorated `NoContraction` (`spvFAdd`, `spvFSub`, `spvFMul`, which the
-//! lowering uses wherever an operation must be rounded on its own, the conversion barrier of a
-//! `half` rounding among them), `OpQuantizeToF16`, `OpUMulExtended` and `OpSMulExtended`, and
+//! lowering uses wherever an operation must be rounded on its own), `OpQuantizeToF16`,
+//! `OpUMulExtended` and `OpSMulExtended` (`spvMulExtended`, which `mulhi` and `madhi` take), and
 //! `GLSL.std.450` `Reflect`. MoltenVK binds every resource through argument buffers, and on an
 //! Apple GPU carries `DriverWorkaround::DiscardDropsSimdgroupStores`.
 //!

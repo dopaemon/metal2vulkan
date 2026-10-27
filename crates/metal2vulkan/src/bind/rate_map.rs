@@ -17,9 +17,10 @@
 //! which differs from the CPU's (the granule of the coordinate plus half a pixel, two roundings
 //! where the CPU fuses, denormals flushed, the layer unclamped). Measured on an Apple M4: the bytes
 //! of 45 maps, and every CPU and GPU answer probed over them, bit for bit, the sign of a zero
-//! included. The translated decoder computes the shader's answers bit for bit in the SPIR-V
-//! interpreter, and on a device that reads `float` denormals as Metal does. The buffer is then
-//! bound like any other ([`BoundBuffer::Buffer`]).
+//! included. The translated decoder's `float` arithmetic is the device's: it computes the shader's
+//! answers bit for bit on a device that reads `float` denormals as Metal does, and with the
+//! device's own denormals elsewhere (`PrecisionNote::DeviceDenormals`), as the SPIR-V interpreter
+//! keeps them. The buffer is then bound like any other ([`BoundBuffer::Buffer`]).
 //!
 //! **Compiling a descriptor.** Metal leaves the compiled map to the device: a layer's quality
 //! samples "may be rounded up ... depending on hardware support". [`RasterizationRateMap::new`]
@@ -755,9 +756,10 @@ impl RasterizationRateMap {
     }
 
     /// A shader's `map_screen_to_physical_coordinates(c, layer)` over this map's parameter data,
-    /// as Apple's GPU decoder and the translated decoder compute it: the granule of `c` plus half
-    /// a pixel, two roundings, denormals flushed, and the layer's tables unclamped (a layer the
-    /// map lacks reads the words where its tables would be).
+    /// as Apple's GPU decoder computes it, and the translated decoder on a device that reads
+    /// `float` denormals as Metal does: the granule of `c` plus half a pixel, two roundings,
+    /// denormals flushed, and the layer's tables unclamped (a layer the map lacks reads the words
+    /// where its tables would be).
     pub fn shader_screen_to_physical(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
         format::shader_screen_to_physical(&self.words, layer, c)
     }
@@ -772,8 +774,9 @@ impl RasterizationRateMap {
     }
 
     /// A shader's `map_physical_to_screen_coordinates(c, layer)` over this map's parameter data,
-    /// as Apple's GPU decoder and the translated decoder compute it: denormals flushed, and the
-    /// layer's tables unclamped, as [`Self::shader_screen_to_physical`].
+    /// as Apple's GPU decoder computes it, and the translated decoder on a device that reads
+    /// `float` denormals as Metal does: denormals flushed, and the layer's tables unclamped, as
+    /// [`Self::shader_screen_to_physical`].
     pub fn shader_physical_to_screen(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
         format::shader_physical_to_screen(&self.words, layer, c)
     }

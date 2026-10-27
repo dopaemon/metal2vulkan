@@ -11,9 +11,10 @@
 //! `fmul` and `fadd` (screen to physical) or an `fsub` and `fmul` (physical to screen), all without
 //! fast-math flags, so the module's result is `rate_map_data`'s `shader_screen_to_physical` and
 //! `shader_physical_to_screen` bit for bit: Apple's GPU decoder's, measured on an Apple M4 under
-//! fast and safe math alike. The float operations read denormals and answer `NaN` as Metal does, as
-//! the lowering gives every `float` `+ - *`. The call's fast-math flags are not carried: the
-//! decoder's arithmetic is Apple's, not the source's.
+//! fast and safe math alike, where the device reads `float` denormals and answers `NaN` as Metal
+//! does. The lowering gives these operations, as every `float` `+ - *`, the device's denormals and
+//! `NaN`: Metal's on a device measured to read them so, the device's own elsewhere, noted. The
+//! call's fast-math flags are not carried: the decoder's arithmetic is Apple's, not the source's.
 //!
 //! The `uint2` overloads (`.v2i32`) stay calls and lowering refuses them
 //! (`Unsupported{RasterizationRateMap, NotImplemented}`): on Apple M3 the screen-to-physical one

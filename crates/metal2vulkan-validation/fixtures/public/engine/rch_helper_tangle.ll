@@ -39,14 +39,14 @@ define void @rch_tangle_sample_after(<4 x float> noundef %0, ptr addrspace(1) %1
   %22 = add i32 %20, %21
   %23 = zext i32 %22 to i64
   %24 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %23
-  %25 = load <4 x float>, ptr addrspace(1) %24, align 16, !tbaa !38, !alias.scope !44, !noalias !47
-  %26 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %25) #10
-  %27 = fptrunc float %11 to half
-  %28 = insertelement <4 x half> poison, half %27, i64 0
-  %29 = shufflevector <4 x half> %28, <4 x half> poison, <4 x i32> <i32 0, i32 0, i32 poison, i32 poison>
-  %30 = fmul fast <4 x half> %26, %29
-  %31 = shufflevector <4 x half> %30, <4 x half> poison, <2 x i32> <i32 0, i32 1>
-  %32 = tail call fast <2 x float> @air.convert.f.v2f32.f.v2f16(<2 x half> %31) #10
+  %25 = bitcast ptr addrspace(1) %24 to ptr addrspace(1)
+  %26 = load <4 x i32>, ptr addrspace(1) %25, align 16, !tbaa !38, !alias.scope !44, !noalias !47
+  %27 = bitcast <4 x float> %10 to <4 x i32>
+  %28 = shufflevector <4 x i32> %27, <4 x i32> poison, <4 x i32> zeroinitializer
+  %29 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %26, <4 x i32> %28) #10
+  %30 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %29) #10
+  %31 = fmul fast <4 x float> %30, <float 0x3DF0000000000000, float 0x3DF0000000000000, float poison, float poison>
+  %32 = shufflevector <4 x float> %31, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %33 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %32, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #13
   %34 = extractvalue { <4 x float>, i8 } %33, 0
   br label %35
@@ -59,12 +59,6 @@ define void @rch_tangle_sample_after(<4 x float> noundef %0, ptr addrspace(1) %1
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>) local_unnamed_addr #2
-
-; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-declare <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float>) local_unnamed_addr #2
-
-; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-declare <2 x float> @air.convert.f.v2f32.f.v2f16(<2 x half>) local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define void @rch_tangle_dfdx_after(<4 x float> noundef %0, ptr addrspace(1) readonly captures(none) %1, ptr addrspace(1) readonly captures(none) %2, ptr addrspace(1) %3, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %4) local_unnamed_addr #1 {
@@ -89,13 +83,13 @@ define void @rch_tangle_dfdx_after(<4 x float> noundef %0, ptr addrspace(1) read
   %22 = add i32 %20, %21
   %23 = zext i32 %22 to i64
   %24 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %23
-  %25 = load <4 x float>, ptr addrspace(1) %24, align 16, !tbaa !38, !alias.scope !49, !noalias !52
-  %26 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %25) #10
-  %27 = fptrunc float %11 to half
-  %28 = insertelement <4 x half> poison, half %27, i64 0
-  %29 = shufflevector <4 x half> %28, <4 x half> poison, <4 x i32> zeroinitializer
-  %30 = fmul fast <4 x half> %26, %29
-  %31 = tail call fast <4 x float> @air.convert.f.v4f32.f.v4f16(<4 x half> %30) #10
+  %25 = bitcast ptr addrspace(1) %24 to ptr addrspace(1)
+  %26 = load <4 x i32>, ptr addrspace(1) %25, align 16, !tbaa !38, !alias.scope !49, !noalias !52
+  %27 = bitcast <4 x float> %10 to <4 x i32>
+  %28 = shufflevector <4 x i32> %27, <4 x i32> poison, <4 x i32> zeroinitializer
+  %29 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %26, <4 x i32> %28) #10
+  %30 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %29) #10
+  %31 = fmul fast <4 x float> %30, splat (float 0x3DF0000000000000)
   %32 = tail call fast <4 x float> @air.dfdx.v4f32(<4 x float> %31) #15
   br label %33
 
@@ -104,9 +98,6 @@ define void @rch_tangle_dfdx_after(<4 x float> noundef %0, ptr addrspace(1) read
   tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %3, <2 x i32> %7, <4 x float> %34, i32 0, i32 2) #14, !alias.scope !52, !noalias !49
   ret void
 }
-
-; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-declare <4 x float> @air.convert.f.v4f32.f.v4f16(<4 x half>) local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define void @rch_tangle_quad_after(<4 x float> noundef %0, ptr addrspace(1) readonly captures(none) %1, ptr addrspace(1) readonly captures(none) %2, ptr addrspace(1) %3, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %4) local_unnamed_addr #1 {
@@ -122,7 +113,7 @@ define void @rch_tangle_quad_after(<4 x float> noundef %0, ptr addrspace(1) read
   %15 = fmul fast <4 x float> %14, splat (float 7.812500e-03)
   %16 = fadd fast <4 x float> %15, <float 1.000000e+00, float 5.000000e-01, float 2.500000e-01, float 1.000000e+00>
   %17 = fcmp fast une float %11, 1.000000e+00
-  br i1 %17, label %18, label %34
+  br i1 %17, label %18, label %36
 
 18:                                               ; preds = %5
   %19 = extractelement <2 x i32> %7, i64 1
@@ -131,20 +122,22 @@ define void @rch_tangle_quad_after(<4 x float> noundef %0, ptr addrspace(1) read
   %22 = add i32 %20, %21
   %23 = zext i32 %22 to i64
   %24 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %23
-  %25 = load <4 x float>, ptr addrspace(1) %24, align 16, !tbaa !38, !alias.scope !54, !noalias !57
-  %26 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %25) #10
-  %27 = fptrunc float %11 to half
-  %28 = extractelement <4 x half> %26, i64 0
-  %29 = fmul fast half %28, %27
-  %30 = fpext half %29 to float
-  %31 = tail call fast float @air.quad_sum.f32(float %30) #15
-  %32 = insertelement <4 x float> poison, float %31, i64 0
-  %33 = shufflevector <4 x float> %32, <4 x float> poison, <4 x i32> zeroinitializer
-  br label %34
+  %25 = bitcast ptr addrspace(1) %24 to ptr addrspace(1)
+  %26 = load <4 x i32>, ptr addrspace(1) %25, align 16, !tbaa !38, !alias.scope !54, !noalias !57
+  %27 = bitcast <4 x float> %10 to <4 x i32>
+  %28 = shufflevector <4 x i32> %27, <4 x i32> poison, <4 x i32> zeroinitializer
+  %29 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %26, <4 x i32> %28) #10
+  %30 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %29) #10
+  %31 = extractelement <4 x float> %30, i64 0
+  %32 = fmul fast float %31, 0x3DF0000000000000
+  %33 = tail call fast float @air.quad_sum.f32(float %32) #15
+  %34 = insertelement <4 x float> poison, float %33, i64 0
+  %35 = shufflevector <4 x float> %34, <4 x float> poison, <4 x i32> zeroinitializer
+  br label %36
 
-34:                                               ; preds = %18, %5
-  %35 = phi <4 x float> [ %33, %18 ], [ %16, %5 ]
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %3, <2 x i32> %7, <4 x float> %35, i32 0, i32 2) #14, !alias.scope !57, !noalias !54
+36:                                               ; preds = %18, %5
+  %37 = phi <4 x float> [ %35, %18 ], [ %16, %5 ]
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %3, <2 x i32> %7, <4 x float> %37, i32 0, i32 2) #14, !alias.scope !57, !noalias !54
   ret void
 }
 
@@ -171,14 +164,14 @@ define void @rch_tangle_lod_after(<4 x float> noundef %0, ptr addrspace(1) %1, p
   %22 = add i32 %20, %21
   %23 = zext i32 %22 to i64
   %24 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %23
-  %25 = load <4 x float>, ptr addrspace(1) %24, align 16, !tbaa !38, !alias.scope !59, !noalias !62
-  %26 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %25) #10
-  %27 = fptrunc float %11 to half
-  %28 = insertelement <4 x half> poison, half %27, i64 0
-  %29 = shufflevector <4 x half> %28, <4 x half> poison, <4 x i32> <i32 0, i32 0, i32 poison, i32 poison>
-  %30 = fmul fast <4 x half> %26, %29
-  %31 = shufflevector <4 x half> %30, <4 x half> poison, <2 x i32> <i32 0, i32 1>
-  %32 = tail call fast <2 x float> @air.convert.f.v2f32.f.v2f16(<2 x half> %31) #10
+  %25 = bitcast ptr addrspace(1) %24 to ptr addrspace(1)
+  %26 = load <4 x i32>, ptr addrspace(1) %25, align 16, !tbaa !38, !alias.scope !59, !noalias !62
+  %27 = bitcast <4 x float> %10 to <4 x i32>
+  %28 = shufflevector <4 x i32> %27, <4 x i32> poison, <4 x i32> zeroinitializer
+  %29 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %26, <4 x i32> %28) #10
+  %30 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %29) #10
+  %31 = fmul fast <4 x float> %30, <float 0x3DF0000000000000, float 0x3DF0000000000000, float poison, float poison>
+  %32 = shufflevector <4 x float> %31, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   %33 = tail call fast float @air.calculate_unclamped_lod_texture_2d(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %32, i32 0) #13
   %34 = insertelement <4 x float> poison, float %33, i64 0
   %35 = shufflevector <4 x float> %34, <4 x float> poison, <4 x i32> zeroinitializer
@@ -215,13 +208,13 @@ define void @rch_tangle_quad_before(<4 x float> noundef %0, ptr addrspace(1) rea
   %24 = add i32 %22, %23
   %25 = zext i32 %24 to i64
   %26 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %25
-  %27 = load <4 x float>, ptr addrspace(1) %26, align 16, !tbaa !38, !alias.scope !64, !noalias !67
-  %28 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %27) #10
-  %29 = fptrunc float %11 to half
-  %30 = insertelement <4 x half> poison, half %29, i64 0
-  %31 = shufflevector <4 x half> %30, <4 x half> poison, <4 x i32> zeroinitializer
-  %32 = fmul fast <4 x half> %28, %31
-  %33 = tail call fast <4 x float> @air.convert.f.v4f32.f.v4f16(<4 x half> %32) #10
+  %27 = bitcast ptr addrspace(1) %26 to ptr addrspace(1)
+  %28 = load <4 x i32>, ptr addrspace(1) %27, align 16, !tbaa !38, !alias.scope !64, !noalias !67
+  %29 = bitcast <4 x float> %10 to <4 x i32>
+  %30 = shufflevector <4 x i32> %29, <4 x i32> poison, <4 x i32> zeroinitializer
+  %31 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %28, <4 x i32> %30) #10
+  %32 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %31) #10
+  %33 = fmul fast <4 x float> %32, splat (float 0x3DF0000000000000)
   %34 = fmul fast float %20, 7.812500e-03
   %35 = insertelement <4 x float> poison, float %34, i64 0
   %36 = shufflevector <4 x float> %35, <4 x float> poison, <4 x i32> zeroinitializer
@@ -260,13 +253,13 @@ define void @rch_tangle_sample_before(<4 x float> noundef %0, ptr addrspace(1) %
   %25 = add i32 %23, %24
   %26 = zext i32 %25 to i64
   %27 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %26
-  %28 = load <4 x float>, ptr addrspace(1) %27, align 16, !tbaa !38, !alias.scope !69, !noalias !72
-  %29 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %28) #10
-  %30 = fptrunc float %11 to half
-  %31 = insertelement <4 x half> poison, half %30, i64 0
-  %32 = shufflevector <4 x half> %31, <4 x half> poison, <4 x i32> zeroinitializer
-  %33 = fmul fast <4 x half> %29, %32
-  %34 = tail call fast <4 x float> @air.convert.f.v4f32.f.v4f16(<4 x half> %33) #10
+  %28 = bitcast ptr addrspace(1) %27 to ptr addrspace(1)
+  %29 = load <4 x i32>, ptr addrspace(1) %28, align 16, !tbaa !38, !alias.scope !69, !noalias !72
+  %30 = bitcast <4 x float> %10 to <4 x i32>
+  %31 = shufflevector <4 x i32> %30, <4 x i32> poison, <4 x i32> zeroinitializer
+  %32 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %29, <4 x i32> %31) #10
+  %33 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %32) #10
+  %34 = fmul fast <4 x float> %33, splat (float 0x3DF0000000000000)
   %35 = fmul fast <4 x float> %21, splat (float 7.812500e-03)
   %36 = fadd fast <4 x float> %34, %35
   br label %37
@@ -300,18 +293,18 @@ define void @rch_tangle_unread(<4 x float> noundef %0, ptr addrspace(1) %1, ptr 
   %22 = add i32 %20, %21
   %23 = zext i32 %22 to i64
   %24 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %23
-  %25 = load <4 x float>, ptr addrspace(1) %24, align 16, !tbaa !38, !alias.scope !74, !noalias !77
-  %26 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %25) #10
-  %27 = fptrunc float %11 to half
-  %28 = insertelement <4 x half> poison, half %27, i64 0
-  %29 = shufflevector <4 x half> %28, <4 x half> poison, <4 x i32> zeroinitializer
-  %30 = fmul fast <4 x half> %26, %29
-  %31 = fmul fast <2 x float> %6, splat (float 5.000000e-01)
-  %32 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %31, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #13
-  %33 = extractvalue { <4 x float>, i8 } %32, 0
-  %34 = tail call fast <4 x float> @air.convert.f.v4f32.f.v4f16(<4 x half> %30) #10
-  %35 = fmul fast <4 x float> %33, splat (float 7.812500e-03)
-  %36 = fadd fast <4 x float> %35, %34
+  %25 = bitcast ptr addrspace(1) %24 to ptr addrspace(1)
+  %26 = load <4 x i32>, ptr addrspace(1) %25, align 16, !tbaa !38, !alias.scope !74, !noalias !77
+  %27 = bitcast <4 x float> %10 to <4 x i32>
+  %28 = shufflevector <4 x i32> %27, <4 x i32> poison, <4 x i32> zeroinitializer
+  %29 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %26, <4 x i32> %28) #10
+  %30 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %29) #10
+  %31 = fmul fast <4 x float> %30, splat (float 0x3DF0000000000000)
+  %32 = fmul fast <2 x float> %6, splat (float 5.000000e-01)
+  %33 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %32, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #13
+  %34 = extractvalue { <4 x float>, i8 } %33, 0
+  %35 = fmul fast <4 x float> %34, splat (float 7.812500e-03)
+  %36 = fadd fast <4 x float> %35, %31
   br label %37
 
 37:                                               ; preds = %18, %5
@@ -341,14 +334,14 @@ define void @rch_tangle_merge_after(<4 x float> noundef %0, ptr addrspace(1) %1,
   %20 = add i32 %18, %19
   %21 = zext i32 %20 to i64
   %22 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %21
-  %23 = load <4 x float>, ptr addrspace(1) %22, align 16, !tbaa !38, !alias.scope !79, !noalias !82
-  %24 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %23) #10
-  %25 = fptrunc float %11 to half
-  %26 = insertelement <4 x half> poison, half %25, i64 0
-  %27 = shufflevector <4 x half> %26, <4 x half> poison, <4 x i32> <i32 0, i32 0, i32 poison, i32 poison>
-  %28 = fmul fast <4 x half> %24, %27
-  %29 = shufflevector <4 x half> %28, <4 x half> poison, <2 x i32> <i32 0, i32 1>
-  %30 = tail call fast <2 x float> @air.convert.f.v2f32.f.v2f16(<2 x half> %29) #10
+  %23 = bitcast ptr addrspace(1) %22 to ptr addrspace(1)
+  %24 = load <4 x i32>, ptr addrspace(1) %23, align 16, !tbaa !38, !alias.scope !79, !noalias !82
+  %25 = bitcast <4 x float> %10 to <4 x i32>
+  %26 = shufflevector <4 x i32> %25, <4 x i32> poison, <4 x i32> zeroinitializer
+  %27 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %24, <4 x i32> %26) #10
+  %28 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %27) #10
+  %29 = fmul fast <4 x float> %28, <float 0x3DF0000000000000, float 0x3DF0000000000000, float poison, float poison>
+  %30 = shufflevector <4 x float> %29, <4 x float> poison, <2 x i32> <i32 0, i32 1>
   br label %31
 
 31:                                               ; preds = %16, %5
@@ -382,32 +375,32 @@ define void @rch_tangle_loop_after(<4 x float> noundef %0, ptr addrspace(1) %1, 
   %16 = shl i32 %15, 6
   %17 = extractelement <2 x i32> %7, i64 0
   %18 = add i32 %16, %17
-  %19 = fptrunc float %11 to half
-  %20 = insertelement <4 x half> poison, half %19, i64 0
-  %21 = shufflevector <4 x half> %20, <4 x half> poison, <4 x i32> <i32 0, i32 0, i32 poison, i32 poison>
-  %22 = fsub fast float 1.000000e+00, %11
-  %23 = fmul fast float %22, 4.000000e+00
-  %24 = tail call i32 @air.convert.u.i32.f.f32(float %23) #10
-  %25 = call i32 @llvm.umax.i32(i32 %24, i32 1)
-  br label %26
+  %19 = bitcast <4 x float> %10 to <4 x i32>
+  %20 = shufflevector <4 x i32> %19, <4 x i32> poison, <4 x i32> zeroinitializer
+  %21 = fsub fast float 1.000000e+00, %11
+  %22 = fmul fast float %21, 4.000000e+00
+  %23 = tail call i32 @air.convert.u.i32.f.f32(float %22) #10
+  %24 = call i32 @llvm.umax.i32(i32 %23, i32 1)
+  br label %25
 
-26:                                               ; preds = %26, %5
-  %27 = phi i32 [ 0, %5 ], [ %38, %26 ]
-  %28 = phi <2 x float> [ %14, %5 ], [ %37, %26 ]
-  %29 = add i32 %18, %27
-  %30 = zext i32 %29 to i64
-  %31 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %30
-  %32 = load <4 x float>, ptr addrspace(1) %31, align 16, !tbaa !38, !alias.scope !84, !noalias !87
-  %33 = tail call fast <4 x half> @air.convert.f.v4f16.f.v4f32(<4 x float> %32) #10
-  %34 = fmul fast <4 x half> %33, %21
-  %35 = shufflevector <4 x half> %34, <4 x half> poison, <2 x i32> <i32 0, i32 1>
-  %36 = tail call fast <2 x float> @air.convert.f.v2f32.f.v2f16(<2 x half> %35) #10
-  %37 = fadd fast <2 x float> %36, %28
-  %38 = add nuw i32 %27, 1
-  %39 = icmp eq i32 %38, %25
-  br i1 %39, label %40, label %26, !llvm.loop !89
+25:                                               ; preds = %25, %5
+  %26 = phi i32 [ 0, %5 ], [ %38, %25 ]
+  %27 = phi <2 x float> [ %14, %5 ], [ %37, %25 ]
+  %28 = add i32 %18, %26
+  %29 = zext i32 %28 to i64
+  %30 = getelementptr inbounds <4 x float>, ptr addrspace(1) %4, i64 %29
+  %31 = bitcast ptr addrspace(1) %30 to ptr addrspace(1)
+  %32 = load <4 x i32>, ptr addrspace(1) %31, align 16, !tbaa !38, !alias.scope !84, !noalias !87
+  %33 = tail call <4 x i32> @air.mul_hi.u.v4i32(<4 x i32> %32, <4 x i32> %20) #10
+  %34 = tail call fast <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32> %33) #10
+  %35 = fmul fast <4 x float> %34, <float 0x3DF0000000000000, float 0x3DF0000000000000, float poison, float poison>
+  %36 = shufflevector <4 x float> %35, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %37 = fadd fast <2 x float> %36, %27
+  %38 = add nuw i32 %26, 1
+  %39 = icmp eq i32 %38, %24
+  br i1 %39, label %40, label %25, !llvm.loop !89
 
-40:                                               ; preds = %26
+40:                                               ; preds = %25
   %41 = extractvalue { <4 x float>, i8 } %13, 0
   %42 = fmul fast <4 x float> %41, splat (float 7.812500e-03)
   %43 = fadd fast <4 x float> %42, <float 1.000000e+00, float 5.000000e-01, float 2.500000e-01, float 1.000000e+00>
@@ -427,6 +420,12 @@ declare i32 @air.convert.u.i32.f.f32(float) local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(argmem: read)
 declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #4
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare <4 x float> @air.convert.f.v4f32.u.v4i32(<4 x i32>) local_unnamed_addr #2
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare <4 x i32> @air.mul_hi.u.v4i32(<4 x i32>, <4 x i32>) local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 declare <4 x float> @air.dfdx.v4f32(<4 x float>) local_unnamed_addr #5

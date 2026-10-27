@@ -1,23 +1,24 @@
-//! A texture write after a branch only quad helpers take, whose arm rounds to `half` beside a
-//! tangled instruction, on the device the cfg selects, under the validation layer: a write is lost
-//! only where its fragment records `PrecisionNote::HelperBranchDropsSimdgroupStores`.
+//! A texture write after a branch only quad helpers take, whose arm takes the high words of
+//! products beside a tangled instruction, on the device the cfg selects, under the validation
+//! layer: a write is lost only where its fragment records
+//! `PrecisionNote::HelperBranchDropsSimdgroupStores`.
 //!
 //! The owned fixture `rch_helper_tangle` draws the triangle of `runtime_lane::guarded_effects`
 //! (its corners in pixels there; no pixel centre near an edge) with no attachment over a 32x16
 //! pass: its edges cut quads, whose helper invocations run beside the covered pixels. Each
 //! fragment reads a 32x16 coverage texture, 1 at a covered pixel and 0 elsewhere, samples an 8x8
 //! texture of `(0.0625, 0.0625, 0.0625, 0)` at LOD 0, and takes a branch where its coverage is not
-//! 1, which only the helpers take; the arm rounds to `half` (a conversion SPIRV-Cross writes
-//! through its `optnone` `spvFAdd`) beside a tangled instruction. After the branch it writes a
-//! 32x16 texture of [`SENTINEL`] words at the pixel. A covered pixel writes `(1, 0.5, 0.25, 1) +
-//! (2^-11, 2^-11, 2^-11, 0)`; a helper's write has no effect. Metal's answer is that. Apple's
-//! compiler loses a simdgroup's texture writes after an `optnone` call only its helpers make, but
-//! not where they make an implicit-LOD sample, a derivative or a simdgroup ballot and shuffle after
-//! it: on MoltenVK on an Apple GPU the `after` functions, whose tangled instruction reads the
-//! rounded value, record no note and lose nothing, and the `before` functions and
-//! `rch_tangle_unread`, whose tangled instruction reads none of it, record the note, their lost
-//! writes reported. No write may be lost where the note is not recorded, and none written outside
-//! the triangle.
+//! 1, which only the helpers take; the arm takes the high words of products (`mulhi`, an
+//! `OpUMulExtended`, which SPIRV-Cross writes through its `optnone` `spvMulExtended`) beside a
+//! tangled instruction. After the branch it writes a 32x16 texture of [`SENTINEL`] words at the
+//! pixel. A covered pixel writes `(1, 0.5, 0.25, 1) + (2^-11, 2^-11, 2^-11, 0)`; a helper's write
+//! has no effect. Metal's answer is that. Apple's compiler loses a simdgroup's texture writes after
+//! an `optnone` call only its helpers make, but not where they make an implicit-LOD sample, a
+//! derivative or a simdgroup ballot and shuffle after it: on MoltenVK on an Apple GPU the `after`
+//! functions, whose tangled instruction reads the products, record no note and lose nothing, and
+//! the `before` functions and `rch_tangle_unread`, whose tangled instruction reads none of them,
+//! record the note, their lost writes reported. No write may be lost where the note is not
+//! recorded, and none written outside the triangle.
 
 use super::buffer_with;
 use super::guarded_effects::{
@@ -40,9 +41,8 @@ const TILE: u64 = 8;
 /// Every texel of the sampled texture.
 const NOISE: [f32; 4] = [0.0625, 0.0625, 0.0625, 0.0];
 
-/// The fragment functions, each with whether its tangled instruction reads the rounded value
-/// after the rounding (in the arm, after the branch's merge, or after a loop only helpers
-/// repeat).
+/// The fragment functions, each with whether its tangled instruction reads the products after
+/// they are taken (in the arm, after the branch's merge, or after a loop only helpers repeat).
 const CASES: [(&str, bool); 9] = [
     ("rch_tangle_sample_after", true),
     ("rch_tangle_dfdx_after", true),
@@ -171,8 +171,8 @@ fn compare(got: &[u32], want: &[u32]) -> (usize, usize, Option<String>) {
 }
 
 /// A write after a branch only helpers take is lost only where the fragment records the note,
-/// and a tangled instruction reading the arm's rounding after it keeps the note away on a device
-/// with the defect.
+/// and a tangled instruction reading the arm's products after them keeps the note away on a
+/// device with the defect.
 #[test]
 fn a_write_after_a_helper_branch_is_lost_only_where_noted() {
     let (messages, _cache, lane) = lane();
