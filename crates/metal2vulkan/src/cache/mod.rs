@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1872;
+pub const SEMANTICS_VERSION: u32 = 1874;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 1872;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 455;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 457;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 455;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1656;
+pub const RUNTIME_VERSION: u32 = 1657;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -324,30 +324,6 @@ pub struct VariantKey {
     /// (`RuntimeFact::MeshLastFirst`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_last_first: bool,
-    /// Whether the draw's render pass depth is `Depth16Unorm`, where the render pipeline's depth
-    /// format says otherwise (`BindShape::depth16_pass`): plain Metal stores into the pass's depth
-    /// whatever format the pipeline names, so the variant's fragment stage writes Metal's 16-bit
-    /// codes, or leaves the depth to the device, by the pass's format
-    /// (`LoweringInputs::depth16_codes`). The plan of a pipeline compiled under it states it
-    /// (`RuntimeFact::Depth16Pass`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_pass: Option<bool>,
-    /// Whether the draw biases a `Depth16Unorm` depth on a profile that stores the pass's
-    /// unbiased depths as Metal's codes but not its biased ones (`BindShape::depth16_biased`): the
-    /// variant's fragment stage adds the draw's bias and writes Metal's code itself
-    /// (`LoweringInputs::depth16_codes`), where a pipeline compiled without it leaves the depth to
-    /// the device. The plan of a pipeline compiled under it states it
-    /// (`RuntimeFact::Depth16Biased`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_biased: bool,
-    /// The side of the draw's bias of a `Depth16Unorm` depth whose fragment stage adds the bias
-    /// itself, where the runtime proved it (`BindShape::depth16_bias_raises`): `Some(true)` where
-    /// Metal's biased depth is never below the fragment's own, `Some(false)` where it is never
-    /// above. The variant's fragment stage declares it (`LoweringInputs::depth16_bias_raises`), so
-    /// the device may test the depth before the stage runs. The plan of a pipeline compiled under
-    /// it states it (`RuntimeFact::Depth16BiasSide`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_bias_raises: Option<bool>,
     /// Storage-image texture slots bound to a texture with a swizzle (`MTLTexture.swizzle` other
     /// than the default) whose texels the function reads or writes
     /// (`LoweringInputs::swizzled_storage`): a Vulkan storage view takes no swizzle, so the
@@ -576,9 +552,6 @@ impl VariantKey {
             && !self.depth_clamp_range
             && !self.rotated_weights
             && !self.mesh_last_first
-            && self.depth16_pass.is_none()
-            && !self.depth16_biased
-            && self.depth16_bias_raises.is_none()
             && self.swizzled_storage.is_empty()
             && !self.addressed_function_tables
             && self.interlocked_colors.is_empty()

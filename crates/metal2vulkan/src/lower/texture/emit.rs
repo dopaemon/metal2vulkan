@@ -21,7 +21,7 @@ use super::slice::Slice;
 use super::{
     Coord, ImageDecl, ImageRef, QueryKind, QueryOp, Read, TexelClass, TexelConv, TexelForm,
 };
-use super::{HalfNans, NormWrite, NullArm, Prelude, Switch, TextureStrategy, Write};
+use super::{HalfNans, NullArm, Prelude, Switch, TextureStrategy, Write};
 use crate::memory::handles::{HANDLE_ALPHA_ONE, NEUTRAL_ELEMENT, NULL_HANDLE};
 
 /// Emit strategy `s` of instruction `at` into the open block.
@@ -838,7 +838,7 @@ pub(crate) const SRGB_WRITE_WORDS: u32 =
 /// below it; alpha's the exact product with 255 rounded to nearest: `pack_float_to_srgb_unorm4x8`
 /// (`math::pack`), which a kernel's write takes too. Each code `c` is written as
 /// `c` times the `f32` nearest `1 / 255`, whose product with 255 lies within `2^-7` of `c`, so
-/// every device's conversion stores `c` (as `argb_codes` writes).
+/// every device's conversion stores `c`.
 fn srgb_codes(
     fb: &mut FunctionBuilder<'_>,
     table: crate::spirv::ids::GlobalId,
@@ -911,11 +911,9 @@ fn from_image(
         StorageImageClass::RotateArgb => rotate_argb(fb, x, true)?,
         StorageImageClass::AlphaInRed => alpha_in_red(fb, x, true)?,
         // A `YCbCrWrite` slot is only written (`StorageImageClass::YCbCrWrite`).
-        StorageImageClass::HalfTowardZero
-        | StorageImageClass::HalfQuietNan
+        StorageImageClass::HalfQuietNan
         | StorageImageClass::SmallFloatQuietNan
-        | StorageImageClass::YCbCrWrite
-        | StorageImageClass::OneBitAlpha => x,
+        | StorageImageClass::YCbCrWrite => x,
         // A half-float texel's bits, through its unsigned integer alias: Metal's read, whole.
         StorageImageClass::HalfBits => return half_bits_texel(fb, decl, form, x),
         // An `RGB9E5Float` word, through its `R32_UINT` alias, decoded exactly.
@@ -1789,28 +1787,21 @@ pub fn to_image(
                 ))
             }
         },
-        StorageImageClass::RotateArgb => {
-            let x = argb_codes(fb, form, x)?;
-            rotate_argb(fb, x, false)?
-        }
+        StorageImageClass::RotateArgb => rotate_argb(fb, x, false)?,
         StorageImageClass::AlphaInRed if form.lanes == 4 => alpha_in_red(fb, x, false)?,
         StorageImageClass::AlphaInRed => {
             return Err(crate::spirv::error::BuildError::Type(
                 crate::spirv::error::TypeRule::FunctionSignature,
             ))
         }
-        StorageImageClass::HalfTowardZero
-        | StorageImageClass::HalfQuietNan
-        | StorageImageClass::SmallFloatQuietNan => match form.conv {
-            TexelConv::F32 => half_write(fb, decl.class, form, x)?,
-            // A `half` texel, held widened, is a half already: the device stores it exactly.
-            _ => x,
-        },
+        StorageImageClass::HalfQuietNan | StorageImageClass::SmallFloatQuietNan => {
+            match form.conv {
+                TexelConv::F32 => half_write(fb, decl.class, form, x)?,
+                // A `half` texel, held widened, is a half already: the device stores it exactly.
+                _ => x,
+            }
+        }
         StorageImageClass::YCbCrWrite => ycbcr_write_texel(fb, form, x)?,
-        StorageImageClass::OneBitAlpha => match (form.conv, form.lanes) {
-            (TexelConv::F32 | TexelConv::F16, 4) => one_bit_alpha(fb, x)?,
-            _ => x,
-        },
         StorageImageClass::HalfBits => half_bits(fb, form, x)?,
         StorageImageClass::SharedExponentBits => shared_exponent_word(fb, form, x)?,
     };
@@ -1923,12 +1914,25 @@ fn half_bits_texel(
 /// The `uvec` a `HalfBits` slot stores for held texel `x` (`f32` lanes of `form`): each lane's
 /// half bits in its low 16 bits (`narrow::to_bits`, exact for every half, a NaN's sign and
 /// payload included). A `half` texel's lanes are halves already, widened exactly; a `float`
-/// texel's are first rounded toward zero to the half Metal stores ([`half_write`] under
-/// `HalfTowardZero`: past 65504 to 65504, an infinity kept, every NaN [`QUIET_NAN`], whose bits
-/// are Metal's `0x7e00`). An integer texel is not one a half-float slot takes.
+/// texel's are first rounded to a half, which no conversion of the device's makes through the
+/// alias: toward zero, as Metal stores it (`color_write::small_float`: past 65504 to 65504, an
+/// infinity kept, every NaN [`QUIET_NAN`], whose bits are Metal's `0x7e00`). An integer texel is
+/// not one a half-float slot takes.
 fn half_bits(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResult<SValue> {
+    use crate::lower::arith::legal::{FloatFmt, Form, Held};
     let x = match form.conv {
-        TexelConv::F32 => half_write(fb, StorageImageClass::HalfTowardZero, form, x)?,
+        TexelConv::F32 => {
+            let f = Form {
+                held: Held::Float(FloatFmt::F32),
+                lanes: form.lanes,
+            };
+            crate::lower::arith::color_write::small_float(
+                fb,
+                f,
+                x,
+                crate::pipeline::color_writes::HALF,
+            )?
+        }
         TexelConv::F16 => x,
         _ => {
             return Err(crate::spirv::error::BuildError::Type(
@@ -2066,9 +2070,9 @@ pub(crate) fn rgb9e5_word(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SV
     Ok(word)
 }
 
-/// The `f32` NaN a written `float`'s NaN becomes under `HalfTowardZero` and `HalfQuietNan`
-/// (`color_write::round`'s), which a device of `DriverDeviation::MetalFloatStorageNans` stores as
-/// Metal's `0x7e00`.
+/// The `f32` NaN a written `float`'s NaN becomes under `HalfQuietNan` and in a `HalfBits` slot's
+/// rounding (`color_write::small_float`'s), which a device of
+/// `DriverDeviation::MetalFloatStorageNans` stores as Metal's `0x7e00`.
 const QUIET_NAN: u32 = 0x7fc0_0000;
 
 /// The words of [`quiet_nans`]: one test and one select of the whole vector, and the constant.
@@ -2086,22 +2090,17 @@ fn quiet_nans(
     fb.select(is_nan, nan, x)
 }
 
-/// The channels of written `float` texel `x` (`f32` lanes of `form`) to a half-float image by
-/// class `class`: under `HalfTowardZero` the values every device stores as Metal's `half`, each
-/// rounded toward zero to the `f32` that holds that `half` exactly, a finite value past 65504 to
-/// 65504, an infinity kept and a NaN to [`QUIET_NAN`] (the half-float rule of `color_write::round`,
-/// the fragment rule, which a kernel's write takes too, as measured; `color_write::small_float`
-/// on the whole vector), so a device that rounds a conversion to nearest stores the exact `half`;
-/// under `HalfQuietNan`, on a device that rounds as Metal does, the value as computed but a NaN as
-/// [`QUIET_NAN`]. The NaN stores as the device's encoding of [`QUIET_NAN`] (Metal's `0x7e00` where
-/// measured, `DriverDeviation::MetalFloatStorageNans`).
+/// The channels of written `float` texel `x` (`f32` lanes of `form`) to a half-float or small
+/// float image by class `class`: under `HalfQuietNan` and `SmallFloatQuietNan` the value as
+/// computed, which the device's conversion rounds, but a NaN as [`QUIET_NAN`]. The NaN stores as
+/// the device's encoding of [`QUIET_NAN`] (Metal's `0x7e00` where measured,
+/// `DriverDeviation::MetalFloatStorageNans`).
 fn half_write(
     fb: &mut FunctionBuilder<'_>,
     class: StorageImageClass,
     form: TexelForm,
     x: SValue,
 ) -> BResult<SValue> {
-    use crate::lower::arith::color_write;
     use crate::lower::arith::legal::{FloatFmt, Form, Held};
     let f = Form {
         held: Held::Float(FloatFmt::F32),
@@ -2110,9 +2109,6 @@ fn half_write(
     match class {
         StorageImageClass::HalfQuietNan | StorageImageClass::SmallFloatQuietNan => {
             quiet_nans(fb, f, x)
-        }
-        StorageImageClass::HalfTowardZero => {
-            color_write::small_float(fb, f, x, crate::pipeline::color_writes::HALF)
         }
         _ => Ok(x),
     }
@@ -2342,25 +2338,17 @@ fn heap_halves(
     fb.select(cond, written, texel)
 }
 
-/// The estimated words of a write's conversion by storage class `class` on four lanes:
-/// `ARGB8Unorm`'s codes ([`argb_codes`]), an 8-bit sRGB format's ([`srgb_codes`]), a half-float
-/// image's halves or NaN ([`half_write`]), or a YCbCr texel's bits and mark
-/// ([`ycbcr_write_texel`]), none for the other classes' swizzles, which the write's base estimate
-/// covers.
+/// The estimated words of a write's conversion by storage class `class` on four lanes: an 8-bit
+/// sRGB format's codes ([`srgb_codes`]), a half-float image's NaN ([`half_write`]), a half-float
+/// texel's bits ([`half_bits`]), an `RGB9E5Float` word ([`shared_exponent_word`]), or a YCbCr
+/// texel's bits and mark ([`ycbcr_write_texel`]), none for the other classes' swizzles, which the
+/// write's base estimate covers.
 pub(crate) fn class_write_words(class: StorageImageClass) -> u32 {
     use crate::lower::arith::color_write;
-    use crate::pipeline::lower_inputs::ChannelWrite;
     match class {
-        StorageImageClass::HalfTowardZero => {
-            color_write::small_float_words(crate::pipeline::color_writes::HALF, 4) as u32
-        }
         StorageImageClass::HalfQuietNan | StorageImageClass::SmallFloatQuietNan => QUIET_NAN_WORDS,
-        StorageImageClass::RotateArgb => {
-            color_write::words(&[Some(ChannelWrite::Unorm { bits: 8 }); 4]) as u32
-        }
         StorageImageClass::YCbCrWrite => YCBCR_WRITE_WORDS,
         StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra => SRGB_WRITE_WORDS,
-        StorageImageClass::OneBitAlpha => ONE_BIT_ALPHA_WORDS,
         StorageImageClass::SharedExponentBits => SHARED_EXPONENT_WORDS,
         // A `float` texel's rounding, then four lanes' bits.
         StorageImageClass::HalfBits => {
@@ -2380,118 +2368,6 @@ pub(crate) fn class_write_words(class: StorageImageClass) -> u32 {
 /// The words of [`shared_exponent_word`], at most: three channels' extract, clamp and mantissa
 /// (about twelve instructions each), the exponent's six, the word's placement, and the constants.
 pub(crate) const SHARED_EXPONENT_WORDS: u32 = 3 * 12 * 6 + 8 * 6 + 3 * 6 + 12 * 4;
-
-/// The words of [`one_bit_alpha`]: the extract, comparison, select and insert, and the
-/// constants.
-pub(crate) const ONE_BIT_ALPHA_WORDS: u32 = 40;
-
-/// Written `float` texel `x` (four `f32` lanes, Metal's channel order) with alpha `1.0` above one
-/// half and `0.0` elsewhere (a NaN 0): the code Metal stores in a 1-bit alpha
-/// (`StorageImageClass::OneBitAlpha`), which every device stores exactly.
-fn one_bit_alpha(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
-    let a = fb.composite_extract(x, &[3])?;
-    let half = f32s(fb, 1, 0.5)?;
-    let above = fb.binary(BinOp::FOrdGreaterThan, a, half)?;
-    let one = f32s(fb, 1, 1.0)?;
-    let zero = f32s(fb, 1, 0.0)?;
-    let a = fb.select(above, one, zero)?;
-    fb.composite_insert(a, x, &[3])
-}
-
-/// The words [`heap_one_bit`] emits beside [`one_bit_alpha`], at most: the field's shift and mask,
-/// and per 1-bit-alpha class its constant, comparison and union.
-pub(crate) fn heap_one_bit_words() -> u32 {
-    let n = crate::metal::texel_format::heap_one_bit_indices().len() as u32;
-    20 + 14 * n
-}
-
-/// Written `float` texel `x` (four `f32` lanes) through heap handle `handle`, its alpha as
-/// [`one_bit_alpha`] writes it where the handle's class is a 1-bit alpha's
-/// (`metal::texel_format::heap_one_bit_indices`), as it is elsewhere (`NormWrite::HeapOneBit`).
-fn heap_one_bit(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    handle: ValueId,
-    x: SValue,
-) -> BResult<SValue> {
-    let indices = crate::metal::texel_format::heap_one_bit_indices();
-    let is = heap_class_among(cx, fb, handle, &indices)?;
-    let rounded = one_bit_alpha(fb, x)?;
-    fb.select(is, rounded, x)
-}
-
-/// Written `float` texel `v` (`f32` lanes of `form`, Metal's channel order) to `image`, each
-/// channel rounded to the code Metal stores in the bound normalized format (`NormWrite::Class`): by
-/// the module's routine and the slot's `TexelFormat` specialization, or a heap handle's class. A
-/// texel of fewer than four lanes is widened by zeros and narrowed back.
-fn norm_codes(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    image: &ImageRef,
-    form: TexelForm,
-    v: SValue,
-) -> BResult<SValue> {
-    let Some(routine) = cx.decl.families.texture.norm_routine else {
-        return Err(cx.fail("a normalized write without its rounding routine"));
-    };
-    let class = match *image {
-        ImageRef::Slot(index) => {
-            let Some(c) = texel_format_const(cx, index) else {
-                return Err(cx.fail(format!("texture slot {index} has no texel format constant")));
-            };
-            fb.module().const_value(c)?
-        }
-        ImageRef::Heap { handle, .. } => {
-            let h = cx.operand(fb, handle)?;
-            super::heap_texel_class(cx, fb, h)?
-        }
-    };
-    let n = form.lanes;
-    let x = match n {
-        4 => v,
-        _ => {
-            let zero = f32s(fb, 1, 0.0)?;
-            let mut lanes = Vec::with_capacity(4);
-            for i in 0..4u8 {
-                lanes.push(match (n, i) {
-                    (1, 0) => v,
-                    (n, i) if i < n => fb.composite_extract(v, &[u32::from(i)])?,
-                    _ => zero,
-                });
-            }
-            let f = f32_ty(fb)?;
-            let t = vec(fb, f, 4)?;
-            fb.composite_construct(t, &lanes)?
-        }
-    };
-    let r = super::norm_write::convert(fb, routine, x, class)?;
-    match n {
-        4 => Ok(r),
-        1 => fb.composite_extract(r, &[0]),
-        n => {
-            let lanes: Vec<u32> = (0..u32::from(n)).collect();
-            fb.vector_shuffle(r, r, &lanes)
-        }
-    }
-}
-
-/// `ARGB8Unorm`'s channels of written texel `x` (`f32` lanes of `form`) as the values every
-/// device stores as Metal's codes: each the 8-bit unorm code Metal writes (the value clamped to
-/// `[0, 1]`, a NaN 0, the exact product with 255 rounded to nearest) times the `f32` nearest `1 /
-/// 255`, the rule (`color_write::round`). A device's conversion to the code may take either
-/// neighbour of the product: the RTX 3090 stored the code below on 22 of the
-/// `extended_range_planes` lane's 1,024 alpha values whose product lies just above a half, where
-/// Metal and the other venues stored the nearest.
-fn argb_codes(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResult<SValue> {
-    use crate::lower::arith::color_write;
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
-    let f = Form {
-        held: Held::Float(FloatFmt::F32),
-        lanes: form.lanes,
-    };
-    let rule = Some(crate::pipeline::lower_inputs::ChannelWrite::Unorm { bits: 8 });
-    color_write::round(fb, f, x, &[rule; 4], None)
-}
 
 /// `a && b`, or `b` alone.
 fn and(fb: &mut FunctionBuilder<'_>, a: Option<SValue>, b: SValue) -> BResult<SValue> {
@@ -3815,13 +3691,6 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
             };
             unswizzled(cx, fb, w.texel, v, word)?
         }
-        _ => v,
-    };
-    // A normalized format's channels, rounded to the codes Metal stores, before the storage
-    // class converts the texel.
-    let v = match (w.norm, w.image) {
-        (NormWrite::Class, image) => norm_codes(cx, fb, &image, w.texel, v)?,
-        (NormWrite::HeapOneBit, ImageRef::Heap { handle, .. }) => heap_one_bit(cx, fb, handle, v)?,
         _ => v,
     };
     // An extended-range texel's raw code, encoded as Metal writes it.

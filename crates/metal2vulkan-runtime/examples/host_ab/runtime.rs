@@ -1727,7 +1727,6 @@ impl Gpu for Runtime {
             ("no_copy_lies_read", c.no_copy_lies_read),
             ("commands_noted_as_before", c.commands_noted_as_before),
             ("draws_settled", c.draws_settled),
-            ("depth16_sided_draws", c.depth16_sided_draws),
             ("two_plane_draws", c.two_plane_draws),
             ("bound_notices_made", c.bound_notices_made),
             ("argument_tables_retained", c.argument_tables_retained),

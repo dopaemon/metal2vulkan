@@ -135,22 +135,6 @@
 //!   drawn from each primitive's last index first (`BindShape::mesh_last_first`) of an emulated
 //!   mesh function's pipeline of lines or triangles runs the variant whose synthesized vertex
 //!   stage reads its corners so (`VariantKey::mesh_last_first`).
-//! - **Pass depth**. Plain Metal stores into the render pass's depth whatever depth format the
-//!   pipeline names: a draw against a `Depth16Unorm` depth whose pipeline names another, or
-//!   against another depth (the hidden `float` one included) whose pipeline names `Depth16Unorm`
-//!   (`BindShape::depth16_pass`), runs the variant whose fragment stage takes Metal's 16-bit codes,
-//!   or leaves the depth to the device, by the pass's depth (`VariantKey::depth16_pass`), where the
-//!   two forms differ (`compile::depth16_stage_form`).
-//! - **Biased depth**. A draw that biases a `Depth16Unorm` depth (`BindShape::depth16_biased`) on
-//!   a profile whose device stores unbiased depths as Metal's codes but not biased ones
-//!   (`DriverDeviation::MetalDepth16Stores` without `DriverDeviation::MetalDepth16BiasedStores`)
-//!   runs the variant whose fragment stage adds Metal's bias and writes Metal's code
-//!   (`VariantKey::depth16_biased`), where its fragment function writes and reads no depth of its
-//!   own and declares no early tests; every other draw keeps the device's depth. A biased draw
-//!   whose fragment stage adds the bias itself (that variant, or any draw where the device stores
-//!   no depth as Metal's code) and whose bias's side the consumer proved
-//!   (`BindShape::depth16_bias_raises`) runs the variant whose stage declares the side
-//!   (`VariantKey::depth16_bias_raises`).
 //! - **Tested storage writes**. A fragment function that stores a color through the interlocked
 //!   storage form and declares no early tests only because it discards
 //!   (`RuntimeFact::TestedStorageWrites`), in a pipeline with a depth or stencil attachment, stores
@@ -1460,57 +1444,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::MeshLastFirst);
-    // A draw that biases a `Depth16Unorm` depth on a profile that stores its unbiased depths as
-    // Metal's codes but not its biased ones: the variant whose fragment stage adds the bias and
-    // writes Metal's code, where its function can take that form (`LoweringInputs::depth16_codes`):
-    // it writes and reads no depth of its own (a written depth takes no bias, and one read from
-    // the position keeps the device's) and declares no early tests.
-    let named_depth16 = p.graphics.depth_format == Some(vk::Format::D16_UNORM);
-    let pass_depth16 = shape.depth16_pass.unwrap_or(named_depth16);
-    let stage_form = |biased| {
-        crate::pipeline::compile::depth16_stage_form(
-            !p.graphics.rasterizer_discard,
-            p.graphics.rasterization_samples.as_raw(),
-            biased,
-            profile,
-        )
-    };
-    let depth16_biased = shape.depth16_biased
-        && pass_depth16
-        && !p.graphics.writes_depth
-        && !p.graphics.reads_position_depth
-        && !p.graphics.early_fragment_tests
-        && stage_form(true)
-        && !stage_form(false);
-    let compiled_biased = p
-        .dependencies
-        .iter()
-        .any(|d| d.fact == RuntimeFact::Depth16Biased);
-    // A biased draw of proven side whose fragment stage adds the bias itself (the variant above,
-    // or every draw where the device stores no depth as Metal's code): the variant whose stage
-    // declares the side.
-    let depth16_bias_raises = shape.depth16_bias_raises.filter(|_| {
-        shape.depth16_biased
-            && pass_depth16
-            && !p.graphics.writes_depth
-            && !p.graphics.reads_position_depth
-            && !p.graphics.early_fragment_tests
-            && stage_form(depth16_biased)
-    });
-    let compiled_bias_raises = p.dependencies.iter().find_map(|d| match d.fact {
-        RuntimeFact::Depth16BiasSide { raises } => Some(raises),
-        _ => None,
-    });
-    // A draw against a depth whose format is `Depth16Unorm` where the pipeline names another, or
-    // the other way round: the variant whose fragment stage takes Metal's codes by the pass's
-    // depth, where the pipeline's fragment stage can take them at all.
-    let depth16_pass = shape
-        .depth16_pass
-        .filter(|&depth16| depth16 != named_depth16 && stage_form(depth16_biased));
-    let compiled_depth16_pass = p.dependencies.iter().find_map(|d| match d.fact {
-        RuntimeFact::Depth16Pass { depth16 } => Some(depth16),
-        _ => None,
-    });
     // A fragment function that stores a color through the interlocked storage form before the
     // depth and stencil tests, since it discards (`RuntimeFact::TestedStorageWrites`), in a
     // pipeline with a depth or stencil attachment: Metal's store, as compiled, where the draw's
@@ -1830,12 +1763,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 // The encoder's alpha test reference, which instantiation reads from the state.
                 PushField::AlphaTestReference if stage == Stage::Fragment => {}
                 PushField::HalfBlendColor if stage == Stage::Fragment => {}
-                // The draw's depth bias, which instantiation reads from the state.
-                PushField::DepthBias if stage == Stage::Fragment => {}
                 // The storage form's kept channels, which instantiation reads from the template.
                 PushField::StorageKeptChannels if stage == Stage::Fragment => {}
-                // An attachment's rule word, which instantiation reads from the template.
-                PushField::ColorWriteRule(_) if stage == Stage::Fragment => {}
                 // A draw of one amplification's id and offsets, which instantiation writes before
                 // each draw; the placement order puts them right after the addresses, so the window
                 // holds them.
@@ -2169,10 +2098,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                                 ))
                             }
                         }
-                    }
-                    // The sRGB color table, the same bytes for every pipeline.
-                    SyntheticBinding::ColorWriteTable if stage == Stage::Fragment => {
-                        WriteSource::ColorWriteTable
                     }
                     // The command buffer's status, on a device that does not address buffers.
                     SyntheticBinding::ExecutionStatus => WriteSource::ExecutionStatus,
@@ -2620,9 +2545,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.depth_clamp_range = depth_clamp_range;
     variant.rotated_weights = rotated_weights;
     variant.mesh_last_first = mesh_last_first;
-    variant.depth16_pass = depth16_pass;
-    variant.depth16_biased = depth16_biased;
-    variant.depth16_bias_raises = depth16_bias_raises;
     variant.read_only_tests = read_only_tests;
     variant.shader_tests = shader_tests;
     variant.shader_stencil = shader_stencil;
@@ -2666,9 +2588,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || compiled_range != depth_clamp_range
                 || compiled_rotated != rotated_weights
                 || compiled_last_first != mesh_last_first
-                || compiled_depth16_pass != depth16_pass
-                || compiled_biased != depth16_biased
-                || compiled_bias_raises != depth16_bias_raises
                 || compiled_tests != read_only_tests
                 || compiled_shader_tests != shader_tests
                 || compiled_shader_stencil != shader_stencil
@@ -2709,7 +2628,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             deindexed: primitive_id_indices,
             private_list,
             storage_kept: storage_kept(p)?,
-            color_write_rules: p.graphics.color_write_rules.clone(),
         }),
         views,
     })
@@ -4577,13 +4495,6 @@ fn instantiate(
                     .flat_map(|v| v.to_le_bytes())
                     .collect(),
                 PushField::StorageKeptChannels => FieldBytes::of(&t.storage_kept.to_le_bytes()),
-                // The attachment's rule word, as link derived it from the pipeline's attachment.
-                PushField::ColorWriteRule(color) => {
-                    match t.color_write_rules.iter().find(|(c, _)| *c == color) {
-                        Some((_, word)) => FieldBytes::of(&word.to_le_bytes()),
-                        None => return Err(internal("a color write rule link gave no word")),
-                    }
-                }
                 // The blend color as an extended-range blend reads it, and one minus it.
                 PushField::BlendColor => FieldBytes::words(
                     crate::lower::arith::extended_range::blend_color::constant_words(
@@ -4599,13 +4510,6 @@ fn instantiate(
                     .blend_color
                     .iter()
                     .flat_map(|c| c.to_bits().to_le_bytes())
-                    .collect(),
-                // The draw's depth bias, and a zero word.
-                PushField::DepthBias => state
-                    .depth_bias
-                    .iter()
-                    .chain(&[0.0])
-                    .flat_map(|v| v.to_bits().to_le_bytes())
                     .collect(),
                 // The first amplification's; `amplifications` writes each before its draw.
                 PushField::AmplificationId

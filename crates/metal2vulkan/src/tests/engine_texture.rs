@@ -253,8 +253,8 @@ fn bgra8_and_rgba8_storage_textures_compile_to_distinct_modules() {
                 srgb += 1;
                 assert!(!s.precision.contains(&PrecisionNote::DeviceTranscendentals));
                 assert_ne!(s.key, rgba.key, "{stem}");
-                // instructions' count: an rgba8 write rounds to Metal's codes in the shader too
-                // where the device is not measured to store them.
+                // The encode's table, which an rgba8 write, left to the device's conversion,
+                // takes none of.
                 assert!(table(s) && !table(&rgba), "{stem}");
             }
         }

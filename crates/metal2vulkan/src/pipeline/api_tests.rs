@@ -246,9 +246,6 @@ mod serde_round_trips {
                 SampledType::Uint,
             )]),
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 1)]),
-            depth16_pass: Some(false),
-            depth16_biased: true,
-            depth16_bias_raises: Some(true),
             color_group: 1,
         });
         round_trip(&SpecializationKey {
@@ -466,8 +463,6 @@ mod serde_round_trips {
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 3)]),
             uniform_varyings: BTreeSet::from([VaryingKey::user(b"user(tint)")]),
             instanced_attributes: BTreeSet::from([1]),
-            depth16_codes: true,
-            depth16_bias_raises: Some(false),
             color_group: Some(crate::pipeline::ColorGroup {
                 present: vec![0, 1, 2, 3, 5, 7],
                 width: 4,
@@ -675,7 +670,6 @@ mod serde_round_trips {
                     view: crate::pipeline::graphics::StandInView::Image,
                 }),
             }),
-            color_write_rules: vec![(0, 0x3322), (2, 0x0001)],
             snapshot_reads: true,
             color_group: Some(crate::pipeline::ColorGroup {
                 present: vec![0, 5],
@@ -1022,10 +1016,6 @@ mod bind_serde_round_trips {
             blend_color: [0.25, -0.5, 1.5, 0.75],
             alpha_test_reference: Some(0.375),
             primitive_type: Some(metal::PrimitiveType::TriangleStrip),
-            depth_bias: [1.5 / 65535.0, -2.0, 0.125],
-            depth16_pass: Some(true),
-            depth16_biased: true,
-            depth16_bias_raises: Some(true),
             primitive_id_indices: Some(metal::IndexType::UInt16),
             quad_primitive_ids: true,
             private_list: true,
@@ -1087,9 +1077,6 @@ mod bind_serde_round_trips {
             fragment_tests: crate::bind::FragmentTests::Pass,
             extended_shadows: BTreeSet::from([0]),
             snapshot_textures: BTreeSet::from([2]),
-            depth16_pass: Some(true),
-            depth16_biased: true,
-            depth16_bias_raises: Some(true),
             primitive_id_indices: Some(metal::IndexType::UInt32),
             quad_primitive_ids: true,
             private_list: true,

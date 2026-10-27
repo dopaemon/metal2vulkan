@@ -15,7 +15,13 @@
 //! value) through `half_storage_writes`' kernels (`access::write`, `access::read_write`, a texture
 //! buffer and an argument buffer's texture), reads the texels back and compares every channel with
 //! Metal's code. A case whose format the runtime refuses for storage is printed and skipped. A
-//! channel that differs is counted, with examples, on a `NORM-STORAGE-WRITE` line.
+//! channel that differs is counted, with examples, on a `NORM-STORAGE-WRITE` line. The kernel
+//! writes the value as computed and the device converts it: the lane holds a channel to Metal's
+//! code where the device is measured to store it (`DriverDeviation::MetalNormStorageWrites`, but
+//! for a 1-bit channel, which RADV rounds up at one half), the measurement of the deviation on
+//! that device; elsewhere the module records the device's conversion
+//! (`PrecisionNote::DeviceColorConversion`) and the lane prints the channels that differ without
+//! holding them.
 //!
 //! [`kernel_writes_store_each_channel_in_its_field`] writes texels whose channels differ into the
 //! 10:10:10:2 formats, whose fields Metal orders red first (`RGB10A2Unorm`) and blue first
@@ -26,6 +32,7 @@ use super::color_writes::{field, metal, round_product, Channel, Output, CASES};
 use super::degrade_notices::on_device;
 use super::half_storage_writes::{written, written_texels, Form};
 use super::layer_reported_nothing;
+use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::metal::PixelFormat;
 
 /// Metal's stored code of `x` in `channel` (the module docs); `None` for a channel of another
@@ -43,8 +50,8 @@ fn stored_code(channel: Channel, x: f32) -> Option<u64> {
 }
 
 /// Every form into every normalized format of `color_writes`' cases, printed against Metal's
-/// conversion and held to it. The cases share one device (they read no notice), and each case's
-/// validation messages fail it by name.
+/// conversion and held to it where the device is measured to store it (the module docs). The cases
+/// share one device (they read no notice), and each case's validation messages fail it by name.
 #[test]
 fn kernel_writes_store_metals_normalized_codes() {
     let mut differ = Vec::new();
@@ -59,6 +66,10 @@ fn kernel_writes_store_metals_normalized_codes() {
     });
     on_device(|device, messages| {
         let name = device.name().to_owned();
+        let measured = device
+            .compile_device()
+            .profile()
+            .takes_driver_deviation(DriverDeviation::MetalNormStorageWrites);
         for case in normalized {
             let values = (case.values)();
             for form in Form::ALL {
@@ -69,7 +80,7 @@ fn kernel_writes_store_metals_normalized_codes() {
                     eprintln!("NORM-STORAGE-WRITE {label} on {name}: refused");
                     continue;
                 };
-                let (mut wrong, mut examples) = (0usize, Vec::new());
+                let (mut wrong, mut held, mut examples) = (0usize, 0usize, Vec::new());
                 for (i, &x) in values.iter().enumerate() {
                     let texel = &stored[i * case.bytes..(i + 1) * case.bytes];
                     for &(offset, channel) in case.channels {
@@ -81,6 +92,9 @@ fn kernel_writes_store_metals_normalized_codes() {
                             continue;
                         }
                         wrong += 1;
+                        if measured && !matches!(channel, Channel::HalfUnorm(1)) {
+                            held += 1;
+                        }
                         if examples.len() < 8 {
                             examples.push(format!(
                                 "{x:e} ({:#010x}) at bit {offset}: {got:#x}, Metal's {want:#x}",
@@ -92,11 +106,11 @@ fn kernel_writes_store_metals_normalized_codes() {
                 let channels = values.len() * case.channels.len();
                 eprintln!(
                     "NORM-STORAGE-WRITE {label} on {name}: {wrong} of {channels} channels differ \
-                     from Metal's: {}",
+                     from Metal's ({held} held to it): {}",
                     examples.join("; ")
                 );
-                if wrong > 0 {
-                    differ.push(format!("{label}: {wrong} of {channels}"));
+                if held > 0 {
+                    differ.push(format!("{label}: {held} of {channels}"));
                 }
             }
         }

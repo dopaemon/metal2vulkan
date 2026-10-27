@@ -2004,11 +2004,6 @@ fn descriptor(
         // The command buffer's status words, the ones every command of it writes, on a device
         // that does not address buffers (`status_address` elsewhere).
         WriteSource::ExecutionStatus => whole(state.status_words(device)?),
-        // The fragment stage's sRGB color table, the same bytes for every pipeline.
-        WriteSource::ColorWriteTable => {
-            let table = metal2vulkan::bind::color_write_table();
-            whole(upload(table, padded(table.len()))?)
-        }
         // A read-only binding takes the device's kept zero buffer, made once for its lifetime
         // (`neutral.rs`): zeros of a length the device's own limits fix cannot have changed since
         // it was made, and before this every draw and dispatch that bound one took a fresh

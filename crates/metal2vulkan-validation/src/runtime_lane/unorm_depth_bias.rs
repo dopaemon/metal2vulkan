@@ -14,24 +14,19 @@
 //! (every code the rule's), and found that a slope alone brings the one unit: [`SLOPE_ALONE`], flat
 //! triangles (so the slope adds nothing itself) under a constant of 0.
 //!
-//! Where the profile takes `DriverDeviation::MetalDepth16Stores`, the device converts an unbiased
-//! depth, and where it also takes `DriverDeviation::MetalDepth16BiasedStores` a biased one: the
-//! runtime records Metal's bias where the device pins Vulkan's unit (`metal::state::depth_bias`),
-//! and the device rounds the sum and converts it its own way. RADV (Mesa 26.2.4, the Radeon 780M)
-//! stored every code Metal's, and MoltenVK (1.4.1, an M4), which hands Metal its constant, too
-//! (both deviations). ANV (Mesa 26.2.4) stored every unbiased code Metal's (the first), but
-//! rounded some biased sums near a code's midpoint to nearest, storing the code next to Metal's,
-//! so a biased draw there runs the variant whose fragment stage adds the bias
-//! (`VariantKey::depth16_biased`).
-//!
-//! Elsewhere the fragment stage writes Metal's codes itself (`LoweringInputs::depth16_codes`),
-//! its bias added in the shader, and every code is Metal's (`shader-unorm-depth`; a sloped bias
-//! takes its slope from the quad's depths, `unorm-depth-slope`). Without it lavapipe (Mesa 26.0.8
-//! and 26.2.4) scaled every depth by 65535 as a `float` and rounded a tie to even (0.9 as 58982),
-//! and NVIDIA's (615.71.09) stored the code below Metal's for a depth up to 0.55 of a code above
-//! a midpoint (0.5 as 32767). A biased draw whose fragment stage cannot add the bias (one that
-//! declares early fragment tests, here) keeps the device's conversion, which the runtime
-//! announces as `unorm-depth-bias` where the profile lacks the second deviation.
+//! The device converts every depth, biased or not: the runtime records Metal's bias where the
+//! device pins Vulkan's unit (`metal::state::depth_bias`), and the device rounds the sum and
+//! converts it its own way. Where the profile takes `DriverDeviation::MetalDepth16Stores` an
+//! unbiased depth stores Metal's code, and where it takes `DriverDeviation::MetalDepth16BiasedStores`
+//! a biased one: RADV (Mesa 26.2.4, the Radeon 780M) stored every code Metal's, and MoltenVK (1.4.1,
+//! an M4), which hands Metal its constant, too (both deviations). ANV (Mesa 26.2.4) stored every
+//! unbiased code Metal's (the first), but rounded some biased sums near a code's midpoint to
+//! nearest, storing the code next to Metal's. Lavapipe (Mesa 26.0.8 and 26.2.4) scaled every depth
+//! by 65535 as a `float` and rounded a tie to even (0.9 as 58982), and NVIDIA's (615.71.09) stored
+//! the code below Metal's for a depth up to 0.55 of a code above a midpoint (0.5 as 32767). Where
+//! the profile lacks a deviation the runtime announces it, `unorm-depth-rounding` for any depth
+//! tested or written and `unorm-depth-bias` for a biased one, and the lane prints the codes that
+//! differ from Metal's without holding them.
 //!
 //! The render pass's depth decides what a draw stores, whatever the pipeline names: the cases
 //! drawn by a pipeline that names no depth store the same codes.
@@ -46,15 +41,10 @@ use super::render_state::{quiet, validated, Pipe, Probe, PASS, WHITE};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::error::DriverDeviation;
-use metal2vulkan::metal::{
-    CompareFunction, DepthClipMode, PixelFormat, PrimitiveType, TextureUsage,
-};
+use metal2vulkan::metal::{CompareFunction, DepthClipMode, PixelFormat, PrimitiveType};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
-use metal2vulkan_runtime::{
-    Degradation, LoadAction, PipelineOptions, RenderPassDescriptor, ResourceOptions, ScissorRect,
-    StoreAction, TextureDescriptor, Viewport,
-};
+use metal2vulkan_runtime::{Degradation, PipelineOptions, ScissorRect, Viewport};
 
 /// The side of each probe's pass: a pixel per case.
 const SIDE: u64 = 32;
@@ -377,30 +367,20 @@ fn grid<const N: usize>(factors: &[f32; N], rows: &[(u32, [u16; N])]) -> Vec<(f3
 }
 
 /// The kinds `unorm_depth_bias` takes: a constant bias on a 16-bit unorm depth the device
-/// converts where the profile lacks `DriverDeviation::MetalDepth16BiasedStores`, past a fragment
-/// stage that cannot add it (one that declares early fragment tests).
+/// converts where the profile lacks `DriverDeviation::MetalDepth16BiasedStores`.
 pub(super) const UNORM_DEPTH_BIAS: [Degradation; 1] = [Degradation::UnormDepthBias];
 
 /// The kinds `unorm_depth_bias` takes: a 16-bit unorm depth the device converts its own way where
-/// the profile lacks `DriverDeviation::MetalDepth16Stores`, here a depth clamped to a viewport
-/// range's end inside `(0, 1)` past a fragment stage that writes Metal's codes.
+/// the profile lacks `DriverDeviation::MetalDepth16Stores`.
 pub(super) const UNORM_DEPTH_ROUNDING: [Degradation; 1] = [Degradation::UnormDepthRounding];
 
-/// The kinds `unorm_depth_bias` takes where the fragment stage writes Metal's 16-bit codes: a
-/// depth tested or written so, and a slope it takes from the quad's depths.
-pub(super) const SHADER_UNORM_DEPTH: [Degradation; 2] =
-    [Degradation::ShaderUnormDepth, Degradation::UnormDepthSlope];
-
-/// Every code probes 7 and 7b and [`SLOPE_ALONE`] measured is Metal's rule's ([`metal_code`]),
-/// and every row stores Metal's code. The device converts an unbiased row (a constant and a slope
-/// factor of 0) where the profile takes `DriverDeviation::MetalDepth16Stores`, and a biased one
-/// where it also takes `DriverDeviation::MetalDepth16BiasedStores`; elsewhere the fragment stage
-/// writes the row's code, and the draws announce `shader-unorm-depth` and, for the sloped rows,
-/// `unorm-depth-slope` once. No draw announces `unorm-depth-bias`. Either way a pipeline that
-/// names no depth stores the same codes: the pass's depth decides them. Where the fragment stage
-/// writes a biased row's code, every row whose bias has a known side
-/// (`metal::state::depth16_bias_side`) runs the variant that declares it, counted
-/// (`WorkCounts::depth16_sided_draws`), and stores Metal's code all the same.
+/// Every code probes 7 and 7b and [`SLOPE_ALONE`] measured is Metal's rule's ([`metal_code`]).
+/// Every row is the device's conversion: an unbiased row (a constant and a slope factor of 0) is
+/// held to Metal's code where the profile takes `DriverDeviation::MetalDepth16Stores`, and a
+/// biased one where it takes `DriverDeviation::MetalDepth16BiasedStores`; elsewhere a row off
+/// Metal's code is printed, and the draws announce `unorm-depth-rounding` (any row) and
+/// `unorm-depth-bias` (a biased row) once, each only where the profile lacks its deviation.
+/// Either way a pipeline that names no depth stores the same codes: the pass's depth decides them.
 #[test]
 fn a_constant_bias_on_a_16_bit_unorm_depth_stores_metals_codes() {
     let slope_alone: Vec<_> = SLOPE_ALONE
@@ -423,61 +403,42 @@ fn a_constant_bias_on_a_16_bit_unorm_depth_stores_metals_codes() {
     let profile = probe.device.compile_device().profile();
     let stores = profile.takes_driver_deviation(DriverDeviation::MetalDepth16Stores);
     let biased_stores = profile.takes_driver_deviation(DriverDeviation::MetalDepth16BiasedStores);
-    // The fragment stage writes Metal's codes, its bias included, wherever the device does not:
-    // every row's where it converts no depth so, a biased row's where it converts only unbiased
-    // ones so.
-    let shader = !stores || !biased_stores;
     let d16 = WHITE.depth(PixelFormat::Depth16Unorm);
-    let sided_before = probe.device.work_counts().depth16_sided_draws;
-    let mut sided_rows = 0u64;
     let mut differ = Vec::new();
     for (name, cases) in &probes {
         let drawn: Vec<(f32, f32, f32)> = cases.iter().map(|&(z, c, s, _)| (z, c, s)).collect();
-        sided_rows += drawn
-            .iter()
-            .filter(|&&(_, c, s)| {
-                metal2vulkan::metal::state::depth16_bias_side(c, s, 0.0).is_some()
-            })
-            .count() as u64;
         let stored = stored_codes(&probe, d16, &drawn);
         let unnamed = stored_codes(&probe, WHITE, &drawn);
         assert_eq!(
             unnamed, stored,
             "{name} on {device}: a pipeline that names no depth stores other codes"
         );
-        let off: Vec<String> = cases
+        let off: Vec<(bool, String)> = cases
             .iter()
             .zip(stored)
             .filter(|&(&(.., metal), stored)| stored != metal)
             .map(|(&(z, c, s, metal), stored)| {
-                format!(
+                let biased = c != 0.0 || s != 0.0;
+                let line = format!(
                     "{name} {:#010x} by {c} and slope {s}: {stored}, Metal {metal}",
                     z.to_bits()
-                )
+                );
+                (if biased { biased_stores } else { stores }, line)
             })
             .collect();
+        let examples: Vec<&String> = off.iter().map(|(_, line)| line).take(8).collect();
         eprintln!(
-            "UNORM-DEPTH-BIAS {device} {name}: {} cases, {} off Metal's",
+            "UNORM-DEPTH-BIAS {device} {name}: {} cases, {} off Metal's: {examples:?}",
             cases.len(),
             off.len()
         );
-        differ.extend(off);
+        differ.extend(off.into_iter().filter(|&(held, _)| held).map(|(_, l)| l));
     }
-    // Each row is drawn twice: by the pipeline that names the depth and by the one that names
-    // none.
-    let sided = probe.device.work_counts().depth16_sided_draws - sided_before;
-    eprintln!("UNORM-DEPTH-SIDED {device}: {sided} draws declared their bias's side");
-    assert_eq!(
-        sided,
-        if shader { 2 * sided_rows } else { 0 },
-        "{device}: draws of a known side through the variant that declares it"
-    );
     let mut kinds = Vec::new();
     let mut quiet_kinds = Vec::new();
     for (taken, list) in [
-        (false, &UNORM_DEPTH_BIAS[..]),
-        (false, &UNORM_DEPTH_ROUNDING[..]),
-        (shader, &SHADER_UNORM_DEPTH[..]),
+        (!biased_stores, &UNORM_DEPTH_BIAS[..]),
+        (!stores, &UNORM_DEPTH_ROUNDING[..]),
     ] {
         match taken {
             true => kinds.extend(list),
@@ -485,12 +446,11 @@ fn a_constant_bias_on_a_16_bit_unorm_depth_stores_metals_codes() {
         }
     }
     // The draws under constant biases move their depth (`biased-depth-past-unit-range` where the
-    // device stores it unclamped; a fragment stage that adds the bias clamps it to `[0, 1]`),
-    // from a `Shared` buffer, through the white pipelines.
+    // device stores it unclamped), from a `Shared` buffer, through the white pipelines.
     let mut first = forced(&[
         (
             Degradation::BiasedDepthPastUnitRange,
-            unclamped_bias(&probe.device) && !shader,
+            unclamped_bias(&probe.device),
         ),
         (
             Degradation::SharedInSystemMemory,
@@ -506,17 +466,20 @@ fn a_constant_bias_on_a_16_bit_unorm_depth_stores_metals_codes() {
         .collect();
     assert!(
         unexpected.is_empty(),
-        "announced {unexpected:?} where Metal's codes are stored"
+        "announced {unexpected:?} where the device is measured to store Metal's codes"
     );
     quiet(probe, &messages);
-    assert!(differ.is_empty(), "codes not Metal's: {differ:#?}");
+    assert!(
+        differ.is_empty(),
+        "codes not Metal's where measured: {differ:#?}"
+    );
 }
 
 /// A draw in depth clamp mode through a viewport depth range whose near end lies inside `(0, 1)`
-/// clamps a depth below it to that end, which the device converts to its code its own way past a
-/// fragment stage that writes Metal's codes: such a draw announces `unorm-depth-rounding` once
-/// there (and `shader-unorm-depth`), and neither where the profile takes
-/// `DriverDeviation::MetalDepth16Stores`. Skipped, printed, on a device without `depthClamp`.
+/// clamps a depth below it to that end, which the device converts to its code: such a draw
+/// announces `unorm-depth-rounding` once where the profile lacks
+/// `DriverDeviation::MetalDepth16Stores`, and nothing there where it takes it. Skipped, printed,
+/// on a device without `depthClamp`.
 #[test]
 fn a_depth_clamped_to_a_range_end_inside_the_unit_range_is_the_device_s_conversion() {
     let (messages, _cache, probe) = validated();
@@ -526,7 +489,7 @@ fn a_depth_clamped_to_a_range_end_inside_the_unit_range_is_the_device_s_conversi
         eprintln!("UNORM-DEPTH-CLAMP {device}: skipped, the device has no depthClamp");
         return;
     }
-    let shader = !profile.takes_driver_deviation(DriverDeviation::MetalDepth16Stores);
+    let unmeasured = !profile.takes_driver_deviation(DriverDeviation::MetalDepth16Stores);
     let d16 = PixelFormat::Depth16Unorm;
     let pipe = WHITE.depth(d16);
     let stored = probe.run(PASS.depth(d16, 1.0), |p, e, h| {
@@ -545,11 +508,8 @@ fn a_depth_clamped_to_a_range_end_inside_the_unit_range_is_the_device_s_conversi
         .map(|t| u16::from_le_bytes([t[0], t[1]]))
         .collect();
     eprintln!("UNORM-DEPTH-CLAMP {device}: stored {codes:?}");
-    let kinds: Vec<Degradation> = match shader {
-        true => vec![
-            Degradation::ShaderUnormDepth,
-            Degradation::UnormDepthRounding,
-        ],
+    let kinds: Vec<Degradation> = match unmeasured {
+        true => vec![Degradation::UnormDepthRounding],
         false => Vec::new(),
     };
     let mut first = forced(&[(
@@ -559,7 +519,7 @@ fn a_depth_clamped_to_a_range_end_inside_the_unit_range_is_the_device_s_conversi
     first.extend(probe.made(pipe));
     let announced = assert_made_once(&messages, &kinds, &first);
     assert!(
-        shader || !announced.contains_key(&Degradation::UnormDepthRounding),
+        unmeasured || !announced.contains_key(&Degradation::UnormDepthRounding),
         "announced unorm-depth-rounding on {device}, whose profile takes the deviation"
     );
     quiet(probe, &messages);
@@ -567,8 +527,8 @@ fn a_depth_clamped_to_a_range_end_inside_the_unit_range_is_the_device_s_conversi
 
 /// A draw biasing a `Depth16Unorm` depth through a fragment function that declares early
 /// fragment tests (the owned fixture `cfb_depth_never`'s `cfb_dn_red_early`, a full-screen
-/// triangle at depth 0.5) keeps the device's conversion, as no fragment stage that tests first
-/// can write the depth: it announces `unorm-depth-bias` once where the profile lacks
+/// triangle at depth 0.5) takes the device's conversion, as every draw does: it announces
+/// `unorm-depth-bias` once where the profile lacks
 /// `DriverDeviation::MetalDepth16BiasedStores`, and `unorm-depth-rounding` where it lacks
 /// `DriverDeviation::MetalDepth16Stores`. The stored code is printed.
 #[test]
@@ -621,107 +581,5 @@ fn a_bias_a_fragment_stage_testing_first_cannot_add_is_the_device_s() {
     )]);
     first.extend(made_render_kinds(&probe.device, &descriptor));
     assert_made_once(&messages, &kinds, &first);
-    quiet(probe, &messages);
-}
-
-/// The side of the cost test's pass: about a 1080p frame's pixels.
-const COST_SIDE: u64 = 1440;
-
-/// The full-screen layers the cost test draws front to back.
-const LAYERS: u16 = 16;
-
-/// Command buffers per form of the cost test, of which the median GPU time is printed.
-const TIMED: usize = 15;
-
-/// What a fragment stage that writes Metal's 16-bit codes costs against the device's own
-/// conversion: [`LAYERS`] full-screen layers drawn front to back (the nearest first, `Less`,
-/// written) into a [`COST_SIDE`]² pass, by the white pipeline into a `Depth16Unorm` depth (whose
-/// fragment stage writes the codes where the profile lacks `DriverDeviation::MetalDepth16Stores`,
-/// or for the biased draws `DriverDeviation::MetalDepth16BiasedStores`, so every layer runs it
-/// before the test, but where it declares the bias's side, which a constant of 2 raises:
-/// `WorkCounts::depth16_sided_draws`) and into a `Depth32Float` one (which the device tests before
-/// the stage runs), unbiased and under a constant bias of 2; each the median GPU time of its
-/// command buffers after one untimed, printed with the form. Nothing about the times is asserted.
-#[test]
-fn the_shader_unorm_depth_costs_against_a_float_depth() {
-    let (messages, _cache, probe) = validated();
-    let device = probe.device.name().to_owned();
-    let profile = probe.device.compile_device().profile();
-    let form = |deviation| match profile.takes_driver_deviation(deviation) {
-        true => "the device's conversion",
-        false => "the fragment stage's codes",
-    };
-    let target = |pf: PixelFormat| {
-        let mut d = TextureDescriptor::texture_2d(pf, COST_SIDE, COST_SIDE, false);
-        d.usage = TextureUsage::RENDER_TARGET;
-        d.resource_options = ResourceOptions::private();
-        probe.device.new_texture(&d).unwrap()
-    };
-    let color = target(PixelFormat::RGBA8Unorm);
-    let state = probe.state(CompareFunction::Less, true, None);
-    let mut lines = Vec::new();
-    for depth_format in [PixelFormat::Depth16Unorm, PixelFormat::Depth32Float] {
-        let depth = target(depth_format);
-        let pipe = WHITE.depth(depth_format);
-        for constant in [0.0f32, 2.0] {
-            let sided_before = probe.device.work_counts().depth16_sided_draws;
-            let mut times = Vec::with_capacity(TIMED);
-            for run in 0..=TIMED {
-                let mut pass = RenderPassDescriptor::new();
-                let attachment = &mut pass.color_attachments[0];
-                attachment.texture = Some(color.clone());
-                attachment.load_action = LoadAction::Clear;
-                attachment.store_action = StoreAction::Store;
-                pass.depth_attachment.texture = Some(depth.clone());
-                pass.depth_attachment.load_action = LoadAction::Clear;
-                pass.depth_attachment.clear_depth = 1.0;
-                pass.depth_attachment.store_action = StoreAction::Store;
-                let command_buffer = probe.queue.command_buffer().unwrap();
-                let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-                let mut held = Vec::new();
-                encoder.set_depth_stencil_state(&state).unwrap();
-                encoder.set_depth_bias(constant, 0.0, 0.0).unwrap();
-                for layer in 0..LAYERS {
-                    let z = 0.1 + f32::from(layer) * 0.05;
-                    probe.draw(&mut encoder, &mut held, pipe, z, 0.0);
-                }
-                encoder.end_encoding().unwrap();
-                command_buffer.commit().unwrap();
-                command_buffer
-                    .wait_until_completed_for(super::WAIT)
-                    .unwrap();
-                assert_eq!(command_buffer.error(), None);
-                if run > 0 {
-                    let start = command_buffer.gpu_start_time().unwrap();
-                    let end = command_buffer.gpu_end_time().unwrap();
-                    times.push((end - start) * 1e6);
-                }
-            }
-            times.sort_by(f64::total_cmp);
-            let deviation = match constant == 0.0 {
-                true => DriverDeviation::MetalDepth16Stores,
-                false => DriverDeviation::MetalDepth16BiasedStores,
-            };
-            // A stage that declares its bias's side (`WorkCounts::depth16_sided_draws`) lets the
-            // device test the depth before it runs.
-            let sided = probe.device.work_counts().depth16_sided_draws > sided_before;
-            let through = match depth_format {
-                PixelFormat::Depth16Unorm if sided => {
-                    "the fragment stage's codes, its side declared"
-                }
-                PixelFormat::Depth16Unorm => form(deviation),
-                _ => "the device's test",
-            };
-            lines.push(format!(
-                "{depth_format:?} biased by {constant} ({through}): {:.0} us",
-                times[TIMED / 2]
-            ));
-        }
-    }
-    eprintln!(
-        "UNORM-DEPTH-COST {device}: {COST_SIDE}x{COST_SIDE}, {LAYERS} layers front to back, \
-         median GPU time of {TIMED}: {}",
-        lines.join(", ")
-    );
     quiet(probe, &messages);
 }

@@ -27,51 +27,29 @@ fn link(
     crate::pipeline::link::link(&all, inputs, p)
 }
 
-/// `fragment` with the color writes a render pipeline of `inputs` on `p` compiles it under, an
-/// attachment whose rules it selects (`ChannelWrite::Selected`) recorded as a four-lane output's
-/// (`StageIo::selected_colors`), which rounds an 8-bit unorm or a half-float channel where
-/// `fragment` lists the attachment as rounded and nothing otherwise.
+/// `fragment` with the color writes a render pipeline of `inputs` on `p` compiles it under.
 fn compiled_for(
     fragment: &FunctionArtifact,
     inputs: &LinkInputs,
     p: &DeviceProfile,
 ) -> FunctionArtifact {
-    use crate::pipeline::color_writes::{HALF_CODE, UNORM8_CODE};
-    use crate::pipeline::lower_inputs::ChannelWrite;
     let mut out = fragment.clone();
     if let (LinkInputs::Render(r), Stage::Fragment) = (inputs, fragment.interface.stage) {
-        let io = &mut out.interface.io;
-        io.color_writes = crate::pipeline::color_writes::wanted(
+        out.interface.io.color_writes = crate::pipeline::color_writes::wanted(
             fragment,
             &r.color_attachments,
             (r.alpha_to_coverage, r.texture_write_rounding_mode),
             p,
         );
-        io.selected_colors = io
-            .color_writes
-            .iter()
-            .filter(|(_, rules)| rules.contains(&Some(ChannelWrite::Selected)))
-            .map(|(&a, _)| {
-                let rounds = fragment.interface.io.rounded_colors.contains(&a);
-                let write = crate::pipeline::stage_io::SelectedWrite {
-                    lanes: 4,
-                    rounds: match rounds {
-                        true => 1 << UNORM8_CODE | 1 << HALF_CODE,
-                        false => 0,
-                    },
-                    nans: 0,
-                };
-                (a, write)
-            })
-            .collect();
     }
     out
 }
 
-/// A blend of one and zero, added, of an attachment the fragment function rounds takes no Vulkan
-/// blend, since the function writes what Metal's blend stores, nor the format's blend support
-/// (lavapipe blends no snorm format); another blend keeps the device's, and so does a (one, zero)
-/// blend of an attachment the function does not round.
+/// A blend of one and zero, added, of an attachment whose format converts the fragment function's
+/// output (its color writes name a rule), or that the function rounds, takes no Vulkan blend, since
+/// Metal's blend stores the output as written, nor the format's blend support (lavapipe blends no
+/// snorm format); another blend keeps the device's, and so does a (one, zero) blend of an
+/// attachment whose format converts nothing (`RGBA32Float`) and the function does not round.
 #[test]
 fn a_rounded_one_zero_blend_takes_no_vulkan_blend() {
     use crate::device::requirements::FormatUsage;
@@ -100,7 +78,10 @@ fn a_rounded_one_zero_blend_takes_no_vulkan_blend() {
     };
     assert_eq!(blend_of(&rounding, replace), None);
     assert!(blend_of(&rounding, over).is_some());
-    assert!(blend_of(&fa, replace).is_some());
+    assert_eq!(blend_of(&fa, replace), None);
+    let mut float = ColorAttachmentDescriptor::new(PixelFormat::RGBA32Float);
+    float.blending_enabled = true;
+    assert!(blend_of(&fa, float).is_some());
     let snorm = vk::Format::R8G8B8A8_SNORM;
     assert!(!p.supports_format(snorm, FormatUsage::ColorAttachmentBlend));
     let mut replace_snorm = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Snorm);
@@ -149,13 +130,7 @@ fn a_safe_one_zero_blend_of_a_sixteen_bit_float_attachment_blends() {
             .expect("links")
             .graphics
             .expect("graphics");
-        let (notes, _) = pipeline_writes(
-            &fragment,
-            &g.color_write_rules,
-            &g.color_attachments,
-            g.alpha_to_coverage,
-        )
-        .expect("the rule words");
+        let (notes, _) = pipeline_writes(&fragment, &g.color_attachments, g.alpha_to_coverage);
         let noted = notes.contains(&crate::pipeline::PrecisionNote::HalfOutputPrecision);
         (
             g.color_attachments[0]
@@ -179,18 +154,13 @@ fn a_safe_one_zero_blend_of_a_sixteen_bit_float_attachment_blends() {
 }
 
 /// A fragment function links only under the color writes its pipeline gives the attachments it
-/// writes. On lavapipe and RADV a `float4` output to an `RGBA8Unorm` attachment rounds by the unorm
+/// writes. On lavapipe and RADV a `float4` output to an `RGBA8Unorm` attachment takes the unorm
 /// rule, blended with (one, zero) too; under another blend, and for alpha-to-coverage's alpha, the
-/// channel is the device's; an `RGBA32Float` attachment takes no entry. Where a channel so rounds,
-/// the attachment selects its rules at the draw (`ChannelWrite::Selected`), by the rule word link
-/// gives it: `0x2222` for the four unorm channels, `0x1222` with alpha-to-coverage's alpha,
-/// `0x3333` for an `RGBA16Float` one's half-float channels, so a fragment compiled for one such
-/// attachment links into a pipeline of another; one all of whose channels are the device's selects
-/// nothing. A fragment compiled under the channels' own rules (`color_writes::exact_writes`) links
-/// too, into a pipeline of those rules. A fragment compiled without the map, or for a format whose
-/// rules it does not select (`RGBA16Unorm`), is `NeedsInput(ColorWrites)`. On MoltenVK, which
-/// converts as Metal does, the map names only the half-float channels, blended or not, and selects
-/// nothing.
+/// channel is the device's; an `RGBA16Float` attachment takes the half-float rule, and an
+/// `RGBA32Float` one no entry. A fragment compiled for one attachment's map links into a pipeline
+/// of that map alone: compiled for another format, or without the map, it is
+/// `NeedsInput(ColorWrites)`. On MoltenVK, which converts as Metal does, the map names only the
+/// half-float channels, blended or not.
 #[test]
 fn color_writes_are_the_pipelines() {
     use crate::error::RuntimeInput;
@@ -229,70 +199,43 @@ fn color_writes_are_the_pipelines() {
     );
     for stem in ["lavapipe", "amd-rdna3-radv"] {
         let p = profile(stem);
-        let writes = |inputs: &LinkInputs, exact: bool| match inputs {
+        let writes = |inputs: &LinkInputs| match inputs {
             LinkInputs::Render(r) => {
                 let colors = &r.color_attachments;
                 let rounding = (r.alpha_to_coverage, r.texture_write_rounding_mode);
-                match exact {
-                    true => crate::pipeline::color_writes::exact_writes([0], colors, rounding, &p),
-                    false => crate::pipeline::color_writes::wanted(&fa, colors, rounding, &p),
-                }
+                crate::pipeline::color_writes::wanted(&fa, colors, rounding, &p)
             }
             _ => unreachable!(),
         };
         let device = Some(C::Device);
         let half = Some(crate::pipeline::color_writes::HALF);
-        let selected = Some([Some(C::Selected); 4]);
         let coverage = render(
             ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm),
             true,
         );
-        for (inputs, exact, want, word) in [
-            (&plain, Some([unorm8; 4]), selected, Some(0x2222)),
-            (
-                &render(replace, false),
-                Some([unorm8; 4]),
-                selected,
-                Some(0x2222),
-            ),
-            (&render(blend, false), Some([device; 4]), None, None),
-            (
-                &coverage,
-                Some([unorm8, unorm8, unorm8, device]),
-                selected,
-                Some(0x1222),
-            ),
-            (&half_float, Some([half; 4]), selected, Some(0x3333)),
-            (&float, None, None, None),
+        for (inputs, want) in [
+            (&plain, Some([unorm8; 4])),
+            (&render(replace, false), Some([unorm8; 4])),
+            (&render(blend, false), Some([device; 4])),
+            (&coverage, Some([unorm8, unorm8, unorm8, device])),
+            (&half_float, Some([half; 4])),
+            (&float, None),
         ] {
-            assert_eq!(writes(inputs, true).get(&0).copied(), exact, "{stem}");
-            let want = want.or(exact);
-            assert_eq!(writes(inputs, false).get(&0).copied(), want, "{stem}");
-            let l = link(&[&va, &fa], inputs, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-            let words = &l.graphics.as_ref().expect("graphics").color_write_rules;
+            assert_eq!(writes(inputs).get(&0).copied(), want, "{stem}");
+            link(&[&va, &fa], inputs, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        }
+        let needs = Err(Error::NeedsInput(RuntimeInput::ColorWrites));
+        // Compiled for one attachment's map, linked into another's pipeline.
+        let for_plain = compiled_for(&fa, &plain, &p);
+        crate::pipeline::link::link(&[&va, &for_plain], &plain, &p)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        for inputs in [&half_float, &coverage] {
             assert_eq!(
-                words.clone(),
-                Vec::from_iter(word.map(|w| (0, w))),
+                crate::pipeline::link::link(&[&va, &for_plain], inputs, &p).map(|_| ()),
+                needs,
                 "{stem}"
             );
         }
-        // Compiled for one attachment whose rules it selects, linked into another's pipeline.
-        let for_plain = compiled_for(&fa, &plain, &p);
-        for inputs in [&half_float, &coverage] {
-            crate::pipeline::link::link(&[&va, &for_plain], inputs, &p)
-                .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        }
-        // Compiled under the channels' own rules, it links into the pipeline of those rules alone.
-        let mut own = fa.clone();
-        own.interface.io.color_writes = writes(&plain, true);
-        crate::pipeline::link::link(&[&va, &own], &plain, &p)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(
-            crate::pipeline::link::link(&[&va, &own], &half_float, &p).map(|_| ()),
-            Err(Error::NeedsInput(RuntimeInput::ColorWrites)),
-            "{stem}"
-        );
-        let needs = Err(Error::NeedsInput(RuntimeInput::ColorWrites));
         // Compiled without the map, and for another format.
         assert_eq!(
             crate::pipeline::link::link(&[&va, &fa], &plain, &p).map(|_| ()),
@@ -416,7 +359,7 @@ fn half_colors_round_to_nearest_even_under_mode_two() {
             _ => unreachable!(),
         };
         // The default mode's own rule of the alpha the coverage reads: the output as written.
-        let unstored = crate::pipeline::color_writes::exact_writes(
+        let unstored = crate::pipeline::color_writes::color_writes(
             [0],
             &[Some(rgb)],
             (true, Mode::TowardZero),
@@ -442,13 +385,7 @@ fn half_colors_round_to_nearest_even_under_mode_two() {
                 .graphics
                 .expect("graphics");
             assert_eq!(g.alpha_to_coverage, coverage, "{stem} {c:?}");
-            let (notes, _) = pipeline_writes(
-                &fragment,
-                &g.color_write_rules,
-                &g.color_attachments,
-                g.alpha_to_coverage,
-            )
-            .expect("the rule words");
+            let (notes, _) = pipeline_writes(&fragment, &g.color_attachments, g.alpha_to_coverage);
             assert_eq!(
                 notes.contains(&PrecisionNote::CoverageReadsRoundedAlpha),
                 coverage && want[3] == nearest,

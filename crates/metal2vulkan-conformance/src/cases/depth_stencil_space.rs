@@ -1181,16 +1181,16 @@ impl Case for DepthCodes {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         //
-        // Two more, both declarations and neither touching a depth code: a `DontCare` depth store
-        // our side keeps where Metal may drop it (`dont-care-store`), and a normalized depth our
-        // side writes through the shader where the device's own store is not Metal's
-        // (`shader-unorm-depth`). Both announced by this row on the 5080 and on llvmpipe (Mesa
-        // 26.2.4) with the case declaring neither, and `shader-unorm-depth` by this row alone in
-        // the family.
+        // Two more, both declarations: a `DontCare` depth store our side keeps where Metal may
+        // drop it (`dont-care-store`, announced by this row on the 5080 and on llvmpipe, Mesa
+        // 26.2.4, with the case declaring it nowhere), and a normalized depth the device converts
+        // where it is not measured to store Metal's code (`unorm-depth-rounding`; expected on
+        // both, unmeasured since the device's own conversion became the only form). Neither
+        // loosens a depth code.
         vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-            crate::replay::notice_allowance(Degradation::ShaderUnormDepth.code()),
+            crate::replay::notice_allowance(Degradation::UnormDepthRounding.code()),
         ]
     }
 

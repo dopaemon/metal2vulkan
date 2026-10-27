@@ -1929,11 +1929,10 @@ fn storage_choices_on_committed_profiles_are_declarable() {
 }
 
 /// A half-float storage texture a function writes takes the class its `float` writes need, by
-/// what the committed profile's device is measured to store (and lavapipe's
-/// probes): `Identity` on MoltenVK (Metal's every value and NaN), `HalfQuietNan` where the device
-/// rounds as Metal does but stores another NaN (RADV, ANV, NVIDIA's, lavapipe), `HalfTowardZero`
-/// where its rounding is not measured; a read-only use, and another float format, stay `Identity`.
-/// On a profile not measured to store a written `half`'s NaN as its bits
+/// what the committed profile's device is measured to store for a NaN (and lavapipe's probes):
+/// `Identity` on MoltenVK (Metal's every NaN), `HalfQuietNan` on every other profile, whose
+/// device's own conversion rounds each value; a read-only use, and another float format, stay
+/// `Identity`. On a profile not measured to store a written `half`'s NaN as its bits
 /// (`DriverDeviation::MetalHalfTexelWrites`), a written use takes the unsigned integer alias
 /// (`StorageImageClass::HalfBits`) wherever the alias serves it, an image of its own format alone
 /// the measured class.
@@ -1944,15 +1943,7 @@ fn half_float_storage_writes_take_their_measured_class() {
         let p = dev.profile();
         let want = match stem.as_str() {
             "moltenvk-m3" => StorageImageClass::Identity,
-            "amd-780m-radv"
-            | "amd-780m-hawkpoint-radv"
-            | "intel-irisxe-rplp-anv"
-            | "intel-uhd770-rpls-anv"
-            | "nvidia-rtx5080-laptop"
-            | "lavapipe"
-            | "gate-lavapipe"
-            | "gate-lavapipe-x86_64" => StorageImageClass::HalfQuietNan,
-            _ => StorageImageClass::HalfTowardZero,
+            _ => StorageImageClass::HalfQuietNan,
         };
         for pf in [
             PixelFormat::R16Float,
@@ -1995,7 +1986,7 @@ fn half_float_storage_writes_take_their_measured_class() {
             );
         }
     }
-    assert_eq!(seen.len(), 4, "{seen:?}");
+    assert_eq!(seen.len(), 3, "{seen:?}");
 }
 
 /// An `RG11B10Float` storage texture a function writes, or texture buffer, takes

@@ -1307,38 +1307,14 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-unorm-depth-bias` (precision). `UnormDepthBias`: A draw biases a
   `Depth16Unorm` depth by a constant, or by a slope alone, which brings Metal's constant unit, on a
   device whose driver is not measured to store Metal's codes so
-  (`DriverDeviation::MetalDepth16BiasedStores`), through a pipeline whose fragment stage does not
-  add the bias itself (more than one sample, early fragment tests, the draw's tests run in the
-  shader, a function that returns its depth or reads its position's depth). Elsewhere such a draw
-  runs the variant whose fragment stage adds the bias. Cost: a biased depth can store a code next
-  to Metal's: the device rounds the biased sum its own way, and without depthBiasExact counts the
-  bias in its own unit.
+  (`DriverDeviation::MetalDepth16BiasedStores`): the device biases and converts the depth. Cost: a
+  biased depth can store a code next to Metal's: the device rounds the biased sum its own way, and
+  without depthBiasExact counts the bias in its own unit.
 - `metal2vulkan-degrade-unorm-depth-rounding` (precision). `UnormDepthRounding`: A draw tests or
   writes a `Depth16Unorm` depth on a device whose driver is not measured to convert a depth to
-  Metal's code (`DriverDeviation::MetalDepth16Stores`), through a pipeline whose fragment stage
-  cannot write the code itself (more than one sample, early fragment tests, the draw's tests run
-  in the shader, a function that reads its position's depth and returns none), or through one
-  that does, in depth clamp mode through a viewport depth range an end of which lies inside
-  `(0, 1)`, where the device clamps the depth to that end. Cost: a depth
-  near a code's midpoint can store the code below Metal's: the device converts the depth to the
-  16-bit code its own way, where Metal rounds to nearest, a tie up.
-- `metal2vulkan-degrade-shader-unorm-depth` (performance). `ShaderUnormDepth`: A draw tests or
-  writes a `Depth16Unorm` depth on a device whose driver is not measured to convert a depth to
-  Metal's code (`DriverDeviation::MetalDepth16Stores`, or for a biased draw
-  `DriverDeviation::MetalDepth16BiasedStores`), through a single-sampled pipeline whose fragment
-  stage writes each depth as Metal's code, its depth bias added in the shader (a pipeline without
-  a fragment function draws through a fragment stage of its own). The render pass's depth decides
-  it, whatever depth format the pipeline names. Cost: the fragment stage writes each depth as
-  Metal's code, about 50 more instructions per fragment, which keeps the device from testing the
-  depth before the stage runs. A biased draw whose bias has a known side
-  (`metal::state::depth16_bias_side`, every Vulkan depth range of the draw inside `[0, 1]`) runs a
-  stage that declares it (`DepthGreater` or `DepthLess`, counted by
-  `WorkCounts::depth16_sided_draws`), so the device may still test first where its test compares
-  that way (docs/FAST-PATHS.md's costs of matching Metal).
-- `metal2vulkan-degrade-unorm-depth-slope` (precision). `UnormDepthSlope`: A draw biases a
-  `Depth16Unorm` depth by a slope through a fragment stage that adds Metal's bias itself. Cost:
-  the fragment stage takes the depth's slope from the depths of its 2x2 quad, where Metal takes
-  the triangle's own: a biased depth near a code's midpoint can store the code next to Metal's.
+  Metal's code (`DriverDeviation::MetalDepth16Stores`): the device converts the depth. Cost: a
+  depth near a code's midpoint can store the code below Metal's: the device converts the depth to
+  the 16-bit code its own way, where Metal rounds to nearest, a tie up.
 - `metal2vulkan-degrade-point-guard-band` (precision). `PointGuardBand`: A draw of points keeps
   Vulkan's clipping of points, where Metal's guard band cannot be emulated: in a rate-mapped pass,
   on a device without `shaderClipDistance` or with too few clip distances beside the vertex
@@ -1494,10 +1470,10 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   the attachment's image takes no input attachment usage, a copy of its samples over the render
   area into a scratch image first.
 - `metal2vulkan-degrade-shader-color-conversion` (performance). `ShaderColorConversion`: A fragment
-  function writes a float to a normalized, sRGB or half-float color attachment on a device whose own
-  conversion is not Metal's (`StageModule::rounded_colors`). Cost: the fragment function rounds each
-  such channel to the code Metal stores before it writes it: about 35 more instructions per
-  normalized or half-float channel, and about 70 and one read of a 4 KiB table per sRGB channel.
+  function writes a float to a half-float color attachment of a pipeline under
+  `TextureWriteRoundingMode::NearestEven`, whose rounding no device's conversion gives
+  (`StageModule::rounded_colors`). Cost: the fragment function rounds each such channel to nearest
+  even before it writes it: about 35 more instructions per channel.
 - `metal2vulkan-degrade-shader-half-color-bits` (performance). `ShaderHalfColorBits`: A fragment
   function writes a `half` to a half-float color attachment as the bits of the half Metal stores,
   through a 16-bit output, on a device that does not store a 32-bit output's NaN as Metal does
@@ -2821,10 +2797,15 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   raw sample (`heap_raw`).
 - `metal2vulkan-degrade-device-color-conversion` (precision).
   `PrecisionNote::DeviceColorConversion`: A fragment function writes a float to a color channel
-  whose conversion the device makes, not Metal's rule (`ChannelWrite::Device`): an attachment that
-  blends with factors other than one and zero, the alpha of attachment 0 under alpha-to-coverage, a
-  format whose conversion Metal was not measured with (the packed 16-bit unorm formats, `A8Unorm`,
-  the packed floats).
+  whose conversion the device makes where it is not measured to make Metal's: a normalized, sRGB or
+  small float channel on a device other than MoltenVK on an Apple GPU not measured to convert that
+  kind as Metal does, an attachment that blends with factors other than one and zero
+  (`ChannelWrite::Device`), the alpha of attachment 0 under alpha-to-coverage, a format whose
+  conversion Metal was not measured with (the packed 16-bit unorm formats, `A8Unorm`, the packed
+  floats). Near a tie between two codes the device may store the other one. Also a `float` texel a
+  function writes to a storage texture that may hold a normalized or half-float format, or
+  `ARGB8Unorm`, on a device not measured to store Metal's codes (or a 1-bit alpha, on one measured
+  to store every other normalized channel's).
 - `metal2vulkan-degrade-device-interpolation` (precision). `PrecisionNote::DeviceInterpolation`: A
   fragment function reads a varying the device interpolates (`center_perspective`, `centroid`,
   `sample` or `no_perspective`, not `flat`) on a device not measured to interpolate as Metal does

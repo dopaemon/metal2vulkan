@@ -136,8 +136,6 @@ pub struct FragmentPass<'a> {
     pub(crate) color_attachments: &'a [Option<ColorAttachmentDescriptor>; 8],
     /// The pipeline has a depth or a stencil attachment.
     pub(crate) depth_or_stencil: bool,
-    /// The pipeline's depth attachment is `Depth16Unorm` (`LoweringInputs::depth16_codes`).
-    pub(crate) depth16: bool,
     pub(crate) raster_sample_count: u32,
     pub(crate) rasterization_enabled: bool,
     pub(crate) alpha_to_coverage: bool,
@@ -165,7 +163,6 @@ impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
         FragmentPass {
             color_attachments: &d.color_attachments,
             depth_or_stencil: d.depth_format.is_some() || d.stencil_format.is_some(),
-            depth16: d.depth_format == Some(crate::metal::PixelFormat::Depth16Unorm),
             raster_sample_count: d.raster_sample_count,
             rasterization_enabled: d.rasterization_enabled,
             alpha_to_coverage: d.alpha_to_coverage,
@@ -188,7 +185,6 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
         FragmentPass {
             color_attachments: &d.color_attachments,
             depth_or_stencil: d.depth_format.is_some() || d.stencil_format.is_some(),
-            depth16: d.depth_format == Some(crate::metal::PixelFormat::Depth16Unorm),
             raster_sample_count: d.raster_sample_count,
             rasterization_enabled: d.rasterization_enabled,
             alpha_to_coverage: d.alpha_to_coverage,
@@ -2206,44 +2202,7 @@ pub(crate) fn fragment_inputs(
     out.depth_compare_clamp_mask = d.depth_compare_clamp_mask;
     out.half_output_lanes = crate::pipeline::color_writes::half_output_lanes(d.color_attachments);
     out.texture_write_rounding = d.texture_write_rounding_mode;
-    out.depth16_codes = depth16_codes(d, v, p);
-    out.depth16_bias_raises = v.depth16_bias_raises.filter(|_| out.depth16_codes);
     out
-}
-
-/// Whether a fragment stage of pass `d` under variant `v` on `p` stores Metal's `Depth16Unorm`
-/// codes itself (`LoweringInputs::depth16_codes`): the depth it renders against is
-/// `Depth16Unorm` (`VariantKey::depth16_pass`, else the pipeline's depth attachment), and
-/// [`depth16_stage_form`] holds, for a biased draw under `VariantKey::depth16_biased`.
-pub(crate) fn depth16_codes(d: FragmentPass<'_>, v: &VariantKey, p: &DeviceProfile) -> bool {
-    v.depth16_pass.unwrap_or(d.depth16)
-        && depth16_stage_form(
-            d.rasterization_enabled,
-            d.raster_sample_count,
-            v.depth16_biased,
-            p,
-        )
-}
-
-/// Whether a pipeline that rasterizes (`rasterizes`) `samples` samples per pixel on `p` takes
-/// Metal's codes from its fragment stage where it renders against a `Depth16Unorm` depth, for a
-/// draw that biases it where `biased`: it rasterizes one sample, and the profile lacks
-/// `DriverDeviation::MetalDepth16Stores`, or for a biased draw
-/// `DriverDeviation::MetalDepth16BiasedStores`. At more than one sample the device's depth is
-/// each sample's own, which one written depth would replace.
-pub(crate) fn depth16_stage_form(
-    rasterizes: bool,
-    samples: u32,
-    biased: bool,
-    p: &DeviceProfile,
-) -> bool {
-    use crate::error::DriverDeviation::{MetalDepth16BiasedStores, MetalDepth16Stores};
-    let stores = if biased {
-        MetalDepth16BiasedStores
-    } else {
-        MetalDepth16Stores
-    };
-    rasterizes && samples <= 1 && !p.takes_driver_deviation(stores)
 }
 
 /// The attributes the vertex function `spec` fetches in fixed function under `inputs` from

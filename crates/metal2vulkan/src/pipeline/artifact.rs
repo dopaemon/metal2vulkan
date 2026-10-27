@@ -183,10 +183,10 @@ pub struct StageModule {
     /// The constant data this stage reads at its `Synthetic(ConstantBlob)` binding, which the
     /// binder fills from `WriteSource::ConstantBlob { stage }`. Each stage has its own.
     pub constant_blob: Option<Arc<[u8]>>,
-    /// The color attachments whose float writes this fragment stage rounds to the codes Metal
-    /// stores in the shader (`StageIo::rounded_colors`), sorted: a normalized, sRGB or
-    /// half-float attachment on a device whose own conversion is not Metal's. Each such write
-    /// costs the stage's instructions per channel; empty for every other stage.
+    /// The color attachments whose float writes this fragment stage rounds in the shader
+    /// (`StageIo::rounded_colors`), sorted: a half-float attachment of a pipeline under
+    /// `TextureWriteRoundingMode::NearestEven`, whose rounding no device's conversion gives. Each
+    /// such write costs the stage's instructions per channel; empty for every other stage.
     pub rounded_colors: Vec<u32>,
     /// The notes of `precision_notes` that hold only under some specializations: a note whose
     /// every access keeps its near-equivalent only on the arms the module selects by its
@@ -1180,25 +1180,29 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a mismatch
     /// for review (no authored case binds such a view).
     ViewBaseTexelOffset,
-    /// A fragment function writes a float to a color channel whose conversion the device makes,
-    /// not Metal's rule (`ChannelWrite::Device`): an attachment that blends with factors other
-    /// than one and zero, the alpha of attachment 0 under alpha-to-coverage, a format whose
-    /// conversion Metal was not measured with (the packed 16-bit unorm formats, `A8Unorm`, the
-    /// packed floats). (A `bfloat` output is refused, as Metal's compiler rejects one.) Near a tie
-    /// between two codes the device may store the other one (every Vulkan driver measured but
-    /// MoltenVK rounds the `f32` product with ties to even and encodes sRGB by its own
-    /// approximation, where Metal rounds the exact product and encodes through its twelve-bit
-    /// table). Every other float color write rounds to Metal's code in the shader. A 32-bit float
-    /// attachment that so blends stores the device's blend arithmetic (NVIDIA's 615.71.09 one `f32`
-    /// ulp from Metal's in some source-over sums, a NaN as `0x7fffffff` where Metal stores
-    /// `0x7fc00000`).
+    /// A fragment function writes a float to a color channel whose conversion the device makes
+    /// where it is not measured to make Metal's: a normalized, sRGB or small float channel the
+    /// attachment stores as written, on a device other than MoltenVK on an Apple GPU
+    /// (`VkProperty::MetalColorWrites`) not measured to convert that kind of channel as Metal does
+    /// (`DriverDeviation::MetalSmallFloatColorWrites`, `MetalNorm16ColorWrites`), an attachment that
+    /// blends with factors other than one and zero (`ChannelWrite::Device`), the alpha of
+    /// attachment 0 under alpha-to-coverage, a format whose conversion Metal was not measured with
+    /// (the packed 16-bit unorm formats, `A8Unorm`, the packed floats). (A `bfloat` output is
+    /// refused, as Metal's compiler rejects one.) Near a tie between two codes the device may store
+    /// the other one (every Vulkan driver measured but MoltenVK rounds the `f32` product with ties
+    /// to even, encodes sRGB by its own approximation and rounds a half to nearest, where Metal
+    /// rounds the exact product, encodes through its twelve-bit table and rounds a half toward
+    /// zero), and a NaN stores as its conversion makes it (Metal stores a normalized channel's as
+    /// 0, a blended snorm channel's as -1.0's code). A 32-bit float attachment that so blends
+    /// stores the device's blend arithmetic (NVIDIA's 615.71.09 one `f32` ulp from Metal's in some
+    /// source-over sums, a NaN as `0x7fffffff` where Metal stores `0x7fc00000`).
     ///
-    /// Also: a function writes a `float` texel through an argument buffer's texture buffer (a heap
-    /// texture buffer, which carries no texel class) that may hold a normalized format the device
-    /// converts otherwise than Metal, which stores each channel's exact product rounded with a tie
-    /// away from zero (a device without `DriverDeviation::MetalNormStorageWrites`, or with it where
-    /// such a buffer may hold a 1-bit alpha). Every other `float` texel write to a normalized
-    /// storage texture rounds to Metal's code in the shader.
+    /// Also: a function writes a `float` (or `half`) texel to a storage texture that may hold a
+    /// normalized or half-float format, or `ARGB8Unorm`, which the device converts where it is not
+    /// measured to store Metal's codes (`DriverDeviation::MetalNormStorageWrites`,
+    /// `MetalHalfStorageWrites`; a 1-bit alpha on a device measured to store every other
+    /// normalized channel's): Metal stores each normalized channel's exact product rounded with a
+    /// tie away from zero (a 1-bit channel 1 only above one half) and a half rounded toward zero.
     ///
     /// Also: a blend into a packed 16-bit unorm attachment (`B5G6R5Unorm`, `A1BGR5Unorm`,
     /// `ABGR4Unorm`, `BGR5A1Unorm`) reads what the device's attachment holds, its channels' codes,

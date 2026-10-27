@@ -229,7 +229,6 @@ pub(crate) struct Counters {
     no_copy_lies_read: AtomicU64,
     commands_noted_as_before: AtomicU64,
     draws_settled: AtomicU64,
-    depth16_sided_draws: AtomicU64,
     two_plane_draws: AtomicU64,
     provoking_last_pipeline_draws: AtomicU64,
     provoking_listed_draws: AtomicU64,
@@ -1598,12 +1597,6 @@ impl Counters {
     /// A draw settled its variant and plan from its bind shape (`GraphicsState::settle_shape`).
     pub(crate) fn draw_settled(&self) {
         self.draws_settled.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A draw ran the variant whose fragment stage declares its `Depth16Unorm` depth bias's side
-    /// (`VariantKey::depth16_bias_raises`).
-    pub(crate) fn depth16_sided_draw(&self) {
-        self.depth16_sided_draws.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw ran a variant that takes a slot bound to a two-plane extended-range texture
@@ -3877,11 +3870,6 @@ pub struct WorkCounts {
     /// Draws that settled their variant and plan from their bind shapes: none for a draw whose
     /// bind shape is one of the latest its pipeline state settled in the same buffer forms.
     pub draws_settled: u64,
-    /// Draws that ran the variant whose fragment stage adds a `Depth16Unorm` depth's bias itself
-    /// and declares its side (`DepthGreater` or `DepthLess`), where the bias's side is known: the
-    /// device may then test the depth before the stage runs, which a stage that writes its depth
-    /// otherwise keeps it from.
-    pub depth16_sided_draws: u64,
     /// Draws that ran a variant taking a texture slot bound to a two-plane extended-range texture
     /// (`RGB10A8_2P_XR10` or its sRGB twin), read or sampled: the variant's function reads the
     /// slot's raw texels and decodes them, and filters each linear sample of the slot itself over
@@ -5061,7 +5049,6 @@ impl Device {
             no_copy_lies_read: counters.no_copy_lies_read.load(Ordering::Relaxed),
             commands_noted_as_before: counters.commands_noted_as_before.load(Ordering::Relaxed),
             draws_settled: counters.draws_settled.load(Ordering::Relaxed),
-            depth16_sided_draws: counters.depth16_sided_draws.load(Ordering::Relaxed),
             two_plane_draws: counters.two_plane_draws.load(Ordering::Relaxed),
             provoking_last_pipeline_draws: counters
                 .provoking_last_pipeline_draws

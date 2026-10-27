@@ -1,17 +1,15 @@
-//! A fragment function's float color output rounded to the code Metal stores
-//! (`color_write::round`), on the interpreter, against the rules probes measured on an Apple M3 Max
-//! and an M4 (`runtime_lane::color_writes` holds the same rules).
+//! A float rounded to the code Metal stores in a color channel (`color_write::round`), on the
+//! interpreter, against the rules probes measured on an Apple M3 Max and an M4
+//! (`runtime_lane::color_writes` holds the same rules).
 //!
 //! Each case writes one value to every lane of a four-lane output whose lanes take different
 //! rules, so every rule runs beside the others. The reference is the value each rule writes:
-//! `c` times the `f32` nearest `1 / m` for Metal's unorm or snorm code `c`, the linear value of
-//! Metal's sRGB byte, and the small float Metal stores, widened. A further check asserts that a device
-//! which rounds the `f32` product to nearest (every Vulkan driver measured, ties aside) stores
-//! each such value as its code.
+//! `c` times the `f32` nearest `1 / m` for Metal's unorm code `c`, and the small float Metal
+//! stores, widened. A further check asserts that a device which rounds the `f32` product to
+//! nearest (every Vulkan driver measured, ties aside) stores each such value as its code.
 
 use super::*;
 use crate::lower::arith::color_write;
-use crate::lower::arith::srgb::{self, ColorTable};
 use crate::pipeline::lower_inputs::ChannelWrite;
 
 /// Metal's code of `x` in a unorm channel of maximum `m`: NaN 0, clamped to `[0, 1]`, the exact
@@ -25,44 +23,6 @@ fn unorm_code(x: f32, m: u32) -> u32 {
 /// the product of a 24-bit significand and a 16-bit integer is exact in `f64`.
 fn exact_round(x: f64, m: u32) -> u32 {
     (x * f64::from(m)).round_ties_even() as u32
-}
-
-/// Metal's code of `x` in a snorm channel of maximum `m` (two's complement as `i32`).
-fn snorm_code(x: f32, m: u32, blended: bool) -> i32 {
-    if x.is_nan() {
-        return if blended { -(m as i32) } else { 0 };
-    }
-    let c = exact_round(f64::from(x.abs().min(1.0)), m) as i32;
-    if x < 0.0 {
-        -c
-    } else {
-        c
-    }
-}
-
-/// The sRGB byte Metal stores for `x`: its twelve-bit index (the exact product with 4095), and
-/// the byte the MSL transfer with the exponent `0.41666` gives that index, which reproduces all
-/// 4096 of Metal's (`srgb_conversions_answer_with_metals_tables`).
-fn srgb_byte(x: f32) -> u32 {
-    let i = unorm_code(x, 4095);
-    let c = f64::from(i) / 4095.0;
-    let v = if c < 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(0.41666) - 0.055
-    };
-    (255.0 * v).round_ties_even() as u32
-}
-
-/// The `f32` nearest the linear value of sRGB byte `b`.
-fn srgb_linear(b: u32) -> f32 {
-    let c = f64::from(b) / 255.0;
-    let v = if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    };
-    v as f32
 }
 
 /// Metal's code of `x` in a float channel of a five-bit exponent (bias 15) and `man` fraction
@@ -119,16 +79,6 @@ fn small_float_nearest_code(x: f32, man: u32, signed: bool) -> u32 {
     small_float_code(v, man, signed)
 }
 
-/// `x` rounded to a half to nearest even, widened (a NaN stays a NaN).
-fn half_nearest(x: f32) -> f32 {
-    let c = small_float_nearest_code(x, 10, true);
-    if x.is_nan() {
-        x
-    } else {
-        small_float_value(c, 10, true) as f32
-    }
-}
-
 /// The value of code `c` of a float channel as [`small_float_code`] describes it (not a NaN).
 fn small_float_value(c: u32, man: u32, signed: bool) -> f64 {
     let negative = signed && (c >> (man + 5)) & 1 == 1;
@@ -160,23 +110,6 @@ fn written(rule: Option<ChannelWrite>, x: f32) -> u64 {
             let m = (1u32 << bits) - 1;
             code_value(unorm_code(x, m), m).to_bits()
         }
-        Some(ChannelWrite::Snorm { bits, blended }) => {
-            let m = (1u32 << (bits - 1)) - 1;
-            let c = snorm_code(x, m, blended);
-            let q = code_value(c.unsigned_abs(), m);
-            if c < 0 || (c == 0 && x < 0.0) {
-                (-q).to_bits()
-            } else {
-                q.to_bits()
-            }
-        }
-        Some(ChannelWrite::Srgb) => srgb_linear(srgb_byte(x)).to_bits(),
-        // A selected channel writes by the rule its code selects: no reference of its own.
-        Some(ChannelWrite::Selected) => unreachable!("a selected channel's rule is its code's"),
-        Some(ChannelWrite::HalfUnorm { bits }) => {
-            let m = (1u32 << bits) - 1;
-            code_value(unorm_code(half_nearest(x), m), m).to_bits()
-        }
         Some(
             rule @ (ChannelWrite::FloatTowardZero { mantissa, signed }
             | ChannelWrite::FloatNearestEven { mantissa, signed }),
@@ -192,16 +125,16 @@ fn written(rule: Option<ChannelWrite>, x: f32) -> u64 {
                 (small_float_value(c, man, signed) as f32).to_bits()
             }
         }
+        Some(rule) => unreachable!("no reference of {rule:?}: `round` takes none"),
     };
     u64::from(bits)
 }
 
 /// The values beside each code and each tie of a channel of maximum `m` (every `step`-th),
-/// `n` `f32` steps either side, over `[lo, 1]`.
-fn around_codes(m: u32, signed: bool, step: usize, n: u32) -> Vec<f32> {
-    let lo = if signed { -(m as i64) } else { 0 };
+/// `n` `f32` steps either side, over `[0, 1]`.
+fn around_codes(m: u32, step: usize, n: u32) -> Vec<f32> {
     let mut out = Vec::new();
-    for k in (lo..=i64::from(m)).step_by(step) {
+    for k in (0..=m).step_by(step) {
         for c in [k as f64, k as f64 + 0.5] {
             let x = (c / f64::from(m)) as f32;
             for d in 0..=n {
@@ -297,27 +230,7 @@ fn small_float_values(man: u32) -> Vec<f32> {
     out
 }
 
-/// The sRGB grid: each twelve-bit index's tie with two `f32` steps either side, and each byte's
-/// linear value.
-fn srgb_values() -> Vec<f32> {
-    let mut out = Vec::new();
-    for i in 0..4095u32 {
-        let t = ((f64::from(i) + 0.5) / 4095.0) as f32;
-        for d in 0..=2 {
-            out.push(f32::from_bits(t.to_bits() + d));
-            out.push(f32::from_bits(t.to_bits() - d));
-        }
-    }
-    out.extend((0..256).map(srgb_linear));
-    out
-}
-
 fn run_rules(what: &str, rules: [Option<ChannelWrite>; 4], values: &[f32]) {
-    run_rules_in(what, rules, values, ColorTable::Uniform);
-}
-
-/// [`run_rules`] with the color table in the buffer `class` names.
-fn run_rules_in(what: &str, rules: [Option<ChannelWrite>; 4], values: &[f32], class: ColorTable) {
     let f = vec(float(32), 4);
     let cases: Vec<Case> = values
         .iter()
@@ -327,10 +240,7 @@ fn run_rules_in(what: &str, rules: [Option<ChannelWrite>; 4], values: &[f32], cl
         what,
         &[f],
         f,
-        &|fb, x| {
-            let table = srgb::declare_color_table(fb.module(), Stage::Kernel, class)?;
-            color_write::round(fb, f, x[0], &rules, Some(table))
-        },
+        &|fb, x| color_write::round(fb, f, x[0], &rules),
         &cases,
         &|c| {
             let x = f32::from_bits(c[0][0] as u32);
@@ -340,10 +250,6 @@ fn run_rules_in(what: &str, rules: [Option<ChannelWrite>; 4], values: &[f32], cl
     );
 }
 
-/// Every unorm and snorm code's value written lies within `2^-7` of the code once multiplied
-/// by its maximum, exactly and as an `f32` product, so a device that rounds that product to
-/// nearest stores the code, whatever it does at ties, and so does Metal; and the linear value of
-/// every sRGB byte is that byte's in Metal's encode.
 /// A render state's half-float channel under `textureWriteRoundingMode` 2 rounds to nearest even
 /// (`color_writes::HALF_NEAREST`): the consumer's spot values on an M3 Max and our probe's
 /// on an M4 (1 + 3 * 2^-12 to `0x3C01`, the tie 1 + 3 * 2^-11 to `0x3C02`, 65519 to `0x7BFF`, from
@@ -400,6 +306,9 @@ fn nearest_even_halves_round_to_mode_twos_codes() {
     }
 }
 
+/// Every unorm code's value written lies within `2^-7` of the code once multiplied by its
+/// maximum, exactly and as an `f32` product, so a device that rounds that product to nearest
+/// stores the code, whatever it does at ties, and so does Metal.
 #[test]
 fn written_values_store_their_codes() {
     for m in [1u32, 3, 15, 31, 63, 255, 1023, 65535, 127, 32767] {
@@ -422,202 +331,22 @@ fn written_values_store_their_codes() {
             );
         }
     }
-    for b in 0..256 {
-        assert_eq!(srgb_byte(srgb_linear(b)), b, "sRGB byte {b}");
-    }
 }
 
 #[test]
 fn eight_bit_channels_round_to_metals_codes() {
-    let mut values = around_codes(255, true, 1, 2);
-    values.extend(around_codes(255, false, 1, 2));
+    let mut values = around_codes(255, 1, 2);
     values.extend(specials());
-    let snorm = |blended| Some(ChannelWrite::Snorm { bits: 8, blended });
     run_rules(
-        "unorm8, snorm8, blended snorm8, device",
+        "unorm8, device, none, unorm8",
         [
             Some(ChannelWrite::Unorm { bits: 8 }),
-            snorm(false),
-            snorm(true),
             Some(ChannelWrite::Device),
+            None,
+            Some(ChannelWrite::Unorm { bits: 8 }),
         ],
         &values,
     );
-}
-
-#[test]
-fn wide_and_packed_channels_round_to_metals_codes() {
-    let mut values = around_codes(65535, false, 61, 2);
-    values.extend(around_codes(32767, true, 37, 2));
-    values.extend(around_codes(1023, false, 1, 2));
-    values.extend(around_codes(3, false, 1, 2));
-    values.extend(specials());
-    run_rules(
-        "unorm16, snorm16, unorm10, unorm2",
-        [
-            Some(ChannelWrite::Unorm { bits: 16 }),
-            Some(ChannelWrite::Snorm {
-                bits: 16,
-                blended: false,
-            }),
-            Some(ChannelWrite::Unorm { bits: 10 }),
-            Some(ChannelWrite::Unorm { bits: 2 }),
-        ],
-        &values,
-    );
-}
-
-/// The packed formats' narrow channels (`A1BGR5Unorm`'s alpha, `ABGR4Unorm`'s, `B5G6R5Unorm`'s)
-/// and the narrowest snorm channel: the exact product's rounding for every `k` the formats take.
-#[test]
-fn narrow_channels_round_to_metals_codes() {
-    let mut values = Vec::new();
-    for m in [1, 15, 31, 63] {
-        values.extend(around_codes(m, false, 1, 3));
-    }
-    values.extend(around_codes(1, true, 1, 3));
-    values.extend(specials());
-    run_rules(
-        "unorm1, unorm4, unorm5, unorm6, snorm2",
-        [
-            Some(ChannelWrite::Unorm { bits: 1 }),
-            Some(ChannelWrite::Unorm { bits: 4 }),
-            Some(ChannelWrite::Unorm { bits: 6 }),
-            Some(ChannelWrite::Snorm {
-                bits: 2,
-                blended: false,
-            }),
-        ],
-        &values,
-    );
-    run_rules(
-        "unorm5",
-        [Some(ChannelWrite::Unorm { bits: 5 }), None, None, None],
-        &values,
-    );
-}
-
-/// The packed 16-bit formats' channels (`ChannelWrite::HalfUnorm`) round the value to a half
-/// first, then as unorm channels: our probe's spot values on an M3 Max (`0x3C842FFF`, a
-/// half below 1/62, to 5-bit code 0; `0x3D463000` to 2; `0x3EFFFFFF`, whose half is 0.5, to 16
-/// of 31 and 32 of 63; 0.5 to 1-bit code 0; `0x3D089000` to 4-bit code 0; `0x3C021000` to 6-bit
-/// code 0), then on the interpreter the values beside every code and tie of 1, 4, 5 and 6 bits,
-/// the halves either side of each tie, and the specials, beside lanes of the other widths.
-#[test]
-fn packed_channels_round_through_a_half() {
-    let code = |x: u32, bits: u32| unorm_code(half_nearest(f32::from_bits(x)), (1 << bits) - 1);
-    assert_eq!(code(0x3C84_2FFF, 5), 0);
-    assert_eq!(code(0x3D46_3000, 5), 2);
-    assert_eq!(code(0x3EFF_FFFF, 5), 16);
-    assert_eq!(code(0x3EFF_FFFF, 6), 32);
-    assert_eq!(code(0.5f32.to_bits(), 1), 0);
-    assert_eq!(code(0x3D08_9000, 4), 0);
-    assert_eq!(code(0x3C02_1000, 6), 0);
-    let mut values = Vec::new();
-    for m in [1u32, 15, 31, 63] {
-        values.extend(around_codes(m, false, 1, 3));
-        // The halves nearest each tie and either side of it, and the midpoints between them
-        // (a half's step is `0x2000` in the `f32` bits there), three `f32` steps either side.
-        for k in 0..m {
-            let tie = ((f64::from(k) + 0.5) / f64::from(m)) as f32;
-            let h = half_nearest(tie).to_bits();
-            for at in (h - 0x2000..=h + 0x2000).step_by(0x1000) {
-                values.extend((0..3).flat_map(|d| [at + d, at - d]).map(f32::from_bits));
-            }
-        }
-    }
-    values.extend(specials());
-    let packed = |bits| Some(ChannelWrite::HalfUnorm { bits });
-    run_rules(
-        "half unorm 1, 4, 5, 6",
-        [packed(1), packed(4), packed(5), packed(6)],
-        &values,
-    );
-}
-
-/// The sRGB byte's estimate ([`srgb::color_linear`]) lies between `b + 1/3` and `b + 5/3` for
-/// Metal's byte `b` of every encode index, evaluated in `f32` step by step and with every step
-/// fused, so `floor` of it, clamped to `[1, 255]`, less one where the index is below that byte's
-/// first index, is `b`.
-#[test]
-fn srgb_estimates_lie_a_byte_above_metals() {
-    let first = |b: u32| u32::from(srgb::SRGB_ENCODE_FIRST[b as usize]);
-    for fused in [false, true] {
-        let step = |a: f32, b: f32, c: f32| if fused { a.mul_add(b, c) } else { a * b + c };
-        for i in 0..4096u32 {
-            let metal = (0..256).rev().find(|&b| first(b) <= i).unwrap_or(0);
-            let x = i as f32;
-            let e = if i < 13 {
-                step(x, srgb::ENCODE_LINEAR, 1.0)
-            } else {
-                let t = (x * (1.0f32 / 4095.0)).sqrt();
-                let [lead, rest @ ..] = srgb::ENCODE_ESTIMATE;
-                rest.iter().fold(lead, |e, &a| step(e, t, a))
-            };
-            let above = f64::from(e) - f64::from(metal);
-            assert!(
-                (0.333..=1.667).contains(&above),
-                "index {i} (fused {fused}): estimate {e}, Metal's byte {metal}"
-            );
-            let b0 = (e as u32).clamp(1, 255);
-            let b = if i < first(b0) { b0 - 1 } else { b0 };
-            assert_eq!(b, metal, "index {i} (fused {fused})");
-        }
-    }
-}
-
-/// An sRGB channel writes Metal's byte's linear value from the color table in either buffer, beside
-/// an 8-bit alpha and a half.
-#[test]
-fn srgb_and_half_channels_take_metals_values() {
-    let mut values = srgb_values();
-    values.extend(half_values());
-    values.extend(specials());
-    for class in [ColorTable::Uniform, ColorTable::Storage] {
-        run_rules_in(
-            &format!("sRGB, sRGB alpha, half, none ({class:?})"),
-            [
-                Some(ChannelWrite::Srgb),
-                Some(ChannelWrite::Unorm { bits: 8 }),
-                Some(ChannelWrite::FloatTowardZero {
-                    mantissa: 10,
-                    signed: true,
-                }),
-                None,
-            ],
-            &values,
-            class,
-        );
-    }
-}
-
-/// The color table's bytes are 256 little-endian `uvec4` entries, entry `b` holding byte `b`'s
-/// first encode index, its linear value's bits and byte `b - 1`'s, so the write's choice between
-/// the two linear values by the index against the first index is Metal's encode.
-#[test]
-fn the_color_table_holds_each_bytes_first_index_and_linear_values() {
-    let table = srgb::color_write_table();
-    assert_eq!(table.len(), 256 * 16);
-    let word = |b: usize, k: usize| {
-        let at = b * 16 + k * 4;
-        let bytes: [u8; 4] = table[at..at + 4].try_into().expect("word");
-        u32::from_le_bytes(bytes)
-    };
-    for b in 0..256usize {
-        assert_eq!(
-            word(b, 0),
-            u32::from(srgb::SRGB_ENCODE_FIRST[b]),
-            "byte {b}"
-        );
-        assert_eq!(word(b, 1), srgb_linear(b as u32).to_bits(), "byte {b}");
-        let prev = if b == 0 {
-            0
-        } else {
-            srgb_linear(b as u32 - 1).to_bits()
-        };
-        assert_eq!(word(b, 2), prev, "byte {b}");
-        assert_eq!(word(b, 3), 0, "byte {b}");
-    }
 }
 
 /// `RG11B10Float`'s unsigned 11- and 10-bit floats, beside a half.
@@ -666,7 +395,7 @@ fn small_float_codes_give_metals_spot_answers() {
 /// A scalar output and a half output (held widened) round as their lanes do.
 #[test]
 fn scalar_and_half_outputs_round() {
-    let values: Vec<f32> = around_codes(255, false, 1, 1)
+    let values: Vec<f32> = around_codes(255, 1, 1)
         .into_iter()
         .chain(specials())
         .collect();
@@ -680,7 +409,7 @@ fn scalar_and_half_outputs_round() {
         "scalar unorm8",
         &[s],
         s,
-        &|fb, x| color_write::round(fb, s, x[0], &rules, None),
+        &|fb, x| color_write::round(fb, s, x[0], &rules),
         &cases,
         &|c| Some(vec![written(rules[0], f32::from_bits(c[0][0] as u32))]),
         &|g, w| g == w,
@@ -688,24 +417,14 @@ fn scalar_and_half_outputs_round() {
     let h = vec(float(16), 2);
     let halves: Vec<u64> = (0u64..0x10000).step_by(3).collect();
     let cases: Vec<Case> = halves.iter().map(|b| vec![vec![*b, *b]]).collect();
-    let rules = [
-        Some(ChannelWrite::Srgb),
-        Some(ChannelWrite::Snorm {
-            bits: 8,
-            blended: false,
-        }),
-        None,
-        None,
-    ];
+    let unorm8 = Some(ChannelWrite::Unorm { bits: 8 });
+    let rules = [unorm8, unorm8, None, None];
     let out = vec(float(32), 2);
     check_accept(
-        "half sRGB and snorm8",
+        "half unorm8",
         &[h],
         out,
-        &|fb, x| {
-            let table = srgb::declare_color_table(fb.module(), Stage::Kernel, ColorTable::Uniform)?;
-            color_write::round(fb, h, x[0], &rules, Some(table))
-        },
+        &|fb, x| color_write::round(fb, h, x[0], &rules),
         &cases,
         &|c| {
             let x = f16_to_f64(c[0][0] as u16) as f32;
@@ -713,116 +432,6 @@ fn scalar_and_half_outputs_round() {
         },
         &|g, w| g == w,
     );
-}
-
-/// A lane written as computed with its NaN chosen (`Lane::NanAs`) passes every other value through
-/// unchanged, a zero's sign, the infinities and the denormals included, and writes every NaN of
-/// either sign and any payload as the chosen bits; it runs beside a rounded lane and one written as
-/// computed.
-#[test]
-fn nan_only_lanes_choose_the_nan_alone() {
-    use color_write::Lane;
-    let f = vec(float(32), 4);
-    let minus_one = (-1.0f32).to_bits();
-    let lanes = [
-        Some(Lane::NanAs(0x7fc0_0000)),
-        Some(Lane::NanAs(minus_one)),
-        Some(Lane::Rounded(ChannelWrite::Unorm { bits: 16 })),
-        None,
-    ];
-    let nans = [
-        0x7fc0_0000u32,
-        0xffc0_0000,
-        0x7f80_0001,
-        0xffff_ffff,
-        0x7fff_ffff,
-    ];
-    let values: Vec<f32> = specials()
-        .into_iter()
-        .chain(nans.iter().map(|&b| f32::from_bits(b)))
-        .chain(around_codes(65535, false, 4099, 1))
-        .collect();
-    let cases: Vec<Case> = values
-        .iter()
-        .map(|x| vec![vec![u64::from(x.to_bits()); 4]])
-        .collect();
-    check_accept(
-        "NaN-only lanes",
-        &[f],
-        f,
-        &|fb, x| color_write::write(fb, f, x[0], &lanes, (None, None)),
-        &cases,
-        &|c| {
-            let x = f32::from_bits(c[0][0] as u32);
-            let nan_as = |bits: u32| u64::from(if x.is_nan() { bits } else { x.to_bits() });
-            Some(vec![
-                nan_as(0x7fc0_0000),
-                nan_as(minus_one),
-                written(Some(ChannelWrite::Unorm { bits: 16 }), x),
-                u64::from(x.to_bits()),
-            ])
-        },
-        &|g, w| g == w,
-    );
-    let rounded = color_write::words(&[Some(ChannelWrite::Unorm { bits: 16 }); 4]);
-    let chosen = color_write::write_words(&[Some(Lane::NanAs(0x7fc0_0000)); 4]);
-    assert!(chosen * 8 < rounded, "{chosen} of {rounded}");
-}
-
-/// A lane whose rule the draw selects (`Lane::Selected`) writes what the rule its code in the
-/// rule word selects writes: the value as computed for no rule (0) and the device's conversion
-/// (1), Metal's 8-bit unorm code (2), and a half-float channel's lane (3) as `half` says (rounded
-/// toward zero, as computed, or its NaN chosen). Each lane reads its own code (bits `4i` to
-/// `4i + 3`): over four words every lane takes every code, beside lanes of the others, across
-/// the unorm grid, the half grid (every third of [`half_values`]) and the specials.
-#[test]
-fn selected_lanes_write_the_rule_their_code_selects() {
-    use crate::pipeline::color_writes::{HALF, HALF_CODE, UNORM8_CODE};
-    use color_write::{HalfLane, Lane};
-    let f = vec(float(32), 4);
-    let mut values = around_codes(255, false, 1, 1);
-    values.extend(half_values().into_iter().step_by(3));
-    values.extend(specials());
-    let words = [0x3210u32, 0x2103, 0x1032, 0x0321];
-    let cases: Vec<Case> = values
-        .iter()
-        .flat_map(|x| {
-            words
-                .iter()
-                .map(|&w| vec![vec![u64::from(x.to_bits()); 4], vec![u64::from(w)]])
-        })
-        .collect();
-    for half in [
-        HalfLane::Rounded,
-        HalfLane::AsComputed,
-        HalfLane::NanAs(0x7fc0_0000),
-    ] {
-        let lanes = [Some(Lane::Selected { half }); 4];
-        check_accept(
-            &format!("selected lanes, half {half:?}"),
-            &[f, int(32)],
-            f,
-            &|fb, x| color_write::write(fb, f, x[0], &lanes, (None, Some(x[1]))),
-            &cases,
-            &|c| {
-                let x = f32::from_bits(c[0][0] as u32);
-                let word = c[1][0] as u32;
-                let lane = |i: u32| match (word >> (4 * i)) & 0xF {
-                    UNORM8_CODE => written(Some(ChannelWrite::Unorm { bits: 8 }), x),
-                    HALF_CODE => match half {
-                        HalfLane::Rounded => written(Some(HALF), x),
-                        HalfLane::AsComputed => u64::from(x.to_bits()),
-                        HalfLane::NanAs(bits) => {
-                            u64::from(if x.is_nan() { bits } else { x.to_bits() })
-                        }
-                    },
-                    _ => u64::from(x.to_bits()),
-                };
-                Some((0..4).map(lane).collect())
-            },
-            &|g, w| g == w,
-        );
-    }
 }
 
 /// `color_write::half_bits` writes each half's own bits: every `half` widened (every NaN payload of
@@ -908,7 +517,7 @@ fn word_attachments_store_metals_words() {
     use crate::metal::PixelFormat;
     let mut values = Vec::new();
     for m in [1, 15, 31, 63] {
-        values.extend(around_codes(m, false, 1, 2));
+        values.extend(around_codes(m, 1, 2));
     }
     values.extend(half_values().into_iter().step_by(5));
     values.extend(specials());

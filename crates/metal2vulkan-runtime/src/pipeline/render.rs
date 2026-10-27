@@ -2551,12 +2551,11 @@ impl CompiledVariant {
 /// **A stage cannot be matched to a function by position.** A pipeline's stages carry the ones
 /// the link synthesizes -- a post-tessellation vertex function's vertex and tessellation control
 /// stages, the geometry stages a barycentric or layer-selecting function needs, one per topology
-/// class, a depth16 fragment stage -- spliced in among the compiled ones, so stage `i` is not
-/// function `i`. What matches them is the identity of the words: a compiled stage's words are
-/// the very allocation its function's relocation slot holds, which is what
-/// `CompiledFunction::relocated_words_digest` answers for and nothing else. A stage no function
-/// claims is a synthesized one, whose words no slot ever held, and it is hashed here as every
-/// stage was before.
+/// class -- spliced in among the compiled ones, so stage `i` is not function `i`. What matches
+/// them is the identity of the words: a compiled stage's words are the very allocation its
+/// function's relocation slot holds, which is what `CompiledFunction::relocated_words_digest`
+/// answers for and nothing else. A stage no function claims is a synthesized one, whose words no
+/// slot ever held, and it is hashed here as every stage was before.
 fn stage_words_digest(functions: &[CompiledFunction], stage: &StageModule) -> Hash256 {
     functions
         .iter()

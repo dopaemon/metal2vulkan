@@ -881,10 +881,6 @@ struct DrawSettings {
     /// The pass's colors it zeroes and its own it drops (`ShapeInputs::routed_colors`): the
     /// encoder's, held, where it keeps them for its pipeline state in its pass (`Routed`).
     routed_colors: Arc<RoutedColors>,
-    /// Whether the depth it renders against is `Depth16Unorm` (`BindState::depth16_pass`).
-    depth16_pass: Option<bool>,
-    /// The side of its depth bias (`BindState::depth16_bias_raises`).
-    depth16_bias_raises: Option<bool>,
     /// Its `VkPipeline` takes the last provoking vertex (`render/provoking.rs`,
     /// `FixedState::provoking_last`).
     provoking_last: bool,
@@ -5771,7 +5767,6 @@ impl RenderLowering {
         });
         state.primitive_type = None;
         state.depth_range = <[f32; 2]>::default();
-        state.depth_bias = [0.0; 3];
         reshape
     }
 
@@ -7287,7 +7282,6 @@ impl RenderLowering {
         let (topology, primitive_restart) = (settings.topology, settings.primitive_restart);
         let unsized_points = settings.unsized_points;
         let (native, compensation) = (settings.native, settings.compensation);
-        let bias_effect = settings.bias;
         let hidden_depth = settings.hidden;
         let (_, stencil) = self.layout.aspects();
         let max = pipeline.base().graphics.max_vertex_amplification_count;
@@ -7356,9 +7350,6 @@ impl RenderLowering {
             (&mut argument_samplers, &mut unlisted),
             (&function_tables, &mut snapshot),
         )?;
-        if plan.variant.depth16_bias_raises.is_some() {
-            self.core.device().shared().counts.depth16_sided_draw();
-        }
         let planes = |form: &ExtendedRange| matches!(form, ExtendedRange::Planes { .. });
         if plan.variant.extended_range.values().any(planes) {
             self.core.device().shared().counts.two_plane_draw();
@@ -7422,12 +7413,6 @@ impl RenderLowering {
                 (native, compensated),
                 graphics.writes_depth,
             )?;
-        }
-        // A fragment stage that adds the draw's depth bias itself reads Metal's factors as push
-        // data, the draw's Vulkan bias recorded as zero (`render_state::depth16_codes`).
-        let depth16 = render_state::depth16_codes(&variant.pipeline().dependencies);
-        if depth16 == Some(true) {
-            live.state.depth_bias = render_state::depth16_push_bias(bias_effect);
         }
         let interface = &variant.pipeline().interface;
         // A pulled attribute's 32-bit displacement past 4 GiB of its buffer
@@ -8419,7 +8404,7 @@ impl RenderLowering {
             Some(kept) => {
                 debug_assert!(
                     (self.shape_inputs())
-                        .draw_state(graphics, &settings, failed, depth16)
+                        .draw_state(graphics, &settings, failed)
                         .is_ok_and(|fresh| fresh == kept),
                     "a draw's state derived again differs from the one kept for its inputs"
                 );
@@ -8428,7 +8413,7 @@ impl RenderLowering {
             None => {
                 let watch = EachWatch::start();
                 let inputs = self.shape_inputs();
-                let shaped = inputs.draw_state(graphics, &settings, failed, depth16)?;
+                let shaped = inputs.draw_state(graphics, &settings, failed)?;
                 // Kept where its derivation announced nothing at each occurrence.
                 if let (Some(token), false) = (shape_token, watch.met()) {
                     self.shape_memo.keep_state(token, &variant, &shaped);
@@ -9883,12 +9868,6 @@ impl RenderLowering {
             );
             let colors = &settings.routed_colors;
             reshape.field_from(&mut state.zeroed_colors, &colors.zeroed);
-            reshape.field(&mut state.depth16_pass, settings.depth16_pass);
-            reshape.field(
-                &mut state.depth16_biased,
-                render_state::biases_depth(settings.bias),
-            );
-            reshape.field(&mut state.depth16_bias_raises, settings.depth16_bias_raises);
             reshape.field(&mut state.primitive_id_indices, primitive_id_indices);
             reshape.field(&mut state.quad_primitive_ids, private.quad_primitive_ids);
             reshape.field(&mut state.private_list, private.private_list);

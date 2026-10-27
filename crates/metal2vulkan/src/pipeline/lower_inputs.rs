@@ -338,18 +338,19 @@ pub struct LoweringInputs {
     pub amplification_draws: Option<AmplificationDraws>,
     /// How each color attachment the fragment function writes takes each channel of its float
     /// output (red, green, blue, alpha; `None` for a channel the format lacks), where the
-    /// attachment's format converts it (a normalized, sRGB or half-float format) on a device not
-    /// measured to convert as Metal does (without `VkProperty::MetalColorWrites`): a
-    /// [`ChannelWrite`] rule where the function rounds the channel by Metal's rule and writes the
-    /// `f32` nearest the code's exact value, which the device stores as that code;
-    /// [`ChannelWrite::Device`] where the device's conversion stays (blending other than factors
-    /// one and zero, the alpha alpha-to-coverage reads, or a format whose conversion Metal was
-    /// not measured with), a near-equivalent the function records as
-    /// `PrecisionNote::DeviceColorConversion`. `Device::compile_render_pipeline` sets it for a
-    /// `Function` fragment stage from the pipeline's color attachments, blend states and
-    /// alpha-to-coverage, and a fragment compiled on its own for such a pipeline compiles under the
-    /// same map: link refuses one compiled under another as `NeedsInput(ColorWrites)`. Empty on a
-    /// device with the property and for any other function.
+    /// attachment's format converts it (a normalized, sRGB or small float format): Metal's
+    /// [`ChannelWrite`] rule where the attachment stores the output as written, which the device's
+    /// conversion stores, the function recording `PrecisionNote::DeviceColorConversion` where the
+    /// device is not measured to convert it as Metal does; [`ChannelWrite::Device`] where the
+    /// device's conversion of another value stays (blending other than factors one and zero, the
+    /// alpha alpha-to-coverage reads, or a format whose conversion Metal was not measured with),
+    /// recorded alike; and a half-float channel's rule under
+    /// `TextureWriteRoundingMode::NearestEven`, which the function rounds itself. On a device that
+    /// stores Metal's codes (`VkProperty::MetalColorWrites`) only the half-float channels.
+    /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the
+    /// pipeline's color attachments, blend states and alpha-to-coverage, and a fragment compiled
+    /// on its own for such a pipeline compiles under the same map: link refuses one compiled under
+    /// another as `NeedsInput(ColorWrites)`. Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub color_writes: BTreeMap<u32, [Option<ChannelWrite>; 4]>,
     /// The varyings the fragment function's mesh render pipeline's mesh function writes per
@@ -787,36 +788,6 @@ pub struct LoweringInputs {
     /// projection). Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub instanced_attributes: BTreeSet<u32>,
-    /// The fragment function stores Metal's `Depth16Unorm` codes itself
-    /// (`lower::stage_io::depth16`): the depth its draws render against is `Depth16Unorm` (its
-    /// pipeline's depth attachment, or the pass's, `VariantKey::depth16_pass`) and its pipeline
-    /// rasterizes one sample, on a profile without `DriverDeviation::MetalDepth16Stores`, or,
-    /// under `VariantKey::depth16_biased` (a draw that biases the depth), without
-    /// `DriverDeviation::MetalDepth16BiasedStores`, so the device's own conversion of a depth may
-    /// store another code near a code's midpoint. Each
-    /// depth it writes is the `float` nearest Metal's code over 65535, which every conversion that
-    /// rounds to nearest stores as that code: the depth it returns, clamped as Metal stores it
-    /// (no `DepthGreater` or `DepthLess` mode, which the rounding can break), and, for a function
-    /// that returns none, the depth Metal stores for the fragment under the draw's depth bias
-    /// (`PushField::DepthBias`, `RuntimeFact::Depth16Codes`), whose hardware bias the consumer
-    /// records as zero. A function that declares or takes early fragment tests, or runs its
-    /// draw's tests itself (`shader_tests`), compiles as without it: the device's tests take its
-    /// depth before it runs; so does one that returns no depth and reads its position's depth,
-    /// which the draw's bias may reach on Metal (unmeasured). `Device::compile_render_pipeline`
-    /// sets it for a `Function` fragment stage from the descriptor, the variant and the profile;
-    /// any other function compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_codes: bool,
-    /// Under `depth16_codes`, the side of the draw's bias where the runtime proved it
-    /// (`VariantKey::depth16_bias_raises`): `Some(true)` where Metal's biased depth is never below
-    /// the fragment's own, `Some(false)` where it is never above. A function that stores the
-    /// depth at entry declares it (`DepthGreater`, `DepthLess`) and bounds the depth it writes by
-    /// `FragCoord.z` on that side, so the device may test the depth before the stage runs where its
-    /// test compares that way (`lower::stage_io::depth16::side_bounded`, whose docs prove the bound
-    /// changes no code). `None` elsewhere, and for a function that returns its depth or stores
-    /// none at entry.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_bias_raises: Option<bool>,
     /// The group of its render pipeline's color attachments a fragment function writes
     /// ([`ColorGroup`]), where the pipeline has more color attachments than the device draws to at
     /// once, or one at an index at or past that count: the function writes the group's colors at
@@ -1149,15 +1120,6 @@ pub enum ChannelWrite {
         /// The channel's bits.
         bits: u8,
     },
-    /// One of the selectable rules (none, the device's conversion, an 8-bit unorm channel's, a
-    /// half-float channel's), chosen at each draw by the attachment's `PushField::ColorWriteRule`
-    /// word, which the pipeline's attachment decides (`GraphicsState::color_write_rules`): the
-    /// function computes each rule's value and selects one, so one module serves every
-    /// attachment whose channels take such rules, whatever its format or blend. Where the device
-    /// does not store Metal's codes itself, an attachment whose channels each take such a rule, one
-    /// of them a rounding (`Unorm { bits: 8 }` or a half's `FloatTowardZero`), takes `Selected` on
-    /// every channel of its entry.
-    Selected,
 }
 
 /// What a vertex function compiled for draws of one amplification each writes beyond its own
@@ -1455,7 +1417,8 @@ pub enum StorageImageClass {
     /// [`SwizzleBgra`]: StorageImageClass::SwizzleBgra
     SrgbEncodeBgra,
     /// An `ARGB8Unorm` image (alpha in byte 0, then red, green, and blue) viewed as
-    /// `R8G8B8A8_UNORM`: the shader rotates the channels.
+    /// `R8G8B8A8_UNORM`: the shader rotates the channels, and the device converts a written
+    /// value.
     RotateArgb,
     /// An `A8Unorm` texture held in `R8_UNORM` (`metal::format::FormatEmulation::AlphaInRed`):
     /// a read is the byte as alpha, `(0, 0, 0, r)`, and a write stores the texel's alpha, as
@@ -1463,14 +1426,9 @@ pub enum StorageImageClass {
     /// texels and `read_write` access).
     AlphaInRed,
     /// A half-float image (`R16Float`, `RG16Float`, `RGBA16Float`) written by a device not
-    /// measured to round a `float` texel as Metal does: the shader rounds each written `float`
-    /// channel toward zero to the `half` Metal stores (a finite value past 65504 to 65504, an
-    /// infinity kept, a NaN to `0x7fc00000`), which the device then stores exactly. A `half`
-    /// texel is written as it is, and reads are `Identity`'s.
-    HalfTowardZero,
-    /// A half-float image written by a device measured to round a `float` texel as Metal does
-    /// but not to store every NaN as Metal's `0x7e00`: the shader writes a `float` channel's NaN
-    /// as `0x7fc00000`, every other value as computed. Reads are `Identity`'s.
+    /// measured to store every NaN as Metal's `0x7e00`: the shader writes a `float` channel's NaN
+    /// as `0x7fc00000`, every other value as computed, which the device's conversion rounds. A
+    /// `half` texel is written as it is, and reads are `Identity`'s.
     HalfQuietNan,
     /// A 4:4:4 two-plane YCbCr texture a slot only writes, through an `R32G32B32A32_UINT` image
     /// of the texture's own (the consumer's write shadow): the shader writes each texel as the
@@ -1484,13 +1442,6 @@ pub enum StorageImageClass {
     /// as Metal does; RADV and NVIDIA keep another NaN's payload bits. A `half` texel is written
     /// as it is, and reads are `Identity`'s.
     SmallFloatQuietNan,
-    /// A unorm image with a 1-bit alpha (`A1BGR5Unorm`, `BGR5A1Unorm`) written on a device
-    /// measured to store every other normalized channel as Metal does
-    /// (`DriverDeviation::MetalNormStorageWrites`) but to round a 1-bit channel's half up: the
-    /// shader writes a `float` or `half` texel's alpha as `1.0` above one half and `0.0`
-    /// elsewhere (a NaN 0), the code Metal stores, every other channel as computed. Reads are
-    /// `Identity`'s.
-    OneBitAlpha,
     /// A half-float image (`R16Float`, `RG16Float`, `RGBA16Float`) a slot writes, and may read,
     /// on a device not measured to store a written `half`'s NaN as its bits
     /// (`DriverDeviation::MetalHalfTexelWrites`), viewed through its unsigned integer alias of

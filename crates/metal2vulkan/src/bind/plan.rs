@@ -235,11 +235,6 @@ pub struct GraphicsTemplate {
     /// write.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) storage_kept: u32,
-    /// `PushField::ColorWriteRule`: the rule word of each color attachment whose rules the
-    /// fragment function selects, by color index (`GraphicsState::color_write_rules`), which its
-    /// draws write.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) color_write_rules: Vec<(u32, u32)>,
 }
 
 /// What a mesh draw of a mesh render pipeline instantiates: the pipeline's specialization layout
@@ -810,11 +805,6 @@ pub enum WriteSource {
     /// zero ([`ExecutionStatus::initial`](crate::bind::ExecutionStatus::initial)). The consumer
     /// reads it once the command buffer completes.
     ExecutionStatus,
-    /// The fragment stage's sRGB color table (`SyntheticBinding::ColorWriteTable`): a read-only
-    /// buffer holding exactly [`color_write_table`](crate::bind::color_write_table)'s bytes,
-    /// bound whole, as the write's descriptor type says (a uniform buffer, or a storage buffer).
-    /// The bytes are the same for every pipeline, so the consumer may keep one such buffer.
-    ColorWriteTable,
     /// The stand-in of the render pass's depth attachment that a fragment function that runs
     /// the draw's depth test itself tests and writes (`GraphicsState::shader_tests`): the
     /// consumer's `R32_SFLOAT` storage image of the attachment's extent, holding its samples as

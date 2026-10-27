@@ -956,10 +956,8 @@ fn a_half_color_output_records_its_precision() {
 /// device blends in its own arithmetic).
 #[test]
 fn a_half_output_without_fast_math_is_noted_where_its_attachment_blends() {
-    use crate::metal::{PixelFormat, TextureWriteRoundingMode};
     use crate::pipeline::artifact::PrecisionNote;
-    use crate::pipeline::color_writes::{pipeline_writes, rule_words};
-    use crate::pipeline::descriptor::ColorAttachmentDescriptor;
+    use crate::pipeline::color_writes::pipeline_writes;
     use crate::pipeline::graphics::{BlendState, ColorAttachmentState};
     use crate::vk::{BlendFactor as F, BlendOp as O, ColorComponentFlags, Format};
     let Some(disabled) = math_mode_edited(Some("air.compile.fast_math_disable")) else {
@@ -1000,22 +998,17 @@ fn a_half_output_without_fast_math_is_noted_where_its_attachment_blends() {
         let f = compile(&disabled, "stage_io_fragment_point", &p).expect("half");
         assert_eq!(f.interface.io.half_blend_colors, [0], "{stem}");
         assert!(!f.precision.contains(&note), "{stem}");
-        let descriptors = [Some(ColorAttachmentDescriptor::new(
-            PixelFormat::RGBA16Float,
-        ))];
-        let rounding = (false, TextureWriteRoundingMode::TowardZero);
-        let rules = rule_words(&f.interface.io, &descriptors, rounding, &p).expect("rules");
         for (what, mask, b, want) in cases {
             let colors = [Some(ColorAttachmentState::new(
                 Format::R16G16B16A16_SFLOAT,
                 mask,
                 b,
             ))];
-            let (notes, _) = pipeline_writes(&f, &rules, &colors, false).expect(what);
+            let (notes, _) = pipeline_writes(&f, &colors, false);
             assert_eq!(notes.contains(&note), want, "{stem}: {what}: {notes:?}");
         }
         // A pipeline without the attachment's state (none listed) records none.
-        let (notes, _) = pipeline_writes(&f, &rules, &[], false).expect("no attachments");
+        let (notes, _) = pipeline_writes(&f, &[], false);
         assert!(!notes.contains(&note), "{stem}: no attachments");
     }
 }
@@ -1030,10 +1023,8 @@ fn a_half_output_without_fast_math_is_noted_where_its_attachment_blends() {
 /// window-server pass's colors of mask none beside its fetched one).
 #[test]
 fn a_half_output_with_fast_math_is_noted_where_its_attachment_stores() {
-    use crate::metal::{PixelFormat, TextureWriteRoundingMode};
     use crate::pipeline::artifact::PrecisionNote;
-    use crate::pipeline::color_writes::{pipeline_writes, rule_words};
-    use crate::pipeline::descriptor::ColorAttachmentDescriptor;
+    use crate::pipeline::color_writes::pipeline_writes;
     use crate::pipeline::graphics::{BlendState, ColorAttachmentState};
     use crate::vk::{BlendFactor as F, BlendOp as O, ColorComponentFlags, Format};
     let Some(bc) = fixture() else { return };
@@ -1060,18 +1051,13 @@ fn a_half_output_with_fast_math_is_noted_where_its_attachment_stores() {
         let f = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         assert_eq!(f.interface.io.half_fast_colors, [0], "{stem}");
         assert!(!f.precision.contains(&note), "{stem}");
-        let descriptors = [Some(ColorAttachmentDescriptor::new(
-            PixelFormat::RGBA16Float,
-        ))];
-        let rounding = (false, TextureWriteRoundingMode::TowardZero);
-        let rules = rule_words(&f.interface.io, &descriptors, rounding, &p).expect("rules");
         for (what, mask, b, want) in cases {
             let colors = [Some(ColorAttachmentState::new(
                 Format::R16G16B16A16_SFLOAT,
                 mask,
                 b,
             ))];
-            let (notes, _) = pipeline_writes(&f, &rules, &colors, false).expect(what);
+            let (notes, _) = pipeline_writes(&f, &colors, false);
             assert_eq!(notes.contains(&note), want, "{stem}: {what}: {notes:?}");
         }
         // A one-channel format under a mask of blue alone stores nothing; under red it stores.
@@ -1084,7 +1070,7 @@ fn a_half_output_with_fast_math_is_noted_where_its_attachment_stores() {
                 mask,
                 over,
             ))];
-            let (notes, _) = pipeline_writes(&f, &rules, &colors, false).expect("R16");
+            let (notes, _) = pipeline_writes(&f, &colors, false);
             assert_eq!(
                 notes.contains(&note),
                 want,
@@ -1092,7 +1078,7 @@ fn a_half_output_with_fast_math_is_noted_where_its_attachment_stores() {
             );
         }
         // A pipeline without the attachment's state (none listed) records none.
-        let (notes, _) = pipeline_writes(&f, &rules, &[], false).expect("no attachments");
+        let (notes, _) = pipeline_writes(&f, &[], false);
         assert!(!notes.contains(&note), "{stem}: no attachments");
     }
 }

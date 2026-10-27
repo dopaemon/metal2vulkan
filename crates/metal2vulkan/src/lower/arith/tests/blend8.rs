@@ -316,7 +316,7 @@ fn a_half_s_code_is_metals() {
         "a half lane's code by the general rule",
         &[f4],
         f4,
-        &|fb, x| crate::lower::arith::color_write::round(fb, f4, x[0], &[unorm; 4], None),
+        &|fb, x| crate::lower::arith::color_write::round(fb, f4, x[0], &[unorm; 4]),
         &cases,
         &reference,
         true,

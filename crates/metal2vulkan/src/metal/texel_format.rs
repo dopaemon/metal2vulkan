@@ -914,21 +914,6 @@ pub fn heap_small_float_indices() -> Vec<u32> {
         .collect()
 }
 
-/// The indices in [`heap_classes`] of the classes of a 1-bit alpha ([`PackedTexels::Rgb5A1`]'s
-/// field: `A1BGR5Unorm`, `BGR5A1Unorm`; a swizzled texture's is `OTHER`): the classes whose
-/// `float` write through a heap handle writes alpha 1 only above one half on a device measured to
-/// store every other normalized channel as Metal does (`StorageImageClass::OneBitAlpha`), which a
-/// write tests by its handle's index alone.
-pub fn heap_one_bit_indices() -> Vec<u32> {
-    let one_bit = (PackedTexels::Rgb5A1 as u32) << TexelFormat::PACKED;
-    heap_classes()
-        .iter()
-        .enumerate()
-        .filter(|(_, &c)| c & TexelFormat::PACKED_MASK == one_bit)
-        .filter_map(|(i, _)| u32::try_from(i).ok())
-        .collect()
-}
-
 /// The index in [`heap_classes`] of `A8Unorm`'s class, which no other format's texture carries:
 /// a storage read or write through a heap handle carrying it converts the member's texels where
 /// the device holds such a texture's alpha in red (`metal::format::alpha_in_red`), which a heap's

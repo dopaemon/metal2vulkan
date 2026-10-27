@@ -374,12 +374,6 @@ pub enum SyntheticBinding {
     /// the post-tessellation vertex function reads (`lower::tessellation::work`). Declared with
     /// the vertex stage's symbols.
     TessellationRecords,
-    /// A fragment function's sRGB color table: a read-only uniform or storage buffer (as the
-    /// binding's descriptor type says) holding
-    /// [`color_write_table`](crate::bind::color_write_table)'s bytes, from which a function that
-    /// writes a float to an sRGB color attachment reads the linear value of the byte Metal
-    /// stores.
-    ColorWriteTable,
     /// The stand-in of the render pass's depth attachment a fragment function that runs the
     /// draw's depth test itself tests and writes (`GraphicsState::shader_tests`): a coherent
     /// `R32f` storage image holding pixel `(x, y)`'s depth at texel `(x, y)` (its samples as the
@@ -1144,25 +1138,11 @@ pub enum PushField {
     /// signedness, as Metal stores it (`RuntimeFact::StorageTextureIntegerChannels`, a slot whose
     /// storage choice declares no format).
     TextureIntegerChannels(SlotRef),
-    /// The rule word of the color attachment of this index for a fragment function that selects
-    /// its channels' rules at the draw (`ChannelWrite::Selected`, `StageIo::selected_colors`): one
-    /// `u32` holding each channel's code (`pipeline::color_writes::rule_word`: none, the device's
-    /// conversion, an 8-bit unorm channel's, a half-float channel's), which the pipeline's
-    /// attachment decides (`GraphicsState::color_write_rules`), so every attachment format and
-    /// blend whose channels take those rules shares one module.
-    ColorWriteRule(u32),
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
     /// function that blends a 16-bit float attachment in the shader under a blend that reads it
     /// (a fetched attachment's blend): one `uvec4` holding the four `f32`s' bits as the encoder
     /// set them (`BindState::blend_color`), which the function rounds to `half`.
     HalfBlendColor,
-    /// The draw's depth bias for a fragment stage that stores Metal's `Depth16Unorm` codes itself
-    /// (`RuntimeFact::Depth16Codes`): one `uvec4` holding the bits of three `f32`s and a zero
-    /// word, `[constant, slope, clamp, 0]` (`BindState::depth_bias`). The constant is Metal's
-    /// units of 1/65535 as a depth (`metal::state::depth16_bias`), the slope and clamp factors
-    /// Metal's; all three are 0 for a draw its bias does not touch (points, lines, a bias the
-    /// draw's viewports take).
-    DepthBias,
     /// The render encoder's alpha test reference (`setAlphaTestReferenceValue:`) for a fragment
     /// function compiled under `LoweringInputs::alpha_test`: one `u32`, the reference's 8-bit
     /// unorm code as Metal's alpha test compares it (`bind::alpha_test_code` of

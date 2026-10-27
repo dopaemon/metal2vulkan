@@ -3197,14 +3197,9 @@ pub(crate) fn fetch_view_alias(format: vk::Format, profile: &DeviceProfile) -> O
 }
 
 /// The class of a storage choice that views `pf`'s own format for `use_`: for a half-float
-/// format (`R16Float`, `RG16Float`, `RGBA16Float`, `RGBX16Float`) the function writes, by what the device is
-/// measured to store for a written `float` (Metal rounds each channel toward zero and stores
-/// every NaN as `0x7e00`): `Identity` where it rounds and stores NaNs as Metal
-/// does (`DriverDeviation::MetalHalfStorageWrites` and `MetalHalfStorageNans`), `HalfQuietNan`
-/// where it rounds alone, else `HalfTowardZero`. An `RG11B10Float` texture the function writes
-/// takes `SmallFloatQuietNan` on every device, and one of a 1-bit alpha ([`one_bit_alpha`])
-/// `OneBitAlpha` on a device of `DriverDeviation::MetalNormStorageWrites` (elsewhere the shader
-/// rounds it by its class). Otherwise `Identity`.
+/// format (`R16Float`, `RG16Float`, `RGBA16Float`, `RGBX16Float`) the function writes,
+/// [`half_write_class`]. An `RG11B10Float` texture the function writes takes
+/// `SmallFloatQuietNan` on every device. Otherwise `Identity`: the device converts the write.
 pub(crate) fn half_storage_class(
     pf: PixelFormat,
     use_: StorageUse,
@@ -3220,12 +3215,6 @@ pub(crate) fn half_storage_class(
     match (half, pf == PixelFormat::RG11B10Float, use_.write) {
         (true, _, true) => half_write_class(profile),
         (_, true, true) => StorageImageClass::SmallFloatQuietNan,
-        (_, _, true)
-            if one_bit_alpha(pf)
-                && profile.takes_driver_deviation(DriverDeviation::MetalNormStorageWrites) =>
-        {
-            StorageImageClass::OneBitAlpha
-        }
         _ => StorageImageClass::Identity,
     }
 }
@@ -3233,14 +3222,16 @@ pub(crate) fn half_storage_class(
 /// Whether `pf`'s alpha is a 1-bit unorm channel (`crate::metal::texel_format::PackedTexels::Rgb5A1`:
 /// `A1BGR5Unorm`, `BGR5A1Unorm`), whose `float` write Metal stores as 1 only above one half, where
 /// a device measured to store every other normalized channel as Metal does rounds the half up
-/// (RADV).
+/// (RADV): the device's conversion of such a write is noted (`lower::texture`'s
+/// `norm_storage_facts`).
 pub(crate) fn one_bit_alpha(pf: PixelFormat) -> bool {
     crate::metal::texel_format::PackedTexels::of(pf)
         == Some(crate::metal::texel_format::PackedTexels::Rgb5A1)
 }
 
 /// Whether `profile` stores a texture (or texture buffer) of a format with a 1-bit alpha
-/// ([`one_bit_alpha`]) for `use_`: a heap write that may reach one tests its handle's class.
+/// ([`one_bit_alpha`]) for `use_`: a write whose bound texture may be one notes the device's
+/// conversion.
 pub(crate) fn one_bit_storage(use_: StorageUse, profile: &DeviceProfile) -> bool {
     PixelFormat::ALL
         .iter()
@@ -3249,14 +3240,14 @@ pub(crate) fn one_bit_storage(use_: StorageUse, profile: &DeviceProfile) -> bool
 }
 
 /// The class a `float` write to a half-float storage image takes on `profile`
-/// ([`half_storage_class`]).
+/// ([`half_storage_class`]): the device rounds each channel to `half` (Metal's rule, toward zero,
+/// where it takes `DriverDeviation::MetalHalfStorageWrites`), so `Identity` where it stores every
+/// NaN as Metal does too (`MetalHalfStorageNans`), else `HalfQuietNan`, which writes a NaN as
+/// `0x7fc00000`.
 pub(crate) fn half_write_class(profile: &DeviceProfile) -> StorageImageClass {
-    let rounds = profile.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
-    let nans = profile.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
-    match (rounds, nans) {
-        (true, true) => StorageImageClass::Identity,
-        (true, false) => StorageImageClass::HalfQuietNan,
-        (false, _) => StorageImageClass::HalfTowardZero,
+    match profile.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans) {
+        true => StorageImageClass::Identity,
+        false => StorageImageClass::HalfQuietNan,
     }
 }
 

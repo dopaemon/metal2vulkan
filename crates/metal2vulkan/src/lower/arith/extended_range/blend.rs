@@ -2620,7 +2620,7 @@ pub fn unorm8_write(fb: &mut FunctionBuilder<'_>, arith: BlendArith, v: Value) -
     match arith {
         BlendArith::Float => {
             let rule = Some(crate::pipeline::lower_inputs::ChannelWrite::Unorm { bits: 8 });
-            crate::lower::arith::color_write::round(fb, f, v, &[rule; 4], None)
+            crate::lower::arith::color_write::round(fb, f, v, &[rule; 4])
         }
         BlendArith::Half => {
             let zero = fsplat(fb, f, 0.0)?;

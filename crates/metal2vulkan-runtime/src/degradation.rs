@@ -319,37 +319,17 @@ degradations! {
              read in every run measured";
         /// A draw biases a `Depth16Unorm` depth by a constant, or by a slope alone, which brings
         /// Metal's constant unit, on a device whose driver is not measured to store Metal's codes
-        /// so (`DriverDeviation::MetalDepth16BiasedStores`, `render_state.rs`), through a
-        /// pipeline whose fragment stage does not add the bias itself (more than one sample,
-        /// early fragment tests, the draw's tests run in the shader, a function that returns its
-        /// depth or reads its position's depth).
+        /// so (`DriverDeviation::MetalDepth16BiasedStores`, `render_state.rs`): the device biases
+        /// and converts the depth.
         UnormDepthBias = "unorm-depth-bias", Precision,
             "a biased depth can store a code next to Metal's: the device rounds the biased sum \
              its own way, and without depthBiasExact counts the bias in its own unit";
         /// A draw tests or writes a `Depth16Unorm` depth on a device whose driver is not measured
         /// to convert a depth to Metal's code (`DriverDeviation::MetalDepth16Stores`,
-        /// `render_state.rs`), through a pipeline whose fragment stage cannot write the code
-        /// itself (more than one sample, early fragment tests, the draw's tests run in the shader,
-        /// a function that reads its position's depth and returns none), or through one that
-        /// does, in depth clamp mode, whose range the device clamps the depth to.
+        /// `render_state.rs`): the device converts the depth.
         UnormDepthRounding = "unorm-depth-rounding", Precision,
             "a depth near a code's midpoint can store the code below Metal's: the device converts \
              the depth to the 16-bit code its own way, where Metal rounds to nearest, a tie up";
-        /// A draw tests or writes a `Depth16Unorm` depth through a fragment stage that writes each
-        /// depth as Metal's code, on a device whose driver is not measured to store Metal's codes
-        /// (`DriverDeviation::MetalDepth16Stores`, or for a biased draw
-        /// `DriverDeviation::MetalDepth16BiasedStores`; `RuntimeFact::Depth16Codes`,
-        /// `render_state.rs`); a pipeline without a fragment function draws through a fragment
-        /// stage of its own.
-        ShaderUnormDepth = "shader-unorm-depth", Performance,
-            "the fragment stage writes each depth as Metal's code, about 50 more instructions \
-             per fragment, which keeps the device from testing the depth before the stage runs";
-        /// A draw biases a `Depth16Unorm` depth by a slope through a fragment stage that adds
-        /// Metal's bias itself (`RuntimeFact::Depth16Codes`, `render_state.rs`).
-        UnormDepthSlope = "unorm-depth-slope", Precision,
-            "the fragment stage takes the depth's slope from the depths of its 2x2 quad, where \
-             Metal takes the triangle's own: a biased depth near a code's midpoint can store \
-             the code next to Metal's";
         /// A draw of points keeps Vulkan's clipping of points, where Metal's guard band cannot be
         /// emulated: in a rate-mapped pass, on a device without `shaderClipDistance` or with too
         /// few clip distances beside the vertex function's own, or through a viewport whose
@@ -543,13 +523,12 @@ degradations! {
              sample planes) and writes the resolve texture, where the device would resolve in \
              the pass; where the attachment's image takes no input attachment usage, a copy of \
              its samples over the render area into a scratch image first";
-        /// A fragment function writes a float to a normalized, sRGB or half-float color
-        /// attachment on a device whose own conversion is not Metal's
-        /// (`StageModule::rounded_colors`).
+        /// A fragment function writes a float to a half-float color attachment of a pipeline
+        /// under `TextureWriteRoundingMode::NearestEven`, whose rounding no device's conversion
+        /// gives (`StageModule::rounded_colors`).
         ShaderColorConversion = "shader-color-conversion", Performance,
-            "the fragment function rounds each such channel to the code Metal stores before it \
-             writes it: about 35 more instructions per normalized or half-float channel, and \
-             about 70 and one read of a 4 KiB table per sRGB channel";
+            "the fragment function rounds each such channel to nearest even before it writes it: \
+             about 35 more instructions per channel";
         /// A fragment function writes a `half` to a half-float color attachment as the bits of
         /// the half Metal stores, through a 16-bit output, on a device that does not store a
         /// 32-bit output's NaN as Metal does (`StageModule::half_bit_colors`).
@@ -3162,8 +3141,9 @@ impl Device {
                     (
                         object(),
                         format!(
-                            "the device's conversion of a float to the format of color \
-                             attachment(s) {:?} is not Metal's near a tie between two codes",
+                            "the pipeline rounds the half-float channels of color \
+                             attachment(s) {:?} to nearest even (its texture write rounding \
+                             mode), which the device's conversion does not",
                             stage.rounded_colors
                         ),
                     )

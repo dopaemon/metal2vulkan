@@ -111,7 +111,7 @@ use metal2vulkan::error::{Capability, Feature, RuntimeDriverDefect, Unsupported}
 use metal2vulkan::metal::{
     CullMode, DepthClipMode, PixelFormat, StencilOperation, TriangleFillMode, Winding,
 };
-use metal2vulkan::pipeline::{GraphicsState, RuntimeDependency, RuntimeFact, ViewportCompensation};
+use metal2vulkan::pipeline::{GraphicsState, ViewportCompensation};
 
 /// Metal's most viewports and scissor rectangles.
 pub(super) const MAX_VIEWPORTS: usize = 16;
@@ -1105,17 +1105,6 @@ impl EncoderState {
             .map_err(device_error)
     }
 
-    /// No Vulkan depth bias for a pipeline of `topology`, for a draw whose fragment stage adds
-    /// Metal's bias itself (`RuntimeFact::Depth16Codes`): the bias stays enabled as for any draw,
-    /// its factors 0.
-    pub(super) fn vk_no_depth_bias(
-        topology: metal2vulkan::vk::PrimitiveTopology,
-        profile: &DeviceProfile,
-    ) -> Result<metal2vulkan::metal::state::DepthBias, Error> {
-        metal2vulkan::metal::state::depth_bias(topology, 0.0, 0.0, 0.0, None, profile)
-            .map_err(device_error)
-    }
-
     /// `Unsupported(LayeredRendering)` needing `multiViewport` on a device without it, for a
     /// draw that would select among more than one viewport.
     pub(super) fn needs_viewports(profile: &DeviceProfile) -> Result<(), Error> {
@@ -1960,151 +1949,22 @@ fn clamp_range(viewport: &Viewport) -> [f32; 2] {
     range.map(|z| z as f32)
 }
 
-/// How a draw's fragment stage writes a `Depth16Unorm` depth: its variant's
-/// `RuntimeFact::Depth16Codes` among `dependencies`, `Some(biased)` where the stage writes Metal's
-/// codes itself (`LoweringInputs::depth16_codes`), `biased` where it adds the draw's bias, so the
-/// draw records a Vulkan bias of zero and pushes Metal's (`BindState::depth_bias`). `None` where
-/// the device converts the depth itself.
-pub(super) fn depth16_codes(dependencies: &[RuntimeDependency]) -> Option<bool> {
-    dependencies.iter().find_map(|d| match d.fact {
-        RuntimeFact::Depth16Codes { biased } => Some(biased),
-        _ => None,
-    })
-}
-
-/// Whether a draw whose primitives take `bias` biases their depths by Metal's factors
-/// (`BindState::depth16_biased`): a constant or slope factor other than 0, for triangles whose
-/// viewports take no bias.
-pub(super) fn biases_depth(bias: Option<DepthBiasEffect>) -> bool {
-    matches!(
-        bias,
-        Some(DepthBiasEffect::Factors { constant, slope, .. }) if constant != 0.0 || slope != 0.0
-    )
-}
-
-/// The side of the depth bias a fragment stage that adds it itself takes for a draw whose
-/// primitives take `bias` through the viewports it uses (all where the pipeline `selects` one)
-/// under `compensation` (`BindState::depth16_bias_raises`): Metal's factors of a known side
-/// (`metal::state::depth16_bias_side`), where every Vulkan depth range of the draw lies inside
-/// `[0, 1]`. A used viewport's range inside it is its Vulkan range and gives a Vulkan depth clamp
-/// of `[0, 1]` (`EncoderState::draw_viewports`, `EncoderState::depth_range`); a compensated depth's
-/// Vulkan range must lie inside it too. `None` for any other draw, which keeps the stage that
-/// declares no side.
-pub(super) fn depth16_bias_side(
-    state: &EncoderState,
-    selects: bool,
-    bias: Option<DepthBiasEffect>,
-    compensation: Option<Compensation>,
-) -> Option<bool> {
-    let Some(DepthBiasEffect::Factors {
-        constant,
-        slope,
-        clamp,
-    }) = bias
-    else {
-        return None;
-    };
-    let inside = |z: f32| (0.0..=1.0).contains(&z);
-    let compensated = compensation
-        .and_then(|c| c.depth)
-        .is_some_and(|range| !range.into_iter().all(inside));
-    if compensated || state.used_viewports(selects).iter().any(outside_depth) {
-        return None;
-    }
-    metal2vulkan::metal::state::depth16_bias_side(constant, slope, clamp)
-}
-
-/// The depth bias a fragment stage that adds it itself pushes for a draw whose primitives take
-/// `bias` (`BindState::depth_bias`): Metal's factors (`metal::state::depth16_bias`), and none for
-/// points and lines or a bias the draw's viewports take (saturated or offset), which its
-/// `FragCoord.z` carries.
-pub(super) fn depth16_push_bias(bias: Option<DepthBiasEffect>) -> [f32; 3] {
-    match bias {
-        Some(DepthBiasEffect::Factors {
-            constant,
-            slope,
-            clamp,
-        }) => metal2vulkan::metal::state::depth16_bias(constant, slope, clamp),
-        _ => [0.0; 3],
-    }
-}
-
-/// Whether a draw in depth clamp mode clamps its depth to a range one of whose ends lies inside
-/// `(0, 1)`, among the viewports it uses (`selects`: its vertex function chooses one): the device
-/// clamps a depth there to that end and converts it its own way, past a fragment stage that
-/// writes Metal's code (`announce_unorm_depth`).
-pub(super) fn clamps_inside(state: &EncoderState, selects: bool) -> bool {
-    state.clip_mode == DepthClipMode::Clamp
-        && state
-            .used_viewports(selects)
-            .iter()
-            .flat_map(clamp_range)
-            .any(|end| end > 0.0 && end < 1.0)
-}
-
 /// Announce once what a draw of `depth_stencil` stores in a `Depth16Unorm` depth
-/// (`depth_format`), whose fragment stage writes it as `codes` says ([`depth16_codes`]) under the
-/// Vulkan bias `bias`, Metal's slope factor being nonzero where `sloped`.
-///
-/// Where the fragment stage writes Metal's codes, the draw tests or writes through it
-/// (`shader-unorm-depth`), a biased stage adding a slope takes it from the quad's depths
-/// (`unorm-depth-slope`), and a draw that clamps the depth to a range end inside `(0, 1)`
-/// (`clamped_inside`, [`clamps_inside`]) stores the device's conversion of that end
-/// (`unorm-depth-rounding`).
-///
-/// Elsewhere the device converts the depth: a constant bias, or a slope alone, which brings
-/// Metal's constant unit, stores Metal's codes only where the profile takes
-/// `DriverDeviation::MetalDepth16BiasedStores` (`unorm-depth-bias`), and any depth it tests or
-/// writes only where the profile takes `DriverDeviation::MetalDepth16Stores`
-/// (`unorm-depth-rounding`). A biased draw on a profile that takes the second but not the first
-/// runs the variant whose fragment stage adds the bias (`BindState::depth16_biased`), unless its
-/// fragment stage cannot write the code. Metal biases by `c ± 1` units of 1/65535 as `float`
-/// (`metal::state::depth_bias`), adds the bias to the depth rounded toward zero, and stores the
-/// sum rounded to nearest, a tie up (probes).
+/// (`depth_format`) under the Vulkan bias `bias`: the device converts the depth, so a constant
+/// bias, or a slope alone, which brings Metal's constant unit, stores Metal's codes only where the
+/// profile takes `DriverDeviation::MetalDepth16BiasedStores` (`unorm-depth-bias`), and any depth it
+/// tests or writes only where the profile takes `DriverDeviation::MetalDepth16Stores`
+/// (`unorm-depth-rounding`). Metal biases by `c ± 1` units of 1/65535 as `float`
+/// (`metal::state::depth_bias`), adds the bias to the depth rounded toward zero, and stores the sum
+/// rounded to nearest, a tie up (probes).
 pub(super) fn announce_unorm_depth(
     device: &Device,
     depth_format: Option<PixelFormat>,
     depth_stencil: &metal2vulkan::metal::state::DepthStencilState,
-    (bias, sloped): (&metal2vulkan::metal::state::DepthBias, bool),
-    (codes, clamped_inside): (Option<bool>, bool),
+    bias: &metal2vulkan::metal::state::DepthBias,
 ) {
     use metal2vulkan::metal::state::DepthBiasUnit;
     if depth_format != Some(PixelFormat::Depth16Unorm) {
-        return;
-    }
-    if let Some(biased) = codes {
-        if depth_stencil.depth_test_enable {
-            device.degrade(Degradation::ShaderUnormDepth, || {
-                (
-                    "a draw testing or writing a Depth16Unorm depth".to_owned(),
-                    "the device is not measured to store Metal's 16-bit codes".to_owned(),
-                )
-            });
-        }
-        if depth_stencil.depth_test_enable && clamped_inside {
-            device.degrade(Degradation::UnormDepthRounding, || {
-                (
-                    "a draw clamping a Depth16Unorm depth to a viewport depth range in depth \
-                     clamp mode"
-                        .to_owned(),
-                    "the device clamps a depth past the range to its end, an end inside (0, 1), \
-                     and converts that end to its 16-bit code its own way, where Metal rounds it \
-                     to nearest, a tie up"
-                        .to_owned(),
-                )
-            });
-        }
-        if biased && sloped {
-            device.degrade(Degradation::UnormDepthSlope, || {
-                (
-                    "a draw biasing a Depth16Unorm depth by a slope".to_owned(),
-                    "the fragment stage takes the depth's slope from the depths of its 2x2 quad, \
-                     where Metal takes the triangle's own: a biased depth near a code's midpoint \
-                     can store the code next to Metal's"
-                        .to_owned(),
-                )
-            });
-        }
         return;
     }
     use metal2vulkan::error::DriverDeviation::{MetalDepth16BiasedStores, MetalDepth16Stores};

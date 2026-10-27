@@ -11,9 +11,10 @@
 //! 255 rounded to nearest even, the X field of `RGBX8Unorm_sRGB` green's byte: every texel equal
 //! to `pack_float_to_srgb_unorm4x8` of the same values. A read (`read_write`, `float4` and
 //! `half4`) of code `c` answers its twelve-bit step `k / 4095` correctly rounded (alpha `c / 255`,
-//! 1 for `RGBX8Unorm_sRGB`; a channel the format lacks 0, alpha 1). The tables are Metal's own: the first encode indices are the color
-//! table's (`bind::color_write_table`), the steps `round(decode(c / 255) * 4095)` of the sRGB
-//! transfer (every one at least `1.6e-4` of a step from a half step).
+//! 1 for `RGBX8Unorm_sRGB`; a channel the format lacks 0, alpha 1). The tables are Metal's own:
+//! the first encode indices are its encode thresholds (`bind::SRGB_RESOLVE_THRESHOLDS`), the
+//! steps `round(decode(c / 255) * 4095)` of the sRGB transfer (every one at least `1.6e-4` of a
+//! step from a half step).
 //!
 //! The values are the probe's, in its order: the `f32`s around each twelve-bit index's half step
 //! (three ulps either side), each step's value and its neighbours, each alpha code's half step
@@ -73,17 +74,12 @@ const FORMATS: [(PixelFormat, bool, usize, [Option<usize>; 4]); 5] = [
     ),
 ];
 
-/// The byte of each twelve-bit index: the largest whose first encode index (the color table's
-/// first word of each entry, `bind::color_write_table`) is at or below it.
+/// The byte of each twelve-bit index: the number of Metal's encode thresholds at or below it
+/// (`bind::SRGB_RESOLVE_THRESHOLDS`, byte `c`'s first index at `c - 1`).
 fn encode_bytes() -> Vec<u8> {
-    let first: Vec<u32> = metal2vulkan::bind::color_write_table()
-        .as_chunks::<16>()
-        .0
-        .iter()
-        .map(|e| u32::from_le_bytes([e[0], e[1], e[2], e[3]]))
-        .collect();
+    use metal2vulkan::bind::SRGB_RESOLVE_THRESHOLDS;
     (0..4096u32)
-        .map(|i| (1..256).rev().find(|&b| first[b] <= i).unwrap_or(0) as u8)
+        .map(|i| SRGB_RESOLVE_THRESHOLDS.partition_point(|&t| u32::from(t) <= i) as u8)
         .collect()
 }
 

@@ -759,7 +759,6 @@ surface! {
         enum ResolveSource N;
         const SRGB_RESOLVE_LINEAR;
         const SRGB_RESOLVE_THRESHOLDS;
-        fn color_write_table;
         fn depth_stencil_copy_modules;
         fn stencil_split_module;
         fn depth_split_module;
@@ -974,8 +973,6 @@ surface! {
         struct DepthBias N;
         enum DepthBiasUnit N;
         fn depth_bias;
-        fn depth16_bias;
-        fn depth16_bias_side;
     }
     "metal::vertex" => metal2vulkan::metal::vertex {
         fn vk_vertex_format;
@@ -1065,10 +1062,8 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::Budget;
 
 /// `inputs` with the color writes `writes` (attachment, its channels' rules), the half-float
-/// channels alone where `dev`'s driver converts a fragment's float writes as Metal does, and
-/// elsewhere each attachment whose rules are each none, the device's, an 8-bit unorm channel's or a
-/// half-float channel's, one of them a rounding, selected at the draw (`ChannelWrite::Selected`):
-/// the inputs a fragment of a pipeline with those attachments compiles under.
+/// channels alone where `dev`'s driver converts a fragment's float writes as Metal does: the
+/// inputs a fragment of a pipeline with those attachments compiles under.
 fn with_color_writes(
     dev: &Device,
     mut inputs: LoweringInputs,
@@ -1081,20 +1076,10 @@ fn with_color_writes(
         signed: true,
     };
     let metal = dev.profile().takes_driver_deviation(metal);
-    // Whether a channel's rule rounds, or `None` where no code selects it.
-    let rounds = |r: Option<ChannelWrite>| match r {
-        None | Some(ChannelWrite::Device) => Some(false),
-        Some(r) => (r == ChannelWrite::Unorm { bits: 8 } || r == half).then_some(true),
-    };
-    let selects = |rules: &[Option<ChannelWrite>; 4]| {
-        let each: Option<Vec<bool>> = rules.iter().map(|&r| rounds(r)).collect();
-        each.is_some_and(|each| each.contains(&true))
-    };
     inputs.color_writes = writes
         .iter()
         .map(|&(a, rules)| match metal {
             true => (a, rules.map(|r| r.filter(|&r| r == half))),
-            false if selects(&rules) => (a, [Some(ChannelWrite::Selected); 4]),
             false => (a, rules),
         })
         .filter(|(_, rules)| rules.iter().any(Option::is_some))

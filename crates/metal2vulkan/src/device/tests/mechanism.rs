@@ -247,12 +247,6 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::MovableStorageWrites {
             early_variant: true,
         },
-        RuntimeFact::Depth16Codes { biased: true },
-        RuntimeFact::Depth16Codes { biased: false },
-        RuntimeFact::Depth16Pass { depth16: true },
-        RuntimeFact::Depth16Biased,
-        RuntimeFact::Depth16BiasSide { raises: true },
-        RuntimeFact::Depth16BiasSide { raises: false },
         RuntimeFact::SynthesizedGeometry {
             weights: true,
             layer: false,
@@ -369,21 +363,17 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::StorageTextureIntegerChannels { .. } => 81,
         RuntimeFact::HeapHalfTexelWrites { .. } => 82,
         RuntimeFact::MovableStorageWrites { .. } => 83,
-        RuntimeFact::Depth16Codes { .. } => 84,
-        RuntimeFact::Depth16Pass { .. } => 85,
-        RuntimeFact::Depth16Biased => 86,
-        RuntimeFact::Depth16BiasSide { .. } => 87,
-        RuntimeFact::SynthesizedGeometry { .. } => 88,
-        RuntimeFact::ObjectThreadgroupArena { .. } => 89,
-        RuntimeFact::ExactFormsOverCompilerLimit { .. } => 90,
-        RuntimeFact::WordInputMerge { .. } => 91,
-        RuntimeFact::ReplayBindings => 92,
-        RuntimeFact::MergedDraws => 93,
-        RuntimeFact::QuadPrimitiveIds => 94,
-        RuntimeFact::RotatedWeights => 95,
-        RuntimeFact::PrivateList => 96,
-        RuntimeFact::MeshLastFirst => 97,
-        RuntimeFact::YCbCrInPlace { .. } => 98,
+        RuntimeFact::SynthesizedGeometry { .. } => 84,
+        RuntimeFact::ObjectThreadgroupArena { .. } => 85,
+        RuntimeFact::ExactFormsOverCompilerLimit { .. } => 86,
+        RuntimeFact::WordInputMerge { .. } => 87,
+        RuntimeFact::ReplayBindings => 88,
+        RuntimeFact::MergedDraws => 89,
+        RuntimeFact::QuadPrimitiveIds => 90,
+        RuntimeFact::RotatedWeights => 91,
+        RuntimeFact::PrivateList => 92,
+        RuntimeFact::MeshLastFirst => 93,
+        RuntimeFact::YCbCrInPlace { .. } => 94,
     }
 }
 
@@ -391,7 +381,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..99).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..95).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -471,9 +461,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::DepthClampRange
                 | RuntimeFact::RotatedWeights
                 | RuntimeFact::MeshLastFirst
-                | RuntimeFact::Depth16Pass { .. }
-                | RuntimeFact::Depth16Biased
-                | RuntimeFact::Depth16BiasSide { .. }
                 | RuntimeFact::TestedStorageWrites { .. }
                 | RuntimeFact::MovableStorageWrites { .. }
                 | RuntimeFact::YCbCrTexture { .. }
@@ -529,15 +516,13 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::StorageTextureIntegerChannels { .. }
                 | RuntimeFact::AccelerationStructureInstanceCount { .. }
                 | RuntimeFact::ViewportCount
-                | RuntimeFact::Depth16Codes { biased: true }
                 // The bound texture's format class, which the binder pushes.
                 | RuntimeFact::TexelFormat { .. } => Mechanism::PushConstant,
                 RuntimeFact::AliasedImageblock { .. } => Mechanism::None,
                 RuntimeFact::CallStackDepth { .. }
                 | RuntimeFact::AbsentArgumentRead { .. }
                 | RuntimeFact::SynthesizedGeometry { .. }
-                | RuntimeFact::ExactFormsOverCompilerLimit { .. }
-                | RuntimeFact::Depth16Codes { biased: false } => Mechanism::None,
+                | RuntimeFact::ExactFormsOverCompilerLimit { .. } => Mechanism::None,
             };
             assert_eq!(m, expected, "{stem}: {fact:?}");
         }

@@ -758,8 +758,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", anisotropic_samplers: {}", "")
                 .replace(", uniform_varyings: {}", "")
                 .replace(", instanced_attributes: {}", "")
-                .replace(", depth16_codes: false", "")
-                .replace(", depth16_bias_raises: None", "")
                 .replace(", color_group: None", "")
                 .replace(", object_payload: None", "")
                 .replace(", tessellation: None", ""),
@@ -1991,8 +1989,8 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
 /// color attachments 0 and 2, not 1: on `lavapipe` attachment 1 is masked and the feature required
 /// (and enabled); on `vk12-floor`, without the feature, every element is identical, an absent
 /// attachment 1's included, and a written attachment that blends differently is refused typed. A
-/// blend of one and zero, added, of an attachment the function rounds to Metal's codes takes no
-/// Vulkan blend, so it differs from no other element.
+/// blend of one and zero, added, of an attachment whose channels convert by a rule other than the
+/// device's (`StageIo::color_writes`) takes no Vulkan blend, so it differs from no other element.
 #[test]
 fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
     use crate::device::requirements::VkFeature;

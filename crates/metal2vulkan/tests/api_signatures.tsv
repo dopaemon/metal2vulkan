@@ -2571,7 +2571,6 @@ field	metal2vulkan-runtime::WorkCounts.creation_pipelines_made	pub creation_pipe
 field	metal2vulkan-runtime::WorkCounts.creation_render_pipelines_drawn	pub creation_render_pipelines_drawn: u64
 field	metal2vulkan-runtime::WorkCounts.creation_render_pipelines_made	pub creation_render_pipelines_made: u64
 field	metal2vulkan-runtime::WorkCounts.dedicated_memory_blocks_live	pub dedicated_memory_blocks_live: u64
-field	metal2vulkan-runtime::WorkCounts.depth16_sided_draws	pub depth16_sided_draws: u64
 field	metal2vulkan-runtime::WorkCounts.depth_attachments_moved	pub depth_attachments_moved: u64
 field	metal2vulkan-runtime::WorkCounts.depth_instances_held	pub depth_instances_held: u64
 field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys_built: u64
@@ -2998,9 +2997,6 @@ field	metal2vulkan::bind::AstcDecode.height	pub height: u32
 field	metal2vulkan::bind::AstcDecode.srgb	pub srgb: bool
 field	metal2vulkan::bind::AstcDecode.width	pub width: u32
 field	metal2vulkan::bind::BindShape.argument_samplers	pub argument_samplers: ArgumentSamplersShape
-field	metal2vulkan::bind::BindShape.depth16_bias_raises	pub depth16_bias_raises: Option<bool>
-field	metal2vulkan::bind::BindShape.depth16_biased	pub depth16_biased: bool
-field	metal2vulkan::bind::BindShape.depth16_pass	pub depth16_pass: Option<bool>
 field	metal2vulkan::bind::BindShape.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::bind::BindShape.dropped_colors	pub dropped_colors: BTreeSet<u32>
 field	metal2vulkan::bind::BindShape.extended_shadows	pub extended_shadows: BTreeSet<u32>
@@ -3027,10 +3023,6 @@ field	metal2vulkan::bind::BindShape.zeroed_colors	pub zeroed_colors: BTreeMap<u3
 field	metal2vulkan::bind::BindState.alpha_test_reference	pub alpha_test_reference: Option<f32>
 field	metal2vulkan::bind::BindState.argument_samplers	pub argument_samplers: Vec<ArgumentSampler>
 field	metal2vulkan::bind::BindState.blend_color	pub blend_color: [f32; 4]
-field	metal2vulkan::bind::BindState.depth16_bias_raises	pub depth16_bias_raises: Option<bool>
-field	metal2vulkan::bind::BindState.depth16_biased	pub depth16_biased: bool
-field	metal2vulkan::bind::BindState.depth16_pass	pub depth16_pass: Option<bool>
-field	metal2vulkan::bind::BindState.depth_bias	pub depth_bias: [f32; 3]
 field	metal2vulkan::bind::BindState.depth_clamp_range	pub depth_clamp_range: Option<[f32; 2]>
 field	metal2vulkan::bind::BindState.depth_clip_mode_clamp	pub depth_clip_mode_clamp: bool
 field	metal2vulkan::bind::BindState.depth_range	pub depth_range: [f32; 2]
@@ -3643,9 +3635,6 @@ field	metal2vulkan::cache::VariantKey.captured_positions	pub captured_positions:
 field	metal2vulkan::cache::VariantKey.color_group	pub color_group: u32
 field	metal2vulkan::cache::VariantKey.cross_class	pub cross_class: BTreeMap<SlotRef, crate::pipeline::sym::SampledType>
 field	metal2vulkan::cache::VariantKey.cubic_samplers	pub cubic_samplers: BTreeMap<SlotRef, u32>
-field	metal2vulkan::cache::VariantKey.depth16_bias_raises	pub depth16_bias_raises: Option<bool>
-field	metal2vulkan::cache::VariantKey.depth16_biased	pub depth16_biased: bool
-field	metal2vulkan::cache::VariantKey.depth16_pass	pub depth16_pass: Option<bool>
 field	metal2vulkan::cache::VariantKey.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::cache::VariantKey.dropped_colors	pub dropped_colors: BTreeSet<u32>
 field	metal2vulkan::cache::VariantKey.dropped_vertex_layer	pub dropped_vertex_layer: bool
@@ -4153,7 +4142,6 @@ field	metal2vulkan::pipeline::GraphicsState.clip_distances	pub clip_distances: u
 field	metal2vulkan::pipeline::GraphicsState.color_attachments	pub color_attachments: Vec<Option<ColorAttachmentState>>
 field	metal2vulkan::pipeline::GraphicsState.color_group	pub color_group: Option<crate::pipeline::lower_inputs::ColorGroup>
 field	metal2vulkan::pipeline::GraphicsState.color_outputs	pub color_outputs: u32
-field	metal2vulkan::pipeline::GraphicsState.color_write_rules	pub color_write_rules: Vec<(u32, u32)>
 field	metal2vulkan::pipeline::GraphicsState.declares_layer	pub declares_layer: bool
 field	metal2vulkan::pipeline::GraphicsState.depth_format	pub depth_format: Option<vk::Format>
 field	metal2vulkan::pipeline::GraphicsState.dynamic_states	pub dynamic_states: Vec<vk::DynamicState>
@@ -4214,8 +4202,6 @@ field	metal2vulkan::pipeline::LoweringInputs.color_group	pub color_group: Option
 field	metal2vulkan::pipeline::LoweringInputs.color_writes	pub color_writes: BTreeMap<u32, [Option<ChannelWrite>; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.cross_class	pub cross_class: BTreeMap<SlotRef, SampledType>
 field	metal2vulkan::pipeline::LoweringInputs.cubic_samplers	pub cubic_samplers: BTreeMap<SlotRef, u32>
-field	metal2vulkan::pipeline::LoweringInputs.depth16_bias_raises	pub depth16_bias_raises: Option<bool>
-field	metal2vulkan::pipeline::LoweringInputs.depth16_codes	pub depth16_codes: bool
 field	metal2vulkan::pipeline::LoweringInputs.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::pipeline::LoweringInputs.depth_compare_clamp_mask	pub depth_compare_clamp_mask: u32
 field	metal2vulkan::pipeline::LoweringInputs.dropped_colors	pub dropped_colors: BTreeSet<u32>
@@ -4598,7 +4584,6 @@ fn	metal2vulkan::bind::capture_assembly_module	pub fn capture_assembly_module(de
 fn	metal2vulkan::bind::capture_settle_module	pub fn capture_settle_module(device: &Device) -> Result<CaptureSettleModule, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::color_resolve_modules	pub fn color_resolve_modules(device: &Device, format: ColorResolveFormat, samples: u32, source: ResolveSource, feature: Feature) -> Result<ColorResolveModules, Error>
-fn	metal2vulkan::bind::color_write_table	pub fn color_write_table() -> &'static [u8]
 fn	metal2vulkan::bind::compressed_blit_module	pub fn compressed_blit_module(device: &Device, rule: CompressedBlit) -> Result<CompressedBlitModule, Error>
 fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
@@ -4723,8 +4708,6 @@ fn	metal2vulkan::metal::state::blend_factor	pub fn blend_factor(f: BlendFactor, 
 fn	metal2vulkan::metal::state::blend_op	pub fn blend_op(op: BlendOperation) -> Result<vk::BlendOp, Error>
 fn	metal2vulkan::metal::state::blend_state	pub fn blend_state(attachment: &ColorAttachmentDescriptor, profile: &DeviceProfile) -> Result<Option<BlendState>, Error>
 fn	metal2vulkan::metal::state::color_write_mask	pub fn color_write_mask(mask: ColorWriteMask) -> Result<vk::ColorComponentFlags, Error>
-fn	metal2vulkan::metal::state::depth16_bias	pub fn depth16_bias(depth_bias: f32, slope_scale: f32, clamp: f32) -> [f32; 3]
-fn	metal2vulkan::metal::state::depth16_bias_side	pub fn depth16_bias_side(depth_bias: f32, slope_scale: f32, clamp: f32) -> Option<bool>
 fn	metal2vulkan::metal::state::depth_bias	pub fn depth_bias(topology: vk::PrimitiveTopology, depth_bias: f32, slope_scale: f32, clamp: f32, depth_format: Option<PixelFormat>, profile: &DeviceProfile) -> Result<DepthBias, Error>
 fn	metal2vulkan::metal::state::depth_clamp_enable	pub fn depth_clamp_enable(mode: DepthClipMode, profile: &DeviceProfile) -> Result<bool, Error>
 fn	metal2vulkan::metal::state::depth_stencil_state	pub fn depth_stencil_state(desc: &DepthStencilDescriptor) -> DepthStencilState
@@ -5142,7 +5125,6 @@ macro-member	metal2vulkan-runtime::Degradation::ShaderHalfColorBits	ShaderHalfCo
 macro-member	metal2vulkan-runtime::Degradation::ShaderResolve	ShaderResolve = "shader-resolve", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShaderSideDepthTest	ShaderSideDepthTest = "shader-side-depth-test", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShaderSideStencil	ShaderSideStencil = "shader-side-stencil", Performance,
-macro-member	metal2vulkan-runtime::Degradation::ShaderUnormDepth	ShaderUnormDepth = "shader-unorm-depth", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShadowMerge	ShadowMerge = "shadow-merge", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShadowedTexture	ShadowedTexture = "shadowed-texture", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShadowedTextureView	ShadowedTextureView = "shadowed-texture-view", Performance,
@@ -5185,7 +5167,6 @@ macro-member	metal2vulkan-runtime::Degradation::UnnamedTexturesPastCapacity	Unna
 macro-member	metal2vulkan-runtime::Degradation::UnorderedDrawBytes	UnorderedDrawBytes = "unordered-draw-bytes", Performance,
 macro-member	metal2vulkan-runtime::Degradation::UnormDepthBias	UnormDepthBias = "unorm-depth-bias", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnormDepthRounding	UnormDepthRounding = "unorm-depth-rounding", Precision,
-macro-member	metal2vulkan-runtime::Degradation::UnormDepthSlope	UnormDepthSlope = "unorm-depth-slope", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnpackedFillColor	UnpackedFillColor = "unpacked-fill-color", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnreachedTilesRewritten	UnreachedTilesRewritten = "unreached-tiles-rewritten", Precision,
 macro-member	metal2vulkan-runtime::Degradation::UnreadableHandleTexture	UnreadableHandleTexture = "unreadable-handle-texture", Precision,
@@ -12324,7 +12305,6 @@ variant	metal2vulkan::bind::WriteSource::ArgumentSampler	ArgumentSampler { index
 variant	metal2vulkan::bind::WriteSource::ArgumentTable	ArgumentTable { stage: Stage, bytes_len: u32 }
 variant	metal2vulkan::bind::WriteSource::Attachment	Attachment { color_index: u32 }
 variant	metal2vulkan::bind::WriteSource::Buffer	Buffer { slot: SlotRef }
-variant	metal2vulkan::bind::WriteSource::ColorWriteTable	ColorWriteTable
 variant	metal2vulkan::bind::WriteSource::CombinedImageSampler	CombinedImageSampler { image: ImageSource, sampler: SamplerSource }
 variant	metal2vulkan::bind::WriteSource::ConstantBlob	ConstantBlob { stage: Stage }
 variant	metal2vulkan::bind::WriteSource::ControlPointIndices	ControlPointIndices
@@ -13518,7 +13498,6 @@ variant	metal2vulkan::pipeline::ChannelWrite::Device	Device
 variant	metal2vulkan::pipeline::ChannelWrite::FloatNearestEven	FloatNearestEven { mantissa: u8, signed: bool }
 variant	metal2vulkan::pipeline::ChannelWrite::FloatTowardZero	FloatTowardZero { mantissa: u8, signed: bool }
 variant	metal2vulkan::pipeline::ChannelWrite::HalfUnorm	HalfUnorm { bits: u8 }
-variant	metal2vulkan::pipeline::ChannelWrite::Selected	Selected
 variant	metal2vulkan::pipeline::ChannelWrite::Snorm	Snorm { bits: u8, blended: bool }
 variant	metal2vulkan::pipeline::ChannelWrite::Srgb	Srgb
 variant	metal2vulkan::pipeline::ChannelWrite::Unorm	Unorm { bits: u8 }
@@ -13652,10 +13631,8 @@ variant	metal2vulkan::pipeline::PushField::BlendColor	BlendColor
 variant	metal2vulkan::pipeline::PushField::CaptureAddress	CaptureAddress
 variant	metal2vulkan::pipeline::PushField::CaptureIndexAddress	CaptureIndexAddress
 variant	metal2vulkan::pipeline::PushField::CaptureLayout	CaptureLayout
-variant	metal2vulkan::pipeline::PushField::ColorWriteRule	ColorWriteRule(u32)
 variant	metal2vulkan::pipeline::PushField::CommandRecordsAddress	CommandRecordsAddress
 variant	metal2vulkan::pipeline::PushField::ControlPointIndexOffset	ControlPointIndexOffset
-variant	metal2vulkan::pipeline::PushField::DepthBias	DepthBias
 variant	metal2vulkan::pipeline::PushField::DepthClampRange	DepthClampRange
 variant	metal2vulkan::pipeline::PushField::DispatchRegion	DispatchRegion
 variant	metal2vulkan::pipeline::PushField::ExecutionStatusAddress	ExecutionStatusAddress
@@ -13738,10 +13715,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::ConstexprSampled	ConstexprSampled {
 variant	metal2vulkan::pipeline::RuntimeFact::CrossClassReads	CrossClassReads { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::CubicArgumentSampler	CubicArgumentSampler { stage: Stage }
 variant	metal2vulkan::pipeline::RuntimeFact::CubicSampler	CubicSampler { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::Depth16BiasSide	Depth16BiasSide { raises: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::Depth16Biased	Depth16Biased
-variant	metal2vulkan::pipeline::RuntimeFact::Depth16Codes	Depth16Codes { biased: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::Depth16Pass	Depth16Pass { depth16: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::DepthClampRange	DepthClampRange
 variant	metal2vulkan::pipeline::RuntimeFact::DeviceAddresses	DeviceAddresses { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::DispatchGrid	DispatchGrid
@@ -13893,9 +13866,7 @@ variant	metal2vulkan::pipeline::StorageFormatClass::Unknown	Unknown
 variant	metal2vulkan::pipeline::StorageImageClass::AlphaInRed	AlphaInRed
 variant	metal2vulkan::pipeline::StorageImageClass::HalfBits	HalfBits
 variant	metal2vulkan::pipeline::StorageImageClass::HalfQuietNan	HalfQuietNan
-variant	metal2vulkan::pipeline::StorageImageClass::HalfTowardZero	HalfTowardZero
 variant	metal2vulkan::pipeline::StorageImageClass::Identity	Identity
-variant	metal2vulkan::pipeline::StorageImageClass::OneBitAlpha	OneBitAlpha
 variant	metal2vulkan::pipeline::StorageImageClass::RotateArgb	RotateArgb
 variant	metal2vulkan::pipeline::StorageImageClass::SharedExponentBits	SharedExponentBits
 variant	metal2vulkan::pipeline::StorageImageClass::SmallFloatQuietNan	SmallFloatQuietNan
@@ -13909,7 +13880,6 @@ variant	metal2vulkan::pipeline::Symbol::DescriptorSet	DescriptorSet(ResourceSlot
 variant	metal2vulkan::pipeline::Symbol::Location	Location(VaryingKey)
 variant	metal2vulkan::pipeline::Symbol::SpecId	SpecId(SpecKey)
 variant	metal2vulkan::pipeline::SyntheticBinding::ArgumentTable	ArgumentTable
-variant	metal2vulkan::pipeline::SyntheticBinding::ColorWriteTable	ColorWriteTable
 variant	metal2vulkan::pipeline::SyntheticBinding::ConstantBlob	ConstantBlob
 variant	metal2vulkan::pipeline::SyntheticBinding::ControlPointIndices	ControlPointIndices
 variant	metal2vulkan::pipeline::SyntheticBinding::DepthStandIn	DepthStandIn

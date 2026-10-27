@@ -435,15 +435,13 @@ fn member_view(
         let use_ = heap_storage_use(profile);
         let c = storage_choice(pixel_format, use_, profile).map_err(bind_error)?;
         // The class's one formatless declaration cannot convert per element, but for a
-        // half-float format's rounding, which a heap write takes from the class its handle
-        // carries: such a member is viewed through its own format.
+        // half-float format's NaN, which a heap write takes from the class its handle carries:
+        // such a member is viewed through its own format.
         let per_element = matches!(
             c.class,
             StorageImageClass::Identity
-                | StorageImageClass::HalfTowardZero
                 | StorageImageClass::HalfQuietNan
                 | StorageImageClass::SmallFloatQuietNan
-                | StorageImageClass::OneBitAlpha
                 | StorageImageClass::HalfBits
         );
         // A half-float member's writes take the class its handle carries, as before: the alias

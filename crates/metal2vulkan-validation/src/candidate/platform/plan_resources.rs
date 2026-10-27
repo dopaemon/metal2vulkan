@@ -513,12 +513,6 @@ impl<'a> PlanResources<'a> {
                         .range(ExecutionStatus::BYTES as u64),
                 )
             }
-            // The fragment stage's sRGB color table.
-            WriteSource::ColorWriteTable => {
-                let table = metal2vulkan::bind::color_write_table();
-                let buffer = self.buffer(context, "color write table", table)?;
-                whole(buffer)
-            }
             WriteSource::Texture { slot, view } => {
                 let (image, layout) = self.image(TextureKey::Slot(*slot))?;
                 let view = self.view(context, image, view)?;

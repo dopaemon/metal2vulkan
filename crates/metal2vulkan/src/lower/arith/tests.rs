@@ -560,13 +560,6 @@ fn dispatch_module(
                 address: None,
                 bytes: input.iter().flat_map(|w| w.to_le_bytes()).collect(),
             },
-            // The color table a kernel that rounds an sRGB channel declares, bound as the binder
-            // binds it.
-            Buffer {
-                slot: Some(super::srgb::color_table_symbol(Stage::Kernel)),
-                address: None,
-                bytes: super::srgb::color_write_table().to_vec(),
-            },
         ],
         push: Vec::new(),
         spec: Default::default(),
@@ -4110,7 +4103,6 @@ mod blend32;
 mod blend8;
 mod blend_packed;
 mod color_write;
-mod depth16;
 mod divide;
 mod fast;
 mod float_texel;
@@ -4119,7 +4111,6 @@ mod half_texel;
 mod libm;
 mod libm_exp;
 mod narrow;
-mod norm_write;
 mod round_texel;
 mod snapshot_codes;
 mod specials;

@@ -208,9 +208,6 @@ pub use color_resolve::{
     ResolveSource, SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS,
 };
 pub use compressed_blit::{compressed_blit_module, CompressedBlit, CompressedBlitModule};
-pub use etc_decode::{etc_decode_module, EtcDecode, EtcTexels};
-// The bytes of `WriteSource::ColorWriteTable`'s buffer.
-pub use crate::lower::arith::srgb::color_write_table;
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
     DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
@@ -221,6 +218,7 @@ pub use depth_stencil_resolve::{
     ResolveWrite,
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
+pub use etc_decode::{etc_decode_module, EtcDecode, EtcTexels};
 pub use extended_shadow::{extended_shadow_module, ExtendedShadowModule};
 pub use graphics::{
     DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups, MeshRecordsRegion,

@@ -126,7 +126,6 @@ mod emit;
 pub mod float_texel;
 pub mod half;
 pub(crate) mod heap_raw;
-pub mod norm_write;
 mod slice;
 mod slot;
 mod status;
@@ -430,14 +429,12 @@ pub struct Write {
     /// The slot's variant binds a texture of this extended-range format: the write encodes the
     /// raw texel ([`extended_range::encode`](crate::lower::arith::extended_range::encode)).
     pub extended: Option<crate::metal::format::ExtendedRange>,
-    /// The slot's storage class ([`storage_class`]): a converting one rounds the write to Metal's
-    /// code of each channel (`RotateArgb`'s `ARGB8Unorm` codes; `HalfTowardZero`'s halves and
-    /// `HalfQuietNan`'s NaN).
+    /// The slot's storage class ([`storage_class`]): a converting one moves or encodes the
+    /// written channels (`RotateArgb`'s rotation, `SrgbEncode`'s codes, `HalfQuietNan`'s NaN).
     pub class: StorageImageClass,
-    /// A `float` written through a heap handle on a device not measured to store it in a
-    /// half-float texture as Metal does ([`heap_write_class`]): the class (`HalfTowardZero` or
-    /// `HalfQuietNan`) the write takes where the handle's texel class is a half-float format's
-    /// (`emit::heap_halves`).
+    /// A `float` written through a heap handle on a device not measured to store its NaN in a
+    /// half-float texture as Metal does ([`heap_write_class`]): the class (`HalfQuietNan`) the
+    /// write takes where the handle's texel class is a half-float format's (`emit::heap_halves`).
     pub heap_half: Option<StorageImageClass>,
     /// A `float` written through a heap handle: its NaN lanes are quieted where the handle's
     /// texel class is a small float's (`StorageImageClass::SmallFloatQuietNan`,
@@ -453,9 +450,6 @@ pub struct Write {
     pub swizzle: bool,
     /// How a `half` texel's NaN is written ([`half_nans`]).
     pub half_nans: HalfNans,
-    /// How a `float` or `half` texel's channels are rounded to a normalized format's codes
-    /// ([`norm_storage`]).
-    pub norm: NormWrite,
     /// The slot's variant binds a texture of another numeric class
     /// (`LoweringInputs::cross_class`): `texel` is that class's own form
     /// ([`native_write_form`]), into which the write first turns the declared lanes
@@ -502,35 +496,6 @@ impl IntRange {
             IntRange::Full => 0,
             IntRange::Widths(_) => 24,
             IntRange::SlotWord(_) => 24 + 48,
-        }
-    }
-}
-
-/// How a `float` texel's write rounds its channels to the codes Metal stores in a normalized
-/// format ([`norm_storage`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum NormWrite {
-    /// As computed: no normalized format, or a device measured to store Metal's codes, or a
-    /// conversion the storage class makes (`StorageImageClass::OneBitAlpha`).
-    Device,
-    /// By the bound format's class (the slot's `TexelFormat` specialization, a heap handle's
-    /// class): the module's routine ([`norm_write`]).
-    Class,
-    /// Through a heap handle on a device measured to store Metal's codes but a 1-bit channel's:
-    /// alpha 1 only above one half where the handle's class is a 1-bit-alpha format's
-    /// (`metal::texel_format::heap_one_bit_indices`), as `StorageImageClass::OneBitAlpha` writes
-    /// it.
-    HeapOneBit,
-}
-
-impl NormWrite {
-    /// The words of the write's rounding: the routine's call, or the class index test, alpha's rule
-    /// and the select, and a heap handle's class read.
-    pub(crate) fn words(self, heap: bool) -> u32 {
-        match self {
-            NormWrite::Device => 0,
-            NormWrite::Class => norm_write::CALL_WORDS + if heap { HEAP_CLASS_WORDS } else { 0 },
-            NormWrite::HeapOneBit => emit::heap_one_bit_words() + emit::ONE_BIT_ALPHA_WORDS + 8,
         }
     }
 }
@@ -934,7 +899,6 @@ impl TextureStrategy {
                         0
                     }
                     + w.half_nans.words()
-                    + w.norm.words(w.image.heap())
                     + if w.cross.is_some() { 48 } else { 0 }
                     + w.saturate.words()
                     + if w.heap_bits {
@@ -1003,9 +967,6 @@ pub struct TexturePlan {
     /// texel, which converts by the class its handle carries (`emit::heap_float_class`): the module
     /// defines the `float` routine.
     pub heap_float: bool,
-    /// Some heap texture's `float` write rounds to a normalized format's codes by the class its
-    /// handle carries ([`NormWrite::Class`]): the module defines the rounding routine.
-    pub heap_norm_write: bool,
     /// The results of the heap reads that decode a member of a form a heap reads
     /// (`ExtendedRange::HEAP_READ`): `false` a `float` one, `true` a `half` one. The module
     /// defines that decode's routine for each ([`heap_raw::define`]).
@@ -1106,9 +1067,6 @@ pub struct Declared {
     /// The module's routine converting one texel to a `float` result by the class
     /// ([`float_texel::define`]), defined once where a slot takes it.
     pub float_routine: Option<FuncId>,
-    /// The module's routine rounding a written `float` texel to a normalized format's codes by
-    /// the class ([`norm_write::define`]), defined once where a write takes it.
-    pub norm_routine: Option<FuncId>,
     /// The `TextureSwizzle` specialization constant of each texture buffer slot whose reads
     /// apply the bound texture buffer's swizzle, and of each storage slot of
     /// `LoweringInputs::swizzled_storage` whose reads and writes apply the bound texture's, or
@@ -1353,9 +1311,6 @@ pub fn declare(
         if s.float_format && d.float_routine.is_none() {
             d.float_routine = Some(float_texel::define(mb)?);
         }
-        if s.norm_write && d.norm_routine.is_none() {
-            d.norm_routine = Some(norm_write::define(mb)?);
-        }
         if s.swizzle {
             let u32_ = mb.ty(SType::Int {
                 width: 32,
@@ -1451,9 +1406,6 @@ pub fn declare(
     }
     if plan.families.texture.heap_float && d.float_routine.is_none() {
         d.float_routine = Some(float_texel::define(mb)?);
-    }
-    if plan.families.texture.heap_norm_write && d.norm_routine.is_none() {
-        d.norm_routine = Some(norm_write::define(mb)?);
     }
     Ok(d)
 }
@@ -2495,9 +2447,6 @@ pub fn routine_words(
         .then_some((half::CENSUS_NAME, half::ROUTINE_WORDS));
     let float = (texture.heap_float || texture.slots.values().any(|s| s.float_format))
         .then_some((float_texel::CENSUS_NAME, float_texel::ROUTINE_WORDS));
-    // The normalized write's rounding, once.
-    let norm = (texture.heap_norm_write || texture.slots.values().any(|s| s.norm_write))
-        .then_some((norm_write::CENSUS_NAME, norm_write::ROUTINE_WORDS));
     // The heap's raw decode, once per result type.
     let raw = (!texture.heap_raw.is_empty()).then(|| {
         (
@@ -2510,7 +2459,6 @@ pub fn routine_words(
         .chain(classes)
         .chain(half)
         .chain(float)
-        .chain(norm)
         .chain(raw)
 }
 
@@ -2521,7 +2469,7 @@ pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 /// The class a `float` written through a heap handle takes where the handle's texel class is a
 /// half-float format's (`emit::heap_halves`): the class a slot bound in such a format takes
 /// (`metal::format::half_write_class`), `None` where that is `Identity` (the device stores the
-/// write as Metal does).
+/// write's NaN as Metal does).
 pub(crate) fn heap_write_class(cx: &SelectCx<'_>) -> Option<StorageImageClass> {
     match crate::metal::format::half_write_class(cx.profile) {
         StorageImageClass::Identity => None,
@@ -2531,12 +2479,16 @@ pub(crate) fn heap_write_class(cx: &SelectCx<'_>) -> Option<StorageImageClass> {
 
 /// What a `float` write to texture `image` (a slot's storage class `class`; a heap write's class
 /// where its handle's is a half-float format's, `heap_half`) relies on or records where it may
-/// reach a half-float image: a write the shader rounds or quiets stores the NaN `0x7fc00000`,
-/// Metal's `0x7e00` where the profile takes `DriverDeviation::MetalFloatStorageNans` (the module
-/// requires its property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`); a
-/// quieted write, unrounded, requires `VkProperty::MetalHalfStorageWrites`; and one left to the
-/// device's conversion, a heap write's or a slot's whose choice declares a half-float format,
-/// requires that and `VkProperty::MetalHalfStorageNans`.
+/// reach a half-float image, whose rounding of each channel to `half` the device makes (Metal
+/// rounds toward zero, a finite value past 65504 to 65504): Metal's where the profile takes
+/// `DriverDeviation::MetalHalfStorageWrites` (the module requires its property), else the device's
+/// (`PrecisionNote::DeviceColorConversion`), but for a half-float member a heap's unsigned integer
+/// twin holds (`heap_bits`), whose bits the shader writes. A write the shader quiets stores the NaN
+/// `0x7fc00000`, Metal's `0x7e00` where the profile takes `DriverDeviation::MetalFloatStorageNans`
+/// (the module requires its property), else the device's encoding of it
+/// (`PrecisionNote::DeviceNanEncoding`); one left to the device's conversion whole, a heap write's
+/// or a slot's whose choice declares a half-float format, requires
+/// `VkProperty::MetalHalfStorageNans` too.
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
@@ -2549,11 +2501,21 @@ pub(super) fn half_storage_facts(
         ImageRef::Slot(_) => class,
     };
     let mut relied = Vec::new();
-    match applied {
-        StorageImageClass::HalfTowardZero | StorageImageClass::HalfQuietNan => {
-            if applied == StorageImageClass::HalfQuietNan {
-                relied.push(VkProperty::MetalHalfStorageWrites);
+    let rounded = |cx: &mut SelectCx<'_>, relied: &mut Vec<VkProperty>| {
+        let measured = cx
+            .profile
+            .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
+        match (heap_bits, measured) {
+            (true, _) => {}
+            (false, true) => relied.push(VkProperty::MetalHalfStorageWrites),
+            (false, false) => {
+                cx.precision.insert(PrecisionNote::DeviceColorConversion);
             }
+        }
+    };
+    match applied {
+        StorageImageClass::HalfQuietNan => {
+            rounded(cx, &mut relied);
             if cx
                 .profile
                 .takes_driver_deviation(DriverDeviation::MetalFloatStorageNans)
@@ -2568,7 +2530,7 @@ pub(super) fn half_storage_facts(
             }
         }
         StorageImageClass::Identity if declared_half(cx, image)? => {
-            relied.push(VkProperty::MetalHalfStorageWrites);
+            rounded(cx, &mut relied);
             relied.push(VkProperty::MetalHalfStorageNans);
         }
         _ => {}
@@ -2585,7 +2547,7 @@ pub(super) fn half_storage_facts(
 /// ([`HalfNans::Kept`]), which a device of `DriverDeviation::MetalHalfTexelWrites` stores as its
 /// bits, and any other float channel every NaN as `0x7fc00000` ([`HalfNans::Canonical`]), which a
 /// 32-bit float channel stores as it is. The texture's format decides: a slot's declared format, or
-/// the class it rounds by (`HalfTowardZero`, `HalfQuietNan`: a 16-bit float format's); a heap
+/// the class it writes by (`HalfQuietNan`: a 16-bit float format's); a heap
 /// element's handle class ([`HalfNans::HeapClass`]); a texture slot's word where its choice
 /// declares none ([`HalfNans::SlotWord`]). A normalized format's channel stores no NaN
 /// ([`HalfNans::Held`]).
@@ -2636,9 +2598,7 @@ pub(super) fn half_nans(
             let slot = slot_of(cx, index)?.slot;
             match cx.inputs.storage_images.get(&slot) {
                 Some(c) => match c.class {
-                    StorageImageClass::HalfTowardZero | StorageImageClass::HalfQuietNan => {
-                        (HalfNans::Kept, Stored::Device)
-                    }
+                    StorageImageClass::HalfQuietNan => (HalfNans::Kept, Stored::Device),
                     StorageImageClass::SmallFloatQuietNan => (HalfNans::Canonical, Stored::Device),
                     // The half's own bits, written through the unsigned integer alias.
                     StorageImageClass::HalfBits => (HalfNans::Kept, Stored::Exact),
@@ -2744,102 +2704,75 @@ fn heap_half_texel_writes(cx: &mut SelectCx<'_>, packed: bool) {
         });
 }
 
-/// How a `float` (or `half`, held widened) texel's write in form `texel` to texture `image` of
-/// shape `shape` rounds its channels where the texture's format may be a normalized one
-/// (`norm_write`'s module docs: Metal stores each channel's code from its exact product). A device
-/// measured to store those codes (`DriverDeviation::MetalNormStorageWrites`, whose property the
-/// module then requires) takes the write as computed but for a 1-bit channel, which it rounds
-/// otherwise: a slot of such a format takes `StorageImageClass::OneBitAlpha`, and a heap write
-/// tests its handle's class where the device stores such a texture ([`NormWrite::HeapOneBit`]).
-/// Elsewhere the write rounds by the bound format's class ([`NormWrite::Class`]): a slot's
-/// `TexelFormat` specialization, a heap handle's class. A heap texture buffer carries no class, so
-/// its write keeps the device's conversion (`PrecisionNote::DeviceColorConversion`) where such a
-/// buffer may hold a format the device converts otherwise. A slot whose storage choice declares a
-/// format that is not normalized, or converts by its class (sRGB, `ARGB8Unorm`, the half and small
-/// floats, a YCbCr write, a 1-bit alpha), takes none.
-pub(super) fn norm_storage(
+/// What a `float` (or `half`, held widened) texel's write in form `texel` to texture `image` of
+/// shape `shape` relies on or records where the texture's format may be a normalized one, whose
+/// conversion the device makes: Metal stores each channel's value clamped to its range (a NaN 0)
+/// times its maximum code exactly, rounded to nearest with a tie away from zero, a 1-bit channel 1
+/// only above one half. A device measured to store those codes
+/// (`DriverDeviation::MetalNormStorageWrites`, whose property the module then requires) stores
+/// them, but for a 1-bit channel, which it rounds otherwise (RADV rounds its half up): a write of
+/// four lanes that may reach a texture of a 1-bit alpha (a heap element, or a slot whose storage
+/// choice declares no format, where the device stores such a texture) records
+/// `PrecisionNote::DeviceColorConversion`. Elsewhere every such write records it (ANV and
+/// lavapipe round the `f32` product with ties to even). A slot whose storage choice declares a
+/// format that is not normalized, or encodes it by its class (sRGB, a YCbCr write, the half and
+/// small floats), records nothing.
+pub(super) fn norm_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     shape: ImageShape,
     texel: TexelForm,
-) -> Result<NormWrite, Error> {
+) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
     use crate::metal::format::{one_bit_storage, StorageUse};
     use crate::vk::NumericFormat as N;
-    let buffer = shape.dim == ImageDim::Buffer;
-    let reached = match image {
-        ImageRef::Heap { .. } => true,
+    // Whether the write may reach a normalized format, and whether the bound texture decides it.
+    let (reached, bound) = match image {
+        ImageRef::Heap { .. } => (true, true),
         ImageRef::Slot(index) => {
             let slot = slot_of(cx, index)?.slot;
             match cx.inputs.storage_images.get(&slot) {
-                None => true,
+                None => (true, true),
                 Some(c) => {
-                    let normalized = c.vk_format == crate::vk::Format::UNDEFINED
+                    let formatless = c.vk_format == crate::vk::Format::UNDEFINED;
+                    let normalized = formatless
                         || c.vk_format
                             .block()
                             .is_some_and(|b| matches!(b.color, Some(N::Unorm | N::Snorm)));
-                    // `AlphaInRed` stores the rounded alpha in red: the routine rounds the
-                    // texel in Metal's channels, before the class moves them.
-                    normalized
-                        && matches!(
-                            c.class,
-                            StorageImageClass::Identity
-                                | StorageImageClass::SwizzleBgra
-                                | StorageImageClass::AlphaInRed
-                        )
+                    let converted = matches!(
+                        c.class,
+                        StorageImageClass::Identity
+                            | StorageImageClass::SwizzleBgra
+                            | StorageImageClass::AlphaInRed
+                            | StorageImageClass::RotateArgb
+                    );
+                    (normalized && converted, formatless)
                 }
             }
         }
     };
     if !reached {
-        return Ok(NormWrite::Device);
+        return Ok(());
     }
-    let measured = cx
+    if !cx
         .profile
-        .takes_driver_deviation(DriverDeviation::MetalNormStorageWrites);
-    if measured {
-        cx.families
-            .texture
-            .storage_properties
-            .insert(VkProperty::MetalNormStorageWrites);
-        let use_ = match buffer {
-            true => StorageUse::texel_buffer(false, true),
-            false => StorageUse::texture(false, true),
-        };
-        // A heap write's alpha, where the device stores a texture of a 1-bit alpha there.
-        let one_bit = image.heap() && texel.lanes == 4 && one_bit_storage(use_, cx.profile);
-        return Ok(match (one_bit, buffer) {
-            (false, _) => NormWrite::Device,
-            (true, true) => {
-                cx.precision.insert(PrecisionNote::DeviceColorConversion);
-                NormWrite::Device
-            }
-            (true, false) => {
-                cx.families.access.heap_class_index = true;
-                NormWrite::HeapOneBit
-            }
-        });
+        .takes_driver_deviation(DriverDeviation::MetalNormStorageWrites)
+    {
+        cx.precision.insert(PrecisionNote::DeviceColorConversion);
+        return Ok(());
     }
-    match image {
-        ImageRef::Heap { .. } if buffer => {
-            cx.precision.insert(PrecisionNote::DeviceColorConversion);
-            Ok(NormWrite::Device)
-        }
-        ImageRef::Heap { .. } => {
-            cx.families.texture.heap_norm_write = true;
-            cx.families.access.heap_class = true;
-            Ok(NormWrite::Class)
-        }
-        ImageRef::Slot(index) => {
-            let slot = slot_of(cx, index)?.slot;
-            if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-                s.norm_write = true;
-            }
-            cx.facts
-                .insert(crate::pipeline::facts::RuntimeFact::TexelFormat { slot });
-            Ok(NormWrite::Class)
-        }
+    cx.families
+        .texture
+        .storage_properties
+        .insert(VkProperty::MetalNormStorageWrites);
+    let use_ = match shape.dim == ImageDim::Buffer {
+        true => StorageUse::texel_buffer(false, true),
+        false => StorageUse::texture(false, true),
+    };
+    if bound && texel.lanes == 4 && one_bit_storage(use_, cx.profile) {
+        cx.precision.insert(PrecisionNote::DeviceColorConversion);
     }
+    Ok(())
 }
 
 /// A fragment function's write of a texel of form `texel` to texture `image` (`extended`: an
@@ -2853,7 +2786,7 @@ pub(super) fn norm_storage(
 /// every mode. The write is built under the default's rule alone, so: a write that may be such
 /// records the mode in `StageIo::texture_write_rounding`, for link to match against the pipeline's;
 /// under `NearestEven` one whose slot's storage choice declares such a format (or rounds as a
-/// half-float one: `HalfTowardZero`, `HalfQuietNan`) is refused
+/// half-float one: `HalfQuietNan`) is refused
 /// `NotImplemented(PrivateRenderState(TextureWriteRounding))`, and one whose bound texture
 /// decides (a slot or texture buffer whose choice declares no format; a heap handle) states
 /// `RuntimeFact::StorageTextureWriteRounding` or `RuntimeFact::HeapWriteRounding`, which the
@@ -2889,12 +2822,10 @@ fn mode_rounded_write(
             match cx.inputs.storage_images.get(&slot) {
                 None => Target::Slot(slot),
                 Some(c) => match c.class {
-                    StorageImageClass::HalfTowardZero | StorageImageClass::HalfQuietNan => {
-                        Target::Declared {
-                            half: true,
-                            small: false,
-                        }
-                    }
+                    StorageImageClass::HalfQuietNan => Target::Declared {
+                        half: true,
+                        small: false,
+                    },
                     StorageImageClass::SmallFloatQuietNan => Target::Declared {
                         half: false,
                         small: true,
@@ -2968,9 +2899,9 @@ fn declared_half(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
 }
 
 /// The class of texture slot `image`'s storage choice, where its variant states one, else
-/// `Identity`: a write through a converting class stores Metal's code of each channel
-/// (`RotateArgb`'s `ARGB8Unorm` codes; `HalfTowardZero`'s halves and `HalfQuietNan`'s NaN). A heap
-/// element's is `Identity`.
+/// `Identity`: a write through a converting class moves or encodes the written channels
+/// (`RotateArgb`'s rotation, `SrgbEncode`'s codes, `HalfQuietNan`'s NaN). A heap element's is
+/// `Identity`.
 pub(crate) fn storage_class(
     cx: &SelectCx<'_>,
     image: ImageRef,
@@ -3787,12 +3718,9 @@ fn select_write(
         false => HalfNans::Held,
     };
     // A `half` texel's too, held widened: Metal stores its value by the same rule.
-    let norm = match texel.conv {
-        TexelConv::F32 | TexelConv::F16 if extended.is_none() => {
-            norm_storage(cx, image, shape, texel)?
-        }
-        _ => NormWrite::Device,
-    };
+    if matches!(texel.conv, TexelConv::F32 | TexelConv::F16) && extended.is_none() {
+        norm_storage_facts(cx, image, shape, texel)?;
+    }
     // A storage slot bound to a swizzled texture stores each channel from the lane the swizzle
     // takes it to, under its variant, as plain Metal writes it. A `ulong` texel's is not measured.
     let swizzle = shape.dim != ImageDim::Buffer && swizzled_storage(cx, image)?;
@@ -3821,7 +3749,6 @@ fn select_write(
         heap_alpha_red,
         swizzle,
         half_nans,
-        norm,
         cross,
         saturate,
         heap_bits,

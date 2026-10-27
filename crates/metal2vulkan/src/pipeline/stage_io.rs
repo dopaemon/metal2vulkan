@@ -196,9 +196,10 @@ pub struct StageIo {
     /// pipeline's (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub color_writes: BTreeMap<u32, [Option<ChannelWrite>; 4]>,
-    /// The attachments among `color_writes` whose float writes the function rounds to Metal's
-    /// codes in the shader, sorted: those with a channel it rounds by Metal's rule rather than
-    /// leaving to the device (`StageModule::rounded_colors`).
+    /// The attachments among `color_writes` whose float writes the function rounds in the shader,
+    /// sorted: those with a half-float channel under `TextureWriteRoundingMode::NearestEven`
+    /// (`color_writes::HALF_NEAREST`), which no device's conversion gives
+    /// (`StageModule::rounded_colors`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub rounded_colors: Vec<u32>,
     /// The attachments among `color_writes` whose output the function writes as the bits of the
@@ -345,13 +346,6 @@ pub struct StageIo {
     /// (`InvalidDescriptor(VertexAttribute)`). Empty for every other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub instanced_attributes: Vec<u32>,
-    /// The attachments among `color_writes` whose rules the draw selects
-    /// (`ChannelWrite::Selected`), by color index, with what the function's write does under each
-    /// code of the attachment's rule word (`PushField::ColorWriteRule`): link derives the word
-    /// from the pipeline's attachment (`GraphicsState::color_write_rules`), and from it whether
-    /// the write rounds in the shader and the notes it keeps.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub selected_colors: BTreeMap<u32, SelectedWrite>,
     /// The attachments a `half` color output of a module compiled without fast math
     /// (`air.compile.fast_math_disable`, safe or relaxed math) reaches, by color index, sorted.
     /// Metal stores there the `half` the function returns, blended into a 16-bit float format with
@@ -403,23 +397,6 @@ pub struct StageIo {
     /// compiled with each color at its own index, and for every other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub color_group: Option<crate::pipeline::lower_inputs::ColorGroup>,
-}
-
-/// What a fragment function's write of a color attachment whose rules the draw selects does
-/// under each code of the attachment's rule word (`StageIo::selected_colors`): bit `c` of a mask
-/// is code `c` (`pipeline::color_writes`'s codes: no rule, the device's conversion, an 8-bit
-/// unorm channel's, a half-float channel's).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SelectedWrite {
-    /// The lanes of the output the rules take, the first `lanes` channels' codes.
-    pub lanes: u8,
-    /// A lane of code `c` rounds the output to Metal's code in the shader.
-    pub rounds: u8,
-    /// A lane of code `c` stores a NaN as the device encodes it
-    /// (`PrecisionNote::DeviceNanEncoding`).
-    pub nans: u8,
 }
 
 /// The samplers a fragment function makes depth comparisons through ([`StageIo::depth_compares`]),

@@ -99,7 +99,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         // The blend color as the encoder set it, four `f32`s' bits.
         PushField::HalfBlendColor => FieldShape::UVec4Array(1),
         // A draw's depth bias: its constant, slope and clamp as `f32`s' bits, and a zero word.
-        PushField::DepthBias => FieldShape::UVec4Array(1),
         // Base vertex, base instance.
         PushField::BaseVertexInstance => FieldShape::UVec2,
         // The draw's vertices per primitive.
@@ -118,7 +117,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::Specialized(_) => FieldShape::U32,
         // An in-place YCbCr texture's size, planes and conversion.
         PushField::YCbCrInPlace(_) => FieldShape::UVec4Array(2),
-        PushField::ColorWriteRule(_) => FieldShape::U32,
         // The residual is below `min{Storage,Uniform}BufferOffsetAlignment`.
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
         // A texture's mipmap level count, an acceleration structure's instance count, the render

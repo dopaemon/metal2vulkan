@@ -20,10 +20,16 @@
 //! `device-nan-encoding` (the recorded near-equivalent).
 //!
 //! The product writes through the storage choice's class (`metal::format::half_storage_class`):
-//! as computed on MoltenVK (`DriverDeviation::MetalHalfStorageWrites` and
-//! `MetalHalfStorageNans`), its NaN quieted to `0x7fc00000` on RADV, ANV, NVIDIA's measured
-//! GPUs and lavapipe from Mesa 26.0.8 through 26.2.4 (`HalfQuietNan`; ANV then stores `0xfe00`
-//! and announces the note), and rounded by the shader elsewhere (`HalfTowardZero`).
+//! as computed on MoltenVK (`DriverDeviation::MetalHalfStorageNans`), and its NaN quieted to
+//! `0x7fc00000` elsewhere (`HalfQuietNan`; ANV then stores `0xfe00` and announces the note), the
+//! device's conversion rounding every other value; or, on a device not measured to store a
+//! written `half`'s NaN as its bits, as the bits the shader rounds toward zero, through the
+//! texture's unsigned integer alias (`StorageImageClass::HalfBits`). A case is held to Metal's
+//! rounding where the device is measured to make it (`DriverDeviation::MetalHalfStorageWrites`:
+//! RADV, ANV, NVIDIA's measured GPUs, lavapipe from Mesa 26.0.8 through 26.2.4 and MoltenVK), the
+//! measurement of the deviation on that device; elsewhere the module records the device's
+//! conversion (`PrecisionNote::DeviceColorConversion`), and the lane prints the channels that
+//! differ without holding them.
 
 use super::color_writes::{
     half, half_toward_zero, specials, unsigned_float, unsigned_float_toward_zero,
@@ -31,6 +37,7 @@ use super::color_writes::{
 use super::degrade_notices::{on_device, on_device_with};
 use super::{buffer_with, layer_reported_nothing, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
+use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::metal::{PixelFormat, ResourceUsage, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -241,7 +248,8 @@ fn nan(h: u16) -> bool {
     h & 0x7c00 == 0x7c00 && h & 0x3ff != 0
 }
 
-/// Every form into every format, printed against Metal's conversion and held to it. Every case
+/// Every form into every format, printed against Metal's conversion and held to it where the
+/// device is measured to make it (the module docs). Every case
 /// runs on one device, which announces `DeviceNanEncoding` at each dispatch that binds a variant
 /// taking it (a device announces a kind once unless its options ask for each occurrence), so
 /// each case reads its own notice as on a device of its own; its validation messages fail it by
@@ -342,7 +350,11 @@ fn judge(
          {away} of them one step away from zero: {}",
         examples.join("; ")
     );
-    Some(format!("{label}: {wrong} of {channels_written}"))
+    let measured = device
+        .compile_device()
+        .profile()
+        .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
+    measured.then(|| format!("{label}: {wrong} of {channels_written}"))
 }
 
 /// `RG11B10Float`'s fields: each one's offset in the texel and fraction bits.

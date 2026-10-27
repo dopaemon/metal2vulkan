@@ -213,30 +213,6 @@ pub struct BindState {
     /// for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_last_first: bool,
-    /// Whether the depth the draw renders against is `Depth16Unorm`: its render pass's depth
-    /// attachment's format, or `false` for the hidden `float` depth a pass without one tests;
-    /// `None` where the draw has no depth. Plain Metal stores into that depth whatever format the
-    /// draw's pipeline names, so a draw whose pipeline names otherwise runs the variant whose
-    /// fragment stage takes Metal's 16-bit codes by it (`BindShape::depth16_pass`,
-    /// `VariantKey::depth16_pass`). Part of the shape; `None` for every other encoder.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_pass: Option<bool>,
-    /// Whether the draw biases its triangles' depths by Metal's factors: a constant or slope factor
-    /// other than 0 (`setDepthBias:slopeScale:clamp:`), for a draw of triangles whose viewports
-    /// take no bias. Where the depth is `Depth16Unorm` and the device stores unbiased depths as
-    /// Metal's codes but not biased ones, the draw runs the variant whose fragment stage adds the
-    /// bias itself (`BindShape::depth16_biased`, `VariantKey::depth16_biased`). Part of the shape;
-    /// `false` for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_biased: bool,
-    /// The side of the draw's depth bias, where the consumer proved it: `Some(true)` where Metal's
-    /// biased depth is never below the fragment's own, `Some(false)` where it is never above
-    /// (`metal::state::depth16_bias_side`). Where the depth is `Depth16Unorm` and the draw's
-    /// fragment stage adds the bias itself, the draw runs the variant whose stage declares that
-    /// side (`BindShape::depth16_bias_raises`, `VariantKey::depth16_bias_raises`), so the device
-    /// may test the depth before the stage runs. Part of the shape; `None` for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_bias_raises: Option<bool>,
     /// Allocations a pointer may reach that the consumer lists apart from `used_resources`, at
     /// their own lengths: the resident set holds them beside the bound buffers and the used
     /// resources, and a replay's extents count them (the runtime's live buffers of their own,
@@ -316,15 +292,6 @@ pub struct BindState {
     /// depend on it, so it is not part of the shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub stencil_references: [u32; 2],
-    /// The draw's depth bias as a fragment stage that stores Metal's `Depth16Unorm` codes itself
-    /// adds it (`PushField::DepthBias`, `RuntimeFact::Depth16Codes`): Metal's constant as a
-    /// depth (`metal::state::depth16_bias`), then its slope and clamp factors, all 0 where the
-    /// draw's bias touches no depth (Metal's default, a draw of points or lines, a bias the draw's
-    /// viewports take). Read only by a draw of such a pipeline, whose consumer records the draw's
-    /// Vulkan depth bias as zero; only the draw's bytes depend on it, so it is not part of the
-    /// shape.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth_bias: [f32; 3],
 }
 
 /// What a draw's depth and stencil tests can do to its fragments (`BindState::fragment_tests`).
@@ -733,9 +700,6 @@ impl BindState {
             fragment_tests: self.fragment_tests,
             extended_shadows: self.extended_shadows.clone(),
             snapshot_textures: self.snapshot_textures.clone(),
-            depth16_pass: self.depth16_pass,
-            depth16_biased: self.depth16_biased,
-            depth16_bias_raises: self.depth16_bias_raises,
             primitive_id_indices: self.primitive_id_indices,
             quad_primitive_ids: self.quad_primitive_ids,
             private_list: self.private_list,
@@ -790,9 +754,6 @@ impl BindState {
             fragment_tests,
             extended_shadows,
             snapshot_textures,
-            depth16_pass,
-            depth16_biased,
-            depth16_bias_raises,
             primitive_id_indices,
             quad_primitive_ids,
             private_list,
@@ -823,9 +784,6 @@ impl BindState {
             && self.fragment_tests == *fragment_tests
             && self.extended_shadows == *extended_shadows
             && self.snapshot_textures == *snapshot_textures
-            && self.depth16_pass == *depth16_pass
-            && self.depth16_biased == *depth16_biased
-            && self.depth16_bias_raises == *depth16_bias_raises
             && self.primitive_id_indices == *primitive_id_indices
             && self.quad_primitive_ids == *quad_primitive_ids
             && self.private_list == *private_list
@@ -1700,21 +1658,6 @@ pub struct BindShape {
     /// the pipeline can read through a snapshot so (`VariantKey::snapshot_textures`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub snapshot_textures: BTreeSet<u32>,
-    /// `BindState.depth16_pass`: where it differs from the pipeline's depth format, the variant
-    /// whose fragment stage takes Metal's 16-bit depth codes by the pass's depth
-    /// (`VariantKey::depth16_pass`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_pass: Option<bool>,
-    /// `BindState.depth16_biased`: against a `Depth16Unorm` depth, on a profile whose device
-    /// stores unbiased depths as Metal's codes but not biased ones, the variant whose fragment
-    /// stage adds the draw's bias and writes Metal's code (`VariantKey::depth16_biased`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_biased: bool,
-    /// `BindState.depth16_bias_raises`: where the draw's fragment stage adds a `Depth16Unorm`
-    /// depth's bias itself, the variant whose stage declares the bias's side
-    /// (`VariantKey::depth16_bias_raises`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth16_bias_raises: Option<bool>,
     /// `BindState.primitive_id_indices`: the primitive ID's de-indexed variant of an indexed
     /// draw's index type (`VariantKey::primitive_id_indices`), where the pipeline writes the ID.
     #[cfg_attr(feature = "serde", serde(default))]

@@ -8,10 +8,11 @@
 //! - **Color attachments**: the format mapping for `ColorAttachment` (plus
 //!   `ColorAttachmentBlend` when blending), the write mask, and the blend state; at most
 //!   `maxColorAttachments` of them. A blend of factors one and zero, added, for color and alpha,
-//!   of an attachment the fragment function rounds to Metal's codes (`StageIo::rounded_colors`), or
-//!   writes as a half's bits (`StageIo::half_bit_colors`), takes no Vulkan blend: the function
-//!   writes what Metal's blend stores, which a device's blend could still change (x86 lavapipe adds
-//!   the clear's `+0` to a `-0` source of an `R16Float` attachment, Metal keeps `-0`). An
+//!   of an attachment whose format converts the fragment function's output
+//!   (`StageIo::color_writes`), or that the function rounds (`StageIo::rounded_colors`) or writes
+//!   as a half's bits (`StageIo::half_bit_colors`), takes no Vulkan blend: Metal's blend stores the
+//!   output as written, as no blend does, which a device's blend could still change (x86 lavapipe
+//!   adds the clear's `+0` to a `-0` source of an `R16Float` attachment, Metal keeps `-0`). An
 //!   attachment that no first (index 0) output of the fragment function names (every attachment of
 //!   a pipeline without a fragment function) gets an empty write mask, so the draw leaves it
 //!   unmodified. That is what Metal does where measured: an unblended attachment the function reads
@@ -347,22 +348,6 @@ pub fn graphics_state(
             _ => None,
         })
         .collect();
-    // The rule word of each attachment whose rules the fragment function selects at the draw.
-    let color_write_rules = match fs {
-        Some(f) => color_writes::rule_words(
-            &f.io,
-            &r.color_attachments,
-            (r.alpha_to_coverage, r.texture_write_rounding_mode),
-            p,
-        )?,
-        None => Vec::new(),
-    };
-    let selected_rounds = |index: u32| {
-        let word = color_write_rules.iter().find(|(a, _)| *a == index);
-        fs.and_then(|f| f.io.selected_colors.get(&index))
-            .zip(word)
-            .is_some_and(|(sel, (_, word))| color_writes::selected_rounds(sel, *word))
-    };
     let mut color_attachments = Vec::with_capacity(used as usize);
     for (index, a) in r.color_attachments.iter().take(used as usize).enumerate() {
         color_attachments.push(match a {
@@ -400,19 +385,26 @@ pub fn graphics_state(
                             blend: None,
                         });
                     }
-                    // The fragment function writes what Metal's blend of one and zero stores,
-                    // so the attachment takes no Vulkan blend, nor the format's blend support:
-                    // one it rounds, and one it writes as a half's bits. But not a 16-bit float
-                    // attachment's from a module without fast math, whose blend Metal computes
-                    // keeping the destination's product by zero: that one blends, announced
-                    // (`color_writes::keeps_zero`).
-                    let rounded = fs.is_some_and(|f| {
-                        f.io.rounded_colors.contains(&(index as u32))
-                            || f.io.half_bit_colors.contains(&(index as u32))
-                    }) || selected_rounds(index as u32);
+                    // Metal's blend of one and zero stores the output as written, as no blend
+                    // does, so an attachment whose format converts the output (its channels
+                    // take a rule of Metal's, `StageIo::color_writes`), or one the function
+                    // rounds or writes as a half's bits, takes no Vulkan blend there, nor the
+                    // format's blend support. But not a 16-bit float attachment's from a module
+                    // without fast math, whose blend Metal computes keeping the destination's
+                    // product by zero: that one blends, announced (`color_writes::keeps_zero`).
+                    let stored = fs.is_some_and(|f| {
+                        let color = index as u32;
+                        f.io.rounded_colors.contains(&color)
+                            || f.io.half_bit_colors.contains(&color)
+                            || f.io.color_writes.get(&color).is_some_and(|rules| {
+                                rules.iter().flatten().any(|r| {
+                                    *r != crate::pipeline::lower_inputs::ChannelWrite::Device
+                                })
+                            })
+                    });
                     let keeps_zero =
                         fs.is_some_and(|f| color_writes::keeps_zero(&f.io, index as u32, a));
-                    let replaced = rounded && color_writes::replaces(a) && !keeps_zero;
+                    let replaced = stored && color_writes::replaces(a) && !keeps_zero;
                     // An extended-range attachment whose blend the function computes over its
                     // input attachment takes no Vulkan blend, and the function's write stores
                     // every raw component (none where it keeps every channel).
@@ -703,7 +695,6 @@ pub fn graphics_state(
         sample_mask: None,
         // The fragment stage's facts decide it (`link::shader_tests`).
         shader_tests: None,
-        color_write_rules,
         snapshot_reads,
         color_group: r.color_group.clone(),
         // The pipeline's private logic operation, once compile decided it

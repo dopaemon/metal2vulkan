@@ -3104,12 +3104,9 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
                 DepthQualifier::Greater => (DepthMode::Greater, Some(ExecMode::DepthGreater)),
                 DepthQualifier::Less => (DepthMode::Less, Some(ExecMode::DepthLess)),
             };
-            // A depth rounded to Metal's code can land below the fragment's own, or above it, so
-            // the function promises neither.
-            let codes = depth16_codes(cx);
             let sp = &mut cx.families.stage_io;
             sp.modes.push(ExecMode::DepthReplacing);
-            sp.modes.extend(extra.filter(|_| !codes));
+            sp.modes.extend(extra);
             let link = out(
                 cx,
                 B::FragDepth,
@@ -3123,14 +3120,10 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
                 cx.facts.insert(RuntimeFact::DepthClampRange);
                 cx.push.insert(PushField::DepthClampRange);
             }
-            if codes {
-                cx.facts.insert(RuntimeFact::Depth16Codes { biased: false });
-            }
             cx.families.stage_io.depth_clamp = Some(DepthClamp {
                 object: link.object,
                 clamps: clamps_fragment_depth(cx),
                 range,
-                codes,
             });
             cx.families.fragment.depth_output = true;
             link
@@ -3317,31 +3310,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         });
         sp.interface.sample_mask = Some(masks);
     }
-    // A fragment function that returns no depth under `LoweringInputs::depth16_codes` stores the
-    // depth Metal stores for the fragment at entry, its Vulkan bias recorded as zero: objects of
-    // its own, not the function's interface, which writes no depth. One that reads its position's
-    // depth keeps the device's conversion: whether Metal's position takes the draw's bias is
-    // unmeasured, and without the Vulkan bias it would not. Under a bias of known side
-    // (`LoweringInputs::depth16_bias_raises`) it declares the side (`depth16::bias_side_mode`).
-    if cx.stage == Stage::Fragment
-        && depth16_codes(cx)
-        && !cx.families.fragment.depth_output
-        && !cx.families.stage_io.interface.position_depth
-    {
-        let raises = cx.inputs.depth16_bias_raises;
-        let sp = &mut cx.families.stage_io;
-        let depth = builtin_object(sp, B::FragDepth, IoDir::Output, Shape::F32);
-        let coord = builtin_object(sp, B::FragCoord, IoDir::Input, Shape::FVec(4));
-        sp.modes.push(ExecMode::DepthReplacing);
-        sp.modes.extend(raises.map(super::depth16::bias_side_mode));
-        sp.depth16 = Some(super::Depth16Store {
-            depth,
-            coord,
-            raises,
-        });
-        cx.facts.insert(RuntimeFact::Depth16Codes { biased: true });
-        cx.push.insert(PushField::DepthBias);
-    }
     // Size: every object, the parameters' words, and a store per output element; a count's
     // compare and select (and its constant 0) are a store's words more, and so is an
     // amplification's offset added; an amplified output is a store, an add and a count's.
@@ -3376,7 +3344,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // comparison and the kill.
         + 40 * u64::from(sp.alpha_test.is_some())
         + compensation_stores(sp.compensation)
-        + sp.depth_clamp.map_or(0, |d| match (d.range, d.clamps || d.codes) {
+        + sp.depth_clamp.map_or(0, |d| match (d.range, d.clamps) {
             // The `[0, 1]` selects, the range's two clamps and the negative NaN's select.
             (true, _) => 14,
             (false, true) => 5,
@@ -3401,12 +3369,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             (sp.words_written.values())
                 .map(|&w| super::word_color::encode_words(w))
                 .fold(0u64, u64::saturating_add),
-        )
-        // A returned depth's code.
-        .saturating_add(match sp.depth_clamp.is_some_and(|d| d.codes) {
-            true => super::depth16::CODE_WORDS,
-            false => 0,
-        });
+        );
     sp.words = (sp.objects.len() as u64)
         .saturating_mul(OBJECT_WORDS)
         .saturating_add(params)
@@ -3416,34 +3379,8 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 .saturating_mul(rets)
                 .saturating_mul(STORE_WORDS),
         )
-        .saturating_add(rounding.saturating_mul(rets))
-        // The depth stored at entry.
-        .saturating_add(match sp.depth16 {
-            Some(d) if d.raises.is_some() => {
-                super::depth16::STORE_WORDS + super::depth16::SIDE_WORDS
-            }
-            Some(_) => super::depth16::STORE_WORDS,
-            None => 0,
-        });
+        .saturating_add(rounding.saturating_mul(rets));
     Ok(())
-}
-
-/// Whether a fragment function stores Metal's `Depth16Unorm` codes itself
-/// (`LoweringInputs::depth16_codes`): compiled under the input, it neither declares nor takes
-/// early fragment tests (the storage form's, `fetch_early_tests`) nor runs its draw's tests itself,
-/// where the device's tests take its depth before it runs.
-fn depth16_codes(cx: &SelectCx<'_>) -> bool {
-    let early = matches!(
-        cx.entry.ep.stage,
-        AirStage::Fragment {
-            early_fragment_tests: true
-        }
-    );
-    cx.stage == Stage::Fragment
-        && cx.inputs.depth16_codes
-        && !early
-        && !cx.families.fragment.fetch_early_tests
-        && !cx.inputs.shader_tests
 }
 
 /// Whether AIR type `ty` of entry `e` is `half` or a vector of it: a `half` color output

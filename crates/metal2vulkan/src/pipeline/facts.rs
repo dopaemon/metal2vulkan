@@ -731,33 +731,6 @@ pub enum RuntimeFact {
     /// no `PrecisionNote::DeviceNanEncoding` for these writes: the consumer announces it at a
     /// draw or dispatch whose heap holds such a texture.
     HeapHalfTexelWrites { stage: Stage, packed: bool },
-    /// The fragment stage writes each depth of a `Depth16Unorm` attachment as Metal's code
-    /// (`LoweringInputs::depth16_codes`), so the device stores Metal's codes without its own
-    /// conversion deciding them. Where `biased`, it stores the depth Metal stores for each fragment,
-    /// its depth bias included: it reads the draw's bias from `PushField::DepthBias`, which the
-    /// binder writes from `BindState::depth_bias`, and adds it to `FragCoord.z` itself, so the
-    /// consumer records the draw's Vulkan depth bias as zero. Otherwise the function returns its
-    /// own depth, which Metal does not bias.
-    Depth16Codes { biased: bool },
-    /// The render pipeline was compiled under `VariantKey::depth16_pass` holding `depth16`: for a
-    /// render pass whose depth is (`depth16`) or is not `Depth16Unorm`, where its own depth format
-    /// says otherwise, so its fragment stage takes Metal's 16-bit codes by the pass's depth
-    /// (`LoweringInputs::depth16_codes`). Its plans state the variant the shape asks for
-    /// (`BindShape::depth16_pass`).
-    Depth16Pass { depth16: bool },
-    /// The render pipeline was compiled under `VariantKey::depth16_biased`: for a draw that biases
-    /// a `Depth16Unorm` depth, on a profile whose unbiased depths the device stores as Metal's
-    /// codes but not its biased ones (`DriverDeviation::MetalDepth16Stores` without
-    /// `DriverDeviation::MetalDepth16BiasedStores`), so its fragment stage adds the bias and
-    /// writes Metal's code itself (`LoweringInputs::depth16_codes`). Its plans state the variant
-    /// the shape asks for (`BindShape::depth16_biased`).
-    Depth16Biased,
-    /// The render pipeline was compiled under `VariantKey::depth16_bias_raises` holding `raises`:
-    /// for a draw whose bias of a `Depth16Unorm` depth the runtime proved never lowers the depth
-    /// (`raises`) or never raises it, so a fragment stage that adds the bias itself declares that
-    /// side (`LoweringInputs::depth16_bias_raises`). Its plans state the variant the shape asks for
-    /// (`BindShape::depth16_bias_raises`).
-    Depth16BiasSide { raises: bool },
     /// The render pipeline draws through synthesized geometry stages, one per topology class, of
     /// which a draw runs its class's (`RenderPipeline::runs_stage`): its fragment function reads
     /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` (`weights`), or its

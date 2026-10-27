@@ -480,13 +480,6 @@ pub fn function_key(
         h.bytes(b"instanced-attributes")
             .bytes(format!("{:?}", inputs.instanced_attributes).as_bytes());
     }
-    // Appended only when set: a fragment function of any other pipeline or profile keeps its key.
-    if inputs.depth16_codes {
-        h.bytes(b"depth16-codes");
-    }
-    if let Some(raises) = inputs.depth16_bias_raises {
-        h.bytes(b"depth16-bias-raises").u64(u64::from(raises));
-    }
     // Appended only when set, in its derived `Debug` form (integers), as `dropped_colors` is.
     if let Some(group) = &inputs.color_group {
         h.bytes(b"color-group")

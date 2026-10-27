@@ -1651,20 +1651,28 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 // words) and its read of the table's length are emitted once. The module was
                 // about 3,500 words with a search per load; it is 1,520 with `u64` ids and 2,202
                 // with word ids.
-                // On a profile not measured to store Metal's normalized codes, the write rounds
-                // by the handle's class through the module's routine: a third function, called
-                // once.
+                // The write's normalized channels are the device's conversion: noted where the
+                // profile is not measured to store Metal's codes, or where it stores a texture
+                // of a 1-bit alpha, which it rounds otherwise.
                 let measured =
                     p.takes_driver_deviation(crate::error::DriverDeviation::MetalNormStorageWrites);
-                let routine = usize::from(!measured);
-                assert_eq!(count(&a, OP_FUNCTION), 2 + routine, "{stem}");
-                assert_eq!(count(&a, OP_FUNCTION_CALL), 2 + routine, "{stem}");
+                let one_bit = crate::metal::format::one_bit_storage(
+                    crate::metal::format::StorageUse::texture(false, true),
+                    &p,
+                );
+                assert_eq!(
+                    a.precision
+                        .contains(&crate::pipeline::PrecisionNote::DeviceColorConversion),
+                    !measured || one_bit,
+                    "{stem}"
+                );
+                assert_eq!(count(&a, OP_FUNCTION), 2, "{stem}");
+                assert_eq!(count(&a, OP_FUNCTION_CALL), 2, "{stem}");
                 assert_eq!(count(&a, OP_ULESS_THAN_EQUAL), 16, "{stem}");
                 assert_eq!(count(&a, OP_ARRAY_LENGTH), 1, "{stem}");
                 // A heap write on a profile whose half-float storage class converts also tests
-                // the handle's class index and writes that class's half, Metal's measured half
-                // write: 1,652 words with `HalfQuietNan`, 1,901 with `HalfTowardZero` (2,588 with
-                // word ids).
+                // the handle's class index and quiets the write's NaN: 1,652 words with
+                // `HalfQuietNan` (2,588 with word ids).
                 let half = match crate::metal::format::half_write_class(&p) {
                     crate::pipeline::lower_inputs::StorageImageClass::Identity => 0,
                     class => crate::lower::texture::heap_half_write_words(class) as usize,
@@ -1674,26 +1682,13 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 let small = crate::lower::texture::heap_half_write_words(
                     crate::pipeline::lower_inputs::StorageImageClass::SmallFloatQuietNan,
                 ) as usize;
-                // And the normalized write's rounding: the routine, its call and the class
-                // table where unmeasured, else a 1-bit alpha's class test where the profile
-                // stores one.
-                use crate::lower::texture::{norm_write, NormWrite};
-                let norm = match measured {
-                    false => {
-                        norm_write::ROUTINE_WORDS as usize
-                            + crate::lower::texture::heap_classes_words() as usize
-                            + NormWrite::Class.words(true) as usize
-                    }
-                    true => NormWrite::HeapOneBit.words(true) as usize,
-                };
                 // And a half-float member's bits through the unsigned integer twin, where the
                 // profile takes it.
                 let bits = match crate::metal::format::heap_half_bits(&p) {
                     true => crate::lower::texture::heap_bits_write_words() as usize,
                     false => 0,
                 };
-                let bound =
-                    half + small + norm + bits + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
+                let bound = half + small + bits + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
                 assert!(
                     a.module.words.len() <= bound,
                     "{stem}: {}",

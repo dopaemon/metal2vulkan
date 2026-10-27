@@ -521,44 +521,6 @@ fn depth16_units(c: f32) -> f64 {
     f64::from(c) + if c >= 0.0 { 1.0 } else { -1.0 }
 }
 
-/// The depth bias a fragment stage that stores Metal's `Depth16Unorm` codes itself adds
-/// (`BindState::depth_bias`, `RuntimeFact::Depth16Codes`), for the render encoder's
-/// `setDepthBias:slopeScale:clamp:` factors `depth_bias` and `slope_scale` (both finite) and
-/// `clamp` (finite; Metal's NaN or infinite clamp clamps nothing, as 0 does): `[u, s, k]`, `u`
-/// Metal's `c ± 1` units of 1/65535 rounded once to `float` ([`depth_bias`]'s rule), `s` and `k`
-/// the factors. All three are 0 where neither factor is nonzero, which biases nothing; the caller
-/// passes 0 for a draw of points or lines, which Metal never biases.
-pub fn depth16_bias(depth_bias: f32, slope_scale: f32, clamp: f32) -> [f32; 3] {
-    if depth_bias == 0.0 && slope_scale == 0.0 {
-        return [0.0; 3];
-    }
-    let units = (depth16_units(depth_bias) / 65535.0) as f32;
-    [units, slope_scale, clamp]
-}
-
-/// The side of the depth bias a fragment stage that stores Metal's `Depth16Unorm` codes itself
-/// adds for the factors `depth_bias`, `slope_scale` and `clamp` ([`depth16_bias`]'s), where every
-/// triangle's biased depth lies on it: `Some(true)` where Metal's units are above 0, the slope
-/// factor finite and not below 0, and a clamp above 0 not below the units, so the stored depth is
-/// never below the fragment's own; `Some(false)` for the mirror, never above it; `None` for any
-/// other bias, whose side a triangle's slope decides, and for none. The caller also needs every
-/// Vulkan depth range of the draw inside `[0, 1]` (`BindState::depth16_bias_raises`); the proof is
-/// `lower::stage_io::depth16::side_bounded`'s.
-pub fn depth16_bias_side(depth_bias: f32, slope_scale: f32, clamp: f32) -> Option<bool> {
-    let [units, slope, clamp] = depth16_bias(depth_bias, slope_scale, clamp);
-    if !units.is_finite() || !slope.is_finite() {
-        return None;
-    }
-    // A NaN or infinite clamp bounds nothing (`depth16_bias`), as the stage's comparisons find.
-    let raises = units > 0.0 && slope >= 0.0 && !(clamp > 0.0 && clamp < units);
-    let lowers = units < 0.0 && slope <= 0.0 && !(clamp < 0.0 && clamp > units);
-    match (raises, lowers) {
-        (true, _) => Some(true),
-        (_, true) => Some(false),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

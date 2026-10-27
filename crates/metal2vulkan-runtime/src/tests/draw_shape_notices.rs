@@ -47,12 +47,8 @@ const UNRELATED: [Degradation; 10] = [
 
 /// The kinds a `Depth16Unorm` draw's state announces (`render_state::announce_unorm_depth`),
 /// which of them depending on the device's profile.
-const UNORM_DEPTH: [Degradation; 4] = [
-    Degradation::ShaderUnormDepth,
-    Degradation::UnormDepthRounding,
-    Degradation::UnormDepthSlope,
-    Degradation::UnormDepthBias,
-];
+const UNORM_DEPTH: [Degradation; 2] =
+    [Degradation::UnormDepthRounding, Degradation::UnormDepthBias];
 
 /// The notices a device announced.
 type Heard = Arc<Mutex<Vec<DegradeNotice>>>;

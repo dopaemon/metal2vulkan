@@ -269,12 +269,6 @@ pub struct GraphicsState {
     /// [`ShaderTestsUse`] for the consumer contract.
     #[cfg_attr(feature = "serde", serde(default))]
     pub shader_tests: Option<ShaderTestsUse>,
-    /// The rule word of each color attachment whose channels' rules the fragment function
-    /// selects at the draw (`StageIo::selected_colors`), by color index, sorted: each channel's
-    /// code of the rule this pipeline's attachment takes (`pipeline::color_writes::rule_word`),
-    /// which the binder writes to the function's `PushField::ColorWriteRule` of the attachment.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub color_write_rules: Vec<(u32, u32)>,
     /// The fragment function reads textures through snapshots (`VariantKey::snapshot_textures`):
     /// each draw of the pipeline is drawn twice in its subpass, the texture's attachment in
     /// `VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`, first with every color write mask 0,
@@ -287,8 +281,7 @@ pub struct GraphicsState {
     /// The group of the pipeline's color attachments this variant draws
     /// (`VariantKey::color_group`), where the device draws them in groups
     /// ([`ColorGroup`](crate::pipeline::ColorGroup)): every color-indexed part of the state
-    /// (`color_attachments`, `input_attachments`, `storage_attachments`, `color_write_rules`
-    /// among them) indexes the group's attachments by location, Metal's attachment
+    /// (`color_attachments`, `input_attachments`, `storage_attachments` among them) indexes the group's attachments by location, Metal's attachment
     /// `colors()[l]` at location `l`, and the fragment stage writes those alone. Each draw of the
     /// pipeline is a draw of every group's variant, in a pass of that group's attachments; the
     /// vertex stage is the same module in every variant, and the fragment stage's `FragDepth`,
@@ -433,7 +426,6 @@ impl GraphicsState {
             color_outputs: 0,
             sample_mask: None,
             shader_tests: None,
-            color_write_rules: Vec::new(),
             snapshot_reads: false,
             color_group: None,
             logic_op: None,

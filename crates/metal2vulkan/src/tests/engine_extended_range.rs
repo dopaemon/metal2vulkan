@@ -10,8 +10,8 @@
 //! - A read outside the texture is Metal's zero texel, alpha the format's (measured), on a profile
 //!   whose device robustness would return the raw zero.
 //! - `ARGB8Unorm`'s storage slot rotates its bytes in the shader (`RotateArgb`), and a half-float
-//!   storage slot of `HalfTowardZero` rounds each written `float` toward zero, one of
-//!   `HalfQuietNan` its NaN alone.
+//!   storage slot of `HalfQuietNan` quiets a written `float`'s NaN alone, the device rounding
+//!   every other value.
 //! - The binder joins a slot bound in an extended-range format to the plan's variant, the
 //!   variant's plan states the same key, and it views the image in the raw format.
 //! - Samples of such a texture are Metal's (`samples`), at Metal's level and through a linear
@@ -625,10 +625,8 @@ fn bfloat_reads_and_writes_are_metals() {
 }
 
 /// `ARGB8Unorm`'s storage slot holds its bytes in an `R8G8B8A8_UNORM` image, alpha in red: a
-/// read rotates them into Metal's channels, and a write back stores each channel's code as Metal
-/// writes it (the value clamped to `[0, 1]`, the exact product with 255 rounded to nearest, ties
-/// to even) as that code times the `f32` nearest `1 / 255`, which every device stores as the code.
-/// The held lanes run from below 0 to above 1.
+/// read rotates them into Metal's channels, and a write back rotates them into the image's lanes
+/// as computed, which the device's conversion stores. The held lanes run from below 0 to above 1.
 #[test]
 fn argb8_storage_slots_rotate_their_bytes() {
     let Some(bc) = assemble("argb8", &kernel(Source::ReadWrite, false, 0)) else {
@@ -644,11 +642,6 @@ fn argb8_storage_slots_rotate_their_bytes() {
     // The image's lanes as the view reads them (the interpreter holds `f32` bits).
     let value = |k: u32| k as f32 / 3600.0 - 0.1;
     let held = |n: u32| -> [u32; 4] { [0, 1, 2, 3].map(|c| value(4 * n + c).to_bits()) };
-    // The lanes a write of `held(n)` stores.
-    let code = |bits: u32| -> u32 {
-        let product = f64::from(f32::from_bits(bits).clamp(0.0, 1.0)) * 255.0;
-        (product.round_ties_even() as f32 * (1.0f32 / 255.0)).to_bits()
-    };
     for (stem, p) in profiles() {
         let (plan, m) =
             typed_module_with(&bc, "k", &p, &i).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -664,23 +657,22 @@ fn argb8_storage_slots_rotate_their_bytes() {
             let at = layout
                 .index(0, 0, 0, [n % SIDE, n / SIDE, 0])
                 .expect("texel");
-            assert_eq!(target[at], held(n).map(code), "{stem}: texel {n} written");
+            assert_eq!(target[at], held(n), "{stem}: texel {n} written");
         }
     }
 }
 
-/// A half-float storage slot of `HalfTowardZero` (formatless, and declared `Rgba16f`) writes each
-/// `float` channel rounded toward zero to the `half` Metal stores, as the `f32` that holds it: a
-/// finite value past 65504 as 65504, an infinity kept, a NaN as `0x7fc00000`;
-/// one of `HalfQuietNan` (a device's that rounds as Metal does: MoltenVK's here) writes it as
-/// computed but a NaN as `0x7fc00000`. The held lanes cover
-/// every tie between neighbouring halves and its neighbours, past the largest, the infinities
-/// and NaNs. The NaN is Metal's where the profile takes `DriverDeviation::MetalFloatStorageNans`
-/// (MoltenVK's and lavapipe's: the module requires its property, and `HalfQuietNan`'s also
-/// `MetalHalfStorageWrites`), else the device's (ANV's on the Iris Xe of RPL-P:
-/// `PrecisionNote::DeviceNanEncoding`).
+/// A half-float storage slot of `HalfQuietNan` (formatless, and declared `Rgba16f`) writes each
+/// `float` channel as computed but a NaN as `0x7fc00000`, the device's conversion rounding the
+/// value: Metal's rounding toward zero where the profile takes
+/// `DriverDeviation::MetalHalfStorageWrites` (the module requires its property), else the
+/// device's own (`PrecisionNote::DeviceColorConversion`). The held lanes cover every tie between
+/// neighbouring halves and its neighbours, past the largest, the infinities and NaNs. The NaN is
+/// Metal's where the profile takes `DriverDeviation::MetalFloatStorageNans` (MoltenVK's and
+/// lavapipe's: the module requires its property), else the device's (ANV's on the Iris Xe of
+/// RPL-P: `PrecisionNote::DeviceNanEncoding`).
 #[test]
-fn half_float_storage_slots_round_toward_zero() {
+fn half_float_storage_slots_quiet_their_nans() {
     use crate::device::requirements::VkProperty;
     use crate::pipeline::artifact::PrecisionNote;
     let Some(bc) = assemble("halves", &kernel(Source::ReadWrite, false, 0)) else {
@@ -713,10 +705,8 @@ fn half_float_storage_slots_round_toward_zero() {
         }
     };
     let held = move |n: u32| -> [u32; 4] { [0, 1, 2, 3].map(|c| value(n, c)) };
-    for class in [
-        StorageImageClass::HalfTowardZero,
-        StorageImageClass::HalfQuietNan,
-    ] {
+    {
+        let class = StorageImageClass::HalfQuietNan;
         for choice in [
             StorageImageChoice {
                 numeric: Some(crate::pipeline::sym::SampledType::Float),
@@ -729,12 +719,8 @@ fn half_float_storage_slots_round_toward_zero() {
             let anv = "intel-irisxe-rplp-anv";
             let anv = (anv, profile(anv, DevicePolicy::default()).expect("profile"));
             for (stem, p) in profiles().into_iter().chain([anv]) {
-                // `HalfQuietNan` is the class of a device measured to round as Metal does.
                 let rounds =
                     p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfStorageWrites);
-                if class == StorageImageClass::HalfQuietNan && !rounds {
-                    continue;
-                }
                 // The kernel reads both textures: without formatless reads, the target's choice
                 // declares its format and the source's `RGBA32Float`'s.
                 let mut i = i.clone();
@@ -760,9 +746,6 @@ fn half_float_storage_slots_round_toward_zero() {
                         .expect("texel");
                     let want = held(n).map(|x| match f32::from_bits(x) {
                         v if v.is_nan() => 0x7fc0_0000,
-                        v if class == StorageImageClass::HalfTowardZero => {
-                            half_value(half_toward_zero(v)).to_bits()
-                        }
                         _ => x,
                     });
                     assert_eq!(target[at], want, "{what}: texel {n}");
@@ -788,8 +771,14 @@ fn half_float_storage_slots_round_toward_zero() {
                 );
                 assert_eq!(
                     relied.contains(&VkProperty::MetalHalfStorageWrites),
-                    class == StorageImageClass::HalfQuietNan,
+                    rounds,
                     "{what}"
+                );
+                assert_eq!(
+                    a.precision.contains(&PrecisionNote::DeviceColorConversion),
+                    !rounds,
+                    "{what}: {:?}",
+                    a.precision
                 );
                 assert!(
                     !relied.contains(&VkProperty::MetalHalfStorageNans),

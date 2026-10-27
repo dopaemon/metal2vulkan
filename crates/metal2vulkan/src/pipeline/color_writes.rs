@@ -1,36 +1,36 @@
 //! How a fragment function's float color outputs reach the attachments whose formats convert
 //! them (`LoweringInputs::color_writes`).
 //!
-//! Metal stores a float written to a normalized attachment as the exact product with the
-//! format's maximum code rounded to nearest, to an 8-bit sRGB one through its twelve-bit encode,
-//! and to a half-float one rounded toward zero (`metal::format::write_conversion`, probes on an
-//! Apple M3 Max and an M4). Vulkan's drivers round the `f32` product with ties to even, encode sRGB
-//! by their own approximations, and round a half to nearest, so near every tie they store another
-//! code (`runtime_lane::color_writes`: ANV, RADV, NVIDIA and lavapipe); only MoltenVK on Apple's
-//! GPUs stores Metal's (`VkProperty::MetalColorWrites`). Everywhere else the fragment function
-//! rounds each such output by Metal's rule itself and writes the `f32` nearest the code's exact
-//! value, which every measured driver stores as that code. On MoltenVK the map keeps the half-float
-//! channels alone, which round nothing and record the device's NaN encoding of a `half` output.
+//! The device converts each output it is handed: its conversion is the contract. Metal stores a
+//! float written to a normalized attachment as the exact product with the format's maximum code
+//! rounded to nearest, to an 8-bit sRGB one through its twelve-bit encode, and to a half-float one
+//! rounded toward zero (`metal::format::write_conversion`, probes on an Apple M3 Max and an M4).
+//! Vulkan's drivers round the `f32` product with ties to even, encode sRGB by their own
+//! approximations, and round a half to nearest, so near a tie they may store another code
+//! (`runtime_lane::color_writes`: ANV, RADV, NVIDIA and lavapipe); only MoltenVK on Apple's GPUs
+//! stores Metal's (`VkProperty::MetalColorWrites`). The map names each channel's rule so the
+//! fragment function can record where the device's conversion is not measured to be Metal's
+//! (`PrecisionNote::DeviceColorConversion`); it rounds none of them. On MoltenVK the map keeps the
+//! half-float channels alone, which record the device's NaN encoding of a `half` output.
 //!
 //! Under `TextureWriteRoundingMode::NearestEven` (Apple's `textureWriteRoundingMode` 2) Metal
-//! rounds a render state's half-float channels to nearest even ([`HALF_NEAREST`]), which no device
-//! does for a conversion it stores after a blend or as Metal's default: the function rounds each
-//! such channel itself on every profile, MoltenVK's included, where the channel stores the output
+//! rounds a render state's half-float channels to nearest even ([`HALF_NEAREST`]), the mode the
+//! pipeline asks for, which MoltenVK's conversion (toward zero, Metal's default) does not give: the
+//! function rounds each such channel itself on every profile, where the channel stores the output
 //! as written.
 //!
-//! The rounding is exact only where nothing after the shader changes the value: an attachment
-//! that blends with factors other than one and zero keeps the device's conversion
-//! ([`ChannelWrite::Device`], recorded as `PrecisionNote::DeviceColorConversion`), and so does
-//! the alpha of attachment 0 under alpha-to-coverage at the default rounding mode, which the
-//! coverage reads as computed. Under `NearestEven` that alpha rounds as the other channels do
-//! where the attachment stores it: Metal stores the nearest-even half and reads the coverage from
-//! the alpha before rounding (probe `a2c` on an Apple M3 Max, macOS 27.0.1: the coverage of 16,384
-//! alphas is the same under either mode), which no device separates, so the coverage reads the
-//! rounded alpha (`PrecisionNote::CoverageReadsRoundedAlpha`, [`pipeline_writes`]). An alpha its
-//! write mask does not store keeps the device's conversion, which stores nothing, so the coverage
-//! reads it as computed, as Metal's does. A format whose conversion
-//! Metal was not measured with keeps the device's conversion too, and so does a 32-bit float
-//! attachment that blends so, whose stored value is the device's blend arithmetic.
+//! An attachment that blends with factors other than one and zero keeps the device's conversion
+//! of the blend's result ([`ChannelWrite::Device`]), and so does the alpha of attachment 0 under
+//! alpha-to-coverage at the default rounding mode, which the coverage reads as computed. Under
+//! `NearestEven` that alpha rounds as the other channels do where the attachment stores it: Metal
+//! stores the nearest-even half and reads the coverage from the alpha before rounding (probe
+//! `a2c` on an Apple M3 Max, macOS 27.0.1: the coverage of 16,384 alphas is the same under either
+//! mode), which no device separates, so the coverage reads the rounded alpha
+//! (`PrecisionNote::CoverageReadsRoundedAlpha`, [`pipeline_writes`]). An alpha its write mask does
+//! not store keeps the device's conversion, which stores nothing, so the coverage reads it as
+//! computed, as Metal's does. A format whose conversion Metal was not measured with keeps the
+//! device's conversion too, and so does a 32-bit float attachment that blends so, whose stored
+//! value is the device's blend arithmetic.
 //!
 //! `Device::compile_render_pipeline` derives the map for a `Function` fragment stage from every
 //! color attachment of the pipeline's descriptor ([`color_writes`]); the fragment function
@@ -55,49 +55,15 @@ use crate::pipeline::lower_inputs::{
     ChannelWrite, ExtendedRangeColor, FactorLane, HalfOutputLane, RotatedBlendForm,
 };
 use crate::pipeline::rotated_blend::{rotated_blend, rotated_form, RotatedBlend};
-use crate::pipeline::stage_io::{IoRole, SelectedWrite};
+use crate::pipeline::stage_io::IoRole;
 
 /// The color writes of a fragment function writing the attachments `written` (dual-source index
 /// 0) of a pipeline whose color attachments are `colors` (alpha-to-coverage on where
 /// `alpha_to_coverage`, its half-float channels rounding by `rounding`) on profile `p` (the
-/// module docs). Where the device stores Metal's codes itself (`VkProperty::MetalColorWrites`)
-/// the map keeps only the half-float channels ([`metal_stored`]), whose `half` NaN the
-/// function's `float` output does not carry.
-///
-/// Elsewhere an attachment each of whose channels takes a selectable rule ([`code`]: none, the
-/// device's conversion, an 8-bit unorm channel's, a half-float channel's), one of them a rounding
-/// (an 8-bit unorm or a half-float channel's), takes [`ChannelWrite::Selected`] on every channel
-/// ([`selects`]): the function computes each such rule and the draw selects one by the attachment's
-/// rule word ([`rule_words`]), so the module is the same for every such format and blend.
-/// [`exact_writes`] is the map before that.
+/// module docs): each channel's rule. Where the device stores Metal's codes itself
+/// (`VkProperty::MetalColorWrites`) the map keeps only the half-float channels
+/// ([`metal_stored`]), whose `half` NaN the function's `float` output does not carry.
 pub(crate) fn color_writes(
-    written: impl IntoIterator<Item = u32>,
-    colors: &[Option<ColorAttachmentDescriptor>],
-    rounding: (bool, TextureWriteRoundingMode),
-    p: &DeviceProfile,
-) -> BTreeMap<u32, [Option<ChannelWrite>; 4]> {
-    let mut out = exact_writes(written, colors, rounding, p);
-    if !metal_color_writes(p) {
-        for rules in out.values_mut() {
-            if selects(rules) {
-                *rules = [Some(ChannelWrite::Selected); 4];
-            }
-        }
-    }
-    out
-}
-
-/// Whether profile `p`'s device stores Metal's codes itself (`VkProperty::MetalColorWrites`).
-fn metal_color_writes(p: &DeviceProfile) -> bool {
-    p.fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::MetalColorWrites)
-}
-
-/// The color writes [`color_writes`] derives before an attachment takes a selected rule: each
-/// channel's own rule.
-pub(crate) fn exact_writes(
     written: impl IntoIterator<Item = u32>,
     colors: &[Option<ColorAttachmentDescriptor>],
     (alpha_to_coverage, rounding): (bool, TextureWriteRoundingMode),
@@ -131,105 +97,30 @@ pub(crate) fn exact_writes(
     out
 }
 
-/// A rule word's code of a channel that takes no rule: the output as written.
-pub(crate) const NO_RULE_CODE: u32 = 0;
-
-/// A rule word's code of a channel the device converts ([`ChannelWrite::Device`]): the output as
-/// written, recorded as `PrecisionNote::DeviceColorConversion`.
-pub(crate) const DEVICE_CODE: u32 = 1;
-
-/// A rule word's code of an 8-bit unorm channel ([`ChannelWrite::Unorm`] of 8 bits).
-pub(crate) const UNORM8_CODE: u32 = 2;
-
-/// A rule word's code of a half-float channel ([`HALF`]).
-pub(crate) const HALF_CODE: u32 = 3;
-
-/// The bits of each channel's code in an attachment's rule word: channel `i`'s code is
-/// `(word >> (RULE_BITS * i)) & RULE_MASK`.
-pub(crate) const RULE_BITS: u32 = 4;
-
-/// One channel's code in a rule word, shifted down.
-pub(crate) const RULE_MASK: u32 = (1 << RULE_BITS) - 1;
-
-/// The code of a channel that takes `rule` in an attachment's rule word, or `None` where `rule`
-/// is no selectable one.
-fn code(rule: Option<ChannelWrite>) -> Option<u32> {
-    match rule {
-        None => Some(NO_RULE_CODE),
-        Some(ChannelWrite::Device) => Some(DEVICE_CODE),
-        Some(ChannelWrite::Unorm { bits: 8 }) => Some(UNORM8_CODE),
-        Some(rule) if rule == HALF => Some(HALF_CODE),
-        Some(_) => None,
-    }
-}
-
-/// The rule word of an attachment whose channels take `rules` ([`code`] of channel `i` at bits
-/// `RULE_BITS * i`), or `None` where a channel takes a rule no code selects.
-pub(crate) fn rule_word(rules: &[Option<ChannelWrite>; 4]) -> Option<u32> {
-    rules
-        .iter()
-        .zip(0u32..)
-        .try_fold(NO_RULE_CODE, |word, (&rule, i)| {
-            Some(word | code(rule)? << (RULE_BITS * i))
-        })
-}
-
-/// Whether an attachment whose channels take `rules` selects its rules at the draw
-/// ([`color_writes`]): each channel's rule has a code ([`rule_word`]), and one of them rounds
-/// (`UNORM8_CODE` or `HALF_CODE`). One that only keeps the device's conversion rounds nothing,
-/// and keeps its module free of the rounding.
-fn selects(rules: &[Option<ChannelWrite>; 4]) -> bool {
-    let rounds = |&r: &Option<ChannelWrite>| matches!(code(r), Some(UNORM8_CODE | HALF_CODE));
-    rule_word(rules).is_some() && rules.iter().any(rounds)
-}
-
-/// The codes the lanes `sel` writes take under rule word `word`.
-fn lane_codes(sel: &SelectedWrite, word: u32) -> impl Iterator<Item = u32> {
-    (0..u32::from(sel.lanes.min(4))).map(move |i| (word >> (RULE_BITS * i)) & RULE_MASK)
-}
-
-/// Whether the write `sel` of an attachment of rule word `word` rounds a lane to Metal's code in
-/// the shader, as an attachment the function lists in `StageIo::rounded_colors` does.
-pub(crate) fn selected_rounds(sel: &SelectedWrite, word: u32) -> bool {
-    lane_codes(sel, word).any(|c| sel.rounds & (1 << c) != 0)
-}
-
-/// The precision notes the write `sel` of an attachment of rule word `word` keeps: the device's
-/// conversion of a channel it converts (`PrecisionNote::DeviceColorConversion`), and its encoding
-/// of a NaN where a lane's code stores one so (`PrecisionNote::DeviceNanEncoding`).
-pub(crate) fn selected_notes(sel: &SelectedWrite, word: u32) -> BTreeSet<PrecisionNote> {
-    let mut notes = BTreeSet::new();
-    for c in lane_codes(sel, word) {
-        if c == DEVICE_CODE {
-            notes.insert(PrecisionNote::DeviceColorConversion);
-        }
-        if sel.nans & (1 << c) != 0 {
-            notes.insert(PrecisionNote::DeviceNanEncoding);
-        }
-    }
-    notes
+/// Whether profile `p`'s device stores Metal's codes itself (`VkProperty::MetalColorWrites`).
+fn metal_color_writes(p: &DeviceProfile) -> bool {
+    p.fields()
+        .enabled
+        .properties
+        .contains(&VkProperty::MetalColorWrites)
 }
 
 /// The precision notes and the attachments it rounds in the shader of fragment function `a` in
-/// a render pipeline whose rule words are `rules` ([`rule_words`]) and whose color attachments
-/// are `colors` (`GraphicsState::color_attachments`): the function's own
-/// (`FunctionArtifact::precision`, `StageIo::rounded_colors`), for each attachment whose
-/// rules it selects (`StageIo::selected_colors`) those its rule word selects
-/// ([`selected_notes`], [`selected_rounds`]), `PrecisionNote::HalfOutputPrecision` where an
-/// attachment of `StageIo::half_blend_colors` blends ([`blends_output`]), and
-/// `PrecisionNote::HalfOutputFastMathBlend` where one of `StageIo::half_fast_colors` stores some
-/// channel ([`stores_output`]), and `PrecisionNote::CoverageReadsRoundedAlpha` where the pipeline
-/// covers by alpha (`alpha_to_coverage`, `GraphicsState::alpha_to_coverage`) and the function
-/// rounds that alpha to nearest even ([`rounds_coverage_alpha`]). Each sorted, each entry once.
-/// `None` where such an attachment has no rule word.
+/// a render pipeline whose color attachments are `colors` (`GraphicsState::color_attachments`):
+/// the function's own (`FunctionArtifact::precision`, `StageIo::rounded_colors`),
+/// `PrecisionNote::HalfOutputPrecision` where an attachment of `StageIo::half_blend_colors`
+/// blends ([`blends_output`]), and `PrecisionNote::HalfOutputFastMathBlend` where one of
+/// `StageIo::half_fast_colors` stores some channel ([`stores_output`]), and
+/// `PrecisionNote::CoverageReadsRoundedAlpha` where the pipeline covers by alpha
+/// (`alpha_to_coverage`, `GraphicsState::alpha_to_coverage`) and the function rounds that alpha to
+/// nearest even ([`rounds_coverage_alpha`]). Each sorted, each entry once.
 pub(crate) fn pipeline_writes(
     a: &FunctionArtifact,
-    rules: &[(u32, u32)],
     colors: &[Option<ColorAttachmentState>],
     alpha_to_coverage: bool,
-) -> Option<(Vec<PrecisionNote>, Vec<u32>)> {
+) -> (Vec<PrecisionNote>, Vec<u32>) {
     let mut notes = a.precision.clone();
-    let mut rounded = a.interface.io.rounded_colors.clone();
+    let rounded = a.interface.io.rounded_colors.clone();
     fn insert<T: Ord>(v: &mut Vec<T>, x: T) {
         if let Err(at) = v.binary_search(&x) {
             v.insert(at, x);
@@ -259,42 +150,7 @@ pub(crate) fn pipeline_writes(
     if a.interface.io.half_fast_colors.iter().any(stored) {
         insert(&mut notes, PrecisionNote::HalfOutputFastMathBlend);
     }
-    for (&color, sel) in &a.interface.io.selected_colors {
-        let &(_, word) = rules.iter().find(|(c, _)| *c == color)?;
-        if selected_rounds(sel, word) {
-            insert(&mut rounded, color);
-        }
-        for note in selected_notes(sel, word) {
-            insert(&mut notes, note);
-        }
-    }
-    Some((notes, rounded))
-}
-
-/// The rule word of each attachment the fragment stage of interface `io` selects its rules for
-/// (`StageIo::selected_colors`) in a render pipeline whose color attachments are `colors`
-/// (alpha-to-coverage on where `alpha_to_coverage`, rounding by `rounding`) on `p`: its channels'
-/// codes ([`rule_word`] of [`exact_writes`]), 0 where the pipeline converts nothing there. Sorted
-/// by attachment. `NeedsInput(ColorWrites)` where a channel takes a rule no code selects, which
-/// [`check`] refuses alike.
-pub(crate) fn rule_words(
-    io: &crate::pipeline::stage_io::StageIo,
-    colors: &[Option<ColorAttachmentDescriptor>],
-    rounding: (bool, TextureWriteRoundingMode),
-    p: &DeviceProfile,
-) -> Result<Vec<(u32, u32)>, Error> {
-    let exact = exact_writes(io.selected_colors.keys().copied(), colors, rounding, p);
-    io.selected_colors
-        .keys()
-        .map(|&a| {
-            let word = match exact.get(&a) {
-                Some(rules) => rule_word(rules),
-                None => Some(NO_RULE_CODE),
-            };
-            word.map(|w| (a, w))
-                .ok_or(Error::NeedsInput(RuntimeInput::ColorWrites))
-        })
-        .collect()
+    (notes, rounded)
 }
 
 /// Whether fragment function `a` rounds the alpha of its output to attachment 0 to nearest even in
@@ -382,8 +238,8 @@ fn metal_stored(c: &ColorAttachmentDescriptor) -> Option<[Option<ChannelWrite>; 
 
 /// Check the fragment stage `fragment` of a render pipeline whose color attachments are
 /// `colors` (alpha-to-coverage on where `alpha_to_coverage`, rounding by `rounding`) on `p`: the
-/// color writes it compiled under are the pipeline's for the attachments it writes, selected or
-/// each channel's own ([`writes_hold`]), and so are its extended-range attachments' writes
+/// color writes it compiled under are the pipeline's for the attachments it writes
+/// ([`writes_hold`]), and so are its extended-range attachments' writes
 /// ([`wanted_extended_range`]), and every color it stores nowhere (`StageIo::unattached_colors`)
 /// has no attachment and is not color 0 under alpha to coverage, and the second outputs it writes
 /// for rotated attachments are the pipeline's ([`wanted_rotated_factors`]), and so are the forms of
@@ -987,24 +843,15 @@ fn written(fragment: &FunctionArtifact) -> impl Iterator<Item = u32> + '_ {
 }
 
 /// Whether the color writes the fragment stage `fragment` compiled under
-/// (`StageIo::color_writes`) are the pipeline's: each attachment's entry is the one the pipeline
-/// gives it ([`wanted`]), or the entry of its channels' own rules ([`exact_writes`]), which a
-/// function compiled under them (a caller's inputs, the map) takes, and the function has an entry
-/// for no other attachment.
+/// (`StageIo::color_writes`) are the pipeline's ([`wanted`]): the same entry for each attachment,
+/// and none for another.
 fn writes_hold(
     fragment: &FunctionArtifact,
     colors: &[Option<ColorAttachmentDescriptor>],
     rounding: (bool, TextureWriteRoundingMode),
     p: &DeviceProfile,
 ) -> bool {
-    let selected = wanted(fragment, colors, rounding, p);
-    let exact = exact_writes(written(fragment), colors, rounding, p);
-    let compiled = &fragment.interface.io.color_writes;
-    let mut attachments = selected.keys().chain(exact.keys()).chain(compiled.keys());
-    attachments.all(|a| {
-        let got = compiled.get(a);
-        got == selected.get(a) || got == exact.get(a)
-    })
+    wanted(fragment, colors, rounding, p) == fragment.interface.io.color_writes
 }
 
 /// How attachment `c` takes each channel of a float output; `coverage_alpha` where

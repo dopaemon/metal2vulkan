@@ -69,10 +69,9 @@
 //! vertex-stage reads in place of bytes a fragment stage of the pass wrote in `pass_start_reads`
 //! ([`IN_PLACE_VERTEX_READS`]) and a vertex stage's write of bytes one wrote there
 //! ([`FRAGMENTS_BEFORE_GEOMETRY`]), constant biases of 16-bit unorm depths the device converts
-//! past a fragment stage that tests first, where the profile is not measured to store Metal's
-//! biased codes, in `unorm_depth_bias` ([`UNORM_DEPTH_BIAS`]), 16-bit unorm depths the device converts without the profile's
-//! deviation ([`UNORM_DEPTH_ROUNDING`]) and those the fragment stage writes Metal's codes of
-//! ([`SHADER_UNORM_DEPTH`]),
+//! where the profile is not measured to store Metal's biased codes, in `unorm_depth_bias`
+//! ([`UNORM_DEPTH_BIAS`]), 16-bit unorm depths the device converts without the profile's
+//! deviation ([`UNORM_DEPTH_ROUNDING`]),
 //! draws of points in a rate-mapped pass, which keep Vulkan's clipping of points, in
 //! `wide_points` ([`POINT_GUARD_BAND`]), draws whose fragment function writes a depth in depth
 //! clamp mode through a range above 0 that keep the device's clamp, in `viewport_ranges`
@@ -214,7 +213,7 @@ use super::texture_blits::{MIPMAPS, UPLOADS};
 use super::tile_dispatches::TILE_DISPATCHES;
 use super::topology_classes::UNSIZED_POINTS;
 use super::two_plane_copies::TWO_PLANE_COPIES;
-use super::unorm_depth_bias::{SHADER_UNORM_DEPTH, UNORM_DEPTH_BIAS, UNORM_DEPTH_ROUNDING};
+use super::unorm_depth_bias::{UNORM_DEPTH_BIAS, UNORM_DEPTH_ROUNDING};
 use super::view_reinterpretation::VIEW_SHADOWS;
 use super::viewport_ranges::{NAN_DEPTH, UNCLAMPED_BIAS, VERTEX_CLAMPS};
 use super::visibility::REPEATED_STARTS;
@@ -513,7 +512,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &FRAGMENTS_BEFORE_GEOMETRY,
         &UNORM_DEPTH_BIAS,
         &UNORM_DEPTH_ROUNDING,
-        &SHADER_UNORM_DEPTH,
         &POINT_GUARD_BAND,
         &NAN_DEPTH,
         &UNCLAMPED_BIAS,

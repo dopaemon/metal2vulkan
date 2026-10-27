@@ -934,11 +934,6 @@ pub struct ArithPlan {
     /// `float` lane, when one of [`ArithPlan::libm`] divides; decided by [`finish`], which adds it
     /// to [`ArithPlan::precise`].
     pub libm_division: Option<divide::Routine>,
-    /// Whether a fragment function writes a float to an sRGB attachment by Metal's encode
-    /// ([`color_write`]), which reads the byte's linear value from the color table, and the
-    /// buffer the table lives in on the profile, which [`declare`] then declares once
-    /// ([`srgb::declare_color_table`]).
-    pub color_table: Option<srgb::ColorTable>,
     /// Whether a function reads or writes a texture slot bound in an `_sRGB` extended-range
     /// format (`LoweringInputs::extended_range`), through Metal's tables, which [`declare`] then
     /// declares once ([`extended_range::declare`]).
@@ -1108,10 +1103,6 @@ pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u6
         )
         .chain(plan.libm.iter().map(|r| (r.name(), u64::from(r.words()))))
         .chain(table)
-        .chain(
-            plan.color_table
-                .map(|_| (COLOR_WRITE_SRGB, u64::from(srgb::COLOR_TABLE_WORDS))),
-        )
         .chain(extended)
         .chain(padded)
 }
@@ -1134,9 +1125,6 @@ pub const DOT: &str = "arith.dot.fused";
 pub const CHUNKED_DOT: &str = "arith.chunked.dot.fused";
 /// See [`SRGB_PACK`].
 pub const SRGB_UNPACK: &str = "arith.unpack.srgb";
-/// The census name of the color table a fragment function's sRGB color writes read
-/// ([`ArithPlan::color_table`]).
-pub const COLOR_WRITE_SRGB: &str = "arith.color_write.srgb";
 /// The census name of Metal's fast division ([`ArithStrategy::FastDivide`]).
 pub const FAST_DIVIDE: &str = "arith.fdiv.fast";
 /// The census name of a multiply fused into the additions that use it
@@ -1288,8 +1276,6 @@ pub struct Declared {
     pub fast: BTreeMap<math::FastDivision, FuncId>,
     /// The sRGB table, when [`ArithPlan::srgb`].
     pub srgb: Option<GlobalId>,
-    /// The color table, when [`ArithPlan::color_table`].
-    pub color_table: Option<GlobalId>,
     /// The extended-range sRGB table, when [`ArithPlan::extended_range_srgb`].
     pub extended_range_srgb: Option<GlobalId>,
     /// The table of each of the plan's [`ArithPlan::padded_srgb`].
@@ -1326,9 +1312,6 @@ pub fn declare(
     }
     if plan.families.arith.srgb.is_some() {
         decl.srgb = Some(srgb::declare(mb)?);
-    }
-    if let Some(class) = plan.families.arith.color_table {
-        decl.color_table = Some(srgb::declare_color_table(mb, plan.stage, class)?);
     }
     if plan.families.arith.extended_range_srgb {
         decl.extended_range_srgb = Some(extended_range::declare(mb)?);

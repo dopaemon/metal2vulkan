@@ -1,99 +1,94 @@
-//! A fragment function's color outputs rounded to the codes Metal stores: which lanes of each
-//! output round, from `LoweringInputs::color_writes`, and their emission (`arith::color_write`).
+//! A fragment function's color outputs as the device converts them: which conversions each
+//! output's channels take, from `LoweringInputs::color_writes`, and the rounding Metal's
+//! `textureWriteRoundingMode` asks for (`arith::color_write`).
 //!
 //! The function records the map it compiled under for each attachment it writes
-//! (`StageIo::color_writes`, which link checks against the pipeline's), and rounds each lane
-//! whose channel has a rule:
+//! (`StageIo::color_writes`, which link checks against the pipeline's), and writes each lane as
+//! computed, the device's conversion storing it, but for a half-float channel under
+//! `TextureWriteRoundingMode::NearestEven` (`color_writes::HALF_NEAREST`), which no device's
+//! conversion of Metal's default does: the function rounds it to nearest even on every profile, and
+//! the device's conversion of the rounded half is exact. A lane the device converts otherwise than
+//! Metal may records a note:
 //!
-//! - a channel the device converts ([`ChannelWrite::Device`]: a blend other than one and zero,
-//!   alpha-to-coverage's alpha, or a format Metal was not measured with) is written as computed
-//!   and the module records `PrecisionNote::DeviceColorConversion`; one whose blend Metal rounds
-//!   to nearest even ([`ChannelWrite::BlendedNearestEven`], a half-float channel under
-//!   `TextureWriteRoundingMode::NearestEven`) is too, and records
-//!   `PrecisionNote::BlendedWriteRounding`;
-//! - a `half` output (held widened) to a half-float channel is already a half: it is not
-//!   rounded again (to an 11- or 10-bit float channel it is), and to a packed 16-bit format's
-//!   channel ([`ChannelWrite::HalfUnorm`]) it rounds as a unorm channel's;
+//! - a channel whose conversion the device makes where it is not measured to make Metal's (a
+//!   blend other than one and zero, alpha-to-coverage's alpha, a format Metal was not measured
+//!   with, or a unorm, snorm, sRGB or small float channel on a device that rounds it otherwise)
+//!   records `PrecisionNote::DeviceColorConversion`; one whose blend Metal rounds to nearest even
+//!   ([`ChannelWrite::BlendedNearestEven`], a half-float channel under
+//!   `TextureWriteRoundingMode::NearestEven`) records `PrecisionNote::BlendedWriteRounding`;
+//! - a `half` output (held widened) to a half-float channel is already a half: the device's
+//!   conversion of it is exact;
 //! - a `bfloat` output never arrives: Metal's compiler rejects one, and the stage's outputs refuse
 //!   it before (`legal::refuse_bfloat_color`);
 //! - an integer output to a channel with a rule is Metal's pipeline error, which link refuses
-//!   (`ColorAttachment`): nothing rounds it;
+//!   (`ColorAttachment`): nothing converts it;
 //! - a NaN written to a half-float channel is stored as the device's conversion encodes it
 //!   (`PrecisionNote::DeviceNanEncoding`) unless the device is measured to store Metal's: Metal
-//!   stores a `float` NaN as `0x7e00` and a `half` NaN's own bits. A `float` output's NaN (the
-//!   rounding writes `0x7fc00000`) is Metal's where the profile takes
-//!   `DriverDeviation::MetalFloatColorNans` or `MetalColorWrites`, a `half` output's (held
-//!   widened, its payload in the significand's top bits) where it takes `MetalHalfColorNans`,
-//!   and either where the function writes it through a 16-bit output (below); elsewhere the
-//!   module records the note (`runtime_lane::color_writes`: ANV and RADV store `0xfe00`, from a
-//!   16-bit output too, lavapipe quiets or canonicalizes a `half` NaN, MoltenVK canonicalizes it
-//!   from a 32-bit output).
+//!   stores a `float` NaN as `0x7e00` and a `half` NaN's own bits. A `float` output's NaN is
+//!   Metal's where the profile takes `DriverDeviation::MetalColorWrites`, and a lane's the function
+//!   rounds to nearest even (its NaN `0x7fc00000`) where it takes `MetalFloatColorNans`; a `half`
+//!   output's (held widened, its payload in the significand's top bits) where it takes
+//!   `MetalHalfColorNans`, or where the function writes it through a 16-bit output (below);
+//!   elsewhere the module records the note (`runtime_lane::color_writes`: ANV and RADV store
+//!   `0xfe00`, from a 16-bit output too, lavapipe quiets or canonicalizes a `half` NaN, MoltenVK
+//!   canonicalizes it from a 32-bit output).
 //!
 //! On a profile that stores Metal's codes itself (`VkProperty::MetalColorWrites`) the map holds
-//! only half-float channels (`pipeline::color_writes`): nothing rounds, and only the NaN note is
-//! recorded, but for a channel that rounds to nearest even (`color_writes::HALF_NEAREST`, a
-//! pipeline's `TextureWriteRoundingMode::NearestEven`), which no device's conversion does: the
-//! function rounds it on every profile, and the device's toward-zero conversion of the rounded half
-//! is exact.
+//! only half-float channels (`pipeline::color_writes`): only the NaN note is recorded, and the
+//! rounding to nearest even under `NearestEven`.
 //!
-//! Where the device is measured to convert one kind of channel as Metal does, an output variable's
-//! lane to such a channel is written as computed, its NaN chosen where the device's store of it
-//! would not be Metal's ([`color_write::Lane::NanAs`]), and the module requires the deviation's
-//! property:
+//! Where the device is measured to convert one kind of channel as Metal does, a lane of an output
+//! variable to such a channel records no `DeviceColorConversion`, and the module requires the
+//! deviation's property:
 //! - a `float` output to a half-float or unsigned small float channel
 //!   (`DriverDeviation::MetalSmallFloatColorWrites`: RADV on the Radeon 780M, ANV on the Iris Xe
-//!   of RPL-P, NVIDIA's on the RTX 3090), its NaN written as the rounding's `0x7fc00000`, which
-//!   every such device stores as Metal's NaN of an unsigned channel and NVIDIA's as `0x7e00`
-//!   (RADV and ANV store `0xfe00` for every NaN of a half-float channel, noted as above, so
-//!   nothing is chosen there);
-//! - an output to a 16-bit unorm or snorm channel (`DriverDeviation::MetalNorm16ColorWrites`:
-//!   RADV on the Radeon 780M), a blended snorm channel's NaN written as -1.0.
+//!   of RPL-P, NVIDIA's on the RTX 3090), which stores every value but a NaN as Metal does: the
+//!   NaN, as computed, is the device's (`PrecisionNote::DeviceNanEncoding`);
+//! - an output to a 16-bit unorm or snorm channel but a blended snorm one, whose NaN Metal stores
+//!   as -1.0 (`DriverDeviation::MetalNorm16ColorWrites`: RADV on the Radeon 780M).
 //!
 //! An attachment no lane of which rounds is not listed as rounded: it keeps its Vulkan blend of
-//! one and zero, through which the facts were measured too, and announces no shader conversion.
-//! A write in the storage form, or through a 16-bit output, rounds as before: the facts are of
-//! the device's conversion of an output variable. A storage write the shader blends into a 16-bit
-//! float attachment gives every NaN as `0x7fc00000`, which the storage image's store converts:
-//! Metal's `0x7e00` where the profile takes `DriverDeviation::MetalFloatStorageNans` (the module
-//! requires its property), else the device's NaN, noted `PrecisionNote::DeviceNanEncoding` (ANV
-//! stores `0xfe00`).
+//! one and zero, through which the facts were measured too. A write in the storage form, or
+//! through a 16-bit output, records the device's conversion: the facts are of the device's
+//! conversion of an output variable. A storage write the shader blends into a 16-bit float
+//! attachment gives every NaN as `0x7fc00000`, which the storage image's store converts: Metal's
+//! `0x7e00` where the profile takes `DriverDeviation::MetalFloatStorageNans` (the module requires
+//! its property), else the device's NaN, noted `PrecisionNote::DeviceNanEncoding` (ANV stores
+//! `0xfe00`).
 //!
 //! Where the device does not store the output's NaN as Metal does, but is measured to store a
 //! 16-bit output's bits unchanged (`DriverDeviation::HalfColorOutputBits`: MoltenVK 1.4.1 on the
 //! M3 Max and the M4), its conversion to 16 bits is Metal's `half(float)`
 //! (`DriverDeviation::MetalHalfConversion`), and the profile declares 16-bit outputs
 //! (`storageInputOutput16`, with `shaderInt16` and `shaderFloat16`), an output to an attachment
-//! whose every channel written is half-float is written as the bits of the half Metal stores,
-//! through a 16-bit output variable ([`half_output`]): a `float` output rounded toward zero, a
-//! `half` output as it is, each converted exactly to 16 bits by that conversion, a NaN as its own
-//! payload's code by integer operations (`arith::color_write::half_bits`), so no conversion of the
-//! device's chooses the NaN, the note is not recorded, and the module requires
-//! `VkProperty::HalfColorOutputBits` and `VkProperty::MetalHalfConversion`. An attachment a lane of
-//! which rounds is listed as rounded (`rounded_colors`), and one whose output is written so but
-//! rounds nothing (a `half` output's) as written as a half's bits (`half_bit_colors`), its own
-//! notice; either takes no Vulkan blend of one and zero. On a device not measured so the output
-//! stays 32-bit: ANV and RADV store every NaN of a 16-bit output as `0xfe00` too, so the route
-//! would change nothing there.
+//! whose every channel written is half-float is written as the bits of its half, through a 16-bit
+//! output variable ([`half_output`]): each lane converted to 16 bits by that conversion, a NaN as
+//! its own payload's code by integer operations (`arith::color_write::half_bits`), so no
+//! conversion of the device's chooses the NaN, the NaN note is not recorded, and the module
+//! requires `VkProperty::HalfColorOutputBits` and `VkProperty::MetalHalfConversion`. An attachment
+//! a lane of which rounds is listed as rounded (`rounded_colors`), and one whose output is written
+//! so but rounds nothing as written as a half's bits (`half_bit_colors`), its own notice; either
+//! takes no Vulkan blend of one and zero. On a device not measured so the output stays 32-bit: ANV
+//! and RADV store every NaN of a 16-bit output as `0xfe00` too, so the route would change nothing
+//! there.
 
 use crate::air::abi::{AbiInt, OutputRole};
 use crate::device::requirements::VkProperty;
 use crate::error::DriverDeviation;
 use crate::lower::arith::color_write;
-use crate::lower::arith::srgb;
 use crate::lower::arith::{FloatFmt, Form};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::color_writes;
 use crate::pipeline::lower_inputs::ChannelWrite;
-use crate::pipeline::stage_io::SelectedWrite;
-use crate::pipeline::sym::{PushField, Stage};
+use crate::pipeline::sym::Stage;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 use std::collections::BTreeSet;
 
-/// Plan the rounding of a fragment function's output of form `f` to color attachment `color`
+/// Plan the write of a fragment function's output of form `f` to color attachment `color`
 /// (dual-source index 0), through an output variable or in the storage form (see the module
 /// docs).
 pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
@@ -111,7 +106,6 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     let metal = cx
         .profile
         .takes_driver_deviation(DriverDeviation::MetalColorWrites);
-    let metal_nans = metal_nans(cx, f);
     let half = half_output(cx, color, f);
     let storage = crate::lower::fragment::writes_through_storage(cx, color);
     // A storage write the shader blends into a 16-bit float attachment stores the blend's `half`
@@ -124,28 +118,17 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     let mut lanes = [None; 4];
     let mut device = false;
     let mut blended = false;
-    let mut half_nans = false;
+    let mut nans = false;
     let mut relied = BTreeSet::new();
-    let mut selected = None;
     for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
         let Some(rule) = rule else { continue };
-        half_nans |= !shader_blended && color_writes::half_float(rule) && !metal_nans && !half;
+        nans |= !shader_blended && color_writes::half_float(rule) && !nan_kept(cx, rule, f, half);
         if metal && rule == color_writes::HALF {
             continue;
         }
-        *slot = match (rule, f.float_fmt()) {
-            (_, None | Some(FloatFmt::F64 | FloatFmt::BFloat)) => None,
-            // The draw selects the channel's rule: each one's lane, and what it does.
-            (ChannelWrite::Selected, Some(fmt)) => {
-                let (lane, write) = selected_lane(
-                    cx,
-                    (fmt, f.lanes),
-                    (metal_nans, half || storage),
-                    &mut relied,
-                );
-                selected = Some(write);
-                Some(lane)
-            }
+        match (rule, f.float_fmt()) {
+            (_, None | Some(FloatFmt::F64 | FloatFmt::BFloat)) => {}
+            // A `half` is a half already, whichever way the channel rounds.
             (
                 ChannelWrite::FloatTowardZero {
                     mantissa: 10..,
@@ -156,35 +139,17 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
                     signed: true,
                 },
                 Some(FloatFmt::Half),
-            ) => None,
-            (ChannelWrite::BlendedNearestEven { .. }, _) => {
-                blended |= !shader_blended;
-                None
-            }
-            (ChannelWrite::HalfUnorm { bits }, Some(fmt @ FloatFmt::Half)) => lane(
-                cx,
-                ChannelWrite::Unorm { bits },
-                fmt,
-                (metal_nans, half || storage),
-                &mut relied,
-            ),
-            (ChannelWrite::Device, _) => {
-                device |= !shader_blended;
-                None
-            }
-            (rule, Some(fmt @ (FloatFmt::F32 | FloatFmt::Half))) => {
-                lane(cx, rule, fmt, (metal_nans, half || storage), &mut relied)
-            }
-        };
-    }
-    // The draw's rule word, and what each of its codes does, which link reads.
-    if let Some(write) = selected {
-        cx.push.insert(PushField::ColorWriteRule(color));
-        cx.families
-            .stage_io
-            .interface
-            .selected_colors
-            .insert(color, write);
+            ) => {}
+            // The pipeline's rounding mode, which the function applies.
+            (rule @ ChannelWrite::FloatNearestEven { .. }, Some(_)) => *slot = Some(rule),
+            (ChannelWrite::BlendedNearestEven { .. }, _) => blended |= !shader_blended,
+            (ChannelWrite::Device, _) => device |= !shader_blended,
+            (rule, Some(fmt)) => match conversion(cx, rule, fmt, half || storage, &mut relied) {
+                Conversion::Metal => {}
+                Conversion::MetalButNan => nans |= !shader_blended,
+                Conversion::Device => device |= !shader_blended,
+            },
+        }
     }
     if device {
         cx.precision.insert(PrecisionNote::DeviceColorConversion);
@@ -193,9 +158,9 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
         cx.precision.insert(PrecisionNote::BlendedWriteRounding);
     }
     if sixteen_blended {
-        half_nans |= !storage_nan(cx, &mut relied);
+        nans |= !storage_nan(cx, &mut relied);
     }
-    if half_nans {
+    if nans {
         cx.precision.insert(PrecisionNote::DeviceNanEncoding);
     }
     if half {
@@ -206,23 +171,9 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
         ]);
     }
     cx.families.stage_io.color_properties.extend(relied);
-    let rounds = lanes
-        .iter()
-        .any(|l| matches!(l, Some(color_write::Lane::Rounded(_))));
-    // The color table, once: its buffer counts in the stage's limits.
-    if lanes.contains(&Some(color_write::Lane::Rounded(ChannelWrite::Srgb)))
-        && cx.families.arith.color_table.is_none()
-    {
-        let class = srgb::ColorTable::of(cx.profile);
-        cx.families.arith.color_table = Some(class);
-        let d = &mut cx.descriptors;
-        match class {
-            srgb::ColorTable::Uniform => d.uniform_buffers = d.uniform_buffers.saturating_add(1),
-            srgb::ColorTable::Storage => d.storage_buffers = d.storage_buffers.saturating_add(1),
-        }
-    }
+    let rounds = lanes.iter().any(Option::is_some);
     let sp = &mut cx.families.stage_io;
-    if lanes.iter().any(Option::is_some) {
+    if rounds {
         sp.rounded.insert(color, lanes);
     }
     let listed = match (rounds, half) {
@@ -252,95 +203,81 @@ fn storage_nan(cx: &SelectCx<'_>, relied: &mut BTreeSet<VkProperty>) -> bool {
     metal
 }
 
-/// The `f32` NaN the rounding writes for a small float's NaN (`0x7fc00000`), whose store each
-/// driver of [`DriverDeviation::MetalSmallFloatColorWrites`] is measured by.
-const QUIET_NAN: u32 = 0x7fc0_0000;
+/// How the device converts a lane of an output of `fmt` (`F32` or `Half`) to a channel of rule
+/// `rule` (a rule of Metal's, not the device's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Conversion {
+    /// As Metal stores it.
+    Metal,
+    /// As Metal stores it but for a NaN, which the device encodes.
+    MetalButNan,
+    /// By the device's own rule, a near-equivalent (`PrecisionNote::DeviceColorConversion`).
+    Device,
+}
 
-/// How a fragment function writes a channel of rule `rule` (a rule the function applies, not
-/// the device's) from an output of `fmt` (`F32` or `Half`) (`metal_nans`: the device stores the
-/// output's NaN to a half-float channel as Metal does; `own`: the function writes the output
-/// otherwise than as a value of its output variable the device converts, as a half's bits
-/// through a 16-bit output, [`half_output`], or as a texel of a storage image): rounded by
-/// Metal's rule, unless the device is measured to convert the channel's output as Metal does, whose
-/// property the module then relies on (`relied`):
+/// How the device converts a lane of an output of `fmt` to a channel of rule `rule` (`own`: the
+/// function writes the output otherwise than as a value of its output variable the device
+/// converts, as a half's bits through a 16-bit output, [`half_output`], or as a texel of a storage
+/// image, which no fact measures): as Metal does where the profile takes the deviation measuring
+/// it, whose property the module then relies on (`relied`), else the device's own:
 ///
 /// - a `float` output to a half-float or unsigned small float channel where the profile takes
-///   `DriverDeviation::MetalSmallFloatColorWrites`: as computed, a NaN as the rounding's
-///   `0x7fc00000` (an unsigned channel's always, a half-float channel's where `metal_nans`;
-///   elsewhere the device stores its own NaN there, noted `PrecisionNote::DeviceNanEncoding`);
+///   `DriverDeviation::MetalSmallFloatColorWrites`: Metal's but for a NaN;
 /// - an output to a 16-bit unorm or snorm channel where the profile takes
-///   `DriverDeviation::MetalNorm16ColorWrites`: as computed, a blended snorm channel's NaN as
-///   -1.0, as Metal stores it.
-fn lane(
+///   `DriverDeviation::MetalNorm16ColorWrites`: Metal's, but for a blended snorm channel, whose NaN
+///   Metal stores as -1.0.
+fn conversion(
     cx: &SelectCx<'_>,
     rule: ChannelWrite,
     fmt: FloatFmt,
-    (metal_nans, own): (bool, bool),
+    own: bool,
     relied: &mut BTreeSet<VkProperty>,
-) -> Option<color_write::Lane> {
-    use color_write::Lane;
+) -> Conversion {
     let takes = |d| !own && cx.profile.takes_driver_deviation(d);
     match rule {
-        ChannelWrite::FloatTowardZero { signed, .. }
+        ChannelWrite::FloatTowardZero { .. }
             if fmt == FloatFmt::F32 && takes(DriverDeviation::MetalSmallFloatColorWrites) =>
         {
             relied.insert(VkProperty::MetalSmallFloatColorWrites);
-            (!signed || metal_nans).then_some(Lane::NanAs(QUIET_NAN))
+            Conversion::MetalButNan
         }
-        ChannelWrite::Unorm { bits: 16 } | ChannelWrite::Snorm { bits: 16, .. }
-            if takes(DriverDeviation::MetalNorm16ColorWrites) =>
-        {
+        ChannelWrite::Unorm { bits: 16 }
+        | ChannelWrite::Snorm {
+            bits: 16,
+            blended: false,
+        } if takes(DriverDeviation::MetalNorm16ColorWrites) => {
             relied.insert(VkProperty::MetalNorm16ColorWrites);
-            matches!(rule, ChannelWrite::Snorm { blended: true, .. })
-                .then_some(Lane::NanAs((-1.0f32).to_bits()))
+            Conversion::Metal
         }
-        rule => Some(Lane::Rounded(rule)),
+        _ => Conversion::Device,
     }
 }
 
-/// How a fragment function writes a lane of an output of `fmt` (`F32` or `Half`; `lanes` lanes)
-/// whose channel's rule the draw selects (`ChannelWrite::Selected`), and what the attachment's
-/// write does under each code of its rule word (`metal_nans` and `own` as [`lane`]'s, which
-/// gives a half-float channel's lane, and records the properties it relies on in `relied`): a
-/// lane of an 8-bit unorm channel rounds; of a half-float channel, it rounds where a `float`
-/// output's lane does, a `half` output being a half already, and stores a NaN as the device
-/// encodes it where the device does not store the output's NaN as Metal does (a lane the device
-/// converts, or of no rule, as computed).
-fn selected_lane(
-    cx: &SelectCx<'_>,
-    (fmt, lanes): (FloatFmt, u8),
-    (metal_nans, own): (bool, bool),
-    relied: &mut BTreeSet<VkProperty>,
-) -> (color_write::Lane, SelectedWrite) {
-    use color_write::{HalfLane, Lane};
-    let half = match fmt {
-        FloatFmt::Half => HalfLane::AsComputed,
-        _ => match lane(cx, color_writes::HALF, fmt, (metal_nans, own), relied) {
-            Some(Lane::Rounded(_)) => HalfLane::Rounded,
-            Some(Lane::NanAs(bits)) => HalfLane::NanAs(bits),
-            Some(Lane::Selected { .. }) | None => HalfLane::AsComputed,
-        },
-    };
-    let bit = |code: u32| 1u8 << code;
-    let half_rounds = match half {
-        HalfLane::Rounded => bit(color_writes::HALF_CODE),
-        HalfLane::AsComputed | HalfLane::NanAs(_) => 0,
-    };
-    let write = SelectedWrite {
-        lanes,
-        rounds: bit(color_writes::UNORM8_CODE) | half_rounds,
-        nans: match metal_nans {
-            true => 0,
-            false => bit(color_writes::HALF_CODE),
-        },
-    };
-    (Lane::Selected { half }, write)
+/// Whether the device stores the NaN a fragment function writes to a half-float channel of rule
+/// `rule` from its output of form `f` as Metal does (the module docs; `half`: written as a half's
+/// bits, [`half_output`]): a `float` output's where the profile takes
+/// `DriverDeviation::MetalColorWrites`, or where the function rounds the lane
+/// (`color_writes::HALF_NEAREST`), whose NaN `0x7fc00000` it then stores as Metal's `0x7e00`
+/// under `MetalFloatColorNans` (the output's own NaN, unrounded, it is not measured to); a `half`
+/// output's where it takes `MetalHalfColorNans`, or written as a half's bits. Another output stores
+/// no NaN of its own there.
+fn nan_kept(cx: &SelectCx<'_>, rule: ChannelWrite, f: Form, half: bool) -> bool {
+    let takes = |d| cx.profile.takes_driver_deviation(d);
+    match f.float_fmt() {
+        Some(FloatFmt::F32) => {
+            takes(DriverDeviation::MetalColorWrites)
+                || (rule == color_writes::HALF_NEAREST
+                    && takes(DriverDeviation::MetalFloatColorNans))
+        }
+        Some(FloatFmt::Half) => half || takes(DriverDeviation::MetalHalfColorNans),
+        _ => true,
+    }
 }
 
 /// Whether the device stores the NaN of a fragment function's output of form `f` to a
-/// half-float channel as Metal does (the module docs): a `float` output's where the profile
-/// takes `DriverDeviation::MetalFloatColorNans` or `MetalColorWrites`, a `half` output's where
-/// it takes `MetalHalfColorNans`. Another output stores no NaN of its own there.
+/// half-float channel as Metal does, for [`half_output`]: a `float` output's where the profile
+/// takes `DriverDeviation::MetalFloatColorNans` or `MetalColorWrites`, a `half` output's where it
+/// takes `MetalHalfColorNans`. Another output stores no NaN of its own there.
 fn metal_nans(cx: &SelectCx<'_>, f: Form) -> bool {
     let takes = |d| cx.profile.takes_driver_deviation(d);
     match f.float_fmt() {
@@ -400,17 +337,13 @@ pub(super) fn half_output(cx: &SelectCx<'_>, color: u32, f: Form) -> bool {
         && !crate::lower::fragment::writes_through_storage(cx, color)
 }
 
-/// The words of the planned writes, each emitted once per return.
-pub(super) fn words(rounded: impl IntoIterator<Item = [Option<color_write::Lane>; 4]>) -> u64 {
-    rounded
-        .into_iter()
-        .map(|r| color_write::write_words(&r))
-        .sum()
+/// The words of the planned roundings, each emitted once per return.
+pub(super) fn words(rounded: impl IntoIterator<Item = [Option<ChannelWrite>; 4]>) -> u64 {
+    rounded.into_iter().map(|r| color_write::words(&r)).sum()
 }
 
-/// Output `x` (form `f`) to color attachment `color`, written as the plan writes each lane:
-/// rounded, or its NaN chosen, or by the rule the attachment's rule word selects
-/// (`PushField::ColorWriteRule`).
+/// Output `x` (form `f`) to color attachment `color`, each lane the plan rounds rounded to nearest
+/// even (`color_writes::HALF_NEAREST`), the others as computed.
 pub(crate) fn round(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -418,16 +351,8 @@ pub(crate) fn round(
     f: Form,
     x: Value,
 ) -> BResult<Value> {
-    let Some(lanes) = cx.plan.families.stage_io.rounded.get(&color).copied() else {
+    let Some(rules) = cx.plan.families.stage_io.rounded.get(&color).copied() else {
         return Ok(x);
     };
-    let table = cx.decl.families.arith.color_table;
-    let selects = lanes
-        .iter()
-        .any(|l| matches!(l, Some(color_write::Lane::Selected { .. })));
-    let word = match selects {
-        true => Some(cx.push_field(fb, PushField::ColorWriteRule(color))?),
-        false => None,
-    };
-    color_write::write(fb, f, x, &lanes, (table, word))
+    color_write::round(fb, f, x, &rules)
 }

@@ -276,13 +276,6 @@ impl ShapeInputs<'_> {
         // tests such a draw (its validation stops it; `render_state.rs`).
         let ds = self.layout.depth_stencil.as_ref();
         let (depth, _) = self.layout.aspects();
-        // The depth it renders against, whose format decides what the draw stores there whatever
-        // the pipeline names (`BindState::depth16_pass`): the pass's attachment's, or the hidden
-        // `float` one's.
-        let depth16_pass = ds
-            .and_then(|ds| ds.depth_format)
-            .or(hidden.then_some(HIDDEN_DEPTH_FORMAT))
-            .map(|format| format == PixelFormat::Depth16Unorm);
         // A compare of `Never` without Metal's depth attachment fails every fragment (probes), the
         // hidden depth's too: the draw runs as `FailingDraw` says.
         let metal_depth = depth && !ds.is_some_and(|ds| ds.hidden);
@@ -427,12 +420,6 @@ impl ShapeInputs<'_> {
         // range (`clamp_draw_depth`).
         let compensated = compensation.is_some_and(|c| c.depth.is_some());
         let native = native && !compensated;
-        let depth16_bias_raises = render_state::depth16_bias_side(
-            self.state,
-            base.writes_viewport_index,
-            bias,
-            compensation,
-        );
         let provoking_last = provoking::natively_last(device, self.state, (pipeline, assembly));
         Ok(DrawSettings {
             unsized_points,
@@ -448,8 +435,6 @@ impl ShapeInputs<'_> {
             bias,
             routing,
             routed_colors,
-            depth16_pass,
-            depth16_bias_raises,
             provoking_last,
         })
     }
@@ -527,9 +512,8 @@ impl ShapeInputs<'_> {
 
     /// The state a draw of `graphics`, its variant's, records with under `settings`
     /// ([`DrawState`]: statically, or as dynamic state), failing as `failing` says, its fragment
-    /// function the stencil test (`shadow`, a shader-side stencil) or the depth test (`tests`),
-    /// and adding Metal's depth bias itself where `depth16` says so
-    /// (`render_state::depth16_codes`); with the viewports in Metal's terms and the compensated
+    /// function the stencil test (`shadow`, a shader-side stencil) or the depth test (`tests`);
+    /// with the viewports in Metal's terms and the compensated
     /// depth range a rate-mapped pass draws each region through (`rate_mapped_pass.rs`). A 16-bit
     /// unorm depth's notice and an unclamped bias's are announced.
     pub(super) fn draw_state(
@@ -537,7 +521,6 @@ impl ShapeInputs<'_> {
         graphics: &GraphicsState,
         settings: &DrawSettings,
         (failing, shadow, tests): (Option<&FailingDraw>, bool, bool),
-        depth16: Option<bool>,
     ) -> Result<ShapedState, Error> {
         let device = self.device;
         let profile = device.compile_device().profile();
@@ -555,28 +538,14 @@ impl ShapeInputs<'_> {
             .as_ref()
             .and_then(|ds| ds.depth_format)
             .or(settings.hidden.then_some(HIDDEN_DEPTH_FORMAT));
-        // A fragment stage that adds Metal's bias itself takes none from the device.
-        let bias = match depth16 {
-            Some(true) => EncoderState::vk_no_depth_bias(topology, profile)?,
-            _ => self.state.vk_depth_bias(topology, depth_format, profile)?,
-        };
+        let bias = self.state.vk_depth_bias(topology, depth_format, profile)?;
         let depth_bias = DepthBiasRecord::of(&bias, device.shared().depth_bias_command)?;
-        // A 16-bit unorm depth, biased or not, stores Metal's codes where the fragment stage
-        // writes them or the driver is measured to (`render_state::announce_unorm_depth`).
-        let sloped =
-            matches!(bias_effect, Some(DepthBiasEffect::Factors { slope, .. }) if slope != 0.0);
-        let clamped_inside = render_state::clamps_inside(self.state, selects);
-        render_state::announce_unorm_depth(
-            device,
-            depth_format,
-            &fixed.depth_stencil,
-            (&bias, sloped),
-            (depth16, clamped_inside),
-        );
+        // A 16-bit unorm depth, biased or not, stores Metal's codes where the driver is measured
+        // to (`render_state::announce_unorm_depth`).
+        render_state::announce_unorm_depth(device, depth_format, &fixed.depth_stencil, &bias);
         // In clip mode a natively ranged device clamps a biased depth to `[0, 1]`
         // (`EncoderState::depth_range`); one that stores it unclamped without that announces it.
-        // A fragment stage that adds Metal's bias itself clamps the biased depth to `[0, 1]`.
-        if depth16 != Some(true) && !graphics.rasterizer_discard {
+        if !graphics.rasterizer_discard {
             let compensated = compensation.is_some_and(|c| c.depth.is_some());
             render_state::announce_unclamped_bias(device, self.state, bias_effect, compensated);
         }

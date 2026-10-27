@@ -87,10 +87,10 @@ pub struct Slice {
     pub guard: bool,
     /// The cell loads are contained.
     pub contained: bool,
-    /// The slot's storage class (`super::storage_class`): a converting one (`RotateArgb`,
-    /// `HalfTowardZero`) rounds each texel to Metal's code of each channel.
+    /// The slot's storage class (`super::storage_class`): a converting one moves or encodes each
+    /// texel's channels (`RotateArgb`'s rotation, `HalfQuietNan`'s NaN).
     pub class: StorageImageClass,
-    /// A `float` slice through a heap handle on a device not measured to store it in a
+    /// A `float` slice through a heap handle on a device not measured to store its NaN in a
     /// half-float texture as Metal does: the class each texel takes where the handle's texel
     /// class is a half-float format's (`super::Write::heap_half`).
     pub heap_half: Option<StorageImageClass>,
@@ -341,6 +341,9 @@ pub(super) fn select(
     let heap_bits = super::heap_bits(cx, image, t.image, (conv, false));
     if conv == TexelConv::F32 {
         super::half_storage_facts(cx, image, class, (heap_half, heap_bits))?;
+    }
+    if matches!(conv, TexelConv::F32 | TexelConv::F16) {
+        super::norm_storage_facts(cx, image, t.image, TexelForm { conv, lanes })?;
     }
     let half_nans = match conv == TexelConv::F16 {
         true => super::half_nans(cx, image, (false, heap_bits))?,

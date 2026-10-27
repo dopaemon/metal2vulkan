@@ -36,7 +36,6 @@ mod engine_coverage_loop;
 mod engine_cross_class;
 mod engine_cube_gather;
 mod engine_declared_varyings;
-mod engine_depth16_codes;
 mod engine_depth_range;
 mod engine_device_level;
 mod engine_device_replay;

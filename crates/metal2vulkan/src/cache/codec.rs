@@ -58,8 +58,8 @@ use crate::pipeline::lower_inputs::{
 };
 use crate::pipeline::stage_io::{
     CoverageLoop, CoverageLoopRefusal, DepthCompares, DepthMode, Interpolation as IoInterpolation,
-    IoNumeric, IoRole, IoType, IoVariable, PulledInput, Sampling as IoSampling, SelectedWrite,
-    StageBuiltin, StageInFetch, StageInInput, StageIo,
+    IoNumeric, IoRole, IoType, IoVariable, PulledInput, Sampling as IoSampling, StageBuiltin,
+    StageInFetch, StageInInput, StageIo,
 };
 use crate::pipeline::sym::{
     AccelerationStructureLevel, AirUserKey, Axis, CombinedSampler, HandleClass, ImageAccess,
@@ -839,7 +839,6 @@ codec_enum! {
         MeshWork,
         TessellationWork,
         TessellationRecords,
-        ColorWriteTable,
         DepthStandIn,
         StencilStandIn,
         StoreSink,
@@ -888,9 +887,7 @@ codec_enum! {
         ShaderStencilState,
         TextureIntegerChannels(f0),
         Specialized(f0),
-        ColorWriteRule(f0),
         HalfBlendColor,
-        DepthBias,
         SnapshotPhase,
         VerticesPerPrimitive,
         TessellationChunk,
@@ -1134,14 +1131,13 @@ codec_struct! {
         early_fragment_tests, extended_range_colors, unattached_colors, half_bit_colors,
         sample_mask, rotated_colors, rotated_factors, rotated_blends, srgb_fetches,
         half_output_lanes, texture_write_rounding, uniform_outputs, uniform_inputs,
-        instanced_attributes, selected_colors, half_blend_colors, half_fast_colors,
+        instanced_attributes, half_blend_colors, half_fast_colors,
         float_blend_colors, zero_indices, color_group, word_colors, alpha_in_red_colors,
         alpha_test, depth_compares,
     }
     DepthCompares { samplers, clamped }
     ColorGroup { present, width, group }
     WordField { shift, bits }
-    SelectedWrite { lanes, rounds, nans }
     ExtendedRangeColor { form, blended, nearest_even }
     PulledInput { index, ty, fetch }
     StageInInput { index, ty, fetch }
@@ -1177,7 +1173,6 @@ codec_enum! {
         Unorm { bits }, Snorm { bits, blended }, Srgb, FloatTowardZero { mantissa, signed }, Device,
         FloatNearestEven { mantissa, signed }, BlendedNearestEven { mantissa, signed },
         HalfUnorm { bits },
-        Selected,
     }
     ExtendedRange {
         Bgr10 { srgb }, Bgra10 { srgb }, Planes { srgb }, R10X6, Rg10X12, R10X6Srgb, Rg10X12Srgb,
@@ -1274,10 +1269,6 @@ codec_enum! {
         StorageTextureIntegerChannels { slot },
         HeapHalfTexelWrites { stage, packed },
         MovableStorageWrites { early_variant },
-        Depth16Codes { biased },
-        Depth16Pass { depth16 },
-        Depth16Biased,
-        Depth16BiasSide { raises },
         SynthesizedGeometry { weights, layer, viewport },
         ObjectThreadgroupArena { static_bytes, payload },
         ExactFormsOverCompilerLimit {
@@ -1382,8 +1373,7 @@ codec_struct! {
         writes_point_size, flat_fragment_inputs,
         clip_distances, writes_depth, reads_barycentric_coord, reads_primitive_id,
         reads_position_depth,
-        fragment_writes_memory, color_outputs, sample_mask, shader_tests, color_write_rules,
-        snapshot_reads,
+        fragment_writes_memory, color_outputs, sample_mask, shader_tests, snapshot_reads,
         color_group, logic_op,
     }
     TessellationState {
