@@ -132,8 +132,6 @@ fn run(
         match (f.field, f.loc) {
             // One region, every buffer bound at its start.
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // 0: a `half` slice's NaN lanes `0x7fc00000`, every other texel as written.
-            (PushField::TextureHalfChannels(_), PushLoc::Push { .. }) => {}
             // A bound value read as data, which the interpreter writes from `spec`.
             (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             // No slot's writes dropped: the word stays 0.

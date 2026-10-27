@@ -818,12 +818,6 @@ pub(crate) fn slot_field(
             .iter()
             .find(|(k, _)| *k == key)
             .map(|(_, value)| FieldBytes::of(&value.to_le_bytes())),
-        // Whether the texture the plan bound holds 16-bit float channels.
-        PushField::TextureHalfChannels(slot) => resources
-            .texture_half_channels
-            .iter()
-            .find(|(s, _)| *s == slot)
-            .map(|(_, half)| FieldBytes::of(&half.to_le_bytes())),
         // The integer channel widths of the texture the plan bound.
         PushField::TextureIntegerChannels(slot) => resources
             .texture_integer_channels

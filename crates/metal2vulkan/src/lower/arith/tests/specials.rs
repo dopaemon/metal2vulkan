@@ -662,11 +662,14 @@ fn fract_and_saturate_answer_as_metal() {
         f32_,
         &rows(|r| [u64::from(r.0), u64::from(r.2)]),
     );
-    metal_answers(
-        FloatFn::Saturate,
-        f32_,
-        &rows(|r| [u64::from(r.0), u64::from(r.3)]),
-    );
+    // `saturate` is the device's `NClamp(x, 0, 1)`: an `f32` denormal operand is the device's
+    // (Metal flushes it to `+0`), every other lane Metal's.
+    let normal = |(x, _): &Row| x[0] & 0x7F80_0000 != 0 || x[0] & 0x007F_FFFF == 0;
+    let saturate: Vec<Row> = rows(|r| [u64::from(r.0), u64::from(r.3)])
+        .into_iter()
+        .filter(normal)
+        .collect();
+    metal_answers(FloatFn::Saturate, f32_, &saturate);
     metal_answers(
         FloatFn::Fract,
         half,

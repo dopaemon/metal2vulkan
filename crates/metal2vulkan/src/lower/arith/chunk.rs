@@ -42,7 +42,7 @@ use crate::error::Error;
 use crate::lower::arith::legal::{self, chunk_lanes, not_lowered, Form, Held};
 use crate::lower::arith::libm::Lib;
 use crate::lower::arith::math::{self, FloatFn};
-use crate::lower::arith::nan::{self, NanAnswer, NanTest};
+use crate::lower::arith::nan::NanTest;
 use crate::lower::arith::{denormal, fma};
 use crate::lower::arith::{narrow, operands_of, ops, wide, ArithStrategy};
 use crate::lower::emit::EmitCx;
@@ -290,7 +290,7 @@ pub fn select(
         InstKind::Call(call) if is_math(call, MathFn::SinCos) => {
             super::select_sincos(cx, at, inst, call, m)
         }
-        InstKind::Call(call) if is_math(call, MathFn::Dot) => select_dot(cx, at, inst, call),
+        InstKind::Call(call) if is_math(call, MathFn::Dot) => select_dot(cx, inst, call),
         InstKind::Cast {
             op: CastOp::Bitcast,
             v,
@@ -368,13 +368,8 @@ fn is_math(call: &Call, f: MathFn) -> bool {
 /// denormals the device's (`super::leave_denormals`). Elsewhere the sum of each chunk's dot
 /// product, rounded once to a narrow format:
 /// `dot`'s device precision (`DeviceArithmetic`) covers the order of the sum, which Vulkan leaves
-/// to the device for `OpDot` too. Its NaN is Metal's.
-fn select_dot(
-    cx: &mut SelectCx<'_>,
-    at: InstId,
-    inst: &Inst,
-    call: &Call,
-) -> Result<ArithStrategy, Error> {
+/// to the device for `OpDot` too. Its NaN is the device's.
+fn select_dot(cx: &mut SelectCx<'_>, inst: &Inst, call: &Call) -> Result<ArithStrategy, Error> {
     let (Some(&a), Some(&b)) = (call.args.first(), call.args.get(1)) else {
         return Err(cx.invariant("air.dot without its operands"));
     };
@@ -404,7 +399,7 @@ fn select_dot(
                 elem,
                 fma,
             };
-            return Ok(super::with_nan(cx, at, s, answer, elem));
+            return Ok(super::with_nan(cx, s, answer));
         }
     }
     super::note(cx, FloatFn::Dot.precision());
@@ -415,7 +410,7 @@ fn select_dot(
         elem,
         contract: super::contraction(call.fmf),
     };
-    Ok(super::with_nan(cx, at, s, answer, elem))
+    Ok(super::with_nan(cx, s, answer))
 }
 
 /// The dot product of chunked vectors `a` and `b` of `lanes` lanes of `elem`: each chunk's `OpDot`
@@ -490,30 +485,22 @@ pub fn dot_chain_words(lanes: u16, elem: Form, fma_words: u32) -> u32 {
 
 /// The sine and cosine of `x` of shape `s`: per chunk for a chunked vector, Metal's fast ones for
 /// `air.fast_sincos` on `float` (`fast`, [`sin_cos_fns`]), each the device's instruction as `lib`
-/// reads it, with the entry's NaN `test` ([`math::float_fn`]), then Metal's
-/// NaN `answers` of each selected ([`nan::select`]).
+/// reads it, with the entry's NaN `test` ([`math::float_fn`]).
 pub fn sin_cos(
     fb: &mut FunctionBuilder<'_>,
     s: Shape,
     x: SValue,
     fast: bool,
-    answers: [Option<NanAnswer>; 2],
     test: NanTest,
     lib: &Lib,
 ) -> BResult<(SValue, SValue)> {
     let (sin, cos) = sin_cos_fns(fast);
     let one = |fb: &mut FunctionBuilder<'_>, f: Form, x: SValue| -> BResult<(SValue, SValue)> {
         let c = Contraction::Forbidden;
-        let mut r = [
+        Ok((
             math::float_fn(fb, sin, f, c, test, &[x], lib)?,
             math::float_fn(fb, cos, f, c, test, &[x], lib)?,
-        ];
-        for (v, answer) in r.iter_mut().zip(answers) {
-            if let Some(answer) = answer {
-                *v = nan::select(fb, f, answer, test, *v, Some(x))?;
-            }
-        }
-        Ok((r[0], r[1]))
+        ))
     };
     if !s.chunked {
         return one(fb, s.form(), x);
@@ -549,19 +536,9 @@ pub fn sin_cos_fns(fast: bool) -> (FloatFn, FloatFn) {
 }
 
 /// The words of [`sin_cos`] on shape `s`.
-pub fn sin_cos_words(s: Shape, fast: bool, answers: [Option<NanAnswer>; 2]) -> u32 {
+pub fn sin_cos_words(s: Shape, fast: bool) -> u32 {
     let (sin, cos) = sin_cos_fns(fast);
-    let per = |f: Form| {
-        let selects = answers
-            .iter()
-            .flatten()
-            .map(|a| a.words(f))
-            .fold(0u32, u32::saturating_add);
-        sin.words(f)
-            .saturating_add(cos.words(f))
-            .saturating_add(8)
-            .saturating_add(selects)
-    };
+    let per = |f: Form| sin.words(f).saturating_add(cos.words(f)).saturating_add(8);
     if !s.chunked {
         return per(s.form());
     }

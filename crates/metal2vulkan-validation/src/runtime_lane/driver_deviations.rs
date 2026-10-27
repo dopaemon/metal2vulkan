@@ -1190,10 +1190,10 @@ const MIN_MAX_CASES: [&str; 4] = [
     "nan-model-min-max-at-zeros-and-denormals-under-fast-math",
 ];
 
-/// Every word of [`MIN_MAX_CASES`] is the Metal row's of the same chip on every profile: the
-/// device's `NMin`, `NMax` and `NClamp` where the profile takes `DriverDeviation::MetalMinMax`
-/// (the kernels then require `VkProperty::MetalMinMax`), else the operand the module picks
-/// itself (`math::metal_min_max`).
+/// Every word of [`MIN_MAX_CASES`] is the Metal row's of the same chip where the profile takes
+/// `DriverDeviation::MetalMinMax`: the device's `NMin`, `NMax` and `NClamp` (the kernels then
+/// require `VkProperty::MetalMinMax`). Elsewhere the module emits the same instructions and
+/// records `native-min-max`, so a differing word is the device's answer, printed, not a failure.
 #[test]
 fn minimums_and_maximums_answer_as_metal() {
     let messages = Messages::default();
@@ -1227,7 +1227,7 @@ fn minimums_and_maximums_answer_as_metal() {
                 differ.len(),
                 metal.len() / 4
             );
-            if !differ.is_empty() {
+            if metals && !differ.is_empty() {
                 failures.push(format!(
                     "{case_name} on {name}: words differ from Metal (word, device, Metal): {:x?}",
                     &differ[..differ.len().min(24)]

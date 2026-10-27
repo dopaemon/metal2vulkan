@@ -1676,10 +1676,6 @@ impl Gpu for Runtime {
                 c.passes_not_inline_actions_unequal_reach,
             ),
             (
-                "passes_not_inline_actions_nan_clear",
-                c.passes_not_inline_actions_nan_clear,
-            ),
-            (
                 "passes_not_inline_actions_resolve",
                 c.passes_not_inline_actions_resolve,
             ),

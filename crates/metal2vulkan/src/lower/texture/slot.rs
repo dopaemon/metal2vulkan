@@ -84,9 +84,6 @@ pub struct Uses {
     /// A cube's texels are fetched by face (an emulated linear cube sample): the slot is declared
     /// as the binder's 2D-array view of its faces.
     pub faces: bool,
-    /// A `half` texel's write reads whether the bound texture's channels are 16-bit floats
-    /// (`HalfNans::SlotWord`): the slot's storage choice declares no format.
-    pub half_channels: bool,
     /// An integer texel's write reads the widths of the bound texture's channels
     /// (`IntRange::SlotWord`): the slot's storage choice declares no format.
     pub int_channels: bool,
@@ -1125,10 +1122,6 @@ fn declare_slot(
     };
     let (format, class) = if storage {
         facts.push(RuntimeFact::StorageTextureFormat { slot: s.slot });
-        if s.uses.half_channels {
-            facts.push(RuntimeFact::StorageTextureHalfChannels { slot: s.slot });
-            push.push(PushField::TextureHalfChannels(s.slot));
-        }
         if s.uses.int_channels {
             facts.push(RuntimeFact::StorageTextureIntegerChannels { slot: s.slot });
             push.push(PushField::TextureIntegerChannels(s.slot));

@@ -4,8 +4,8 @@
 //! 27.0.1).
 //!
 //! On the CPU interpreter, each kernel runs under the choice without the conversion and with it,
-//! on the same image and values, for `float`, `half`, `uint` and `int` texels and the classes a
-//! held RGBA twin takes (`Identity`; a half-float twin's `HalfQuietNan`): a `read_write` read
+//! on the same image and values, for `float`, `half`, `uint` and `int` texels and the class a
+//! held RGBA twin takes (`Identity`, a half-float twin's too): a `read_write` read
 //! is the plain read with alpha 1, in bounds and past the texture (whose alpha Metal reads 1
 //! too); a write, `access::write` or `read_write`, stores the plain write's texel with its fourth
 //! lane the green lane's bits, after the class's conversion. An sRGB twin's `SrgbEncode`, and an
@@ -77,10 +77,7 @@ impl Texel {
         match self {
             Texel::Float | Texel::Half => vec![
                 (vk::Format::R8G8B8A8_UNORM, StorageImageClass::Identity),
-                (
-                    vk::Format::R16G16B16A16_SFLOAT,
-                    StorageImageClass::HalfQuietNan,
-                ),
+                (vk::Format::R16G16B16A16_SFLOAT, StorageImageClass::Identity),
                 (vk::Format::R32G32B32A32_SFLOAT, StorageImageClass::Identity),
             ],
             Texel::Uint => vec![(vk::Format::R32G32B32A32_UINT, StorageImageClass::Identity)],

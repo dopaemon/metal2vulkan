@@ -711,7 +711,6 @@ fn data_element(ty: NumTy) -> Result<(Element, IoType), Error> {
             numeric,
             components: lanes,
             source_bits: bits,
-            bits: 32,
         },
     ))
 }
@@ -846,7 +845,6 @@ fn target_index(cx: &mut SelectCx<'_>, which: TargetIndex) -> Result<MeshStrateg
             numeric: IoNumeric::Uint,
             components: 1,
             source_bits: 32,
-            bits: 32,
         },
     };
     let list = &mut cx.families.stage_io.interface.outputs;

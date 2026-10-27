@@ -851,22 +851,6 @@ pub fn heap_numeric(pf: PixelFormat) -> Option<crate::pipeline::sym::SampledType
     }
 }
 
-/// The indices in [`heap_classes`] of the half-float family without a packed field (`R16Float`,
-/// `RG16Float`, `RGBA16Float`, each its own channels, and `RGBX16Float`, `RGBA16Float`'s with
-/// three): the classes whose float write through a heap handle takes the half-float storage class,
-/// which a write tests by its handle's index alone.
-pub fn heap_half_indices() -> Vec<u32> {
-    use crate::metal::bicubic::BicubicTexels;
-    heap_classes()
-        .iter()
-        .enumerate()
-        .filter(|(_, &c)| {
-            c & (BicubicTexels::HALF | TexelFormat::PACKED_MASK) == BicubicTexels::HALF
-        })
-        .filter_map(|(i, _)| u32::try_from(i).ok())
-        .collect()
-}
-
 /// The half-float formats whose texture a heap's unsigned integer twin
 /// (`StorageFormatClass::HalfBits`) holds through its unsigned integer alias, in the own-view
 /// classes' order ([`heap_classes`]). `RGBX16Float` is not among them: no heap storage class
@@ -900,20 +884,6 @@ pub fn heap_own_view_index(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> 
     reads_unswizzled(pf, swizzle).then_some(heap_layout().own_view + k)
 }
 
-/// The indices in [`heap_classes`] of the small floats' class (`RG11B10Float`'s, which
-/// `RGB9E5Float` shares; a swizzled texture's is `OTHER`): the classes whose `float` write
-/// through a heap handle quiets its NaNs (`StorageImageClass::SmallFloatQuietNan`), which a write
-/// tests by its handle's index alone.
-pub fn heap_small_float_indices() -> Vec<u32> {
-    let small = (PackedTexels::SmallFloat as u32) << TexelFormat::PACKED;
-    heap_classes()
-        .iter()
-        .enumerate()
-        .filter(|(_, &c)| c & TexelFormat::PACKED_MASK == small)
-        .filter_map(|(i, _)| u32::try_from(i).ok())
-        .collect()
-}
-
 /// The index in [`heap_classes`] of `A8Unorm`'s class, which no other format's texture carries:
 /// a storage read or write through a heap handle carrying it converts the member's texels where
 /// the device holds such a texture's alpha in red (`metal::format::alpha_in_red`), which a heap's
@@ -925,9 +895,7 @@ pub fn heap_alpha_in_red_index() -> u32 {
 }
 
 /// Whether a texture of pixel format `pf` holds 16-bit float channels of its own: its class is
-/// the half-float family's without a packed field ([`heap_half_indices`]' classes), so a written
-/// `half` stores its NaN there as the half's own bits, and elsewhere as the conversion of
-/// `0x7fc00000` (`PushField::TextureHalfChannels`).
+/// the half-float family's without a packed field.
 pub fn half_channels(pf: PixelFormat) -> bool {
     use crate::metal::bicubic::BicubicTexels;
     texel_format(pf).0 & (BicubicTexels::HALF | TexelFormat::PACKED_MASK) == BicubicTexels::HALF
@@ -1552,16 +1520,24 @@ mod tests {
         assert_ne!(heap_class_index(PixelFormat::A8Unorm, moved), a8);
     }
 
-    /// The half-float heap classes a float write tests by index are the unswizzled half-float
-    /// formats' and no other format's: `RGBX16Float`'s too, `RGBA16Float`'s texels with three
-    /// channels, whose writes take the half class as its twin's.
+    /// The heap classes of the half-float family without a packed field are the unswizzled
+    /// half-float formats' and no other format's: `RGBX16Float`'s too, `RGBA16Float`'s texels with
+    /// three channels.
     ///
     /// The own-view entries of `R16Float`, `RG16Float` and `RGBA16Float` are half classes too, and
     /// the twin's indices are exactly those formats' own: no other format's texture, swizzled or
     /// not, carries one, and none carries an own-view index.
     #[test]
     fn a_heap_write_finds_the_half_formats_by_index() {
-        let half = heap_half_indices();
+        use crate::metal::bicubic::BicubicTexels;
+        let half: Vec<u32> = heap_classes()
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| {
+                c & (BicubicTexels::HALF | TexelFormat::PACKED_MASK) == BicubicTexels::HALF
+            })
+            .filter_map(|(i, _)| u32::try_from(i).ok())
+            .collect();
         let wanted = [
             PixelFormat::R16Float,
             PixelFormat::RG16Float,

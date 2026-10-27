@@ -193,9 +193,6 @@ pub enum IoObject {
         numeric: IoNumeric,
         components: u8,
         deco: IoDecor,
-        /// Declared as 16-bit `half` lanes: a color output the function writes as the bits of
-        /// the half Metal stores (`color_write::half_output`).
-        half: bool,
     },
     /// A builtin variable.
     Builtin {
@@ -268,12 +265,6 @@ pub enum Source {
     /// the variable, declared `Flat`, read as Metal's interpolation returns such a value
     /// ([`metal_interpolated_constant`]).
     Uniform(Link),
-    /// A fixed-function vertex attribute of a narrow-float Metal format (a `half` format, or
-    /// `FloatRG11B10`; `VertexFetch::FixedFunction`'s `narrow_float`) read as `float`: the
-    /// variable, with Metal's canonical NaN where the device's own widening of the field left a
-    /// NaN, whose payload and sign Metal's fetch drops (`nan::canonical_on_bits`). Every finite,
-    /// zero, subnormal and infinite code the widening delivers passes through.
-    WidenedAttribute(Link),
     /// A fragment function's `[[primitive_id]]` under `LoweringInputs::quad_primitive_ids`:
     /// Vulkan's `PrimitiveId` (the variable) shifted right by one, the quad of the list's
     /// triangle, as Metal counts one primitive a quad of its private quads and quad strip.
@@ -409,9 +400,6 @@ pub struct StageIoPlan {
     /// (`color_write`), through an output variable or in the storage form: each by its rule, a
     /// half-float channel's under `TextureWriteRoundingMode::NearestEven`.
     pub rounded: BTreeMap<u32, [Option<crate::pipeline::lower_inputs::ChannelWrite>; 4]>,
-    /// The color attachments whose output the function writes as the bits of the half Metal
-    /// stores, through a 16-bit output variable (`color_write::half_output`).
-    pub halves: BTreeSet<u32>,
     /// The measured driver deviations, as their properties, a fragment function's color writes
     /// rely on: channels that record no device conversion because the device converts them as
     /// Metal does (`color_write`). The module requires them.
@@ -1198,7 +1186,6 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
             | Source::CapturedBaseVertex(_)
             | Source::Merged { .. }
             | Source::Uniform(_)
-            | Source::WidenedAttribute(_)
             | Source::QuadPrimitive(_) => None,
         })
         .collect();
@@ -1291,12 +1278,6 @@ pub fn param_value(
             let x = placed(fb, &link, x)?;
             let x = metal_interpolated_constant(fb, link.form, x)?;
             return narrow::round(fb, link.form, x);
-        }
-        Some(Source::WidenedAttribute(link)) => {
-            let p = pointer(cx, fb, &link)?;
-            let x = fb.load(p, MemAccess::default())?;
-            let x = crate::lower::arith::nan::canonical_on_bits(fb, link.form, x)?;
-            return to_lowered(cx, fb, &link, x);
         }
         Some(Source::QuadPrimitive(link)) => {
             let p = pointer(cx, fb, &link)?;
@@ -2733,16 +2714,10 @@ fn io_elem(mb: &mut ModuleBuilder, numeric: IoNumeric) -> BResult<TypeId> {
 }
 
 /// Store output part `x` (in its lowered representation, which is the interface type, except a
-/// `bool`, carried as `uint` 1 or 0, a 32-bit integer declared `int`, whose bits are stored by
-/// `OpBitcast`, and a color output declared `half`, whose half's bits are stored) through `link`.
+/// `bool`, carried as `uint` 1 or 0, and a 32-bit integer declared `int`, whose bits are stored by
+/// `OpBitcast`) through `link`.
 fn store(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, link: &Link, x: SValue) -> BResult<()> {
-    let half = matches!(
-        cx.plan.families.stage_io.objects.get(link.object),
-        Some(IoObject::User { half: true, .. })
-    );
-    let x = if half {
-        crate::lower::arith::color_write::half_bits(fb, link.form, x)?
-    } else if bool_as_uint(cx, link) {
+    let x = if bool_as_uint(cx, link) {
         let one = ops::splat(fb, uint_lanes(link.form), 1)?;
         let zero = ops::splat(fb, uint_lanes(link.form), 0)?;
         fb.select(x, one, zero)?
@@ -2818,12 +2793,8 @@ pub fn declare(
                 numeric,
                 components,
                 deco,
-                half,
             } => {
-                let elem = match half {
-                    true => mb.ty(SType::Float { width: 16 })?,
-                    false => io_elem(mb, *numeric)?,
-                };
+                let elem = io_elem(mb, *numeric)?;
                 let ty = if *components == 1 {
                     elem
                 } else {

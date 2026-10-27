@@ -434,18 +434,14 @@ fn member_view(
         // every access the device lets a heap make.
         let use_ = heap_storage_use(profile);
         let c = storage_choice(pixel_format, use_, profile).map_err(bind_error)?;
-        // The class's one formatless declaration cannot convert per element, but for a
-        // half-float format's NaN, which a heap write takes from the class its handle carries:
-        // such a member is viewed through its own format.
+        // The class's one formatless declaration cannot convert per element: a member is viewed
+        // through its own format.
         let per_element = matches!(
             c.class,
-            StorageImageClass::Identity
-                | StorageImageClass::HalfQuietNan
-                | StorageImageClass::SmallFloatQuietNan
-                | StorageImageClass::HalfBits
+            StorageImageClass::Identity | StorageImageClass::HalfBits
         );
-        // A half-float member's writes take the class its handle carries, as before: the alias
-        // a slot only written takes (`StorageImageClass::HalfBits`) is a slot's alone.
+        // A half-float member's writes are the device's conversion's, as an `Identity` member's:
+        // the alias a slot only written takes (`StorageImageClass::HalfBits`) is a slot's alone.
         let aliased = c.alias.is_some() && c.class != StorageImageClass::HalfBits;
         // An `A8Unorm` texture held in red (`StorageImageClass::AlphaInRed`): its `R8_UNORM`
         // image, whose texels a heap access converts where the handle carries `A8Unorm`'s class

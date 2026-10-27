@@ -127,7 +127,6 @@ fn stage_footprint(stage: &StageModule) -> u64 {
         + clauses
         + vector_bytes::<u32>(
             stage.rounded_colors.capacity()
-                + stage.half_bit_colors.capacity()
                 + stage.own_pixel_textures.capacity()
                 + stage.snapshot_textures.capacity(),
         )
@@ -196,12 +195,6 @@ pub struct StageModule {
     /// every note holds under every specialization. [`StageModule::precision_notes_under`]
     /// gives the notes of the module as a pipeline specializes it.
     pub specialized_notes: Vec<SpecializedNote>,
-    /// The color attachments this fragment stage writes as the bits of the half Metal stores,
-    /// through a 16-bit output, rounding none of their channels (`StageIo::half_bit_colors`),
-    /// sorted: a `half` output to a half-float attachment on a device that stores a 16-bit
-    /// output's bits but not a 32-bit output's NaN as Metal does. Each such write costs the stage
-    /// a few instructions per output; empty for every other stage.
-    pub half_bit_colors: Vec<u32>,
     /// The texture slots this fragment stage reads only at the fragment's own pixel, sorted
     /// (`StageInterface::own_pixel_textures`): a draw's reads of such a slot lie inside the
     /// rectangle bounding its scissors, a pixel wider each way for its helper invocations, on a
@@ -812,15 +805,22 @@ pub enum PrecisionNote {
     /// `0x7fc00000` for the NaN results of its float arithmetic and functions, and Vulkan states no
     /// encoding, so a device may answer another sign or payload (llvmpipe: `0xffc00000`). Recorded
     /// wherever the module leaves a `float` operation that can produce a NaN to the device; not by
-    /// the functions that select Metal's NaN themselves, nor by Metal's precise and fast `float`
-    /// divisions. Also recorded by every read, sample, gather, and pixel fetch of a `half` texel:
-    /// Metal hands back the texel's own NaN, sign and payload, and Vulkan states no encoding for a
-    /// 16-bit float texel's decode (MoltenVK answers the canonical NaN for every one); on a device
-    /// that rounds a `half` through its conversion under the float controls (ANV, RADV), the NaN
-    /// that conversion makes of the device's decode, by default (`NanMinMaxPolicy::Native`). Also
-    /// recorded by a `half` texel's write to a storage texture that may hold a float format: Metal
-    /// stores a 16-bit float texel's NaN as the half's own bits and a 32-bit one's as `0x7fc00000`,
-    /// and the device converts the half widened. Also recorded by a 16-bit float attachment's blend
+    /// Metal's precise and fast `float` divisions. Also recorded by every read, sample, gather, and
+    /// pixel fetch of a `half` texel: Metal hands back the texel's own NaN, sign and payload, and
+    /// Vulkan states no encoding for a 16-bit float texel's decode (MoltenVK answers the canonical
+    /// NaN for every one); on a device that rounds a `half` through its conversion under the float
+    /// controls (ANV, RADV), the NaN that conversion makes of the device's decode. Also recorded by
+    /// a `float` read of a 16-bit float texture through its unsigned integer alias. Also recorded
+    /// by a `half` texel's write to a storage texture that may hold a float format, a slot whose
+    /// storage choice declares none or a heap element: Metal stores a 16-bit float texel's NaN as
+    /// the half's own bits and a 32-bit or packed small float one's as its canonical NaN, and the
+    /// device converts the half widened. Also recorded by a `float` write to a storage texture that
+    /// may hold a half-float or packed small float format, and by a `float` color output written as
+    /// computed to such an attachment, where the device is not measured to store Metal's NaN there:
+    /// Metal stores every NaN as its canonical one, and RADV and NVIDIA keep a NaN's payload bits.
+    /// Also recorded by a fixed-function vertex attribute of a float format narrower than 32 bits
+    /// that the function reads as `float`: Metal widens its NaN to `0x7fc00000`, and the device's
+    /// widening need not. Also recorded by a 16-bit float attachment's blend
     /// the function computes in the storage form, on a device not measured to store `0x7fc00000` in
     /// a 16-bit float storage image as Metal's `0x7e00` (`DriverDeviation::MetalFloatStorageNans`):
     /// the blend gives every NaN as `0x7fc00000`, and the device's store converts it (ANV stores
@@ -1766,8 +1766,11 @@ pub enum PrecisionNote {
     /// NaN's encoding is the device's. Validation derives no tolerance from it.
     NativeHalfQuantize,
     /// Native device maths: a `float` or `half` operation's NaN result is the device's, its sign
-    /// and payload unselected, on a device whose arithmetic is not measured to answer Metal's
-    /// canonical NaN, under `NanMinMaxPolicy::Native` (the default). **Recorded bound:** where
+    /// and payload unselected, where Metal answers a NaN the device is not measured to answer:
+    /// every NaN Metal answers on a device whose arithmetic is not measured to answer Metal's
+    /// canonical NaN, and every NaN but the canonical one (an operand's bits, or the canonical NaN
+    /// with an operand's sign) on a device measured to answer it (MoltenVK on an Apple GPU).
+    /// **Recorded bound:** where
     /// Metal answers a NaN the device answers a NaN (the module keeps
     /// `SignedZeroInfNanPreserve` where Metal's entry keeps NaNs), its sign and payload the
     /// device's own (llvmpipe: `0xffc00000`), where Metal answers its canonical `0x7fc00000`
@@ -1781,8 +1784,9 @@ pub enum PrecisionNote {
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or
-    /// `NClamp`, not the translation's selects of Metal's operand, on a device not measured to
-    /// answer Metal's, under `NanMinMaxPolicy::Native` (the default). **Recorded bound:** the
+    /// `NClamp`, on a device not measured to answer Metal's operand; and a `saturate` of a format
+    /// whose operand Metal's other functions do not pick (`bfloat`, `double`) on every device.
+    /// **Recorded bound:** the
     /// result is one of the operands, the one Metal answers but at three ties: of two NaNs a NaN
     /// (its bits the device's), where Metal answers the second operand's; of `+0` and `-0` either
     /// zero, where Metal answers the second; and an `f32` denormal beside a zero or another

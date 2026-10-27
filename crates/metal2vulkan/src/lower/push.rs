@@ -121,10 +121,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
         // A texture's mipmap level count, an acceleration structure's instance count, the render
         // encoder's viewport count, the render pass's array length, a kernel stage-in buffer's
-        // bound stride, whether a storage texture's channels are 16-bit floats, its integer
-        // channels' widths.
+        // bound stride, a storage texture's integer channels' widths.
         PushField::TextureLevels(_)
-        | PushField::TextureHalfChannels(_)
         | PushField::TextureIntegerChannels(_)
         | PushField::InstanceCount(_)
         | PushField::ViewportCount

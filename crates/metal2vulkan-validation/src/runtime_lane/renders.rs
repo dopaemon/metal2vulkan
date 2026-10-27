@@ -26,8 +26,9 @@
 //!   A case with no current Metal row (one awaiting Metal qualification) goes the same way, and
 //!   says so.
 //! - **Clears** write Metal's measured bytes: each color format, depth and stencil value an M4 was
-//!   measured with, the NaNs of half, small-float and float formats among them (a Metal probe, the
-//!   M3 Max alike). A format the device cannot render is counted.
+//!   measured with, the NaNs of float formats among them (a Metal probe, the M3 Max alike); a NaN
+//!   of a half-float or small-float format is the device's conversion, announced. A format the
+//!   device cannot render is counted.
 //! - **Load and store actions**, the encoder's late store action, the passes' order against blits
 //!   in one command buffer, and Metal's refusals of passes and draws, typed. What a `DontCare`
 //!   load or store leaves is printed: Metal leaves it undefined, and Apple's GPU keeps the old
@@ -44,22 +45,19 @@ use crate::candidate::engine::{linked_modules, LinkedModule, ENGINE_EXECUTOR_ABI
 use crate::candidate::runtime_case::{
     commit_render, render_pipeline_descriptor, render_pipeline_state, RenderInputs, TemplateState,
 };
-use crate::candidate::runtime_samples::encode as samples_of;
 use crate::candidate::tests::engine_render;
 use crate::case::{AuthoredCase, Stage};
 use crate::check::interface::AirInterface;
-use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::gpu::TEST_DEVICE;
 use crate::store::CorpusStore;
 use metal2vulkan::bind::StatusReport;
-use metal2vulkan::error::RuntimeDriverDefect;
-use metal2vulkan::metal::{IndexType, PixelFormat, PrimitiveType, TextureType, TextureUsage};
+use metal2vulkan::metal::{IndexType, PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::RenderPipelineDescriptor;
 use metal2vulkan_runtime::{
     AppleOnly, Attachment, BlitOption, Buffer, ClearColor, CommandBuffer, CommandBufferStatus,
-    Device, DrawProblem, Error, Invalid, LoadAction, Origin, Problem, Region, RenderCommandEncoder,
-    RenderPassDescriptor, RenderPassProblem, ResourceOptions, Size, StoreAction, Texture,
-    TextureDescriptor,
+    Degradation, Device, DrawProblem, Error, Invalid, LoadAction, Origin, Problem, Region,
+    RenderCommandEncoder, RenderPassDescriptor, RenderPassProblem, ResourceOptions, Size,
+    StoreAction, Texture, TextureDescriptor,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -835,15 +833,15 @@ pub(super) fn small_nan(channel: u32, exponent: u32, mantissa: u32) -> bool {
     (channel >> mantissa) & all == all && channel & ((1 << mantissa) - 1) != 0
 }
 
-/// Each channel of a `pf` texel (`RGBA16Float`'s four halves, `RG11B10Float`'s three fields) as
-/// its bits, its exponent's width and its mantissa's.
+/// Each channel of a `pf` texel (a half-float format's halves, `RG11B10Float`'s three fields) as
+/// its bits, its exponent's width and its mantissa's; empty for another format.
 fn channels(pf: PixelFormat, texel: &[u8]) -> Vec<(u32, u32, u32)> {
     match pf {
-        PixelFormat::RGBA16Float => texel
+        PixelFormat::R16Float | PixelFormat::RG16Float | PixelFormat::RGBA16Float => texel
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|h| (u32::from(u16::from_le_bytes([h[0], h[1]])) & 0x7fff, 5, 10))
+            .map(|h| (u32::from(u16::from_le_bytes([h[0], h[1]])), 5, 10))
             .collect(),
         PixelFormat::RG11B10Float => {
             let word = u32::from_le_bytes([texel[0], texel[1], texel[2], texel[3]]);
@@ -857,408 +855,29 @@ fn channels(pf: PixelFormat, texel: &[u8]) -> Vec<(u32, u32, u32)> {
     }
 }
 
-/// A NaN clear: its format and color, the texel where Metal drops a `half` NaN's sign, and the
-/// one where it keeps it ([`NAN_CLEARS`]).
-type NanClear = (PixelFormat, [f64; 4], &'static [u8], &'static [u8]);
-
-/// Metal's NaN clears by format and clear color (an M4 under macOS 27.0.1; a Metal probe; the
-/// consumer's M3 Max alike at 4x4): the texel a level stores in its texels or every sample where
-/// Metal drops a `half` NaN's sign and payload (an uncompressed texture, or a level under 16 texels
-/// a side), then where it keeps them.
-const NAN_CLEARS: &[NanClear] = &[
-    (
-        PixelFormat::RGBA16Float,
-        [f64::NAN, 1.0, 0.5, f64::NAN],
-        &[0x00, 0x7e, 0x00, 0x3c, 0x00, 0x38, 0x00, 0x7e],
-        &[0x00, 0x7e, 0x00, 0x3c, 0x00, 0x38, 0x00, 0x7e],
-    ),
-    (
-        PixelFormat::RGBA16Float,
-        [-f64::NAN, -f64::NAN, -f64::NAN, -f64::NAN],
-        &[0x00, 0x7e, 0x00, 0x7e, 0x00, 0x7e, 0x00, 0x7e],
-        &[0x00, 0xfe, 0x00, 0xfe, 0x00, 0xfe, 0x00, 0xfe],
-    ),
-    (
-        PixelFormat::RGBA16Float,
-        [f64::NAN, 1.0, 0.5, -f64::NAN],
-        &[0x00, 0x7e, 0x00, 0x3c, 0x00, 0x38, 0x00, 0x7e],
-        &[0x00, 0x7e, 0x00, 0x3c, 0x00, 0x38, 0x00, 0xfe],
-    ),
-    (
-        PixelFormat::R16Float,
-        [-f64::NAN, 0.0, 0.0, 0.0],
-        &[0x00, 0x7e],
-        &[0x00, 0xfe],
-    ),
-    (
-        PixelFormat::RGBA16Float,
-        [
-            f64::from_bits(0x7ffc_0000_0000_0000),
-            1.0,
-            f64::from_bits(0x7ff4_0000_0000_0000),
-            f64::from_bits(0xffff_ffff_ffff_ffff),
-        ],
-        &[0x00, 0x7e, 0x00, 0x3c, 0x00, 0x7e, 0x00, 0x7e],
-        &[0x00, 0x7f, 0x00, 0x3c, 0x00, 0x7f, 0xff, 0xff],
-    ),
-    (
-        PixelFormat::RG11B10Float,
-        [f64::NAN, 1.0, 0.5, f64::NAN],
-        &[0xe0, 0x07, 0x1e, 0x70],
-        &[0xe0, 0x07, 0x1e, 0x70],
-    ),
-    (
-        PixelFormat::RG11B10Float,
-        [f64::NAN, f64::NAN, f64::NAN, f64::NAN],
-        &[0xe0, 0x07, 0x3f, 0xfc],
-        &[0xe0, 0x07, 0x3f, 0xfc],
-    ),
-    (
-        PixelFormat::R32Float,
-        [f64::from_bits(0x7ff0_0000_2000_0000), 0.0, 0.0, 0.0],
-        &[0x01, 0x00, 0xc0, 0x7f],
-        &[0x01, 0x00, 0xc0, 0x7f],
-    ),
-    (
-        PixelFormat::R32Float,
-        [-f64::NAN, 0.0, 0.0, 0.0],
-        &[0x00, 0x00, 0xc0, 0xff],
-        &[0x00, 0x00, 0xc0, 0xff],
-    ),
-];
-
-/// `texel` with each NaN channel as Metal's 4x resolve makes it where it drops the clear's NaN
-/// (a level whose clear drops a `half` NaN's sign): zero in a small-float channel, and
-/// `0x7fc00000` in a 32-bit float one.
-fn nans_resolved(pf: PixelFormat, texel: &[u8]) -> Vec<u8> {
-    match pf {
-        PixelFormat::R32Float => texel
-            .as_chunks::<4>()
-            .0
+/// Whether texel `got` of `pf` differs from `want` only by one NaN for another in a half-float or
+/// small-float channel: the device's conversion of a NaN clear (`device-nan-encoding`).
+fn nan_for_nan(pf: PixelFormat, got: &[u8], want: &[u8]) -> bool {
+    let (got, want) = (channels(pf, got), channels(pf, want));
+    !want.is_empty()
+        && got.len() == want.len()
+        && got
             .iter()
-            .flat_map(
-                |f| match f32::from_le_bytes([f[0], f[1], f[2], f[3]]).is_nan() {
-                    true => 0x7fc0_0000u32.to_le_bytes(),
-                    false => [f[0], f[1], f[2], f[3]],
-                },
-            )
-            .collect(),
-        PixelFormat::RGBA16Float | PixelFormat::R16Float => texel
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|h| {
-                match small_nan(u32::from(u16::from_le_bytes([h[0], h[1]])) & 0x7fff, 5, 10) {
-                    true => [0, 0],
-                    false => [h[0], h[1]],
-                }
-            })
-            .collect(),
-        PixelFormat::RG11B10Float => {
-            let word = u32::from_le_bytes([texel[0], texel[1], texel[2], texel[3]]);
-            let fields = [(0, 11, 6), (11, 11, 6), (22, 10, 5)];
-            let kept = fields.iter().fold(0u32, |out, &(at, width, mantissa)| {
-                let field = (word >> at) & ((1 << width) - 1);
-                match small_nan(field, 5, mantissa) {
-                    true => out,
-                    false => out | (field << at),
-                }
-            });
-            kept.to_le_bytes().to_vec()
-        }
-        _ => texel.to_vec(),
-    }
-}
-
-/// A NaN `Clear` of a new `Private` attachment (`nan_clear.rs`) of 4x4, 16x16 and 64x64, 1x and
-/// 4x, plain (a usage Metal compresses) and with `PixelFormatView` usage (kept uncompressed),
-/// in a pass without a draw call, in one whose draw (`rt6_restart`, `clear_reach::Lane`) lies
-/// wholly off the target, and in one whose only draw call draws no vertices, stores Metal's texel
-/// ([`NAN_CLEARS`]): the one with a `half` NaN's sign where Metal keeps it, at a plain level of 16
-/// or more in a pass without a draw call, and without it elsewhere (a draw call of no vertices is
-/// a draw call: the consumer's M3 Max, `R32Float`, `RG32Float` and `RGBA32Float` at 2 and 4
-/// samples, 16 a side, cleared to `-NaN`, resolves `0x7fc00000`). A 1x attachment is read whole by a blit. Each sample of a 4x one
-/// is read through an unsigned view of its texel size where its format has one (`RGBA16Float`,
-/// `R16Float` and `R32Float`, `runtime_samples::encode`): its own with `PixelFormatView` usage,
-/// else a same-format copy's with it (Metal's and the devices' copies keep every sample's bits, but
-/// for a device whose multisampled copies convert float NaNs, `MultisampledCopiesConvertFloatNans`,
-/// on which a copy's samples are left unread). Every 4x one is resolved into a new plain 1x texture
-/// read by a blit. In a pass without a draw call Metal's resolve keeps the texel where it keeps the
-/// sign and stores zero in each small-float NaN channel and `0x7fc00000` in each 32-bit float one
-/// elsewhere, which the runtime writes on every device (an `R32Float` clear is Metal's conversion
-/// of the double at every level); so does one whose draw calls draw nothing, its resolve then
-/// Metal's texel without the sign. In a pass with a draw Metal's resolve averages the samples, each
-/// NaN zero: a device's resolve whose NaN channels differ only so is its resolve rule, printed
-/// (`device-rounded-resolve`), not this clear's. A `BGR10_XR` NaN clear is printed beside them, or
-/// the device's refusal of the format. Each prints `MSAA-NAN-CLEAR`.
-#[test]
-fn multisampled_nan_clears_store_metal_s_texel() {
-    let (messages, cache, lane) = super::clear_reach::lane();
-    let device = &lane.device;
-    let name = device.name().to_owned();
-    let xr: &[NanClear] = &[(PixelFormat::BGR10XR, [f64::NAN, 0.5, 1.0, 1.0], &[], &[])];
-    // A triangle wholly off the target, the vertex function's positions.
-    let off: Vec<u8> = [2.0f32, 2.0, 3.0, 2.0, 2.0, 3.0]
-        .iter()
-        .flat_map(|v| v.to_le_bytes())
-        .collect();
-    let off = buffer_with(device, &off).unwrap();
-    let (mut wrong, mut checked) = (Vec::new(), 0usize);
-    // A device whose multisampled copies convert float NaNs (RADV) cannot copy the samples of an
-    // attachment without `PixelFormatView` usage out to be read.
-    let copies_convert = device
-        .properties()
-        .driver_defects
-        .contains(&RuntimeDriverDefect::MultisampledCopiesConvertFloatNans);
-    for &(pf, color, small, large) in NAN_CLEARS.iter().chain(xr) {
-        let bytes = match pf {
-            PixelFormat::RGBA16Float => 8,
-            PixelFormat::R16Float => 2,
-            _ => 4,
-        };
-        let view = match pf {
-            PixelFormat::RGBA16Float => Some(ReadbackView::Rg32Uint),
-            PixelFormat::R16Float => Some(ReadbackView::R16Uint),
-            PixelFormat::R32Float => Some(ReadbackView::R32Uint),
-            _ => None,
-        };
-        let measured = !small.is_empty();
-        for (side, samples, viewed, drawn) in [4u32, 16, 64]
-            .into_iter()
-            .flat_map(|side| [(side, 1u64), (side, 2), (side, 4)])
-            .flat_map(|(side, samples)| [(side, samples, false), (side, samples, true)])
-            .flat_map(|(side, samples, viewed)| {
-                [Drawn::No, Drawn::OffTarget, Drawn::Nothing]
-                    .map(|drawn| (side, samples, viewed, drawn))
-            })
-            .filter(|&(_, _, _, drawn)| measured || drawn == Drawn::No)
-        {
-            let usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
-            let new = |samples: u64, viewed: bool| {
-                let mut descriptor =
-                    TextureDescriptor::texture_2d(pf, side.into(), side.into(), false);
-                if samples > 1 {
-                    descriptor.texture_type = TextureType::Type2DMultisample;
-                    descriptor.sample_count = samples;
-                }
-                descriptor.usage = match viewed {
-                    true => usage | TextureUsage::PIXEL_FORMAT_VIEW,
-                    false => usage,
-                };
-                descriptor.resource_options = ResourceOptions::private();
-                device.new_texture(&descriptor)
-            };
-            let label = format!(
-                "{pf:?} {color:?} {samples}x {side}x{side}{}{}",
-                if viewed { " PixelFormatView" } else { "" },
-                match drawn {
-                    Drawn::No => "",
-                    Drawn::OffTarget => " drawn off the target",
-                    Drawn::Nothing => " a draw call of no vertices",
-                }
-            );
-            let texture = match new(samples, viewed) {
-                Ok(texture) => texture,
-                Err(Error::Unsupported(why)) => {
-                    println!("MSAA-NAN-CLEAR {label} on {name}: unsupported {why:?}");
-                    continue;
-                }
-                Err(error) => panic!("{label}: {error}"),
-            };
-            let resolved = (samples > 1).then(|| {
-                attachment(
-                    device,
-                    pf,
-                    [side.into(), side.into()],
-                    ResourceOptions::private(),
-                )
-                .unwrap()
-            });
-            let mut pass = RenderPassDescriptor::new();
-            let target = &mut pass.color_attachments[0];
-            target.texture = Some(texture.clone());
-            target.load_action = LoadAction::Clear;
-            target.store_action = match &resolved {
-                Some(resolved) => {
-                    target.resolve_texture = Some(resolved.clone());
-                    StoreAction::StoreAndMultisampleResolve
-                }
-                None => StoreAction::Store,
-            };
-            let [red, green, blue, alpha] = color;
-            target.clear_color = ClearColor::new(red, green, blue, alpha);
-            let pipeline =
-                (drawn != Drawn::No).then(|| lane.pipeline(&[pf], (None, None), samples));
-            let command_buffer = lane.queue.command_buffer().unwrap();
-            let encoded = command_buffer
-                .render_command_encoder(&pass)
-                .and_then(|mut encoder| {
-                    if let Some(pipeline) = &pipeline {
-                        encoder.set_render_pipeline_state(pipeline)?;
-                        encoder.set_vertex_buffer(Some(&off), 0, 0)?;
-                        let vertices = match drawn {
-                            Drawn::Nothing => 0,
-                            _ => 3,
-                        };
-                        encoder.draw_primitives(PrimitiveType::Triangle, 0, vertices, 1, 0)?;
-                    }
-                    encoder.end_encoding()
-                });
-            match encoded {
-                Ok(()) => {}
-                // A device that cannot render the format refuses the pass (`BGR10_XR` on x86
-                // lavapipe and on MoltenVK).
-                Err(Error::Unsupported(why)) => {
-                    println!("MSAA-NAN-CLEAR {label} on {name}: unsupported {why:?}");
-                    continue;
-                }
-                Err(error) => {
-                    println!("MSAA-NAN-CLEAR {label} on {name}: refused {error:?}");
-                    wrong.push(format!("{label}: refused {error:?}"));
-                    continue;
-                }
-            }
-            // The samples, through the unsigned view of a texture with `PixelFormatView` usage:
-            // the attachment's own, or a copy's.
-            let read = match (samples > 1, view) {
-                (true, Some(_)) if !viewed && copies_convert => None,
-                (true, Some(view)) => {
-                    let readable = match viewed {
-                        true => texture.clone(),
-                        false => {
-                            let copy = new(samples, true).unwrap();
-                            let mut blit = command_buffer.blit_command_encoder().unwrap();
-                            blit.copy_texture(&texture, &copy).unwrap();
-                            blit.end_encoding().unwrap();
-                            copy
-                        }
-                    };
-                    Some(
-                        samples_of(
-                            device,
-                            &command_buffer,
-                            &readable,
-                            SampleRead::Color(view),
-                            [side, side],
-                            samples as u32,
-                        )
-                        .unwrap(),
-                    )
-                }
-                _ => None,
-            };
-            run(&command_buffer);
-            let distinct = |all: &[u8]| {
-                let mut seen: Vec<Vec<u8>> = Vec::new();
-                for texel in all.chunks_exact(bytes) {
-                    if !seen.iter().any(|s| s == texel) {
-                        seen.push(texel.to_vec());
-                    }
-                }
-                seen
-            };
-            let stored = distinct(&blit_read(
-                device,
-                resolved.as_ref().unwrap_or(&texture),
-                bytes as u64,
-            ));
-            let sampled = read.map(|read| distinct(&read.bytes().unwrap()));
-            let sampled_line = match &sampled {
-                Some(sampled) => format!(" samples {sampled:02x?}"),
-                None if samples > 1 && view.is_some() => {
-                    " samples unread (the device's copy converts NaNs)".to_owned()
-                }
-                None => String::new(),
-            };
-            let what = if samples > 1 { "resolved" } else { "stored" };
-            if !measured {
-                println!(
-                    "MSAA-NAN-CLEAR {label} on {name}:{sampled_line} {what} {stored:02x?} \
-                     (printed: no measured Metal texel)"
-                );
-                continue;
-            }
-            checked += 1;
-            let signed = side >= 16 && !viewed && drawn == Drawn::No;
-            let texel = if signed { large } else { small };
-            let samples_exact = sampled.iter().flatten().all(|sample| sample == texel);
-            let verdict = if samples == 1 {
-                match stored.iter().all(|got| got == texel) {
-                    true => Ok("Metal's texel".to_owned()),
-                    false => Err(()),
-                }
-            } else {
-                let metal = match signed {
-                    true => texel.to_vec(),
-                    false => nans_resolved(pf, texel),
-                };
-                // A resolve keeping or dropping a NaN, of any bits, beside Metal's other channels.
-                let resolve_rule = |got: &[u8]| {
-                    nans_resolved(pf, got) == nans_resolved(pf, texel)
-                        && channels(pf, got).iter().zip(channels(pf, texel)).all(
-                            |(&(g, e, m), (t, _, _))| match small_nan(t, e, m) {
-                                true => g == 0 || small_nan(g, e, m),
-                                false => g == t,
-                            },
-                        )
-                };
-                match (samples_exact, stored.iter().all(|got| *got == metal)) {
-                    (true, true) => Ok("Metal's texel, Metal's resolve".to_owned()),
-                    (true, false)
-                        if drawn == Drawn::OffTarget
-                            && stored.iter().all(|got| resolve_rule(got)) =>
-                    {
-                        Ok(format!(
-                            "Metal's texel; the device's resolve rule, Metal's resolve \
-                             {metal:02x?}"
-                        ))
-                    }
-                    _ => Err(()),
-                }
-            };
-            match verdict {
-                Ok(verdict) => println!(
-                    "MSAA-NAN-CLEAR {label} on {name}:{sampled_line} {what} {stored:02x?}: {verdict}"
-                ),
-                Err(()) => {
-                    println!(
-                        "MSAA-NAN-CLEAR {label} on {name}:{sampled_line} {what} {stored:02x?}: \
-                         WRONG, Metal {texel:02x?}"
-                    );
-                    wrong.push(format!(
-                        "{label}:{sampled_line} {what} {stored:02x?}, Metal {texel:02x?}"
-                    ));
-                }
-            }
-        }
-    }
-    println!("MSAA-NAN-CLEAR {checked} cases checked on {name}");
-    drop(off);
-    drop(lane);
-    drop(cache);
-    let _ = messages.take_notices();
-    assert!(wrong.is_empty(), "{wrong:#?}");
-}
-
-/// What a pass of [`multisampled_nan_clears_store_metal_s_texel`] draws.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Drawn {
-    /// No draw call.
-    No,
-    /// A triangle wholly off the target.
-    OffTarget,
-    /// A draw call of no vertices.
-    Nothing,
+            .zip(&want)
+            .all(|(&(g, e, m), &(w, _, _))| g == w || (small_nan(g, e, m) && small_nan(w, e, m)))
 }
 
 /// Each color clear Metal was measured with stores Metal's bytes, depth and stencil clears
-/// included; a format the device cannot render to is counted, not run.
+/// included, but a NaN of a half-float or small-float channel, which the device's clear converts as
+/// it likes, announced (`device-nan-encoding`) and printed; a format the device cannot render to is
+/// counted, not run.
 #[test]
 fn clears_store_the_bytes_metal_stores() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
     let (mut checked, mut unsupported, mut wrong) = (0usize, Vec::new(), Vec::new());
+    let mut announced = false;
     for &(pf, color, expected) in COLOR_CLEARS {
         let texture = match attachment(&device, pf, [1, 1], ResourceOptions::private()) {
             Ok(texture) => texture,
@@ -1278,7 +897,15 @@ fn clears_store_the_bytes_metal_stores() {
             Err(error) => panic!("{pf:?}: {error}"),
         }
         let bytes = blit_read(&device, &texture, expected.len() as u64);
-        if bytes != expected {
+        announced |= super::degrade_notices::counts(&messages.take_notices())
+            .contains_key(&Degradation::DeviceNanEncoding);
+        if bytes != expected && announced && nan_for_nan(pf, &bytes, expected) {
+            eprintln!(
+                "clear {pf:?} {color:?} on {}: {bytes:02x?}, Metal {expected:02x?} \
+                 (device-nan-encoding)",
+                device.name()
+            );
+        } else if bytes != expected {
             wrong.push(format!(
                 "{pf:?} {color:?}: {bytes:02x?}, Metal {expected:02x?}"
             ));

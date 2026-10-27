@@ -40,10 +40,6 @@ pub struct DevicePolicy {
     /// Whether a normalized vertex attribute's value is the device's fixed-function conversion of
     /// its codes (the default) or Metal's, divided exactly in the shader.
     pub vertex_normalized: VertexNormalizedPolicy,
-    /// Whether a NaN result's bits, and the operand Metal's minimum and maximum functions
-    /// (`fmin`, `fmax`, `min3`, `max3`, `clamp`, `saturate`) pick at a NaN or a signed zero, are
-    /// the device's own (the default) or Metal's.
-    pub nan_and_min_max: NanMinMaxPolicy,
 
     /// Whether a texture whose format the device lacks, held in a carrier (an ASTC LDR texture,
     /// or an EAC 11-bit one), samples a decoded twin of compact codes (the default) or of Metal's
@@ -80,10 +76,10 @@ pub struct DevicePolicy {
 impl DevicePolicy {
     /// The untrusted-guest production policy: containment and isolation on, Metal's 8-bit linear
     /// filter emulated exactly where the emulation runs, native device sampling (a two-plane YCbCr texture's samples among them),
-    /// the device's own texel conversions, the device's NaN and minimum and maximum, compact
-    /// codes in a carried texture's decoded twin, the driver's compressed image of a heap's texture
-    /// Metal keeps compressed, command buffers ready together in one kernel submission, batches of
-    /// one queue ordered by their ends where the driver runs them one after another, and a sampled
+    /// the device's own texel conversions, compact codes in a carried texture's decoded twin, the
+    /// driver's compressed image of a heap's texture Metal keeps compressed, command buffers ready
+    /// together in one kernel submission, batches of one queue ordered by their ends where the
+    /// driver runs them one after another, and a sampled
     /// texture over host pages in place where the device's check passed.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
@@ -95,7 +91,6 @@ impl DevicePolicy {
         ycbcr_filter: YCbCrFilterPolicy::Device,
         texel_conversion: TexelConversionPolicy::Device,
         vertex_normalized: VertexNormalizedPolicy::Device,
-        nan_and_min_max: NanMinMaxPolicy::Native,
         decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
         completion: CompletionPolicy::Grouped,
@@ -106,8 +101,7 @@ impl DevicePolicy {
 
     /// This policy with Metal's answer wherever the choices offer it: its texel conversions
     /// ([`TexelConversionPolicy::Exact`]), its normalized vertex attributes
-    /// ([`VertexNormalizedPolicy::Exact`]), its NaN and minimum and maximum
-    /// ([`NanMinMaxPolicy::Exact`]), its filter of a
+    /// ([`VertexNormalizedPolicy::Exact`]), its filter of a
     /// two-plane YCbCr texture
     /// ([`YCbCrFilterPolicy::Exact`]), its decode of a carried texture's texels
     /// ([`DecodedTexelsPolicy::Exact`]), a heap's texture whose bytes alias the heap's
@@ -124,7 +118,6 @@ impl DevicePolicy {
             ycbcr_filter: YCbCrFilterPolicy::Exact,
             texel_conversion: TexelConversionPolicy::Exact,
             vertex_normalized: VertexNormalizedPolicy::Exact,
-            nan_and_min_max: NanMinMaxPolicy::Exact,
             decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
             completion: CompletionPolicy::Exact,
@@ -294,39 +287,6 @@ pub enum VertexNormalizedPolicy {
     /// Metal's, computed exactly in the shader: the attribute is pulled from its vertex buffer
     /// and its codes divided by `lower::stage_io::fetch`'s integer sequence, as a format the
     /// fixed-function path cannot fetch at all already is. One module per format.
-    Exact,
-}
-
-/// Whose NaN a `float` or `half` result answers, and which operand Metal's minimum and maximum
-/// functions (`fmin`, `fmax`, `min3`, `max3`, `clamp`, and `saturate`, Metal's
-/// `clamp(x, +0, 1)`) pick at a NaN, a signed zero or an `f32` denormal, on a device not measured
-/// to answer Metal's (the owner's "the bit pattern of NaN values, and min and max when NaN or
-/// signed zero is involved" of 2026-10-11). A device measured to answer Metal's canonical NaN
-/// (`DriverDeviation::MetalCanonicalNans`) keeps it, and one measured to compute Metal's minimum
-/// and maximum (`DriverDeviation::MetalMinMax`) or whose functions are Metal's own
-/// (`DriverDeviation::MetalFloatFunctions`, MoltenVK on an Apple GPU) keeps Metal's picks, under
-/// either setting.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum NanMinMaxPolicy {
-    /// The device's own (the default): every NaN Metal answers is the device's (its sign and
-    /// payload; no select of Metal's bits), and those functions are the device's `NMin`, `NMax`
-    /// and `NClamp`. On a device that rounds a `half` through its conversion under the float
-    /// controls (ANV, RADV), a `half` read from its bits is the device's widening of them, and a
-    /// `half` texel takes that conversion's NaN. Such a module records
-    /// [`PrecisionNote::NativeNanEncoding`](crate::pipeline::PrecisionNote::NativeNanEncoding)
-    /// or [`NativeMinMax`](crate::pipeline::PrecisionNote::NativeMinMax), whose docs state the
-    /// bound.
-    #[default]
-    Native,
-    /// Metal's: the translation selects Metal's NaN where the device may answer another, and
-    /// Metal's operand where the device's instructions may pick another; a `half` widened to
-    /// `float` answers `0x7fc00000` for every NaN, as Metal does. A `half` texel read, sampled or
-    /// gathered keeps the NaN the device decoded through native half rounding too and through the
-    /// conversion under the float controls, and a
-    /// `half` read from its bits is decoded in integer arithmetic where the default takes the
-    /// device's widening (a `half` stored back unchanged keeps its bits under either).
     Exact,
 }
 

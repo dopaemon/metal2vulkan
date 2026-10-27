@@ -431,57 +431,6 @@ fn a_native_conversion_converts_the_value_itself() {
     }
 }
 
-/// Whether `entry`'s plan on `p` rounds `half` natively, and whether a `half` texel keeps its
-/// decoded NaN through that rounding (`ArithPlan::native_half`, `ArithPlan::texel_nans`).
-fn texel_nans(bitcode: &[u8], entry: &str, p: &DeviceProfile) -> (bool, bool) {
-    let mut m = meter();
-    let decoded = air::decode(bitcode, &mut m).expect("decode");
-    let req = SpecRequest {
-        call_stack_depth: 1,
-        entry: entry.to_owned(),
-        ..SpecRequest::default()
-    };
-    let spec = air::specialize(decoded, &req, &mut m).expect("specialize");
-    let memory = analyze_memory(&spec, p, &mut m).expect("memory");
-    let plan = select(&spec, &memory, p, &LowerInputs::new(), &mut m).expect("select");
-    let arith = &plan.families.arith;
-    (arith.native_half, arith.texel_nans)
-}
-
-/// A `half` texel keeps the NaN the device decoded through native half rounding only where the NaN
-/// switch asks for Metal's NaN (`NanMinMaxPolicy::Exact`: the profile's `NanEncoding::Device`);
-/// under the default (`NanMinMaxPolicy::Native`) no committed profile's plan keeps it, so native
-/// half rounding takes the form's NaN, byte for byte; and a profile measured to answer Metal's
-/// canonical NaN keeps the default's plan under either setting. At least one profile rounds
-/// natively and keeps the texel's NaN under the switch (lavapipe and the NVIDIA profiles).
-#[test]
-fn a_texels_nan_is_kept_under_native_half_rounding_only_where_the_nan_switch_asks() {
-    use crate::device::profile::NanEncoding;
-    use crate::device::NanMinMaxPolicy;
-    let Some(bc) = bitcode() else {
-        return;
-    };
-    let switched = DevicePolicy {
-        nan_and_min_max: NanMinMaxPolicy::Exact,
-        ..DevicePolicy::default()
-    };
-    let mut kept_natively = 0usize;
-    for (stem, p) in &committed_profiles().expect("profiles") {
-        let (native, kept) = texel_nans(&bc, "half_narrow", p);
-        assert!(!kept, "{stem}: the default keeps no texel NaN");
-        let q = profile(stem, switched).expect("profile");
-        let (native_q, kept_q) = texel_nans(&bc, "half_narrow", &q);
-        assert_eq!(native_q, native, "{stem}: the switch leaves the rounding");
-        let device_nans = q.fields().nan_encoding == NanEncoding::Device;
-        assert_eq!(kept_q, device_nans, "{stem}: {:?}", q.fields().nan_encoding);
-        kept_natively += usize::from(native_q && kept_q);
-    }
-    assert!(
-        kept_natively > 0,
-        "a profile that rounds natively and keeps texel NaNs"
-    );
-}
-
 /// What a module's words say of its `half` rounding: its execution modes with a float width, the
 /// conversions from 32- to 16-bit floats and back with how many carry `NoContraction`, its
 /// `OpQuantizeToF16`s, and its 16-bit float arithmetic.
@@ -744,18 +693,14 @@ fn half_load_module() -> String {
 
 /// Where a profile rounds `half` through the conversion under the float controls (ANV, RADV), a
 /// kernel that reads a `half` from memory and rounds nothing widens its bits by the device's
-/// conversion by default (`NanMinMaxPolicy::Native`, which leaves a NaN's bits to the device): the
-/// module has that widening and no narrowing, its entry declares the controls
+/// conversion, which leaves a NaN's bits to the device: the module has that widening and no
+/// narrowing, its entry declares the controls
 /// (`narrow::controlled_modes`, so a half denormal widens exactly), it requires their properties,
 /// records `NativeNanEncoding`, selects no canonical NaN, and passes L3; on the interpreter a half
-/// denormal, a zero's sign, `65504` and an infinity read as their values, and a NaN as a NaN.
-/// Under `NanMinMaxPolicy::Exact` it decodes the bits in integer arithmetic (no conversion),
-/// declares no 16-bit mode, records no such note, and widens every NaN to Metal's `0x7FC00000`
-/// (a quiet and a signalling one of either sign; the decode alone keeps their payloads). Under
-/// either the `half` stored back unchanged keeps its bits, NaNs included.
+/// denormal, a zero's sign, `65504` and an infinity read as their values, and a NaN as a NaN; the
+/// `half` stored back unchanged keeps its bits, NaNs included.
 #[test]
 fn a_half_read_from_memory_widens_by_the_conversion_under_the_float_controls() {
-    use crate::device::NanMinMaxPolicy;
     use crate::spv::ExecutionMode as M;
     let Some(bc) = assemble("native-half-load", &half_load_module()) else {
         return;
@@ -766,55 +711,39 @@ fn a_half_read_from_memory_widens_by_the_conversion_under_the_float_controls() {
             continue;
         }
         controlled += 1;
-        let exact = profile(
-            stem,
-            DevicePolicy {
-                nan_and_min_max: NanMinMaxPolicy::Exact,
-                ..DevicePolicy::default()
-            },
-        )
-        .expect("profile");
-        for (q, widened) in [(p, true), (&exact, false)] {
-            let what = format!("half_load on {stem}, widened {widened}");
-            let a = compile(&bc, "half_load", q).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            link_and_validate(&a, q).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let r = rounding(&a.module.words);
-            assert_eq!(r.narrowings, 0, "{what}: {r:?}");
-            assert_eq!(r.widenings > 0, widened, "{what}: {r:?}");
-            for mode in [M::RoundingModeRTE, M::DenormPreserve] {
-                assert_eq!(
-                    r.modes.contains(&(mode as u32, 16)),
-                    widened,
-                    "{what}: {mode:?} {r:?}"
-                );
-            }
-            assert_eq!(
-                a.precision.contains(&PrecisionNote::NativeNanEncoding),
-                widened,
-                "{what}: {:?}",
-                a.precision
+        let what = format!("half_load on {stem}");
+        let a = compile(&bc, "half_load", p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let r = rounding(&a.module.words);
+        assert_eq!(r.narrowings, 0, "{what}: {r:?}");
+        assert!(r.widenings > 0, "{what}: {r:?}");
+        for mode in [M::RoundingModeRTE, M::DenormPreserve] {
+            assert!(
+                r.modes.contains(&(mode as u32, 16)),
+                "{what}: {mode:?} {r:?}"
             );
-            assert_eq!(r.canonical_nans > 0, !widened, "{what}: {r:?}");
-            let run = |h: u16| {
-                let mut bytes = vec![0; 16];
-                bytes[..2].copy_from_slice(&h.to_le_bytes());
-                let b = interpret_bytes(&bc, "half_load", q, bytes);
-                let wide = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
-                let kept = u16::from_le_bytes([b[12], b[13]]);
-                assert_eq!(kept, h, "{what}: {h:#06x} stored back");
-                f32::from_bits(wide)
-            };
-            assert_eq!(run(0x0001).to_bits(), 2f32.powi(-24).to_bits(), "{what}");
-            assert_eq!(run(0x8000).to_bits(), (-0.0f32).to_bits(), "{what}");
-            assert_eq!(run(0x7BFF), 65504.0, "{what}");
-            assert_eq!(run(0xFC00), f32::NEG_INFINITY, "{what}");
-            for h in [0x7E01, 0xFE00, 0x7C01, 0xFDFF] {
-                let x = run(h);
-                assert!(x.is_nan(), "{what}: {h:#06x}");
-                if !widened {
-                    assert_eq!(x.to_bits(), 0x7FC0_0000, "{what}: {h:#06x}");
-                }
-            }
+        }
+        assert!(
+            a.precision.contains(&PrecisionNote::NativeNanEncoding),
+            "{what}: {:?}",
+            a.precision
+        );
+        assert_eq!(r.canonical_nans, 0, "{what}: {r:?}");
+        let run = |h: u16| {
+            let mut bytes = vec![0; 16];
+            bytes[..2].copy_from_slice(&h.to_le_bytes());
+            let b = interpret_bytes(&bc, "half_load", p, bytes);
+            let wide = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
+            let kept = u16::from_le_bytes([b[12], b[13]]);
+            assert_eq!(kept, h, "{what}: {h:#06x} stored back");
+            f32::from_bits(wide)
+        };
+        assert_eq!(run(0x0001).to_bits(), 2f32.powi(-24).to_bits(), "{what}");
+        assert_eq!(run(0x8000).to_bits(), (-0.0f32).to_bits(), "{what}");
+        assert_eq!(run(0x7BFF), 65504.0, "{what}");
+        assert_eq!(run(0xFC00), f32::NEG_INFINITY, "{what}");
+        for h in [0x7E01, 0xFE00, 0x7C01, 0xFDFF] {
+            assert!(run(h).is_nan(), "{what}: {h:#06x}");
         }
     }
     assert!(

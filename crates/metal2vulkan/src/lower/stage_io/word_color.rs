@@ -96,7 +96,6 @@ pub(super) fn plan(
         numeric: IoNumeric::Uint,
         components: 1,
         source_bits: 32,
-        bits: 32,
     }))
 }
 

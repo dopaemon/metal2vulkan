@@ -837,17 +837,6 @@ impl ResourcePlanner<'_> {
             };
             self.template.texture_levels.push((slot, levels));
         }
-        if self.has_fact(RuntimeFact::StorageTextureHalfChannels { slot }) {
-            let half = match (&write.0, self.texture_shape(slot)) {
-                (WriteSource::Texture { .. }, Some(TextureShape::Texture { pixel_format, .. })) => {
-                    crate::metal::texel_format::half_channels(*pixel_format)
-                }
-                _ => false,
-            };
-            self.template
-                .texture_half_channels
-                .push((slot, u32::from(half)));
-        }
         if self.has_fact(RuntimeFact::StorageTextureIntegerChannels { slot }) {
             let word = match (&write.0, self.texture_shape(slot)) {
                 (

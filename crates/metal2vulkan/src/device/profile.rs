@@ -536,14 +536,10 @@ pub struct ProfileFields {
     /// Metal's own, in the math mode Metal's compile of the module takes, or the device's. The
     /// module takes the device's instructions on either; the notes it records differ.
     pub float_functions: FloatFunctions,
-    /// Which NaN the device's `float` and `half` arithmetic answers: Metal's canonical NaN, so the
-    /// translation leaves it to the device, or the device's own, so the translation selects Metal's
-    /// where a result's bits are observed.
+    /// Which NaN the device's `float` and `half` arithmetic answers: Metal's canonical NaN, measured,
+    /// or the device's own, which the module records where Metal answers a NaN. Either way the
+    /// translation leaves every NaN's bits to the device.
     pub nan_encoding: NanEncoding,
-    /// Whose NaN a `half` read, sample or gather hands back for a NaN texel: Metal's, by the
-    /// class of the texture bound, where the policy's `NanMinMaxPolicy::Exact` asks for it, on
-    /// every device, or the device's decode (the default).
-    pub texel_nans: TexelNanRoute,
     /// Whether a linear sample the device's sampler answers (`DeviceProfile::device_samples`)
     /// takes Metal's filter of a two-plane YCbCr texture bound at its slot, through the slot's
     /// YCbCr variant (`RuntimeFact::YCbCrTexture`): under the policy's `YCbCrFilterPolicy::Exact`,
@@ -560,11 +556,6 @@ pub struct ProfileFields {
     /// which its refresh reads across the bus once per encoder where the in-place form would read
     /// the planes there at every pass. Both forms read Metal's texels exactly.
     pub ycbcr_in_place: bool,
-    /// Whose operand Metal's minimum and maximum functions pick (`lower::arith::native_min_max`):
-    /// Metal's, or the device's `NMin`, `NMax` and `NClamp` as they are (the policy's
-    /// `NanMinMaxPolicy::Native`). Derived, so a device that keeps Metal's picks keys the same
-    /// under both policies.
-    pub min_max: MinMaxRoute,
     /// The Function storage a thread holds correctly (`device::function_storage`): a stage's
     /// private memory, its call stacks included, may take this much a thread
     /// (`VkLimit::FunctionStorageBytesPerThread`), and a vertex or fragment function on a device
@@ -685,52 +676,18 @@ pub enum FloatFunctions {
     Native,
 }
 
-/// Whose operand Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` on `float` and
-/// `half` pick ([`ProfileFields::min_max`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum MinMaxRoute {
-    /// Metal's: the device's `NMin`, `NMax` and `NClamp` where they are measured to be Metal's
-    /// (`DriverDeviation::MetalMinMax`), else the translation's selects of Metal's operand, as on a
-    /// device whose functions are Metal's own (`DriverDeviation::MetalFloatFunctions`) or under
-    /// `NanMinMaxPolicy::Exact`.
-    Metal,
-    /// The device's `NMin`, `NMax` and `NClamp` as they are (`NanMinMaxPolicy::Native`, the
-    /// default), noted `PrecisionNote::NativeMinMax` with its bound.
-    Native,
-}
-
 /// Which NaN a device's `float` and `half` arithmetic answers ([`ProfileFields::nan_encoding`]),
-/// decided by the driver's measured deviation [`DriverDeviation::MetalCanonicalNans`].
+/// decided by the driver's measured deviation [`DriverDeviation::MetalCanonicalNans`]. The
+/// translation selects no NaN under either: every NaN's bits are the device's.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NanEncoding {
     /// Metal's canonical NaN, `0x7FC00000` (`0x7E00` as `half`), for every NaN result of the
-    /// arithmetic and of the functions whose NaN Metal canonicalizes.
+    /// arithmetic and of the functions whose NaN Metal canonicalizes, measured: such a result
+    /// records nothing.
     MetalCanonical,
-    /// The device's own: an operand's bits, quieted or not, or another NaN, which the
-    /// translation answers Metal's in place of (the policy's `NanMinMaxPolicy::Exact`).
-    Device,
-    /// The device's own, taken as it is (`NanMinMaxPolicy::Native`, the default), noted
-    /// `PrecisionNote::NativeNanEncoding` with its bound.
+    /// The device's own, unmeasured, noted `PrecisionNote::NativeNanEncoding` with its bound.
     Native,
-}
-
-/// Whose NaN a `half` texel access hands back for a NaN texel ([`ProfileFields::texel_nans`]).
-/// A texel's NaN is the image's decode, which the access narrows itself, not a result of the
-/// device's arithmetic, so [`ProfileFields::nan_encoding`] does not decide it: a device measured
-/// to answer Metal's canonical NaN in its arithmetic (`NanEncoding::MetalCanonical`) need not
-/// answer it for a texel, and MoltenVK on the Apple M3 Max does not (a 32-bit float texel's NaN
-/// read as `half` keeps its payload's top bits).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum TexelNanRoute {
-    /// Metal's rule (`NanMinMaxPolicy::Exact`): a 16-bit float texel's own NaN where the access
-    /// reads one texel, and `0x7e00` for every other NaN, by the class of the texture bound
-    /// (`lower::texture::texel_nans_class`).
-    Metal,
-    /// The device's decode (`NanMinMaxPolicy::Native`, the default), noted
-    /// `PrecisionNote::DeviceNanEncoding`.
-    Device,
 }
 
 /// What the consumer enabled, as the capability vocabulary `Requirements` uses

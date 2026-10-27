@@ -1507,7 +1507,6 @@ fn stage_module(c: &CompiledFunction, linked: &Linked, i: usize) -> Result<Stage
         constant_blob: a.blob.clone(),
         rounded_colors,
         specialized_notes: a.specialized.clone(),
-        half_bit_colors: a.interface.io.half_bit_colors.clone(),
         own_pixel_textures: a.interface.own_pixel_textures.clone(),
         snapshot_textures: a.interface.snapshot_textures.clone(),
         private_bytes: a.interface.private_bytes,

@@ -879,7 +879,6 @@ codec_enum! {
         VertexDepthClamp,
         BlendColor,
         ShaderTestsState,
-        TextureHalfChannels(f0),
         CaptureAddress,
         CaptureLayout,
         CaptureIndexAddress,
@@ -1128,12 +1127,11 @@ codec_struct! {
     StageIo {
         inputs, outputs, builtins, pulled, stage_in, multisampled, varyings_at_pixel,
         position_depth, coverage_loop, color_writes, rounded_colors, primitive_inputs,
-        early_fragment_tests, extended_range_colors, unattached_colors, half_bit_colors,
-        sample_mask, rotated_colors, rotated_factors, rotated_blends, srgb_fetches,
-        half_output_lanes, texture_write_rounding, uniform_outputs, uniform_inputs,
-        instanced_attributes, half_blend_colors, half_fast_colors,
-        float_blend_colors, zero_indices, color_group, word_colors, alpha_in_red_colors,
-        alpha_test, depth_compares,
+        early_fragment_tests, extended_range_colors, unattached_colors, sample_mask,
+        rotated_colors, rotated_factors, rotated_blends, srgb_fetches, half_output_lanes,
+        texture_write_rounding, uniform_outputs, uniform_inputs, instanced_attributes,
+        half_blend_colors, half_fast_colors, float_blend_colors, zero_indices, color_group,
+        word_colors, alpha_in_red_colors, alpha_test, depth_compares,
     }
     DepthCompares { samplers, clamped }
     ColorGroup { present, width, group }
@@ -1143,7 +1141,7 @@ codec_struct! {
     StageInInput { index, ty, fetch }
     StageInFetch { format, buffer_index, offset, stride, step_function, step_rate, index }
     IoVariable { key, role, ty }
-    IoType { numeric, components, source_bits, bits }
+    IoType { numeric, components, source_bits }
 }
 
 codec_enum! {
@@ -1255,7 +1253,6 @@ codec_enum! {
         CubicSampler { slot },
         CubicArgumentSampler { stage },
         ShaderTests { formatless, multisampled, planes },
-        StorageTextureHalfChannels { slot },
         CapturedPositions { form },
         HeapRawSamples { stage, sampler },
         ShaderStencilTest { formatless },
@@ -1273,8 +1270,7 @@ codec_enum! {
         ObjectThreadgroupArena { static_bytes, payload },
         ExactFormsOverCompilerLimit {
             sampling,
-            texel_conversion,
-            nan_and_min_max
+            texel_conversion
         },
         MergedDraws,
         QuadPrimitiveIds,
@@ -1332,8 +1328,7 @@ codec_struct! {
     StageModule {
         stage, entry_point, spirv, specialization, required_subgroup_size, stage_flags,
         reconvergence, precision_notes, strategies, constant_blob, rounded_colors,
-        specialized_notes, half_bit_colors, own_pixel_textures, snapshot_textures, private_bytes,
-        stats,
+        specialized_notes, own_pixel_textures, snapshot_textures, private_bytes, stats,
     }
     SpecializedNote { note, when }
     SpecClause { all }

@@ -151,7 +151,6 @@ mod engine_swizzled_storage;
 mod engine_table_copies;
 mod engine_tables;
 mod engine_tessellation;
-mod engine_texel_nans;
 mod engine_texture;
 mod engine_texture_atomic_unk;
 mod engine_texture_interp;

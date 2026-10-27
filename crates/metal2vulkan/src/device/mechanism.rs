@@ -113,8 +113,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::BicubicTexels { .. } => Mechanism::Specialization,
         // The binder writes the bound texture's level count per draw or dispatch.
         RuntimeFact::StorageTextureLevels { .. } => Mechanism::PushConstant,
-        // The binder writes whether the bound texture's channels are 16-bit floats.
-        RuntimeFact::StorageTextureHalfChannels { .. } => Mechanism::PushConstant,
         // The binder writes the bound texture's integer channel widths.
         RuntimeFact::StorageTextureIntegerChannels { .. } => Mechanism::PushConstant,
         // The binder views each level of the bound texture at its element.

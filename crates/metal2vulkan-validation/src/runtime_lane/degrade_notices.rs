@@ -1869,8 +1869,7 @@ fn a_creation_s_notices_and_messages_reach_the_sink_on_the_asking_thread() {
 /// every precision note a stage records that no specialization removes (a specialized one is
 /// announced where a draw or dispatch binds a variant keeping it), but
 /// `ArgumentPixelSamplerScaling`, which a draw or dispatch listing the state announces;
-/// `shader-half-color-bits` where a stage writes a `half`'s bits to a color attachment,
-/// `shader-color-conversion` where one rounds a color write to Metal's code; and reconvergence
+/// `shader-color-conversion` where a stage rounds a color write to Metal's code; and reconvergence
 /// that is not Metal's.
 fn making_kinds<'a>(stages: impl IntoIterator<Item = &'a StageModule>) -> BTreeSet<Degradation> {
     let mut kinds = BTreeSet::new();
@@ -1880,9 +1879,6 @@ fn making_kinds<'a>(stages: impl IntoIterator<Item = &'a StageModule>) -> BTreeS
             if !specialized && note != PrecisionNote::ArgumentPixelSamplerScaling {
                 kinds.insert(Degradation::from_precision_note(note));
             }
-        }
-        if !stage.half_bit_colors.is_empty() {
-            kinds.insert(Degradation::ShaderHalfColorBits);
         }
         if !stage.rounded_colors.is_empty() {
             kinds.insert(Degradation::ShaderColorConversion);

@@ -550,9 +550,6 @@ pub struct SelectCx<'a> {
     func: FuncId,
     /// Whether each instruction's result is observed, by `InstId` ([`observed_results`]).
     observed: Vec<bool>,
-    /// Whether each instruction's result may carry its NaN's bits to an observation, by `InstId`
-    /// (`arith::nan::observed_payloads`).
-    nan_payloads: Vec<bool>,
 }
 
 impl SelectCx<'_> {
@@ -653,15 +650,6 @@ impl SelectCx<'_> {
     /// other than a phi, or by a phi whose result is observed ([`observed_results`]).
     pub fn is_observed(&self, id: InstId) -> bool {
         self.observed
-            .get(id.raw() as usize)
-            .copied()
-            .unwrap_or(true)
-    }
-
-    /// Whether the result of instruction `id` may carry its NaN's bits to an observation: read
-    /// by an instruction or terminator that does not drop them (`arith::nan::drops_payload`).
-    pub fn nan_payload_observed(&self, id: InstId) -> bool {
-        self.nan_payloads
             .get(id.raw() as usize)
             .copied()
             .unwrap_or(true)
@@ -1208,15 +1196,6 @@ pub fn select(
         }
     };
     let root_bytes = root_sets.charged();
-    let nan_payloads = match arith::nan::observed_payloads(e, e.func, body, m) {
-        Ok(n) => n,
-        Err(err) => {
-            m.release(observed_bytes);
-            m.release(root_bytes);
-            return Err(err);
-        }
-    };
-    let nan_bytes = nan_payloads.len();
     let cx = SelectCx {
         entry: e,
         body,
@@ -1250,12 +1229,10 @@ pub fn select(
         phis: access::phis::PhiFacts::default(),
         func: e.func,
         observed,
-        nan_payloads,
     };
     let result = select_entry(cx, body, func.params.len(), m);
     m.release(observed_bytes);
     m.release(root_bytes);
-    m.release(nan_bytes);
     result
 }
 

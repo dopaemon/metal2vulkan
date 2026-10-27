@@ -10,8 +10,8 @@
 //! - A read outside the texture is Metal's zero texel, alpha the format's (measured), on a profile
 //!   whose device robustness would return the raw zero.
 //! - `ARGB8Unorm`'s storage slot rotates its bytes in the shader (`RotateArgb`), and a half-float
-//!   storage slot of `HalfQuietNan` quiets a written `float`'s NaN alone, the device rounding
-//!   every other value.
+//!   storage slot leaves each written `float` to the device's conversion, noting where it is not
+//!   measured to be Metal's.
 //! - The binder joins a slot bound in an extended-range format to the plan's variant, the
 //!   variant's plan states the same key, and it views the image in the raw format.
 //! - Samples of such a texture are Metal's (`samples`), at Metal's level and through a linear
@@ -662,18 +662,20 @@ fn argb8_storage_slots_rotate_their_bytes() {
     }
 }
 
-/// A half-float storage slot of `HalfQuietNan` (formatless, and declared `Rgba16f`) writes each
-/// `float` channel as computed but a NaN as `0x7fc00000`, the device's conversion rounding the
-/// value: Metal's rounding toward zero where the profile takes
-/// `DriverDeviation::MetalHalfStorageWrites` (the module requires its property), else the
-/// device's own (`PrecisionNote::DeviceColorConversion`). The held lanes cover every tie between
-/// neighbouring halves and its neighbours, past the largest, the infinities and NaNs. The NaN is
-/// Metal's where the profile takes `DriverDeviation::MetalFloatStorageNans` (MoltenVK's and
-/// lavapipe's: the module requires its property), else the device's (ANV's on the Iris Xe of
-/// RPL-P: `PrecisionNote::DeviceNanEncoding`).
+/// A half-float storage slot (formatless, and declared `Rgba16f`) writes each `float` channel as
+/// computed, the device's conversion rounding it and storing its NaN. The rounding is Metal's
+/// toward zero where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module
+/// requires its property), else the device's own (`PrecisionNote::DeviceColorConversion`); the
+/// NaN is Metal's `0x7e00` where it takes `DriverDeviation::MetalHalfStorageNans` (MoltenVK's: the
+/// module requires its property), else the device's (`PrecisionNote::DeviceNanEncoding`). A
+/// formatless slot may also reach a packed small float image, whose NaN is the device's on every
+/// profile (noted too), or a normalized one, whose conversion is the device's on every profile
+/// (noted too). The held lanes cover every tie between neighbouring halves and its
+/// neighbours, past the largest, the infinities and NaNs.
 #[test]
-fn half_float_storage_slots_quiet_their_nans() {
+fn half_float_storage_slots_leave_their_writes_to_the_device() {
     use crate::device::requirements::VkProperty;
+    use crate::error::DriverDeviation;
     use crate::pipeline::artifact::PrecisionNote;
     let Some(bc) = assemble("halves", &kernel(Source::ReadWrite, false, 0)) else {
         return;
@@ -705,94 +707,88 @@ fn half_float_storage_slots_quiet_their_nans() {
         }
     };
     let held = move |n: u32| -> [u32; 4] { [0, 1, 2, 3].map(|c| value(n, c)) };
-    {
-        let class = StorageImageClass::HalfQuietNan;
-        for choice in [
-            StorageImageChoice {
-                numeric: Some(crate::pipeline::sym::SampledType::Float),
-                ..StorageImageChoice::new(crate::vk::Format::UNDEFINED, class)
-            },
-            StorageImageChoice::new(crate::vk::Format::R16G16B16A16_SFLOAT, class),
-        ] {
-            let mut i = LowerInputs::new();
-            i.storage_images.insert(TARGET, choice);
-            let anv = "intel-irisxe-rplp-anv";
-            let anv = (anv, profile(anv, DevicePolicy::default()).expect("profile"));
-            for (stem, p) in profiles().into_iter().chain([anv]) {
-                let rounds =
-                    p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfStorageWrites);
-                // The kernel reads both textures: without formatless reads, the target's choice
-                // declares its format and the source's `RGBA32Float`'s.
-                let mut i = i.clone();
-                if !p.fields().images.storage_read_without_format {
-                    if choice.vk_format == crate::vk::Format::UNDEFINED {
-                        continue;
-                    }
-                    let held = crate::vk::Format::R32G32B32A32_SFLOAT;
-                    let source = StorageImageChoice::new(held, StorageImageClass::Identity);
-                    i.storage_images.insert(SOURCE, source);
+    let class = StorageImageClass::Identity;
+    let mut nans_seen = std::collections::BTreeSet::new();
+    for choice in [
+        StorageImageChoice {
+            numeric: Some(crate::pipeline::sym::SampledType::Float),
+            ..StorageImageChoice::new(crate::vk::Format::UNDEFINED, class)
+        },
+        StorageImageChoice::new(crate::vk::Format::R16G16B16A16_SFLOAT, class),
+    ] {
+        let mut i = LowerInputs::new();
+        i.storage_images.insert(TARGET, choice);
+        let anv = "intel-irisxe-rplp-anv";
+        let anv = (anv, profile(anv, DevicePolicy::default()).expect("profile"));
+        for (stem, p) in profiles().into_iter().chain([anv]) {
+            // The kernel reads both textures: without formatless reads, the target's choice
+            // declares its format and the source's `RGBA32Float`'s.
+            let mut i = i.clone();
+            if !p.fields().images.storage_read_without_format {
+                if choice.vk_format == crate::vk::Format::UNDEFINED {
+                    continue;
                 }
-                let what = format!("{stem} {class:?} {:?}", choice.vk_format);
-                let (plan, m) =
-                    typed_module_with(&bc, "k", &p, &i).unwrap_or_else(|e| panic!("{what}: {e}"));
-                validate(&bc, &i, &p, &what);
-                let images = [image(0, held), image(1, |_| [0; 4])];
-                let (_, images) = run(&m, &resources(&plan, 16, &[]), &images);
-                let target = texels_of(&images, 1);
-                let layout = image(1, |_| [0; 4]);
-                for n in 0..SIDE * SIDE {
-                    let at = layout
-                        .index(0, 0, 0, [n % SIDE, n / SIDE, 0])
-                        .expect("texel");
-                    let want = held(n).map(|x| match f32::from_bits(x) {
-                        v if v.is_nan() => 0x7fc0_0000,
-                        _ => x,
-                    });
-                    assert_eq!(target[at], want, "{what}: texel {n}");
-                }
-                let a = compile_bitcode(
-                    &bc,
-                    EntryRef::Name("k"),
-                    &FunctionConstantValues::defaults(),
-                    &p,
-                    &i,
-                    &mut meter(),
-                    SPIRV_WORDS,
-                )
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let measured =
-                    p.takes_driver_deviation(crate::error::DriverDeviation::MetalFloatStorageNans);
-                assert_eq!(measured, stem != "intel-irisxe-rplp-anv", "{what}");
-                let relied = &a.requirements.properties;
-                assert_eq!(
-                    relied.contains(&VkProperty::MetalFloatStorageNans),
-                    measured,
-                    "{what}"
-                );
-                assert_eq!(
-                    relied.contains(&VkProperty::MetalHalfStorageWrites),
-                    rounds,
-                    "{what}"
-                );
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::DeviceColorConversion),
-                    !rounds,
-                    "{what}: {:?}",
-                    a.precision
-                );
-                assert!(
-                    !relied.contains(&VkProperty::MetalHalfStorageNans),
-                    "{what}"
-                );
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                    !measured,
-                    "{what}: {:?}",
-                    a.precision
-                );
+                let held = crate::vk::Format::R32G32B32A32_SFLOAT;
+                let source = StorageImageChoice::new(held, StorageImageClass::Identity);
+                i.storage_images.insert(SOURCE, source);
             }
+            let what = format!("{stem} {:?}", choice.vk_format);
+            let (plan, m) =
+                typed_module_with(&bc, "k", &p, &i).unwrap_or_else(|e| panic!("{what}: {e}"));
+            validate(&bc, &i, &p, &what);
+            let images = [image(0, held), image(1, |_| [0; 4])];
+            let (_, images) = run(&m, &resources(&plan, 16, &[]), &images);
+            let target = texels_of(&images, 1);
+            let layout = image(1, |_| [0; 4]);
+            for n in 0..SIDE * SIDE {
+                let at = layout
+                    .index(0, 0, 0, [n % SIDE, n / SIDE, 0])
+                    .expect("texel");
+                assert_eq!(target[at], held(n), "{what}: texel {n}");
+            }
+            let a = compile_bitcode(
+                &bc,
+                EntryRef::Name("k"),
+                &FunctionConstantValues::defaults(),
+                &p,
+                &i,
+                &mut meter(),
+                SPIRV_WORDS,
+            )
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+            let rounds = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
+            let nans = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
+            nans_seen.insert(nans);
+            let relied = &a.requirements.properties;
+            assert_eq!(
+                relied.contains(&VkProperty::MetalHalfStorageWrites),
+                rounds,
+                "{what}"
+            );
+            let formatless = choice.vk_format == crate::vk::Format::UNDEFINED;
+            let converted = a.precision.contains(&PrecisionNote::DeviceColorConversion);
+            assert!(converted || rounds, "{what}: {:?}", a.precision);
+            if !formatless {
+                assert_eq!(converted, !rounds, "{what}: {:?}", a.precision);
+            }
+            assert_eq!(
+                relied.contains(&VkProperty::MetalHalfStorageNans),
+                nans,
+                "{what}"
+            );
+            assert!(
+                !relied.contains(&VkProperty::MetalFloatStorageNans),
+                "{what}"
+            );
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::DeviceNanEncoding),
+                !nans || formatless,
+                "{what}: {:?}",
+                a.precision
+            );
         }
     }
+    assert_eq!(nans_seen.len(), 2, "both NaN facts: {nans_seen:?}");
 }
 
 /// The value of a `half`'s bits (not a NaN).

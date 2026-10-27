@@ -1,22 +1,19 @@
 //! The device's forms of Metal's maths: on a device whose `float` functions are not Metal's own,
 //! the maths functions, divisions and fused multiply-adds (`NativeTranscendentals`,
 //! `NativeDivision`, `NativeFma`) and `dot`, `mix` and `fast::sqrt` (`NativeDot`, `NativeMix`,
-//! `NativeTranscendentals`) are the device's instructions, each recording its kinds; and one of the
-//! policy's choices takes the device's NaN and minimum and maximum (`NanMinMaxPolicy`:
-//! `NativeNanEncoding`, `NativeMinMax`) where it is on, and Metal's selects of its NaN and operand
-//! where it is off.
+//! `NativeTranscendentals`) are the device's instructions, each recording its kinds; and on every
+//! device not measured to answer Metal's, the NaN and the minimum and maximum are the device's
+//! (`NativeNanEncoding`, `NativeMinMax`).
 //!
 //! The kernels read three `float`s from buffer 0 and store one result after them: a precise
 //! `sin`, `exp`, `atan2` and `pow`, a precise and an `arcp` division, a `half` `fma`, an addition,
 //! an `fmin`, a `saturate`, a `fast::sqrt`, a `dot` and a `float` and a `half` `mix`. On lavapipe
-//! each records its kind, a choice's exactly where it is on, and a choice's is smaller there than
-//! with it off; the interpreter's answers stay within the bound the kind's docs state, and are
-//! Metal's on MoltenVK and with the choice off. `llvm-as` assembles the module; without it the
-//! tests skip visibly.
+//! each records its kind; the interpreter's answers stay within the bound the kind's docs state,
+//! and are Metal's on MoltenVK. `llvm-as` assembles the module; without it the tests skip visibly.
 
 use crate::air::{self, SpecRequest};
-use crate::device::profile::{DeviceProfile, FloatFunctions, MinMaxRoute, NanEncoding};
-use crate::device::{DevicePolicy, NanMinMaxPolicy};
+use crate::device::profile::{DeviceProfile, FloatFunctions};
+use crate::device::DevicePolicy;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
 use crate::memory::static_root::analyze_memory;
@@ -30,54 +27,12 @@ use crate::spirv::testing::{committed_profiles_with, is_moltenvk_capture};
 
 const OP_FUNCTION: u32 = 54;
 
-/// One of the policy's choices between the device's form and Metal's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Choice {
-    /// The NaN and minimum and maximum (`NanMinMaxPolicy`).
-    NanMinMax,
-}
-
-impl Choice {
-    const ALL: [Choice; 1] = [Choice::NanMinMax];
-
-    /// `policy` with this choice on (the device's form) or off (Metal's).
-    fn set(self, policy: DevicePolicy, on: bool) -> DevicePolicy {
-        match self {
-            Choice::NanMinMax => DevicePolicy {
-                nan_and_min_max: match on {
-                    true => NanMinMaxPolicy::Native,
-                    false => NanMinMaxPolicy::Exact,
-                },
-                ..policy
-            },
-        }
-    }
-
-    /// The default policy with every choice on or off.
-    fn every(on: bool) -> DevicePolicy {
-        Choice::ALL
-            .iter()
-            .fold(DevicePolicy::default(), |p, c| c.set(p, on))
-    }
-
-    /// Whether profile `p` takes this choice's device forms.
-    fn taken(self, p: &DeviceProfile) -> bool {
-        let f = p.fields();
-        match self {
-            Choice::NanMinMax => {
-                f.nan_encoding == NanEncoding::Native && f.min_max == MinMaxRoute::Native
-            }
-        }
-    }
-}
-
-/// A kernel: its name, the body defining `%r` from `%a`, `%b` and `%c`, the note its device form
-/// records, and the choice that takes it (`None`: every device but MoltenVK).
+/// A kernel: its name, the body defining `%r` from `%a`, `%b` and `%c`, and the note its device
+/// form records.
 struct Kernel {
     name: &'static str,
     body: &'static str,
     note: PrecisionNote,
-    choice: Option<Choice>,
 }
 
 const KERNELS: [Kernel; 14] = [
@@ -85,85 +40,71 @@ const KERNELS: [Kernel; 14] = [
         name: "native_sin",
         body: "  %r = tail call float @air.sin.f32(float %a)\n",
         note: PrecisionNote::NativeTranscendentals,
-        choice: None,
     },
     Kernel {
         name: "native_exp",
         body: "  %r = tail call float @air.exp.f32(float %a)\n",
         note: PrecisionNote::NativeTranscendentals,
-        choice: None,
     },
     Kernel {
         name: "native_atan2",
         body: "  %r = tail call float @air.atan2.f32(float %a, float %b)\n",
         note: PrecisionNote::NativeTranscendentals,
-        choice: None,
     },
     Kernel {
         name: "native_pow",
         body: "  %r = tail call float @air.pow.f32(float %a, float %b)\n",
         note: PrecisionNote::NativeTranscendentals,
-        choice: None,
     },
     Kernel {
         name: "native_fdiv",
         body: "  %r = fdiv float %a, %b\n",
         note: PrecisionNote::NativeDivision,
-        choice: None,
     },
     Kernel {
         name: "native_fdiv_arcp",
         body: "  %r = fdiv arcp float %a, %b\n",
         note: PrecisionNote::NativeDivision,
-        choice: None,
     },
     Kernel {
         name: "native_half_fma",
         body: "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hc = fptrunc float %c to half\n  %hr = tail call half @air.fma.f16(half %ha, half %hb, half %hc)\n  %r = fpext half %hr to float\n",
         note: PrecisionNote::NativeFma,
-        choice: None,
     },
     Kernel {
         name: "native_fadd",
         body: "  %r = fadd float %a, %b\n",
         note: PrecisionNote::NativeNanEncoding,
-        choice: Some(Choice::NanMinMax),
     },
     Kernel {
         name: "native_fmin",
         body: "  %r = tail call float @air.fmin.f32(float %a, float %b)\n",
         note: PrecisionNote::NativeMinMax,
-        choice: Some(Choice::NanMinMax),
     },
     Kernel {
         name: "native_fast_sqrt",
         body: "  %r = tail call fast float @air.fast_sqrt.f32(float %a)\n",
         note: PrecisionNote::NativeTranscendentals,
-        choice: None,
     },
     Kernel {
         name: "native_dot",
         body: "  %u0 = insertelement <2 x float> undef, float %a, i32 0\n  %u = insertelement <2 x float> %u0, float %b, i32 1\n  %v0 = insertelement <2 x float> undef, float %c, i32 0\n  %v = insertelement <2 x float> %v0, float %a, i32 1\n  %r = tail call float @air.dot.v2f32(<2 x float> %u, <2 x float> %v)\n",
         note: PrecisionNote::NativeDot,
-        choice: None,
     },
     Kernel {
         name: "native_mix",
         body: "  %r = tail call float @air.mix.f32(float %a, float %b, float %c)\n",
         note: PrecisionNote::NativeMix,
-        choice: None,
     },
     Kernel {
         name: "native_saturate",
         body: "  %r = tail call float @air.saturate.f32(float %a)\n",
         note: PrecisionNote::NativeMinMax,
-        choice: Some(Choice::NanMinMax),
     },
     Kernel {
         name: "native_half_mix",
         body: "  %ha = fptrunc float %a to half\n  %hb = fptrunc float %b to half\n  %hc = fptrunc float %c to half\n  %hr = tail call half @air.mix.f16(half %ha, half %hb, half %hc)\n  %r = fpext half %hr to float\n",
         note: PrecisionNote::NativeMix,
-        choice: None,
     },
 ];
 
@@ -262,13 +203,10 @@ fn ulps(got: f32, want: f64) -> f64 {
     (f64::from(got) - want).abs() / ulp
 }
 
-/// On every committed profile but the MoltenVK captures, whose functions, NaN and minimum and
-/// maximum are Metal's own, the maths functions are the device's, and each choice takes its device
-/// forms exactly where it is on, and moves the fingerprint; on the MoltenVK captures neither
-/// setting takes them, and the NaN choice moves the fingerprint all the same: a texel's NaN, the
-/// image's decode, follows it on every device (`TexelNanRoute`).
+/// On every committed profile but the MoltenVK captures, whose functions are Metal's own, the maths
+/// functions are the device's.
 #[test]
-fn each_choice_takes_the_device_s_forms_where_it_is_on() {
+fn the_maths_functions_are_the_device_s_but_on_moltenvk() {
     let profiles = committed_profiles_with(DevicePolicy::default()).expect("profiles");
     assert!(profiles.len() >= 10, "{} profiles", profiles.len());
     for (stem, p) in &profiles {
@@ -278,71 +216,25 @@ fn each_choice_takes_the_device_s_forms_where_it_is_on() {
             "{stem}"
         );
     }
-    for choice in Choice::ALL {
-        let base = Choice::every(true);
-        let on = committed_profiles_with(choice.set(base, true)).expect("profiles");
-        let off = committed_profiles_with(choice.set(base, false)).expect("profiles");
-        for ((stem, p), (_, q)) in on.iter().zip(&off) {
-            let metal = is_moltenvk_capture(stem);
-            assert_eq!(choice.taken(p), !metal, "{stem} {choice:?} on");
-            assert!(!choice.taken(q), "{stem} {choice:?} off");
-            assert_ne!(p.fingerprint(), q.fingerprint(), "{stem} {choice:?}");
-        }
-    }
 }
 
-/// On lavapipe each kernel of a choice records its kind exactly where its choice is on, and each
-/// other kernel records its kind under every setting (all of them on and all of them off); where
-/// a choice is on its kernel's module is smaller than where it is off, passes L3 either way, and
-/// records no kind of a choice that is off. Each module is its entry alone (no routine).
+/// On lavapipe each kernel records its kind, passes L3, and is its entry alone (no routine).
 #[test]
-fn each_choice_records_its_kinds_only_when_on() {
+fn each_kernel_records_its_kind() {
     let Some(bc) = bitcode() else {
         return;
     };
-    for others in [true, false] {
-        let base = Choice::every(others);
-        for k in &KERNELS {
-            let words = |on: bool| {
-                let policy = k.choice.map_or(base, |c| c.set(base, on));
-                let p = profile("lavapipe", policy).expect("profile");
-                let what = format!("{} {:?} on {on}, others {others}", k.name, k.choice);
-                let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                assert_eq!(
-                    a.precision.contains(&k.note),
-                    on || k.choice.is_none(),
-                    "{what}: {:?}",
-                    a.precision
-                );
-                for c in Choice::ALL {
-                    if Some(c) != k.choice && !others {
-                        let theirs: Vec<_> = KERNELS
-                            .iter()
-                            .filter(|o| o.choice == Some(c) && o.note != k.note)
-                            .map(|o| o.note)
-                            .collect();
-                        assert!(
-                            theirs.iter().all(|n| !a.precision.contains(n)),
-                            "{what}: {:?}",
-                            a.precision
-                        );
-                    }
-                }
-                assert_eq!(functions(&a.module.words), 1, "{what}: no routine");
-                a.module.words.len()
-            };
-            if k.choice.is_none() {
-                words(true);
-                continue;
-            }
-            let (on, off) = (words(true), words(false));
-            assert!(
-                on < off,
-                "{} others {others}: on {on} words, off {off}",
-                k.name
-            );
-        }
+    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    for k in &KERNELS {
+        let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{}: {e:?}", k.name));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{}: L3: {e}", k.name));
+        assert!(
+            a.precision.contains(&k.note),
+            "{}: {:?}",
+            k.name,
+            a.precision
+        );
+        assert_eq!(functions(&a.module.words), 1, "{}: no routine", k.name);
     }
 }
 
@@ -374,50 +266,37 @@ fn the_maths_functions_are_within_their_bounds() {
     );
 }
 
-/// On lavapipe with the NaN and minimum and maximum on, an addition answers the device's NaN (a
-/// NaN, here the operand's payload) where off selects Metal's canonical `0x7fc00000`, and `fmin` is
-/// the device's `NMin` and `saturate` its `NClamp(x, 0, 1)`, answering the operand Metal does
-/// beside a NaN and between two numbers either way. The maths functions' device divisions take the
-/// same choice's NaN: Metal's canonical one off, selected (the routine they replace answers it),
-/// the device's on.
+/// On lavapipe an addition answers the device's NaN (a NaN, here the operand's payload), and so do
+/// the maths functions' device divisions. `fmin` is the device's `NMin` and `saturate` its
+/// `NClamp(x, 0, 1)`, answering the operand Metal does beside a NaN and between two numbers.
 #[test]
-fn the_nan_and_min_max_are_the_device_s_on_and_metal_s_off() {
+fn the_nan_and_min_max_are_the_device_s() {
     let Some(bc) = bitcode() else {
         return;
     };
-    let base = Choice::every(true);
-    let on = profile("lavapipe", Choice::NanMinMax.set(base, true)).expect("on");
-    let off = profile("lavapipe", Choice::NanMinMax.set(base, false)).expect("off");
+    let p = profile("lavapipe", DevicePolicy::default()).expect("lavapipe");
     let nan = f32::from_bits(0x7fc0_1234);
     for name in ["native_fadd", "native_fdiv", "native_fdiv_arcp"] {
-        let run = |p: &DeviceProfile| interpret(&bc, name, p, [nan, 1.0, 0.0]);
-        assert!(run(&on).is_nan(), "{name}");
-        assert_eq!(run(&off).to_bits(), 0x7fc0_0000, "{name}");
+        assert!(interpret(&bc, name, &p, [nan, 1.0, 0.0]).is_nan(), "{name}");
     }
-    for p in [&on, &off] {
-        let min = |a: f32, b: f32| interpret(&bc, "native_fmin", p, [a, b, 0.0]);
-        assert_eq!(min(nan, 2.0), 2.0);
-        assert_eq!(min(2.0, nan), 2.0);
-        assert_eq!(min(1.0, -3.0), -3.0);
-        // `saturate` is Metal's `clamp(x, +0, 1)`, the device's `NClamp` on.
-        let saturate = |x: f32| interpret(&bc, "native_saturate", p, [x, 0.0, 0.0]);
-        for (x, want) in [
-            (nan, 0.0f32),
-            (2.0, 1.0),
-            (-3.0, 0.0),
-            (0.25, 0.25),
-            (f32::INFINITY, 1.0),
-            (f32::NEG_INFINITY, 0.0),
-        ] {
-            assert_eq!(saturate(x), want, "saturate({x})");
-        }
-        // Either zero on (`NativeMinMax`'s tie), `+0` off.
-        assert_eq!(saturate(-0.0), 0.0);
+    let min = |a: f32, b: f32| interpret(&bc, "native_fmin", &p, [a, b, 0.0]);
+    assert_eq!(min(nan, 2.0), 2.0);
+    assert_eq!(min(2.0, nan), 2.0);
+    assert_eq!(min(1.0, -3.0), -3.0);
+    // `saturate` is Metal's `clamp(x, +0, 1)`, the device's `NClamp`.
+    let saturate = |x: f32| interpret(&bc, "native_saturate", &p, [x, 0.0, 0.0]);
+    for (x, want) in [
+        (nan, 0.0f32),
+        (2.0, 1.0),
+        (-3.0, 0.0),
+        (0.25, 0.25),
+        (f32::INFINITY, 1.0),
+        (f32::NEG_INFINITY, 0.0),
+    ] {
+        assert_eq!(saturate(x), want, "saturate({x})");
     }
-    assert_eq!(
-        interpret(&bc, "native_saturate", &off, [-0.0, 0.0, 0.0]).to_bits(),
-        0
-    );
+    // Either zero (`NativeMinMax`'s tie).
+    assert_eq!(saturate(-0.0), 0.0);
 }
 
 /// On lavapipe `dot` is the device's `OpDot` and `mix` its `FMix` (a `half` one rounded once), each

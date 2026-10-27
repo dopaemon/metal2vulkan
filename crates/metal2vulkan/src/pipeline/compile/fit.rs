@@ -13,7 +13,7 @@
 use crate::budget::{Budget, Meter};
 use crate::cache::VariantKey;
 use crate::device::policy::{
-    DevicePolicy, NanMinMaxPolicy, SamplingPolicy, TexelConversionPolicy, YCbCrFilterPolicy,
+    DevicePolicy, SamplingPolicy, TexelConversionPolicy, YCbCrFilterPolicy,
 };
 use crate::device::{mechanism, Device, DeviceProfile};
 use crate::error::Error;
@@ -298,7 +298,6 @@ impl ReducedForms {
             ReducedForms::NativeSampling => sampled,
             ReducedForms::AllNative => DevicePolicy {
                 texel_conversion: TexelConversionPolicy::Device,
-                nan_and_min_max: NanMinMaxPolicy::Native,
                 ..sampled
             },
         }
@@ -316,7 +315,6 @@ fn dropped_forms(
     let fact = RuntimeFact::ExactFormsOverCompilerLimit {
         sampling: base.sampling != policy.sampling || base.ycbcr_filter != policy.ycbcr_filter,
         texel_conversion: base.texel_conversion != policy.texel_conversion,
-        nan_and_min_max: base.nan_and_min_max != policy.nan_and_min_max,
     };
     RuntimeDependency {
         fact,

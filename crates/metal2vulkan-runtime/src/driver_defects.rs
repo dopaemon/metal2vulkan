@@ -155,16 +155,15 @@ pub(super) struct Affected {
 ///   and a multisampled copy is then a draw (`radv_gfx_copy_image`) that fetches each sample in
 ///   that format and exports it: a NaN in a 16-bit float channel lands as `0xfe00`, its sign and
 ///   payload lost, while a single-sampled copy kept them. Read in 26.2's source (2026-10-09), and
-///   measured on 26.2.4 (driverVersion 0x6802004) on the Radeon 780M (`deviceID` 0x15bf;
-///   `runtime_lane::renders::multisampled_nan_clears_store_metal_s_texel`: every NaN sample of a 4x
-///   `R16Float` and `RGBA16Float` NaN clear, copied from its unsigned-integer scratch, held
-///   `0xfe00`: a scratch not mutable to the attachment's format alike): known broken through
-///   26.2.4. The path is every RADV GPU's, so every device has it. Nothing is refused: the NaN
-///   clear of a multisampled attachment is written through a view of its image in the
-///   unsigned-integer format of its texel size (`nan_clear.rs`), which the runtime's multisampled
-///   color render targets of such formats take there where it costs the image nothing
-///   (`nan_clear::view_candidate`), and is the device's copy, announced (`device-nan-encoding`),
-///   where the image takes no such view.
+///   measured on 26.2.4 (driverVersion 0x6802004) on the Radeon 780M (`deviceID` 0x15bf: every
+///   NaN sample of a 4x `R16Float` and `RGBA16Float` texel copied from an unsigned-integer scratch
+///   held `0xfe00`, a scratch not mutable to the attachment's format alike): known broken through
+///   26.2.4. The path is every RADV GPU's, so every device has it. Nothing is refused: a blit copy
+///   between multisampled images of such a format runs through views of them in the
+///   unsigned-integer format of its texel size where both take one (`sample_planes::BitsCopy`),
+///   which the runtime's multisampled color render targets of such formats take where it costs the
+///   image nothing (`nan_clear::view_candidate`), and is the device's copy, announced
+///   (`device-nan-encoding`), elsewhere.
 ///
 /// `ReadsCommandBuffersAfterTheirSignal`:
 /// - MoltenVK (`MOLTENVK`): on a device with `MTLSharedEvent` the GPU signals a timeline

@@ -200,8 +200,6 @@ fn push_bytes(plan: &Plan, levels: &[(u32, u32)]) -> Vec<u8> {
                 push[offset as usize..offset as usize + 4].copy_from_slice(&n.to_le_bytes());
             }
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // 0: a `half` write's NaN lanes `0x7fc00000`; the kernels write none.
-            (PushField::TextureHalfChannels(_), PushLoc::Push { .. }) => {}
             // A bound value read as data, which the interpreter writes from `spec`.
             (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             // No slot's writes dropped: the word stays 0.

@@ -1,16 +1,14 @@
 //! The device's forms of Metal's maths, through the runtime, on the device the cfg selects, under
-//! the validation layer, with the NaN and minimum and maximum choice on and off. Every other lane
-//! takes Metal's answers where a switch keeps them (`candidate::runtime_case::validated_options`
-//! sets `DevicePolicy::exact_answers`); this one starts from those options. The maths functions,
-//! divisions and fused multiply-adds (`PrecisionNote::NativeTranscendentals`, `NativeDivision`,
-//! `NativeFma`) and `dot`, `mix` and `fast::sqrt` (`NativeDot`, `NativeMix`, and
-//! `NativeTranscendentals` for `fast::sqrt`) are the device's on every device whose functions are
-//! not Metal's own; the NaN and minimum and maximum (`NanMinMaxPolicy::Native`:
-//! `NativeNanEncoding`, `NativeMinMax`) are where the choice is on. Under each setting the stage
-//! records exactly the kinds of the forms it takes (where the device's answer is not Metal's own),
-//! the pipeline state announces the kinds its stage records, and every thread's answers stay
-//! within the bounds the kinds record; where the choice is off a NaN product is Metal's canonical
-//! NaN `0x7fc00000`.
+//! the validation layer. Every other lane takes Metal's answers where a switch keeps them
+//! (`candidate::runtime_case::validated_options` sets `DevicePolicy::exact_answers`); this one
+//! starts from those options. The maths functions, divisions and fused multiply-adds
+//! (`PrecisionNote::NativeTranscendentals`, `NativeDivision`, `NativeFma`) and `dot`, `mix` and
+//! `fast::sqrt` (`NativeDot`, `NativeMix`, and `NativeTranscendentals` for `fast::sqrt`) are the
+//! device's on every device whose functions are not Metal's own, and the NaN and minimum and
+//! maximum (`NativeNanEncoding`, `NativeMinMax`) on every device not measured to answer Metal's.
+//! The stage records exactly the kinds of the forms it takes (where the device's answer is not
+//! Metal's own), the pipeline state announces the kinds its stage records, and every thread's
+//! answers stay within the bounds the kinds record.
 //!
 //! The kernel reads ten `float`s a thread and writes fourteen: `sin` and `cos` of an angle in
 //! `[-π, π]`, `exp2` of an exponent in `[-10, 10]`, `log2` of a value in `[2^-20, 2^20]`, a
@@ -25,7 +23,7 @@ use super::degrade_notices::{counts, on_device_with};
 use super::{buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::device::{FloatControl, FloatWidth, NanMinMaxPolicy, VkProperty};
+use metal2vulkan::device::{FloatControl, FloatWidth, VkProperty};
 use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::library::Library;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote};
@@ -315,75 +313,39 @@ const NATIVE: [PrecisionNote; 7] = [
     PrecisionNote::NativeMix,
 ];
 
-/// Whether a setting turns the NaN and minimum and maximum choice on.
-#[derive(Clone, Copy, Debug)]
-struct Setting {
-    nan_min_max: bool,
-}
-
-/// The choice off and on.
-const SETTINGS: [Setting; 2] = [
-    Setting { nan_min_max: false },
-    Setting { nan_min_max: true },
-];
-
 /// `x` rounded to a `half` to nearest even (a normal `half`'s magnitude).
 fn to_half(x: f64) -> f64 {
     let ulp = half_ulp(x);
     (x / ulp).round_ties_even() * ulp
 }
 
-/// Where a thread's answers are not Metal's under `setting` (Metal's own being known exactly where
-/// the choice is off): Metal's canonical NaN for the product of a NaN.
-fn not_metal_s(setting: Setting, x: &[f32; IN], r: &[f32; OUT]) -> Vec<String> {
-    let n = x[9];
-    let mut out = Vec::new();
-    let mut want = |what: &str, got: f32, metal: f32| {
-        if got.to_bits() != metal.to_bits() {
-            out.push(format!("{what}: {got:e} for Metal's {metal:e}"));
-        }
-    };
-    if !setting.nan_min_max && n.is_nan() {
-        want("n * b", r[9], f32::from_bits(0x7fc0_0000));
-    }
-    out
-}
-
-/// Under each setting, on a device whose `float` functions are not Metal's own, the stage records
-/// exactly the kinds of the forms it takes: the maths functions `NativeTranscendentals` and
-/// `NativeDivision` (and `NativeFma` where an `fma` takes the device's `Fma`), `NativeDot`,
-/// `NativeMix` and `NativeTranscendentals` (`fast::sqrt`), and with the NaN and minimum and maximum
-/// on `NativeNanEncoding` (on a device whose arithmetic is not measured to answer Metal's canonical
-/// NaN) and `NativeMinMax`; the pipeline state announces each native kind of its stage once; every
-/// thread's answers are within the bounds their kinds record, and Metal's where the choice is off.
-/// On MoltenVK, whose functions, minimum and maximum, and NaNs are Metal's own, the stage records
-/// none of them under any setting and announces none. The device announces
-/// `float-tininess-after-rounding` as it is made, exactly off MoltenVK.
+/// On a device whose `float` functions are not Metal's own, the stage records exactly the kinds of
+/// the forms it takes: the maths functions `NativeTranscendentals` and `NativeDivision` (and
+/// `NativeFma` where an `fma` takes the device's `Fma`), `NativeDot`, `NativeMix` and
+/// `NativeTranscendentals` (`fast::sqrt`), and `NativeMinMax` where the device is not measured to
+/// answer Metal's operand; and `NativeNanEncoding` wherever the device is not measured to answer
+/// Metal's canonical NaN (on one measured to, it records the note where the kernel computes another
+/// of Metal's NaNs). The pipeline state announces each native kind of its stage once, and every
+/// thread's answers are within the bounds their kinds record. On MoltenVK, whose functions and
+/// minimum and maximum are Metal's own, the stage records none of their kinds and announces none.
+/// The device announces `float-tininess-after-rounding` as it is made, exactly off MoltenVK.
 #[test]
-fn each_choice_answers_within_its_recorded_bounds_on_and_metal_s_off() {
+fn native_maths_answers_within_its_recorded_bounds() {
     let bitcode = llvm_assemble_text(&kernel()).unwrap();
-    for setting in SETTINGS {
-        on_device_with(
-            |options| {
-                if setting.nan_min_max {
-                    options.policy.nan_and_min_max = NanMinMaxPolicy::Native;
-                }
-            },
-            |device, messages| answers_under(device, messages, setting, &bitcode),
-        );
-    }
+    on_device_with(
+        |_| {},
+        |device, messages| answers_under(device, messages, &bitcode),
+    );
 }
 
-/// [`each_choice_answers_within_its_recorded_bounds_on_and_metal_s_off`] under `setting`, on
-/// `device`, made with it.
-fn answers_under(device: &Device, messages: &Messages, setting: Setting, bitcode: &[u8]) {
-    let name = format!("{} {setting:?}", device.name());
+/// [`native_maths_answers_within_its_recorded_bounds`] on `device`.
+fn answers_under(device: &Device, messages: &Messages, bitcode: &[u8]) {
+    let name = device.name().to_string();
     let expected = stage_kinds(device, bitcode);
     let compile = device.compile_device();
     let takes = |d| compile.profile().takes_driver_deviation(d);
     let metals = takes(DriverDeviation::MetalFloatFunctions);
     eprintln!("{name}: Metal's own functions {metals}; native kinds {expected:?}");
-    let Setting { nan_min_max } = setting;
     // The constructor checked the creation notices against `creation_kinds`: the device's
     // multiply and fused multiply-add, announced as it was made.
     assert_eq!(
@@ -398,15 +360,15 @@ fn answers_under(device: &Device, messages: &Messages, setting: Setting, bitcode
         (PrecisionNote::NativeMix, !metals),
         (
             PrecisionNote::NativeMinMax,
-            nan_min_max && !metals && !takes(DriverDeviation::MetalMinMax),
-        ),
-        (
-            PrecisionNote::NativeNanEncoding,
-            nan_min_max && !takes(DriverDeviation::MetalCanonicalNans),
+            !metals && !takes(DriverDeviation::MetalMinMax),
         ),
     ] {
         let kind = Degradation::from_precision_note(note);
         assert_eq!(expected.contains(&kind), native, "{name}: {kind:?}");
+    }
+    if !takes(DriverDeviation::MetalCanonicalNans) {
+        let kind = Degradation::from_precision_note(PrecisionNote::NativeNanEncoding);
+        assert!(expected.contains(&kind), "{name}: {kind:?}");
     }
 
     let library = device.new_library_with_air(bitcode).unwrap();
@@ -470,17 +432,12 @@ fn answers_under(device: &Device, messages: &Messages, setting: Setting, bitcode
         .enumerate()
     {
         failures.extend(broken(x, r).into_iter().map(|f| format!("thread {i}: {f}")));
-        failures.extend(
-            not_metal_s(setting, x, r)
-                .into_iter()
-                .map(|f| format!("thread {i}: {f}")),
-        );
         let [_, _, _, a, b, ..] = x.map(f64::from);
         correctly_rounded += u32::from(r[4] == (a / b) as f32);
     }
     eprintln!(
-        "{name}: {} answers break a bound or Metal's; {correctly_rounded} of {COUNT} quotients \
-         correctly rounded",
+        "{name}: {} answers break a bound; {correctly_rounded} of {COUNT} quotients correctly \
+         rounded",
         failures.len()
     );
     assert!(

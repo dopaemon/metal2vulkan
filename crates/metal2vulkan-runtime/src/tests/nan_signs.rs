@@ -114,10 +114,11 @@ fn a_draw_call_drops_a_half_nan_s_sign() {
 }
 
 /// On a device whose multisampled copies convert float NaNs (RADV), a multisampled render target
-/// the runtime makes, of a format whose NaN clear it writes, takes a view in the unsigned-integer
-/// format of its texel size, through which the clear is written (`nan_clear.rs`), wherever it
-/// costs the image nothing; where the view would change the image's memory requirements, its
-/// clear is announced instead. Elsewhere nothing asks for it. Each prints `NAN-CLEAR-VIEW`.
+/// the runtime makes, of a format of floats narrower than 32 bits, takes a view in the
+/// unsigned-integer format of its texel size, through which a copy keeps its samples' bits
+/// (`nan_clear.rs`), wherever it costs the image nothing; where the view would change the image's
+/// memory requirements, its copies are announced instead. Elsewhere nothing asks for it. Each
+/// prints `NAN-CLEAR-VIEW`.
 #[test]
 fn a_nan_clear_target_takes_an_unsigned_view_where_copies_convert_and_it_is_free() {
     let scratch = Scratch::new();

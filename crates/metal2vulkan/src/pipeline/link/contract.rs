@@ -122,8 +122,8 @@ fn invariant(detail: &str) -> Error {
 }
 
 /// Whether data type `ty` is the scalar or vector `want` declares (32-bit `float` or
-/// unsigned-integer lanes; signed-integer lanes for a color output to a signed-integer attachment;
-/// 16-bit `float` lanes for a color output written as a half's bits).
+/// unsigned-integer lanes; signed-integer lanes for a color output to a signed-integer
+/// attachment).
 fn io_type_matches(m: &TypedModule, ty: TypeId, want: IoType) -> Result<bool, Error> {
     let types = m.types();
     let (elem, lanes) = match types.get(ty)? {
@@ -131,15 +131,15 @@ fn io_type_matches(m: &TypedModule, ty: TypeId, want: IoType) -> Result<bool, Er
         _ => (ty, 1),
     };
     let numeric = match types.get(elem)? {
-        Type::Float { width } if u32::from(*width) == u32::from(want.bits) => IoNumeric::Float,
+        Type::Float { width: 32 } => IoNumeric::Float,
         Type::Int {
             width: 32,
             signed: false,
-        } if want.bits == 32 => IoNumeric::Uint,
+        } => IoNumeric::Uint,
         Type::Int {
             width: 32,
             signed: true,
-        } if want.bits == 32 => IoNumeric::Sint,
+        } => IoNumeric::Sint,
         _ => return Ok(false),
     };
     Ok(numeric == want.numeric && lanes == want.components)

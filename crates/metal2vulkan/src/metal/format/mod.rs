@@ -2887,9 +2887,8 @@ pub fn storage_image_choice(
 /// `Identity` when the direct format supports the use's storage usage and the shader can declare
 /// it: with the format `Unknown` where the format serves the use without one
 /// ([`accessed_without_format`]; every such format of one numeric type shares one key, and
-/// `StorageImageChoice::numeric` keeps the type), else with its SPIR-V image format. A half-float
-/// format the use writes takes the class its writes need there instead (`half_storage_class`).
-/// Otherwise an alias view of a `MUTABLE_FORMAT` image (or the same bytes viewed as the alias
+/// `StorageImageChoice::numeric` keeps the type), else with its SPIR-V image format: the device
+/// converts every write, a half-float format's included. Otherwise an alias view of a `MUTABLE_FORMAT` image (or the same bytes viewed as the alias
 /// format, for a texture buffer): bgra8 through an rgba8 view and bgr10a2 through an rgb10a2 view
 /// (`A2R10G10B10` through `A2B10G10R10`, which NVIDIA and lavapipe store where they do not store
 /// the former) with `SwizzleBgra`, the 8-bit sRGB formats through their UNORM twin with
@@ -3013,13 +3012,12 @@ fn held_storage_choice(
     // device that stores the format.
     let word = matches!(alias, Some((_, StorageImageClass::SharedExponentBits)));
     if storage(image) && declarable(image) && !rotated && !srgb_x && !word {
-        let class = half_storage_class(pf, use_, profile);
         if !formatless(image) {
-            return Ok(StorageImageChoice::new(image, class));
+            return Ok(StorageImageChoice::new(image, StorageImageClass::Identity));
         }
         // The declaration names no format; the choice keeps the format's numeric type for a
         // function that depends on it.
-        let mut choice = StorageImageChoice::new(F::UNDEFINED, class);
+        let mut choice = StorageImageChoice::new(F::UNDEFINED, StorageImageClass::Identity);
         choice.numeric = crate::bind::neutral::numeric_type(image);
         return Ok(choice);
     }
@@ -3196,29 +3194,6 @@ pub(crate) fn fetch_view_alias(format: vk::Format, profile: &DeviceProfile) -> O
     }
 }
 
-/// The class of a storage choice that views `pf`'s own format for `use_`: for a half-float
-/// format (`R16Float`, `RG16Float`, `RGBA16Float`, `RGBX16Float`) the function writes,
-/// [`half_write_class`]. An `RG11B10Float` texture the function writes takes
-/// `SmallFloatQuietNan` on every device. Otherwise `Identity`: the device converts the write.
-pub(crate) fn half_storage_class(
-    pf: PixelFormat,
-    use_: StorageUse,
-    profile: &DeviceProfile,
-) -> StorageImageClass {
-    let half = matches!(
-        pf,
-        PixelFormat::R16Float
-            | PixelFormat::RG16Float
-            | PixelFormat::RGBA16Float
-            | PixelFormat::RGBX16Float
-    );
-    match (half, pf == PixelFormat::RG11B10Float, use_.write) {
-        (true, _, true) => half_write_class(profile),
-        (_, true, true) => StorageImageClass::SmallFloatQuietNan,
-        _ => StorageImageClass::Identity,
-    }
-}
-
 /// Whether `pf`'s alpha is a 1-bit unorm channel (`crate::metal::texel_format::PackedTexels::Rgb5A1`:
 /// `A1BGR5Unorm`, `BGR5A1Unorm`), whose `float` write Metal stores as 1 only above one half, where
 /// a device measured to store every other normalized channel as Metal does rounds the half up
@@ -3237,18 +3212,6 @@ pub(crate) fn one_bit_storage(use_: StorageUse, profile: &DeviceProfile) -> bool
         .iter()
         .filter(|&&pf| one_bit_alpha(pf))
         .any(|&pf| storage_choice(pf, use_, profile).is_ok())
-}
-
-/// The class a `float` write to a half-float storage image takes on `profile`
-/// ([`half_storage_class`]): the device rounds each channel to `half` (Metal's rule, toward zero,
-/// where it takes `DriverDeviation::MetalHalfStorageWrites`), so `Identity` where it stores every
-/// NaN as Metal does too (`MetalHalfStorageNans`), else `HalfQuietNan`, which writes a NaN as
-/// `0x7fc00000`.
-pub(crate) fn half_write_class(profile: &DeviceProfile) -> StorageImageClass {
-    match profile.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans) {
-        true => StorageImageClass::Identity,
-        false => StorageImageClass::HalfQuietNan,
-    }
 }
 
 /// The SPIR-V `Image Format` a storage image of Vulkan format `format` is declared with (Vulkan

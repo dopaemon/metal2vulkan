@@ -19,17 +19,17 @@
 //! stored as another NaN is counted apart, not as a failure, where the device announces
 //! `device-nan-encoding` (the recorded near-equivalent).
 //!
-//! The product writes through the storage choice's class (`metal::format::half_storage_class`):
-//! as computed on MoltenVK (`DriverDeviation::MetalHalfStorageNans`), and its NaN quieted to
-//! `0x7fc00000` elsewhere (`HalfQuietNan`; ANV then stores `0xfe00` and announces the note), the
-//! device's conversion rounding every other value; or, on a device not measured to store a
-//! written `half`'s NaN as its bits, as the bits the shader rounds toward zero, through the
-//! texture's unsigned integer alias (`StorageImageClass::HalfBits`). A case is held to Metal's
-//! rounding where the device is measured to make it (`DriverDeviation::MetalHalfStorageWrites`:
-//! RADV, ANV, NVIDIA's measured GPUs, lavapipe from Mesa 26.0.8 through 26.2.4 and MoltenVK), the
-//! measurement of the deviation on that device; elsewhere the module records the device's
-//! conversion (`PrecisionNote::DeviceColorConversion`), and the lane prints the channels that
-//! differ without holding them.
+//! The product writes through the storage choice's class (`metal::format::storage_choice`):
+//! as computed, the device's conversion rounding every value and storing every NaN; or, on a device
+//! not measured to store a written `half`'s NaN as its bits, as the bits the shader rounds toward
+//! zero, through the texture's unsigned integer alias (`StorageImageClass::HalfBits`). A case is
+//! held to Metal's rounding where the device is measured to make it
+//! (`DriverDeviation::MetalHalfStorageWrites`: RADV, ANV, NVIDIA's measured GPUs, lavapipe from
+//! Mesa 26.0.8 through 26.2.4 and MoltenVK), the measurement of the deviation on that device;
+//! elsewhere the module records the device's conversion (`PrecisionNote::DeviceColorConversion`),
+//! and the lane prints the channels that differ without holding them. A NaN is the device's,
+//! announced as `device-nan-encoding` where the profile does not take `MetalHalfStorageNans` (ANV
+//! stores `0xfe00`).
 
 use super::color_writes::{
     half, half_toward_zero, specials, unsigned_float, unsigned_float_toward_zero,

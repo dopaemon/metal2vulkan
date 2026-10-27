@@ -144,9 +144,6 @@ pub struct ModuleBuilder {
     /// Whether that rounding is the device's own rather than one measured to be Metal's
     /// ([`ModuleBuilder::native_half`]).
     native_half: bool,
-    /// Whether a `half` texel keeps the NaN the device decoded under native half rounding too
-    /// ([`ModuleBuilder::texel_nans`]).
-    texel_nans: bool,
     /// Whether a `half`'s NaN bits are the device's conversion's under the float controls
     /// ([`ModuleBuilder::native_half_nans`]).
     native_half_nans: bool,
@@ -283,25 +280,10 @@ impl ModuleBuilder {
         self.native_half
     }
 
-    /// Whether a `half` texel keeps the NaN the device decoded even where the module's `half`
-    /// rounding is the device's own ([`ModuleBuilder::native_half`]): where the NaN switch asks
-    /// for Metal's NaN (`NanMinMaxPolicy::Exact`). Emission sets it with the form; a builder that
-    /// never sets it keeps the NaN wherever the rounding is Metal's, as before.
-    pub fn set_texel_nans(&mut self, keep: bool) {
-        self.texel_nans = keep;
-    }
-
-    /// Whether a `half` texel keeps its decoded NaN under native half rounding
-    /// ([`ModuleBuilder::set_texel_nans`]).
-    pub fn texel_nans(&self) -> bool {
-        self.texel_nans
-    }
-
     /// Whether a `half`'s NaN bits are left to the device's conversion where the module rounds
     /// through it under the float controls ([`QuantizeForm::Controlled`]): a `half` read from its
-    /// bits is the device's widening of them, and a `half` texel takes the rounding's NaN, where
-    /// the profile leaves NaN bits to the device (`NanMinMaxPolicy::Native`). Emission sets it
-    /// with the form; a builder that never sets it decodes in integer arithmetic and keeps a
+    /// bits is the device's widening of them, and a `half` texel takes the rounding's NaN. Emission
+    /// sets it with the form; a builder that never sets it decodes in integer arithmetic and keeps a
     /// texel's NaN, as before.
     pub fn set_native_half_nans(&mut self, native: bool) {
         self.native_half_nans = native;

@@ -1928,23 +1928,18 @@ fn storage_choices_on_committed_profiles_are_declarable() {
     }
 }
 
-/// A half-float storage texture a function writes takes the class its `float` writes need, by
-/// what the committed profile's device is measured to store for a NaN (and lavapipe's probes):
-/// `Identity` on MoltenVK (Metal's every NaN), `HalfQuietNan` on every other profile, whose
-/// device's own conversion rounds each value; a read-only use, and another float format, stay
-/// `Identity`. On a profile not measured to store a written `half`'s NaN as its bits
-/// (`DriverDeviation::MetalHalfTexelWrites`), a written use takes the unsigned integer alias
-/// (`StorageImageClass::HalfBits`) wherever the alias serves it, an image of its own format alone
-/// the measured class.
+/// A half-float storage texture a function writes takes `Identity` on every committed profile: the
+/// device converts each value and NaN (`lower::texture`'s `half_storage_facts` records what it
+/// relies on or notes); so do a read-only use and another float format. On a profile not measured
+/// to store a written `half`'s NaN as its bits (`DriverDeviation::MetalHalfTexelWrites`), a written
+/// use takes the unsigned integer alias (`StorageImageClass::HalfBits`) wherever the alias serves
+/// it, an image of its own format alone `Identity`.
 #[test]
 fn half_float_storage_writes_take_their_measured_class() {
     let mut seen = BTreeSet::new();
     for (stem, dev) in committed_devices() {
         let p = dev.profile();
-        let want = match stem.as_str() {
-            "moltenvk-m3" => StorageImageClass::Identity,
-            _ => StorageImageClass::HalfQuietNan,
-        };
+        let want = StorageImageClass::Identity;
         for pf in [
             PixelFormat::R16Float,
             PixelFormat::RG16Float,
@@ -1986,59 +1981,7 @@ fn half_float_storage_writes_take_their_measured_class() {
             );
         }
     }
-    assert_eq!(seen.len(), 3, "{seen:?}");
-}
-
-/// An `RG11B10Float` storage texture a function writes, or texture buffer, takes
-/// `SmallFloatQuietNan` on every committed profile that writes it (its NaNs quieted to the
-/// `0x7fc00000` every device measured stores as Metal's); a read-only use stays `Identity`; and a
-/// heap write tests the small floats' class, `RG11B10Float`'s and `RGB9E5Float`'s alone.
-#[test]
-fn storage_choices_quiet_small_float_writes() {
-    let mut written = 0;
-    for (stem, dev) in committed_devices() {
-        let p = dev.profile();
-        let pf = PixelFormat::RG11B10Float;
-        for use_ in [
-            StorageUse::READ_WRITE_TEXTURE,
-            StorageUse::texture(false, true),
-            StorageUse::texel_buffer(false, true),
-        ] {
-            if let Ok(choice) = storage_choice(pf, use_, p) {
-                assert_eq!(
-                    choice.class,
-                    StorageImageClass::SmallFloatQuietNan,
-                    "{stem} {use_:?}"
-                );
-                written += 1;
-            }
-        }
-        if let Ok(read) = storage_choice(pf, StorageUse::texture(true, false), p) {
-            assert_eq!(read.class, StorageImageClass::Identity, "{stem} read");
-        }
-    }
-    assert!(written > 0, "no committed profile writes RG11B10Float");
-    // The small floats' classes are `RG11B10Float`'s and `RGB9E5Float`'s, and no other format's.
-    let classes = crate::metal::texel_format::heap_classes();
-    let small: BTreeSet<u32> = crate::metal::texel_format::heap_small_float_indices()
-        .into_iter()
-        .map(|i| classes[i as usize])
-        .collect();
-    let class = |pf: PixelFormat| {
-        crate::metal::texel_format::heap_class(pf, crate::metal::TextureSwizzleChannels::DEFAULT).0
-    };
-    let want: BTreeSet<u32> = [PixelFormat::RG11B10Float, PixelFormat::RGB9E5Float]
-        .into_iter()
-        .map(class)
-        .collect();
-    assert_eq!(small, want);
-    for &pf in PixelFormat::ALL {
-        assert_eq!(
-            small.contains(&class(pf)),
-            matches!(pf, PixelFormat::RG11B10Float | PixelFormat::RGB9E5Float),
-            "{pf:?}"
-        );
-    }
+    assert_eq!(seen.len(), 2, "{seen:?}");
 }
 
 /// A `BGR10A2Unorm` storage texture or texture buffer is stored through its own `A2R10G10B10`

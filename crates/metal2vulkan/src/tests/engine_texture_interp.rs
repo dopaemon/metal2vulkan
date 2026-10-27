@@ -613,11 +613,11 @@ fn half_reads_convert_by_the_bound_format() {
 }
 
 /// A `half` read keeps the texel's exact value: a half-float texel, which the device decodes to its
-/// exact `f32` value, reads back bit for bit, every half subnormal, both zeros, both infinities,
-/// `±65504`, and NaN payloads included; a 32-bit float texel rounds to nearest even onto the half
-/// grid, subnormals kept, past `65504` to the infinity. The interpreter gives `OpQuantizeToF16`'s
-/// result below the smallest normal half as the zero of the input's sign and its NaN as `0x7E00`,
-/// so a bare quantize fails here.
+/// exact `f32` value, reads back bit for bit, every half subnormal, both zeros, both infinities and
+/// `±65504` included, and a NaN as a NaN, its bits the rounding's (`DeviceNanEncoding`); a 32-bit
+/// float texel rounds to nearest even onto the half grid, subnormals kept, past `65504` to the
+/// infinity. The interpreter gives `OpQuantizeToF16`'s result below the smallest normal half as the
+/// zero of the input's sign, so a bare quantize fails here.
 #[test]
 fn half_reads_keep_subnormals_zeros_infinities_and_nans() {
     let Some(bc) = fixture() else {
@@ -670,7 +670,16 @@ fn half_reads_keep_subnormals_zeros_infinities_and_nans() {
                 .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
-            assert_eq!(got, want, "{stem}: texel {texel:08x?}");
+            let nan = |h: u16| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
+            let same = got.len() == want.len()
+                && got
+                    .iter()
+                    .zip(want)
+                    .all(|(&g, &w)| g == w || (nan(g) && nan(w)));
+            assert!(
+                same,
+                "{stem}: texel {texel:08x?}: {got:04x?} for {want:04x?}"
+            );
         }
         ran += 1;
     }

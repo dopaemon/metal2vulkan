@@ -342,15 +342,12 @@ pub fn round_texel_words(f: Form) -> u32 {
 /// `OpQuantizeToF16` may return another NaN; it is told by its bits, so the test holds whatever
 /// float modes the device compiles the module under. Under native half rounding
 /// ([`native_rounding`]) the rounding's own NaN stands instead: the note the module records bounds
-/// a NaN's encoding to the device's, so the keep's four instructions a texel are left out, but
-/// where the NaN switch asks for Metal's NaN (`NanMinMaxPolicy::Exact`;
-/// `ModuleBuilder::texel_nans`), which keeps them. So too under the float controls
-/// ([`QuantizeForm::Controlled`]) where the profile leaves a NaN's bits to the device
-/// (`ModuleBuilder::native_half_nans`, `NanMinMaxPolicy::Native`): the conversion keeps a NaN a
-/// NaN, its bits the device's, as the texel's decode is (`PrecisionNote::DeviceNanEncoding`, which
-/// the access records). Another form is [`round`]ed.
+/// a NaN's encoding to the device's, so the keep's four instructions a texel are left out. So too
+/// under the float controls ([`QuantizeForm::Controlled`], `ModuleBuilder::native_half_nans`): the
+/// conversion keeps a NaN a NaN, its bits the device's, as the texel's decode is
+/// (`PrecisionNote::DeviceNanEncoding`, which the access records). Another form is [`round`]ed.
 pub fn round_texel(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let native = fb.module().native_half() && !fb.module().texel_nans();
+    let native = fb.module().native_half();
     match f.held {
         Held::Float(FloatFmt::Half) if native || fb.module().native_half_nans() => round(fb, f, x),
         Held::Float(FloatFmt::Half) => {
@@ -983,9 +980,9 @@ fn f32_bits_to_half_bits(fb: &mut FunctionBuilder<'_>, u: Form, b: Value) -> BRe
 /// Under native half rounding through the device's conversion ([`native_decode`]) a `half`'s exact
 /// decode is offered the device's ([`native_from_bits`]) where no loop holds it
 /// (`FunctionBuilder::offer_outside_loops`): NVIDIA's compiler makes a module faster with the
-/// device's widening outside loops and slower with it inside one. Under the float controls, where
-/// the profile leaves a NaN's bits to the device (`ModuleBuilder::native_half_nans`), a `half` is
-/// the device's widening of its bits wherever it is ([`device_from_bits`]); so is the `half` of a
+/// device's widening outside loops and slower with it inside one. Under the float controls
+/// (`ModuleBuilder::native_half_nans`), a `half` is the device's widening of its bits wherever it
+/// is ([`device_from_bits`]); so is the `half` of a
 /// load whose uses read no NaN's bits, where the device's widening is Metal's
 /// (`ModuleBuilder::widens_halves`, [`widening`](super::widening)): exact, a NaN `0x7FC00000` as
 /// Metal widens it, the bits noted as for the integer decode.
@@ -1063,8 +1060,8 @@ fn native_from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<
 /// `SignedZeroInfNanPreserve`. A NaN widens to a NaN whose bits are the device's (the SPIR-V
 /// spec's `SignedZeroInfNanPreserve`: "Bit patterns for NaNs might not be preserved"). Metal widens
 /// every `half` NaN to `0x7FC00000` and every other `half` to its value (the M3 Max, every bit
-/// pattern, loaded from device and constant memory, safe and fast math), which the NaN switch
-/// answers at the widening to `float` (`nan::cast_answer`) on [`half_bits_to_f32_bits`]'s decode.
+/// pattern, loaded from device and constant memory, safe and fast math), which no form answers: the
+/// device's NaN is noted (`PrecisionNote::NativeNanEncoding`).
 fn device_from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<Value> {
     let e = fb.module().ty(Type::Float { width: 16 })?;
     let pair = fb.module().ty(Type::Vector { elem: e, len: 2 })?;

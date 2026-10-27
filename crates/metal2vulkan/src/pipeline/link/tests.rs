@@ -45,7 +45,6 @@ pub(super) fn io_ty(numeric: IoNumeric, components: u8) -> IoType {
         numeric,
         components,
         source_bits: 32,
-        bits: 32,
     }
 }
 

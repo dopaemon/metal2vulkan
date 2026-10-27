@@ -1670,28 +1670,16 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 assert_eq!(count(&a, OP_FUNCTION_CALL), 2, "{stem}");
                 assert_eq!(count(&a, OP_ULESS_THAN_EQUAL), 16, "{stem}");
                 assert_eq!(count(&a, OP_ARRAY_LENGTH), 1, "{stem}");
-                // A heap write on a profile whose half-float storage class converts also tests
-                // the handle's class index and quiets the write's NaN: 1,652 words with
-                // `HalfQuietNan` (2,588 with word ids).
-                let half = match crate::metal::format::half_write_class(&p) {
-                    crate::pipeline::lower_inputs::StorageImageClass::Identity => 0,
-                    class => crate::lower::texture::heap_half_write_words(class) as usize,
-                };
-                // And, on every profile, the test of the small floats' class and the quieted
-                // NaNs of its write (1,632 words on MoltenVK with `u64` ids).
-                let small = crate::lower::texture::heap_half_write_words(
-                    crate::pipeline::lower_inputs::StorageImageClass::SmallFloatQuietNan,
-                ) as usize;
                 // And a half-float member's bits through the unsigned integer twin, where the
                 // profile takes it.
                 let bits = match crate::metal::format::heap_half_bits(&p) {
                     true => crate::lower::texture::heap_bits_write_words() as usize,
                     false => 0,
                 };
-                let bound = half + small + bits + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
+                let bound = bits + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
                 assert!(
                     a.module.words.len() <= bound,
-                    "{stem}: {}",
+                    "{stem}: {} words over {bound} (bits {bits})",
                     a.module.words.len()
                 );
                 assert_eq!(uses(&a, "texture.write.heap"), 1, "{stem}");
@@ -1752,12 +1740,14 @@ declare void @air.write_texture_2d.{elem}(ptr addrspace(1), <2 x i32>, {ty}, i32
 /// A `half` (or `float`) texel written through an argument buffer's texture, on a profile where
 /// every half-float format has its unsigned integer alias and the device is not measured to store
 /// a written `half`'s NaN as its bits (`metal::format::heap_half_bits`), declares the float
-/// storage group's unsigned integer twin (`StorageFormatClass::HalfBits`) beside it, states
-/// `RuntimeFact::HeapHalfTexelWrites` for the members the twin does not hold, and records no
-/// `PrecisionNote::DeviceNanEncoding` for the write: a `half` write's fact counts packed small
-/// floats too, a `float` write's is stated only where the device's conversion of `0x7fc00000`
-/// is not measured to be Metal's (`DriverDeviation::MetalFloatStorageNans`). Elsewhere the module
-/// declares one class and records the note as before (`half`), or relies on the measured property.
+/// storage group's unsigned integer twin (`StorageFormatClass::HalfBits`) beside it and states
+/// `RuntimeFact::HeapHalfTexelWrites` for the members the twin does not hold: a `half` write's fact
+/// counts packed small floats too, a `float` write's is stated only where the device's conversion
+/// of a NaN to a half-float texel is not measured to be Metal's
+/// (`DriverDeviation::MetalHalfStorageNans`).
+/// Elsewhere the module declares one class. Every such write records
+/// `PrecisionNote::DeviceNanEncoding`: the heap may hold a 32-bit or packed small float texture,
+/// whose NaN is the device's.
 #[test]
 fn a_heap_texel_write_stores_half_bits_through_the_unsigned_twin() {
     use crate::error::DriverDeviation;
@@ -1790,20 +1780,14 @@ fn a_heap_texel_write_stores_half_bits_through_the_unsigned_twin() {
                     packed,
                 })
             };
+            assert!(noted, "{what}: {:?}", a.precision);
             if twin {
                 twins += 1;
-                assert!(!noted, "{what}");
-                let float_fact = !p.takes_driver_deviation(DriverDeviation::MetalFloatStorageNans)
-                    && crate::metal::format::half_write_class(&p)
-                        != crate::pipeline::lower_inputs::StorageImageClass::Identity;
+                let float_fact = !p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
                 assert_eq!(fact(true), !float, "{what}");
                 assert_eq!(fact(false), float && float_fact, "{what}");
             } else {
                 assert!(!fact(true) && !fact(false), "{what}");
-                let keeps = p.takes_driver_deviation(DriverDeviation::MetalHalfTexelWrites);
-                if !float {
-                    assert_eq!(noted, !keeps, "{what}");
-                }
             }
         }
         assert!(twins > 0, "no committed profile takes the twin");

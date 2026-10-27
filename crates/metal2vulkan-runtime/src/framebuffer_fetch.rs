@@ -416,7 +416,7 @@ impl Device {
     /// size; then with the usage its framebuffer fetch's form
     /// needs ([`fetch_candidate`]), or a multisampled depth/stencil attachment's copies without
     /// colour copies need (`depth_stencil_scratch::sampled_candidate`), then the unsigned-integer
-    /// view a NaN clear writes a multisampled attachment through on a device whose copies
+    /// view a copy keeps a multisampled attachment's NaN bits through on a device whose copies
     /// convert its NaNs (`nan_clear::view_candidate`), then the input attachment usage the
     /// exact color resolve reads a multisampled color attachment through
     /// (`color_resolve::input_candidate`), and then the feedback loop usage a draw that reads the

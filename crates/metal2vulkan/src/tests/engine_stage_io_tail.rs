@@ -304,7 +304,6 @@ fn without_the_feature_the_weights_are_varyings() {
         numeric: IoNumeric::Float,
         components: 2,
         source_bits: 32,
-        bits: 32,
     };
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
         let p = prof(stem);

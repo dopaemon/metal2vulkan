@@ -631,7 +631,6 @@ fn pulled_read(
             },
             components: form.lanes,
             source_bits: form.bits(),
-            bits: 32,
         };
         sp.interface
             .pulled

@@ -733,8 +733,7 @@ fn announce(device: &Device, p: &Prepared, objects: &VariantObjects) {
             [(&region.specialization, None)],
         );
     }
-    // The GPU's commands bind the textures: every slot whose `half` writes read its word.
-    device.degrade_half_texel_writes(&p.variant.pipeline().dependencies, None);
+    device.degrade_half_texel_writes(&p.variant.pipeline().dependencies);
     device.degrade_bound_formats(std::slice::from_ref(&p.variant.pipeline().stage), None);
     // The values the variant's plan pushes for the commands the GPU writes.
     for (n, region) in p.commands.regions.iter().enumerate() {

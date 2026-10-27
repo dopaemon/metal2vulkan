@@ -1426,7 +1426,7 @@ pub(super) fn sampled_value(
                     cx,
                     fb,
                     (s, key),
-                    (texture, &p.fetch, super::fetched::classes(s), true),
+                    (texture, &p.fetch, super::fetched::CLASSES, true),
                     image,
                     &|fb, texels| super::fetched::plain_value(fb, s, texels),
                     &|fb, si| fb.gather(si, coord, component, &ops),
@@ -2644,7 +2644,7 @@ pub(super) fn held_value(
         }
         _ => None,
     };
-    let held = match (half, float) {
+    Ok(match (half, float) {
         (Some(h), _) => {
             let access = match s.op {
                 SampleOp::Gather { .. } => HalfForm::Read,
@@ -2670,26 +2670,7 @@ pub(super) fn held_value(
             held_texel(fb, image.texel, form, x)?
         }
         (None, None) => held_texel(fb, image.texel, form, texel)?,
-    };
-    // Under the NaN switch, Metal's NaN: the texel's own where the sample reads one texel of a
-    // texture of 16-bit float channels, else `0x7e00`.
-    let Some(class) = s.half_nans else {
-        return Ok(held);
-    };
-    use crate::lower::texture::{NanClass, OneTexel};
-    let (class, one) = match (class, s.one_texel) {
-        (NanClass::Never, _) | (_, OneTexel::Never) => (NanClass::Never, None),
-        (class, OneTexel::Always) => (class, None),
-        (class, OneTexel::Word(n)) => {
-            let word = sampler_word(cx, fb, Pixel::Spec(n))?;
-            (class, Some(word_reads_one(fb, word)?))
-        }
-        (class, OneTexel::Heap(h)) => {
-            let word = sampler_word(cx, fb, Pixel::Heap(h))?;
-            (class, Some(word_reads_one(fb, word)?))
-        }
-    };
-    crate::lower::texture::metal_texel_nans(cx, fb, (class, one), texel, held)
+    })
 }
 
 /// Whether sampler word `word` states a sampler that reads one texel of one level: nearest min and

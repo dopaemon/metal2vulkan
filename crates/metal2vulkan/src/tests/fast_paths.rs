@@ -8,8 +8,8 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, HeapCompressionPolicy,
-    HostPageTexturePolicy, NanMinMaxPolicy, RenderLoweringPolicy, SamplingPolicy,
-    TexelConversionPolicy, Unorm8LinearFilterPolicy, VertexNormalizedPolicy, YCbCrFilterPolicy,
+    HostPageTexturePolicy, RenderLoweringPolicy, SamplingPolicy, TexelConversionPolicy,
+    Unorm8LinearFilterPolicy, VertexNormalizedPolicy, YCbCrFilterPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -64,7 +64,6 @@ fn choices() -> Vec<Choice> {
         ycbcr_filter: _,
         texel_conversion: _,
         vertex_normalized: _,
-        nan_and_min_max: _,
         // The runtime's: the texels of a carried texture's decoded twin, a heap's compressed
         // texture's image, when the host sees a command buffer complete, how a batch begins after
         // the earlier ones of its queue, where a render encoder's calls are lowered, and what holds
@@ -82,7 +81,6 @@ fn choices() -> Vec<Choice> {
         choice!(p.ycbcr_filter: YCbCrFilterPolicy { Device, Exact }),
         choice!(p.texel_conversion: TexelConversionPolicy { Device, Exact }),
         choice!(p.vertex_normalized: VertexNormalizedPolicy { Device, Exact }),
-        choice!(p.nan_and_min_max: NanMinMaxPolicy { Native, Exact }),
         choice!(p.decoded_texels: DecodedTexelsPolicy { Compact, Exact }),
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
         choice!(p.completion: CompletionPolicy { Grouped, Exact }),
@@ -126,8 +124,6 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DeviceSampling,
             DeviceTexelConversion,
             HalfTexelConversion,
-            NativeNanEncoding,
-            NativeMinMax,
         ],
         NotBuilt: [
             ExtendedRangeBlendSource,
@@ -203,6 +199,8 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             UnmeasuredGroupSpeculation,
             NotMipmappedAnisotropicFilter,
             DeviceSampleLevel,
+            NativeNanEncoding,
+            NativeMinMax,
         ],
     }
 }

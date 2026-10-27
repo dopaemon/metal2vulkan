@@ -85,13 +85,15 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `robustBufferAccess`, buffer accesses and vertex input are left to it. (MoltenVK advertises the
   feature without implementing it; there such accesses are not contained, as on native Metal.)
 - **The device's arithmetic.** The device's own maths library, divisions, fused multiply-adds,
-  `float` denormals, and rounding order of `dot`/`mix`/`fast::sqrt`, on every device and with no
-  exact form. Each records a precision note with its bound; on MoltenVK on an Apple GPU, whose
-  `float` functions are Metal's own, they are Metal's answers.
+  `float` denormals, rounding order of `dot`/`mix`/`fast::sqrt`, NaN bits, and the operand of
+  `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate`, on every device and with no exact form.
+  Each records a precision note with its bound; on MoltenVK on an Apple GPU, whose `float`
+  functions are Metal's own, they are Metal's answers, but for a NaN's bits where the device is
+  not measured to answer Metal's.
 - **Fast native forms off Apple's GPUs.** The device's own sampler (its filter of a two-plane
-  YCbCr texture among them), texel conversions, NaN bits and min/max. Each records a precision
-  note with its bound, and each has an exact switch. The device's own `half` rounding and its
-  blend of a `half` color have none: each records its note.
+  YCbCr texture among them) and texel conversions. Each records a precision note with its bound,
+  and each has an exact switch. The device's own `half` rounding and its blend of a `half` color
+  have none: each records its note.
   `DevicePolicy::exact_answers()` turns on every exact form but sampling's, Metal's filter of a
   two-plane YCbCr texture (`YCbCrFilterPolicy::Exact`) included; `sampling =
   SamplingPolicy::Exact` emulates Metal's sampler too.
@@ -202,9 +204,9 @@ measured takes the conservative route.
 
 Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 32-lane
 simdgroups (including lockstep races on threadgroup memory within a barrier interval), and the
-bit-exact `fneg`, `fabs` and `half`-to-`float` widening of NaNs and denormals. Under the exact
-switches it also keeps Metal's canonical NaNs and Metal's operand choice in `fmin`, `fmax`,
-`min3`, `max3` and `clamp`.
+bit-exact `fneg`, `fabs` and `half`-to-`float` widening of NaNs and denormals. A NaN's bits and
+the operand `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` pick beside a NaN or between
+two zeros are the device's.
 
 What the runtime enables for itself outside the vocabulary enters no enable set, compile profile
 or fingerprint: among it the extensions of its dma-buf fallback for no-copy memory whose pointer
@@ -1477,12 +1479,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   `TextureWriteRoundingMode::NearestEven`, whose rounding no device's conversion gives
   (`StageModule::rounded_colors`). Cost: the fragment function rounds each such channel to nearest
   even before it writes it: about 35 more instructions per channel.
-- `metal2vulkan-degrade-shader-half-color-bits` (performance). `ShaderHalfColorBits`: A fragment
-  function writes a `half` to a half-float color attachment as the bits of the half Metal stores,
-  through a 16-bit output, on a device that does not store a 32-bit output's NaN as Metal does
-  (`StageModule::half_bit_colors`). Cost: the fragment function writes each such output as its
-  half's bits through a 16-bit output: about 20 more instructions per output, and the attachment
-  takes no Vulkan blend of one and zero.
 - `metal2vulkan-degrade-render-pass-split` (performance). `RenderPassSplit`: A Metal render pass
   runs as several Vulkan render pass instances: a framebuffer fetch through the pixel interlock
   keeps its attachment out of its draws' subpass, and the pass's draws leave different attachments
@@ -3018,15 +3014,14 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   round as Metal's conversion does.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
-  unselected, on a device whose arithmetic is not measured to answer Metal's canonical NaN, under
-  `NanMinMaxPolicy::Native`. Also recorded where a `half` read from its bits is the device's
-  widening under the float controls (ANV, RADV): a NaN's bits the device's, where Metal widens
-  every `half` NaN to `0x7fc00000`.
+  unselected, where Metal answers a NaN the device is not measured to answer (every NaN but
+  Metal's canonical one on a device measured to answer that, MoltenVK on an Apple GPU). Also
+  recorded where a `half` read from its bits is the device's widening under the float controls
+  (ANV, RADV): a NaN's bits the device's, where Metal widens every `half` NaN to `0x7fc00000`.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
-  `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, not the translation's
-  selects of Metal's operand, on a device not measured to answer Metal's, under
-  `NanMinMaxPolicy::Native`.
+  `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not
+  measured to answer Metal's operand.
 - `metal2vulkan-degrade-native-dot` (precision). `PrecisionNote::NativeDot`: Native device maths:
   Metal's `dot` on `float`, or on `half` where its fused multiply-add is not the measured 16-bit
   one, is the device's `OpDot` (a `half` one summed in `float` and rounded once to `half`), not

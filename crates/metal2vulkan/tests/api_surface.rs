@@ -229,7 +229,6 @@ surface! {
         enum YCbCrFilterPolicy N;
         enum TexelConversionPolicy N;
         enum VertexNormalizedPolicy N;
-        enum NanMinMaxPolicy N;
         enum DecodedTexelsPolicy N;
         enum HeapCompressionPolicy N;
         enum CompletionPolicy N;
@@ -1046,7 +1045,7 @@ surface! {
 
 use metal2vulkan::bind::{BindState, BoundBuffer, Dispatch, DrawCall, StageTable};
 use metal2vulkan::cache::{Hash256, PipelineArtifact, PipelineKey};
-use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, FloatWidth, NanMinMaxPolicy};
+use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, FloatWidth};
 use metal2vulkan::library::{CompiledFunction, Library};
 use metal2vulkan::metal::{PixelFormat, VertexFormat};
 use metal2vulkan::pipeline::{
@@ -1334,9 +1333,8 @@ fn content_digests_name_what_a_pipeline_says_not_its_build() {
 }
 
 /// The precision contract is public: a fast `float` division records the device's arithmetic,
-/// Metal's precise division records the device's division, its denormals and its NaN where the
-/// policy takes the device's NaN (`NativeDivision`, `DeviceDenormals`, `NativeNanEncoding`), the
-/// division and its denormals under `NanMinMaxPolicy::Exact`, an integer operator has no notes, and
+/// Metal's precise division records the device's division, its denormals and its NaN
+/// (`NativeDivision`, `DeviceDenormals`, `NativeNanEncoding`), an integer operator has no notes, and
 /// a fast `float` `tanh`, which the crate computes with a division of its own, records the device's
 /// arithmetic, on a profile whose `float` functions are the device's (lavapipe's); on one whose
 /// functions are Metal's own (MoltenVK's), both are Metal's own in a fast-math entry and record
@@ -1361,39 +1359,21 @@ fn the_precision_contract_names_each_float_operations_notes() {
     assert!(fdiv(moltenvk, EntryMath::Precise)
         .expect("a float operator")
         .contains(&PrecisionNote::DeviceArithmetic));
-    let mut policy = DevicePolicy::default();
-    policy.nan_and_min_max = NanMinMaxPolicy::Native;
-    let native = device_under("lavapipe", policy);
-    policy.nan_and_min_max = NanMinMaxPolicy::Exact;
-    let metal_nans = device_under("lavapipe", policy);
-    for (p, notes) in [
-        (
+    let native = device_under("lavapipe", DevicePolicy::default());
+    assert_eq!(
+        PrecisionNote::of_float_operator(
+            BinOp::FDiv,
+            FloatWidth::F32,
+            FastMath::NONE,
             native.profile(),
-            BTreeSet::from([
-                PrecisionNote::DeviceDenormals,
-                PrecisionNote::NativeDivision,
-                PrecisionNote::NativeNanEncoding,
-            ]),
+            EntryMath::Precise
         ),
-        (
-            metal_nans.profile(),
-            BTreeSet::from([
-                PrecisionNote::DeviceDenormals,
-                PrecisionNote::NativeDivision,
-            ]),
-        ),
-    ] {
-        assert_eq!(
-            PrecisionNote::of_float_operator(
-                BinOp::FDiv,
-                FloatWidth::F32,
-                FastMath::NONE,
-                p,
-                EntryMath::Precise
-            ),
-            Some(notes)
-        );
-    }
+        Some(BTreeSet::from([
+            PrecisionNote::DeviceDenormals,
+            PrecisionNote::NativeDivision,
+            PrecisionNote::NativeNanEncoding,
+        ]))
+    );
     assert_eq!(
         PrecisionNote::of_float_operator(
             BinOp::Add,

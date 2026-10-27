@@ -30,8 +30,8 @@ use crate::lower::arith::ops::{fsplat, splat, ty};
 use crate::pipeline::lower_inputs::ChannelWrite;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, OperandRule};
-use crate::spirv::ids::{TypeId, Value};
-use crate::spirv::ir::{BinOp, ConvOp, GlslOp, Type, UnOp};
+use crate::spirv::ids::Value;
+use crate::spirv::ir::{BinOp, ConvOp, GlslOp, UnOp};
 
 /// An upper estimate of the SPIR-V words of one channel's rounding by `rule`.
 pub fn channel_words(rule: ChannelWrite) -> u64 {
@@ -57,77 +57,6 @@ pub fn words(rules: &[Option<ChannelWrite>; 4]) -> u64 {
         .map(|&r| channel_words(r))
         .sum::<u64>()
         + written.saturating_add(1).saturating_mul(6)
-}
-
-/// An upper estimate of the SPIR-V words of [`half_bits`]: about 20 instructions on the whole
-/// vector, its constants, 16-bit types and their capabilities included (192 words measured on four
-/// lanes, two widening conversions with them).
-pub const HALF_BITS_WORDS: u64 = 34 * 6;
-
-/// The `half` lanes whose bits hold `x` (float lanes of form `f`, a 32-bit container), each lane
-/// a value a half holds exactly (a half widened, or a value [`round`] rounded to one), on a
-/// profile whose conversion to 16 bits, of an operand its compiler cannot fold into the
-/// instruction computing it, is Metal's `half(float)` (`DriverDeviation::MetalHalfConversion`,
-/// `narrow::QuantizeForm::Converted`): that conversion of `x + -0.0` (an `OpFAdd` decorated
-/// `NoContraction`, as `narrow` converts), exact for every value but a NaN, whose half the
-/// conversion makes `0x7e00`; a NaN lane is [`nan_codes`]'s code instead, chosen as 16-bit
-/// integers, and the lanes bitcast to `half` once (`Int16` and `Float16`), so no conversion on
-/// the device chooses a NaN's encoding.
-pub fn half_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let lanes = |fb: &mut FunctionBuilder<'_>, elem: Type| -> BResult<TypeId> {
-        let elem = fb.module().ty(elem)?;
-        match f.lanes {
-            1 => Ok(elem),
-            len => fb.module().ty(Type::Vector { elem, len }),
-        }
-    };
-    let u16_ = lanes(
-        fb,
-        Type::Int {
-            width: 16,
-            signed: false,
-        },
-    )?;
-    let h = lanes(fb, Type::Float { width: 16 })?;
-    let minus_zero = fsplat(fb, f.with(Held::Float(FloatFmt::F32)), -0.0)?;
-    let held = fb.binary_no_contraction(BinOp::FAdd, x, minus_zero)?;
-    let converted = fb.convert(ConvOp::FConvert, held, h)?;
-    let converted = fb.convert(ConvOp::Bitcast, converted, u16_)?;
-    let nan = nan_codes(fb, f, x)?;
-    let nan = fb.convert(ConvOp::UConvert, nan, u16_)?;
-    let is_nan = fb.unary(UnOp::IsNan, x)?;
-    let code = fb.select(is_nan, nan, converted)?;
-    fb.convert(ConvOp::Bitcast, code, h)
-}
-
-/// The 16-bit `half` NaN codes (in `u32` lanes) of `x` (float lanes of form `f`, a 32-bit
-/// container) where a lane is a NaN, by integer operations on the bits: the sign, every exponent
-/// bit, and the top ten fraction bits, a widened half NaN's own payload, `0x200` where those are
-/// zero (a NaN no half widens to). A lane that is not a NaN gives a code [`half_bits`] does not
-/// choose.
-pub fn nan_codes(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let u = f.with(Held::Int {
-        bits: 32,
-        container: 32,
-    });
-    let k = |fb: &mut FunctionBuilder<'_>, bits: u32| splat(fb, u, u64::from(bits));
-    let ut = ty(fb, u)?;
-    let bits = fb.convert(ConvOp::Bitcast, x, ut)?;
-    let k16 = k(fb, 16)?;
-    let sign = fb.binary(BinOp::ShiftRightLogical, bits, k16)?;
-    let sign_bit = k(fb, 0x8000)?;
-    let sign = fb.binary(BinOp::BitwiseAnd, sign, sign_bit)?;
-    let k13 = k(fb, 13)?;
-    let top = fb.binary(BinOp::ShiftRightLogical, bits, k13)?;
-    let payload_mask = k(fb, 0x3ff)?;
-    let top = fb.binary(BinOp::BitwiseAnd, top, payload_mask)?;
-    let zero = k(fb, 0)?;
-    let low = fb.binary(BinOp::IEqual, top, zero)?;
-    let quiet = k(fb, 0x200)?;
-    let payload = fb.select(low, quiet, top)?;
-    let infinity = k(fb, 0x7c00)?;
-    let special = fb.binary(BinOp::BitwiseOr, infinity, payload)?;
-    fb.binary(BinOp::BitwiseOr, sign, special)
 }
 
 fn malformed() -> BuildError {

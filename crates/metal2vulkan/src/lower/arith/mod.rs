@@ -60,12 +60,10 @@
 //! `f32` denormals whatever the device's modes, and the normalized and sRGB `air.unpack`/`air.pack`
 //! conversions are exact integer sequences and Metal's tables.
 //!
-//! A NaN result is Metal's ([`nan`]): `float` `+ - * /`, the fused multiply-add on `OpFmaKHR`, and
-//! the functions whose NaN Metal canonicalizes answer `0x7FC00000`, and `half` `+`, `*`, fused
-//! multiply-add, and a `float` narrowed to `half` the canonical `half` NaN `0x7E00`, which the
-//! lowering selects where the result's bits are observed unless the profile's measured device fact
-//! leaves it to the device (`NanEncoding::MetalCanonical`); the functions whose NaN carries an
-//! operand's sign or bits answer it on every profile.
+//! A NaN result's bits are the device's ([`nan`]): where Metal answers one the device is not
+//! measured to answer (its canonical `0x7FC00000` or `0x7E00` on a device without
+//! `NanEncoding::MetalCanonical`, and a NaN that carries an operand's sign or bits on every
+//! device), the module records `PrecisionNote::NativeNanEncoding`.
 
 pub mod aggregate;
 pub mod chunk;
@@ -104,7 +102,7 @@ use crate::air::ir::{
 };
 use crate::air::Entry;
 use crate::budget::Meter;
-use crate::device::profile::{DriverWorkaround, FloatFunctions, MinMaxRoute, NanEncoding};
+use crate::device::profile::{DriverWorkaround, FloatFunctions, NanEncoding};
 use crate::device::{DeviceProfile, FloatWidth};
 use crate::error::Error;
 use crate::lower::access;
@@ -397,10 +395,6 @@ pub enum ArithStrategy {
         /// `air.fast_sincos` on `float`: [`FloatFn::FastSin`] and [`FloatFn::FastCos`], which
         /// flush past the last evaluated quadrant as Metal's `fast::sincos` does.
         fast: bool,
-        /// Metal's NaN selected for the sine and for the cosine, where Metal answers one the
-        /// device may not: the answers of the `sin` and `cos` the call computes, as `with_nan`
-        /// selects them for those calls.
-        nan: [Option<nan::NanAnswer>; 2],
     },
     /// `air.dot` of chunked vectors of `lanes` lanes of `elem` ([`chunk::dot`]).
     ChunkedDot {
@@ -416,13 +410,6 @@ pub enum ArithStrategy {
         lanes: u16,
         elem: Form,
         fma: fma::Fma,
-    },
-    /// A float result with Metal's NaN selected where it is a NaN ([`nan`]): the value of `of`, a
-    /// result of `form`, then [`nan::select`] of `answer`. Named as `of`.
-    Nan {
-        of: Box<ArithStrategy>,
-        answer: nan::NanAnswer,
-        form: Form,
     },
     /// An operation with a wide integer operand or result on a profile without `shaderInt64`,
     /// on the two words of each value ([`wide`]).
@@ -454,12 +441,7 @@ pub enum ArithStrategy {
 impl FamilyStrategy for ArithStrategy {
     fn name(&self, _: &FamilyPlans) -> Cow<'static, str> {
         use ArithStrategy as S;
-        // The NaN select is its operation's: the census names the operation.
-        let mut s = self;
-        while let S::Nan { of, .. } = s {
-            s = of;
-        }
-        Cow::Borrowed(match s {
+        Cow::Borrowed(match self {
             S::Int { form, .. } | S::IntCompare { form, .. } if form.legalized() => {
                 "arith.int.legalized"
             }
@@ -549,8 +531,6 @@ impl FamilyStrategy for ArithStrategy {
             S::Forward(_) => "arith.aggregate.forward",
             S::Null(_) => "arith.aggregate.null",
             S::Member { .. } => "arith.aggregate.member",
-            // Named as its operation: unwrapped above.
-            S::Nan { .. } => "arith.nan",
         })
     }
 
@@ -642,12 +622,9 @@ impl FamilyStrategy for ArithStrategy {
                 let lanes = u32::from(floats.lanes);
                 64 + srgb + 400 + 24 * lanes + narrow::round_words(*floats)
             }
-            S::SinCos {
-                shape,
-                store,
-                fast,
-                nan,
-            } => chunk::sin_cos_words(*shape, *fast, *nan).saturating_add(store.words()),
+            S::SinCos { shape, store, fast } => {
+                chunk::sin_cos_words(*shape, *fast).saturating_add(store.words())
+            }
             S::ChunkedDot { lanes, elem, .. } => chunk::dot_words(*lanes, *elem),
             S::ChunkedChain { lanes, elem, fma } => {
                 chunk::dot_chain_words(*lanes, *elem, fma.words())
@@ -681,7 +658,6 @@ impl FamilyStrategy for ArithStrategy {
             S::LaneShuffle { out, .. } => chunk::move_words(*out, chunk::LaneMove::Shuffle, false),
             S::WordBitcast { from, to } => chunk::bitcast_words(*from, *to),
             S::Wide(w) => w.words(),
-            S::Nan { of, answer, form } => of.words().saturating_add(answer.words(*form)),
         }
     }
 
@@ -821,26 +797,18 @@ pub struct ArithPlan {
     /// Whether [`ArithPlan::quantize`] is the device's own rounding (native half rounding,
     /// [`narrow::native_rounding`]), decided with it by [`finish`].
     pub native_half: bool,
-    /// Whether a `half` texel keeps the NaN the device decoded under that native rounding too
-    /// (`narrow::round_texel`): where the profile's NaN is the translation's to answer as Metal's
-    /// (`NanEncoding::Device`, the policy's `NanMinMaxPolicy::Exact`), decided by [`finish`].
-    pub texel_nans: bool,
     /// Whether a `half`'s NaN bits are left to the device's conversion where the module rounds
     /// through the conversion under the float controls ([`QuantizeForm::Controlled`]): a `half`
     /// read from its bits is the device's widening of them (`narrow::from_bits`), and a `half`
-    /// texel takes the rounding's NaN (`narrow::round_texel`). Where the profile's NaN is the
-    /// device's own (`NanEncoding::Native`, the policy's `NanMinMaxPolicy::Native`, the default),
-    /// decided by [`finish`].
+    /// texel takes the rounding's NaN (`narrow::round_texel`). Decided by [`finish`], on every
+    /// profile that rounds so.
     pub native_half_nans: bool,
     /// Whether Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` on `float` or `half`
-    /// takes the device's `NMin`, `NMax` or `NClamp`, measured to be Metal's
+    /// takes the device's `NMin`, `NMax` or `NClamp` measured to be Metal's
     /// (`DriverDeviation::MetalMinMax`), recorded at selection: the module then requires
-    /// `VkProperty::MetalMinMax`, and every such call in it takes those instructions.
+    /// `VkProperty::MetalMinMax`. Every such call takes those instructions on every profile; one
+    /// not measured so records `NativeMinMax` ([`native_min_max`]).
     pub device_min_max: bool,
-    /// Whether those functions take the device's `NMin`, `NMax` or `NClamp` as native device
-    /// maths ([`native_min_max`]), recorded at selection: the module records `NativeMinMax` and
-    /// requires no property.
-    pub native_min_max: bool,
     /// Whether a `half` `+`, `-` or `*` takes the device's 16-bit arithmetic
     /// ([`ArithStrategy::F16`]), measured to be Metal's (`DriverDeviation::MetalHalfArithmetic`),
     /// recorded at selection: the module then requires `VkProperty::MetalHalfArithmetic`.
@@ -944,12 +912,8 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.quantize = narrow::quantize_form(cx.profile);
     cx.families.arith.native_half =
         narrow::native_rounding(cx.profile, cx.families.arith.quantize).is_some();
-    // Where the NaN switch asks for Metal's NaN, a texel's NaN is its own through that rounding.
-    cx.families.arith.texel_nans = nan::encoding(cx.profile) == NanEncoding::Device;
-    // Under the float controls a `half`'s NaN is the device's conversion's where the profile
-    // leaves NaN bits to the device.
-    cx.families.arith.native_half_nans = cx.families.arith.quantize == QuantizeForm::Controlled
-        && nan::encoding(cx.profile) == NanEncoding::Native;
+    // Under the float controls a `half`'s NaN is the device's conversion's.
+    cx.families.arith.native_half_nans = cx.families.arith.quantize == QuantizeForm::Controlled;
     cx.families.arith.mask = if cx
         .profile
         .fields()
@@ -1368,8 +1332,8 @@ pub fn float_binop_notes(
             p.fields().float_functions == FloatFunctions::Metal,
         ));
     }
-    // A `float` `+ - *` and remainder answer Metal's NaN: the device's, where the profile states
-    // it is, else selected ([`nan`]), and leave their denormals to the device: `+ - *` but where it
+    // A `float` `+ - *` and remainder answer the device's NaN, noted where the profile does not
+    // state it is Metal's ([`nan`]), and leave their denormals to the device: `+ - *` but where it
     // is measured to read them as Metal does ([`leave_denormals`]), a remainder on every device.
     // Metal's `half` and `bfloat` remainders are not measured.
     let answer = binop_answer(op, fmt);
@@ -1383,8 +1347,9 @@ pub fn float_binop_notes(
     Some(OpNotes::everywhere(notes))
 }
 
-/// The NaN Metal answers for the float binary operator `op` on format `fmt` that its lowering
-/// selects ([`with_nan`]): `float` `frem`'s canonical NaN beside [`nan::binary_answer`]'s.
+/// The NaN Metal answers for the float binary operator `op` on format `fmt`, which its lowering
+/// leaves to the device ([`with_nan`]): `float` `frem`'s canonical NaN beside
+/// [`nan::binary_answer`]'s.
 fn binop_answer(op: AirBin, fmt: FloatFmt) -> Option<nan::NanAnswer> {
     match (op, fmt) {
         (AirBin::FRem, FloatFmt::F32) => Some(nan::NanAnswer::Canonical),
@@ -1392,36 +1357,22 @@ fn binop_answer(op: AirBin, fmt: FloatFmt) -> Option<nan::NanAnswer> {
     }
 }
 
-/// Strategy `s` of instruction `at`, a result of form `form`, with Metal's NaN `answer` selected
-/// ([`nan`]): where Metal answers one the lowering does not, the profile does not leave it to the
-/// device, and the result's NaN bits may be observed. Under native device maths
-/// ([`NanEncoding::Native`]) every answer is left to the device, noted `NativeNanEncoding`.
+/// Strategy `s`, whose result's NaN Metal answers as `answer` where the lowering does not answer
+/// it itself, with that NaN left to the device ([`nan`]): noted `NativeNanEncoding` where the
+/// device is not measured to answer it ([`nan::NanAnswer::device_answers`]).
 fn with_nan(
     cx: &mut SelectCx<'_>,
-    at: InstId,
     s: ArithStrategy,
     answer: Option<nan::NanAnswer>,
-    form: Form,
 ) -> ArithStrategy {
     note_native_nan(cx, answer);
-    match answer {
-        Some(answer)
-            if !answer.left_to(nan::encoding(cx.profile)) && cx.nan_payload_observed(at) =>
-        {
-            ArithStrategy::Nan {
-                of: Box::new(s),
-                answer,
-                form,
-            }
-        }
-        _ => s,
-    }
+    s
 }
 
-/// Record `NativeNanEncoding` where Metal answers a NaN (`answer`) that native device maths
-/// leaves to the device ([`NanEncoding::Native`]).
+/// Record `NativeNanEncoding` where Metal answers a NaN (`answer`) the device is not measured to
+/// answer ([`nan::NanAnswer::device_answers`]).
 fn note_native_nan(cx: &mut SelectCx<'_>, answer: Option<nan::NanAnswer>) {
-    if answer.is_some() && nan::encoding(cx.profile) == NanEncoding::Native {
+    if answer.is_some_and(|a| !a.device_answers(nan::encoding(cx.profile))) {
         cx.precision.insert(PrecisionNote::NativeNanEncoding);
     }
 }
@@ -1549,14 +1500,15 @@ fn select_in(
                 // `x - y * trunc(x / y)` of its precise quotient, which the device's `OpFRem` is at
                 // the device's precision, below.
                 Held::Float(FloatFmt::F32) if *op == AirBin::FRem && every_flag(*fmf) => {
-                    return select_float_fn(cx, at, (FloatFn::Fmod, true), *fmf, f);
+                    return select_float_fn(cx, (FloatFn::Fmod, true), *fmf, f);
                 }
                 // Metal divides `float` without `arcp` correctly rounded, a denormal operand
                 // read as a zero and a denormal quotient flushed (a probe cases 914cc4d2, 711cc190,
                 // and c10cba13, every lane), and `half` under every flag set rounded once from the
                 // exact quotient (4c363561, 54f0fe8e, every lane): the device's quotient, its
-                // divisor kept in Vulkan's range ([`divide::native`]), its NaN Metal's canonical
-                // one. No device is measured to read a quotient's denormals as Metal does.
+                // divisor kept in Vulkan's range ([`divide::native`]), its NaN the device's (Metal
+                // answers its canonical one). No device is measured to read a quotient's denormals
+                // as Metal does.
                 Held::Float(fmt) if divide::precise(*op, fmt, *fmf) => {
                     let notes = float_binop_notes(*op, fmt, *fmf, cx.profile);
                     record(cx, notes.unwrap_or_default());
@@ -1564,7 +1516,7 @@ fn select_in(
                     fp_env(cx, *fmf, f);
                     leave_denormals(cx, f, denormal::Covered::Never);
                     let s = S::NativeDivide { form: f };
-                    with_nan(cx, at, s, Some(nan::NanAnswer::Canonical), f)
+                    with_nan(cx, s, Some(nan::NanAnswer::Canonical))
                 }
                 Held::Float(fmt) if op.is_float() => {
                     let notes = float_binop_notes(*op, fmt, *fmf, cx.profile);
@@ -1586,15 +1538,15 @@ fn select_in(
                     // (a probe cases 914cc4d2 and 711cc190, every flag set measured, every lane),
                     // its reciprocal flushing past `2^126` and at a denormal `y`: the device's
                     // `OpFDiv(x, y)`, Metal's own where the device's functions are Metal's in an
-                    // entry Metal compiles with fast math. Its NaN is the device's where the
-                    // profile leaves NaNs to it, else Metal's canonical one, selected; its `f32`
-                    // denormals the device's ([`float_binop_notes`]).
+                    // entry Metal compiles with fast math. Its NaN is the device's, noted where it
+                    // is not measured to be Metal's canonical one; its `f32` denormals the
+                    // device's ([`float_binop_notes`]).
                     if *op == AirBin::FDiv
                         && fmf.contains(FastMath::ARCP)
                         && f.float_fmt() == Some(FloatFmt::F32)
                     {
                         let s = S::FastDivide { form: f, contract };
-                        with_nan(cx, at, s, Some(nan::NanAnswer::Canonical), f)
+                        with_nan(cx, s, Some(nan::NanAnswer::Canonical))
                     } else if let Some(basis) = f16_arithmetic(cx.profile, *op, f) {
                         // The device's own `half` arithmetic, Metal's in the forms that keep it
                         // apart, which the AIR's flags allow whatever they are. Only the measured
@@ -1602,7 +1554,7 @@ fn select_in(
                         // its entry declares.
                         cx.families.arith.f16_arith |= basis == F16Basis::Measured;
                         let s = S::F16 { op: *op, form: f };
-                        with_nan(cx, at, s, nan::binary_answer(*op, fmt), f)
+                        with_nan(cx, s, nan::binary_answer(*op, fmt))
                     } else {
                         let s = S::Float {
                             op: *op,
@@ -1615,7 +1567,7 @@ fn select_in(
                         if matches!(op, AirBin::FAdd | AirBin::FSub | AirBin::FMul) {
                             leave_denormals(cx, f, denormal::Covered::Deviation);
                         }
-                        with_nan(cx, at, s, binop_answer(*op, fmt), f)
+                        with_nan(cx, s, binop_answer(*op, fmt))
                     }
                 }
                 _ => return Err(cx.invariant("a binary operator on mismatched operands")),
@@ -1631,7 +1583,7 @@ fn select_in(
             fp_env(cx, *fmf, f);
             // Metal's `half` `fneg` answers the canonical NaN.
             let nan = f.float_fmt().and_then(nan::fneg_answer);
-            with_nan(cx, at, S::FNeg { form: f, bits }, nan, f)
+            with_nan(cx, S::FNeg { form: f, bits }, nan)
         }
         InstKind::ICmp { pred, a, .. } => {
             let f = form_in(cx, *a, chunk)?;
@@ -1654,7 +1606,7 @@ fn select_in(
                 form: f,
             }
         }
-        InstKind::Cast { op, v } => select_cast(cx, at, *op, *v, inst, chunk)?,
+        InstKind::Cast { op, v } => select_cast(cx, *op, *v, inst, chunk)?,
         InstKind::Select { .. } => S::Select,
         InstKind::Freeze(v) => match cx.constant(*v) {
             Some(LoweredConst::Undef(_)) => S::Zero(result),
@@ -1715,11 +1667,10 @@ fn select_in(
     })
 }
 
-/// Select the cast `op` of `v`, instruction `at`; with `chunk`, for one chunk (as
+/// Select the cast `op` of `v`, instruction `inst`; with `chunk`, for one chunk (as
 /// [`select_in`]).
 fn select_cast(
     cx: &mut SelectCx<'_>,
-    at: InstId,
     op: CastOp,
     v: Value,
     inst: &Inst,
@@ -1747,7 +1698,7 @@ fn select_cast(
                 (Some(a), Some(b)) => nan::cast_answer(op, a, b),
                 _ => None,
             };
-            return Ok(with_nan(cx, at, s, answer, to));
+            return Ok(with_nan(cx, s, answer));
         }
         CastOp::FPToUI => CastKind::FpToUi,
         CastOp::FPToSI => CastKind::FpToSi,
@@ -2057,7 +2008,7 @@ fn select_call(
         Callee::Air {
             op: AirIntrinsic::Convert(c),
             ..
-        } => return select_convert(cx, at, inst, call, c, chunk),
+        } => return select_convert(cx, inst, call, c, chunk),
         Callee::Air {
             op: AirIntrinsic::Pack(p),
             ..
@@ -2097,16 +2048,14 @@ fn select_call(
             }
             ArithStrategy::IntFn { f: op, form: f }
         }
-        Fun::Float(op) => select_float_fn(cx, at, (op, fast), call.fmf, f)?,
+        Fun::Float(op) => select_float_fn(cx, (op, fast), call.fmf, f)?,
     })
 }
 
 /// The strategy of float function `op` (`fast` its `fast_` variant) with fast-math flags `fmf`
-/// on operands of form `f`, the result of instruction `at`: a math call's, or LLVM's `frem`'s,
-/// which is `fmod`.
+/// on operands of form `f`: a math call's, or LLVM's `frem`'s, which is `fmod`.
 fn select_float_fn(
     cx: &mut SelectCx<'_>,
-    at: InstId,
     (op, fast): (FloatFn, bool),
     fmf: FastMath,
     f: Form,
@@ -2120,7 +2069,6 @@ fn select_float_fn(
         let arith = &mut cx.families.arith;
         arith.fmod_uses |= fmod;
         arith.device_min_max |= device_min_max(cx.profile, op, f);
-        arith.native_min_max |= native_min_max(cx.profile, op, f);
     }
     if let FloatLowering::Fma(fma)
     | FloatLowering::FastFmod(fma)
@@ -2129,11 +2077,6 @@ fn select_float_fn(
     {
         cx.families.arith.take_fma(fma);
     }
-    // `dot`'s result is a scalar.
-    let result = match lowered.how {
-        FloatLowering::Fn(FloatFn::Dot) | FloatLowering::Dot(_) => f.scalar_form(),
-        _ => f,
-    };
     let s = match lowered.how {
         FloatLowering::Fma(fma) => ArithStrategy::Fma(fma),
         FloatLowering::FastFmod(fma) => ArithStrategy::FastFmod { fma },
@@ -2150,7 +2093,7 @@ fn select_float_fn(
     if let Some(covered) = call_coverage(lowered.how, facts) {
         leave_denormals(cx, f, covered);
     }
-    Ok(with_nan(cx, at, s, lowered.nan, result))
+    Ok(with_nan(cx, s, lowered.nan))
 }
 
 /// Where the device reads the `f32` denormals of a float function call lowered as `how` on a
@@ -2188,9 +2131,9 @@ fn coverage_left(how: FloatLowering, f: Form, facts: FloatFacts) -> bool {
 }
 
 /// Whether Metal's minimum and maximum function `op` on lanes of form `f` takes the device's
-/// `NMin`, `NMax` or `NClamp`: `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate`
-/// ([`min_max_family`]) on `float` and `half` ([`math::metal_picks`]) where profile `p` takes
-/// `DriverDeviation::MetalMinMax`.
+/// `NMin`, `NMax` or `NClamp` measured to be Metal's: `fmin`, `fmax`, `min3`, `max3`, `clamp` and
+/// `saturate` ([`min_max_family`]) on `float` and `half` ([`math::metal_picks`]) where profile `p`
+/// takes `DriverDeviation::MetalMinMax`.
 fn device_min_max(p: &DeviceProfile, op: FloatFn, f: Form) -> bool {
     use crate::error::DriverDeviation;
     min_max_family(op)
@@ -2215,13 +2158,13 @@ fn min_max_family(op: FloatFn) -> bool {
 }
 
 /// Whether Metal's minimum and maximum function `op` on lanes of form `f` takes the device's
-/// `NMin`, `NMax` or `NClamp` as they are: one of [`device_min_max`]'s functions on a profile whose
-/// picks are the device's (`MinMaxRoute::Native`: not measured to be Metal's, and the policy's
-/// `NanMinMaxPolicy::Native`), noted `NativeMinMax`.
-fn native_min_max(p: &DeviceProfile, op: FloatFn, f: Form) -> bool {
-    min_max_family(op)
-        && math::metal_picks(f.float_fmt())
-        && p.fields().min_max == MinMaxRoute::Native
+/// `NMin`, `NMax` or `NClamp` as they are, not measured to be Metal's, noted `NativeMinMax`: one of
+/// [`device_min_max`]'s functions on a profile that does not take `DriverDeviation::MetalMinMax`
+/// (`native_min_max`, [`FloatFacts::native_min_max`]), and `saturate` on every other float
+/// format, which no device is measured to answer as Metal's `clamp(x, +0, 1)`.
+fn native_min_max(op: FloatFn, f: Form, native_min_max: bool) -> bool {
+    let picks = math::metal_picks(f.float_fmt());
+    min_max_family(op) && ((picks && native_min_max) || (op == FloatFn::Saturate && !picks))
 }
 
 /// Why the device's 16-bit `+ - *` answers as Metal's `half` arithmetic ([`f16_arithmetic`]).
@@ -2295,10 +2238,10 @@ struct FloatFacts {
     metal_functions: bool,
     /// Whether the device reads `f32` denormals as Metal does ([`denormal::device_flushes`]).
     device_denormals: bool,
-    /// Whether the profile leaves Metal's NaN to the device ([`NanEncoding::Native`]).
-    nan_native: bool,
-    /// Whether Metal's minimum and maximum functions are the device's as they are
-    /// (`MinMaxRoute::Native`, [`native_min_max`]).
+    /// Which NaN the device's arithmetic answers ([`nan::encoding`]).
+    nans: NanEncoding,
+    /// Whether Metal's minimum and maximum functions are the device's not measured to be Metal's:
+    /// the profile does not take `DriverDeviation::MetalMinMax` ([`native_min_max`]).
     native_min_max: bool,
 }
 
@@ -2309,8 +2252,8 @@ impl FloatFacts {
             routes: fma::routes(p),
             metal_functions: p.fields().float_functions == FloatFunctions::Metal,
             device_denormals: denormal::device_flushes(p),
-            nan_native: nan::encoding(p) == NanEncoding::Native,
-            native_min_max: p.fields().min_max == MinMaxRoute::Native,
+            nans: nan::encoding(p),
+            native_min_max: !p.takes_driver_deviation(crate::error::DriverDeviation::MetalMinMax),
         }
     }
 }
@@ -2439,10 +2382,10 @@ fn native_fma(fma: fma::Fma) -> OpNotes {
 /// The lowering of float function `op` called with the `fast_` prefix if `fast` and with
 /// fast-math flags `fmf`, on operands of form `f`, on a profile with float facts `facts`
 /// ([`FloatFacts`]); `None` where the form refuses the function (it is not a float, or a `double`
-/// the function does not take). Where the profile leaves NaNs to the device a Metal NaN the call
-/// answers is the device's, noted `NativeNanEncoding` (as [`with_nan`] records it), and where its
-/// picks are the device's Metal's minimum and maximum functions are the device's
-/// ([`native_min_max`]), noted `NativeMinMax`; the `f32` denormals the device reads where the
+/// the function does not take). A Metal NaN the call answers is the device's, noted
+/// `NativeNanEncoding` where the device is not measured to answer it (as [`with_nan`] records it),
+/// and Metal's minimum and maximum functions are the device's, noted `NativeMinMax` where they are
+/// not measured to be Metal's ([`native_min_max`]); the `f32` denormals the device reads where the
 /// table covers the call but the profile lacks the deviation are noted `DeviceDenormals`
 /// ([`coverage_left`]).
 fn float_call(
@@ -2454,12 +2397,11 @@ fn float_call(
 ) -> Option<FloatCall> {
     let mut call = float_call_of(op, fast, fmf, f, facts)?;
     let mut native = BTreeSet::new();
-    if call.nan.is_some() && facts.nan_native {
+    if call.nan.is_some_and(|a| !a.device_answers(facts.nans)) {
         native.insert(PrecisionNote::NativeNanEncoding);
     }
     if let FloatLowering::Fn(op) = call.how {
-        let picks = min_max_family(op) && math::metal_picks(f.float_fmt());
-        if picks && facts.native_min_max {
+        if native_min_max(op, f, facts.native_min_max) {
             native.insert(PrecisionNote::NativeMinMax);
         }
     }
@@ -2496,9 +2438,9 @@ fn float_call_of(
     // `FastMathRewrites`.
     if matches!(op, FloatFn::Fma | FloatFn::MulAdd) {
         if let Some(fma) = fma::Fma::by(routes, f) {
-            // The device's `float` instruction answers the device's NaN, so Metal's is selected; a
-            // `half` result's rounding answers the device's `half` NaN on every route, so Metal's
-            // is selected where it is measured.
+            // The device's `float` instruction answers the device's NaN, noted; a `half` result's
+            // rounding answers the device's `half` NaN on every route, noted where Metal's is
+            // measured.
             let khr = fma.route.device_float();
             let nan = match f.float_fmt() {
                 Some(FloatFmt::Half) => {
@@ -2516,7 +2458,7 @@ fn float_call_of(
     // Metal's `mix(x, y, t)` on `float` and `half` is `fma(t, y, fma(-t, x, x))`, with and without
     // fast-math flags. Where the device's functions are Metal's, and on `half` by the measured
     // 16-bit fused multiply-add, Metal's own form of its own fused multiply-adds answers it, whose
-    // NaN is the device's `float` instruction's, which is selected, and a `half` result's as the
+    // NaN is the device's `float` instruction's, which is noted, and a `half` result's as the
     // `half` `fma`'s.
     if op == FloatFn::Mix {
         if let Some(fma) = fma::Fma::by(routes, f) {
@@ -2557,8 +2499,8 @@ fn float_call_of(
     // fast-math flags, `b * (a + c)` for `dot(float2(a, b), float2(b, c))`, `NativeDot`). Where the
     // profile's `float` functions are Metal's, a `float` `OpDot` reaches Metal's own `dot`, the
     // same chain; a `half` there would be summed in its `float` container, so it takes the chain,
-    // as a `half` one by the measured 16-bit fused multiply-add does. Metal's NaN is selected as
-    // for any function.
+    // as a `half` one by the measured 16-bit fused multiply-add does. Its NaN is the device's,
+    // noted as for any function.
     if op == FloatFn::Dot {
         if let Some(fma) = fma::Fma::by(routes, f.scalar_form()) {
             let nan = f
@@ -2602,7 +2544,7 @@ fn float_call_of(
             });
         }
     }
-    // The NaN Metal answers, selected where the lowering does not answer it itself.
+    // The NaN Metal answers, where the lowering does not answer it itself.
     let answer = f
         .float_fmt()
         .and_then(|fmt| nan::function_answer(op, fast, every_flag(fmf), fmt));
@@ -2746,14 +2688,11 @@ pub(super) fn select_sincos(
     );
     let fast = symbol_fast && f.float_fmt() == Some(FloatFmt::F32);
     let (sin, cos) = chunk::sin_cos_fns(fast);
-    // Each result takes the NaN its function answers as a call of its own (`float_call`'s rule):
-    // Metal's `sincos` answers its `sin` and `cos`, word for word (cases 7b283404 and f6524207,
-    // every pair), so where Metal's answer is measured it is selected; otherwise the device's NaN
-    // is noted. The cosine is stored, so its bits are observed. Each records its notes as a call of
-    // its own (`function_notes`).
+    // Each result's NaN is the device's, noted as a call of its own's (`float_call`'s rule): Metal's
+    // `sincos` answers its `sin` and `cos`, word for word (cases 7b283404 and f6524207, every
+    // pair). Each records its notes as a call of its own (`function_notes`).
     let metal_functions = cx.profile.fields().float_functions == FloatFunctions::Metal;
-    let mut nans = [None; 2];
-    for (slot, (op, stored)) in nans.iter_mut().zip([(sin, false), (cos, true)]) {
+    for op in [sin, cos] {
         let answer = f
             .float_fmt()
             .and_then(|fmt| nan::function_answer(op, symbol_fast, every_flag(call.fmf), fmt));
@@ -2766,9 +2705,7 @@ pub(super) fn select_sincos(
             (!op.metal_denormals(), !metal_nans && answer.is_none()),
         );
         record(cx, notes);
-        let observed = stored || cx.nan_payload_observed(at);
         note_native_nan(cx, answer.filter(|_| !metal_nans));
-        *slot = answer.filter(|a| !metal_nans && !a.left_to(nan::encoding(cx.profile)) && observed);
     }
     fp_env(cx, call.fmf, f);
     let align = cx
@@ -2791,7 +2728,6 @@ pub(super) fn select_sincos(
         shape,
         store: Box::new(store),
         fast,
-        nan: nans,
     })
 }
 
@@ -2842,7 +2778,6 @@ fn select_pack(
 
 fn select_convert(
     cx: &mut SelectCx<'_>,
-    at: InstId,
     inst: &Inst,
     call: &crate::air::ir::Call,
     c: &Convert,
@@ -2928,7 +2863,7 @@ fn select_convert(
         (ConvertKind::Float, Some(a), Some(b)) => nan::convert_answer(a, b),
         _ => None,
     };
-    Ok(with_nan(cx, at, s, nan, to))
+    Ok(with_nan(cx, s, nan))
 }
 
 // ---- Emission ----
@@ -3001,16 +2936,11 @@ pub fn emit(
             }
         }
         S::IndexWord(w) => access::index::emit_word(cx, fb, w)?,
-        S::SinCos {
-            shape,
-            store,
-            fast,
-            nan,
-        } => {
+        S::SinCos { shape, store, fast } => {
             let p = nth(cx, &xs, 0)?;
             let test = nan::NanTest::for_modes(&cx.plan.families.arith.modes);
             let lib = lib(cx);
-            let (sin, cos) = chunk::sin_cos(fb, *shape, p, *fast, *nan, test, &lib)?;
+            let (sin, cos) = chunk::sin_cos(fb, *shape, p, *fast, test, &lib)?;
             // The access family's store reads the stored value as the call's result.
             cx.define(result, cos);
             access::emit(cx, fb, at, store)?;
@@ -3026,7 +2956,6 @@ pub fn emit(
 pub(crate) fn lib(cx: &EmitCx<'_>) -> libm::Lib {
     let arith = &cx.plan.families.arith;
     libm::Lib::new(arith.metal_functions, cx.decl.families.arith.fmod)
-        .with_min_max(arith.device_min_max || arith.native_min_max)
 }
 
 /// The operands strategy `s` reads (a prefix of the instruction's; all when `None`).
@@ -3062,7 +2991,6 @@ fn arity(s: &ArithStrategy) -> Option<usize> {
         | S::Member { .. } => Some(0),
         S::Chunked { parts, .. } => parts.first().and_then(|(_, p)| arity(p)),
         S::Wide(w) => w.arity(),
-        S::Nan { of, .. } => arity(of),
         _ => None,
     }
 }
@@ -3093,11 +3021,6 @@ fn value(
             wide,
             result,
         } => chunk::emit_chunked(cx, fb, *lanes, parts, wide, result, xs)?,
-        S::Nan { of, answer, form } => {
-            let r = value(cx, fb, of, xs)?;
-            let test = nan::NanTest::for_modes(&cx.plan.families.arith.modes);
-            nan::select(fb, *form, *answer, test, r, xs.first().copied())?
-        }
         S::ChunkedDot {
             lanes,
             elem,

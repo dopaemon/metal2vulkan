@@ -387,7 +387,6 @@ impl GeometryStages {
                     constant_blob: None,
                     rounded_colors: Vec::new(),
                     specialized_notes: Vec::new(),
-                    half_bit_colors: Vec::new(),
                     own_pixel_textures: Vec::new(),
                     snapshot_textures: Vec::new(),
                     private_bytes: 0,

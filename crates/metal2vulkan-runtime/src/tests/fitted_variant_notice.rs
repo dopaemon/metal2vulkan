@@ -77,7 +77,6 @@ fn fit_into(dependencies: &mut Vec<RuntimeDependency>) {
         RuntimeFact::ExactFormsOverCompilerLimit {
             sampling: true,
             texel_conversion: true,
-            nan_and_min_max: false,
         },
         Mechanism::None,
     ));

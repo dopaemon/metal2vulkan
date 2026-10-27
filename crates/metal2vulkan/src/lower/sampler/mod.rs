@@ -677,10 +677,6 @@ pub struct Sampling {
     /// A `float` texel of the slot converts by the bound format's class (`float_texel`), where
     /// [`one_texel`](Self::one_texel) holds.
     pub float_texel: bool,
-    /// Where the NaN switch asks for Metal's NaN, how the access's `half` texel answers a NaN
-    /// texel (`texture::half_texel_nans`): by the class of the bound texture it names, and
-    /// whether the access reads one texel ([`one_texel`](Self::one_texel)).
-    pub half_nans: Option<crate::lower::texture::NanClass>,
     /// A [`centred`](Self::centred) sample through a runtime or argument buffer's sampler with a
     /// texel offset, on a device without `VkProperty::MetalSampler`, which adds the offset to the
     /// texel it reads before addressing it: the texel's centre moves back by the offset on an
@@ -1290,10 +1286,7 @@ impl Sampling {
             } else {
                 0
             }
-            + self.heap_raw.as_ref().map_or(0, heap_raw::HeapRaw::words)
-            + self
-                .half_nans
-                .map_or(0, crate::lower::texture::NanClass::words))
+            + self.heap_raw.as_ref().map_or(0, heap_raw::HeapRaw::words))
         // The code a sampling routine holds is the routine's, counted once in the module.
         .saturating_sub(self.routed_words())
     }

@@ -160,9 +160,8 @@ pub fn storage_buffers(a: &FunctionArtifact) -> u32 {
         .sum()
 }
 
-/// The default policy with Metal's NaN and minimum and maximum (`NanMinMaxPolicy::Exact`): the
-/// policy of the tests of those forms, which the device's forms, the defaults, leave off a device
-/// whose functions are not Metal's. The texel conversions are the default's.
+/// The default policy with Metal's answers wherever a choice still offers them
+/// ([`DevicePolicy::exact_answers`]) but the texel conversions, which are the default's.
 pub fn exact_maths() -> DevicePolicy {
     let native = DevicePolicy::default();
     DevicePolicy {

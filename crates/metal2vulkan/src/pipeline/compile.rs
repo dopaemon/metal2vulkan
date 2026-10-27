@@ -1842,7 +1842,7 @@ pub(crate) fn spec_request(
 /// parameters `lower::stage_io` plans). Each with the numeric class it is declared with and
 /// whether its declared form is a 32-bit `float` (`float`, `float2`, `float3`, `float4`), which is
 /// what the projection's `VertexFetch::FixedFunction::narrow_float` may hold of it: only a 32-bit
-/// `float` read canonicalizes the device's widening (`lower::stage_io::plan`). Empty for any other
+/// `float` read notes the device's widening's NaN (`lower::stage_io::plan`). Empty for any other
 /// stage.
 pub(crate) fn declared_attributes(
     spec: &air::Entry,
@@ -2327,8 +2327,9 @@ fn lower_inputs(
                 pull_every,
             )?;
             // `narrow_float` is key data only where the entry reads the attribute as a 32-bit
-            // `float`; a `half`-declared attribute compiles the same either way, so the bit must
-            // not key a variant of it (`link::vertex::narrow_float_of_f32_reads`).
+            // `float`, whose NaN the module notes; a `half`-declared attribute compiles the same
+            // either way, so the bit must not key a variant of it
+            // (`link::vertex::narrow_float_of_f32_reads`).
             crate::pipeline::link::vertex::narrow_float_of_f32_reads(&mut projection, |a| {
                 declared.get(&a).is_some_and(|&(_, f32_read)| f32_read)
             });
@@ -2674,7 +2675,7 @@ fn compile_kept<K>(
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
     // widening, which they make exact but for a NaN's bits: the entry declares them, and so
     // requires the device's float-controls properties for them, and no fact. A module that widens
-    // so leaves a NaN's bits to the device, as the profile does (`NanMinMaxPolicy::Native`).
+    // so leaves a NaN's bits to the device, as every profile does.
     if plan.families.arith.quantize == crate::spirv::builder::QuantizeForm::Controlled {
         let widens = crate::lower::arith::narrow::widens_bits(&module, m)?;
         if widens

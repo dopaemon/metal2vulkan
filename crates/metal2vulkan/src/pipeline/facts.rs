@@ -597,13 +597,6 @@ pub enum RuntimeFact {
         multisampled: bool,
         planes: bool,
     },
-    /// The function writes `half` texels to the storage texture bound to the slot, whose storage
-    /// choice declares no format, and reads whether its channels are 16-bit floats
-    /// (`PushField::TextureHalfChannels`): Metal stores a written half's NaN as the half's own
-    /// bits in a 16-bit float channel and as its conversion of `0x7fc00000` in any other. The
-    /// binder writes 1 for a bound `R16Float`, `RG16Float` or `RGBA16Float` texture
-    /// (`metal::format::half_channels`), and 0 for any other and a neutral.
-    StorageTextureHalfChannels { slot: SlotRef },
     /// The vertex function was compiled in capture form `form` (`VariantKey::captured_positions`,
     /// `LoweringInputs::captured_positions`): each vertex it runs writes a 32-byte record of its
     /// clip position, point size and restart flag from `PushField::CaptureAddress`, at the slot
@@ -727,9 +720,10 @@ pub enum RuntimeFact {
     /// device stores exactly. A member the twin does not hold stores the device's conversion of a
     /// NaN, not Metal's: a half-float texture that is swizzled or whose image takes no view in
     /// another format, and where `packed` a packed small float one (`RG11B10Float`,
-    /// `RGB9E5Float`); `bind::heap_write_nans_converted` names such a texture. The module records
-    /// no `PrecisionNote::DeviceNanEncoding` for these writes: the consumer announces it at a
-    /// draw or dispatch whose heap holds such a texture.
+    /// `RGB9E5Float`); `bind::heap_write_nans_converted` names such a texture, which the consumer
+    /// announces `PrecisionNote::DeviceNanEncoding` for at a draw or dispatch whose heap holds
+    /// one. The module records that note for these writes too: a 32-bit or packed small float
+    /// member's NaN is the device's.
     HeapHalfTexelWrites { stage: Stage, packed: bool },
     /// The render pipeline draws through synthesized geometry stages, one per topology class, of
     /// which a draw runs its class's (`RenderPipeline::runs_stage`): its fragment function reads
@@ -768,7 +762,6 @@ pub enum RuntimeFact {
     ExactFormsOverCompilerLimit {
         sampling: bool,
         texel_conversion: bool,
-        nan_and_min_max: bool,
     },
     /// The render pipeline was compiled under `VariantKey::quad_primitive_ids`, and its fragment
     /// function reads `[[primitive_id]]` from Vulkan's `PrimitiveId` shifted right by one

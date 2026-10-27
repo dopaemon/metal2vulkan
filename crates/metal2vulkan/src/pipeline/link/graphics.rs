@@ -9,10 +9,10 @@
 //!   `ColorAttachmentBlend` when blending), the write mask, and the blend state; at most
 //!   `maxColorAttachments` of them. A blend of factors one and zero, added, for color and alpha,
 //!   of an attachment whose format converts the fragment function's output
-//!   (`StageIo::color_writes`), or that the function rounds (`StageIo::rounded_colors`) or writes
-//!   as a half's bits (`StageIo::half_bit_colors`), takes no Vulkan blend: Metal's blend stores the
-//!   output as written, as no blend does, which a device's blend could still change (x86 lavapipe
-//!   adds the clear's `+0` to a `-0` source of an `R16Float` attachment, Metal keeps `-0`). An
+//!   (`StageIo::color_writes`), or that the function rounds (`StageIo::rounded_colors`), takes no
+//!   Vulkan blend: Metal's blend stores the output as written, as no blend does, which a device's
+//!   blend could still change (x86 lavapipe adds the clear's `+0` to a `-0` source of an
+//!   `R16Float` attachment, Metal keeps `-0`). An
 //!   attachment that no first (index 0) output of the fragment function names (every attachment of
 //!   a pipeline without a fragment function) gets an empty write mask, so the draw leaves it
 //!   unmodified. That is what Metal does where measured: an unblended attachment the function reads
@@ -388,14 +388,13 @@ pub fn graphics_state(
                     // Metal's blend of one and zero stores the output as written, as no blend
                     // does, so an attachment whose format converts the output (its channels
                     // take a rule of Metal's, `StageIo::color_writes`), or one the function
-                    // rounds or writes as a half's bits, takes no Vulkan blend there, nor the
+                    // rounds, takes no Vulkan blend there, nor the
                     // format's blend support. But not a 16-bit float attachment's from a module
                     // without fast math, whose blend Metal computes keeping the destination's
                     // product by zero: that one blends, announced (`color_writes::keeps_zero`).
                     let stored = fs.is_some_and(|f| {
                         let color = index as u32;
                         f.io.rounded_colors.contains(&color)
-                            || f.io.half_bit_colors.contains(&color)
                             || f.io.color_writes.get(&color).is_some_and(|rules| {
                                 rules.iter().flatten().any(|r| {
                                     *r != crate::pipeline::lower_inputs::ChannelWrite::Device

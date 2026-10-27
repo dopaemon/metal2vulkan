@@ -238,8 +238,7 @@ pub(super) fn select(
     (image, shape): (ImageRef, ImageShape),
     operand: Option<crate::air::ir::Value>,
 ) -> Result<Option<Plain>, Error> {
-    let half_gather = half_gather(cx, op, form);
-    if form.map(|f| f.conv) != Some(TexelConv::F32) && !half_gather {
+    if form.map(|f| f.conv) != Some(TexelConv::F32) {
         return Ok(None);
     }
     let gather = match op {
@@ -256,9 +255,7 @@ pub(super) fn select(
     };
     if cx.profile.device_samples() {
         cx.families.sampler.device_sampling = true;
-        if !half_gather {
-            return Ok(None);
-        }
+        return Ok(None);
     }
     let fetch = match (stat.map(|(r, _)| r), argument) {
         (Some(SamplerRef::Constexpr(words)), _) => {
@@ -284,34 +281,9 @@ pub(super) fn select(
     Ok(fetch.map(|fetch| Plain { image, fetch }))
 }
 
-/// Whether `op` is a gather with a `half` result whose texels the shader fetches where the bound
-/// class is a 16-bit float one: where the NaN switch asks for Metal's NaN
-/// (`NanMinMaxPolicy::Exact`, the profile's `TexelNanRoute::Metal`) on a device without Metal's
-/// own sampler. Metal's gather hands back a 16-bit float texel's own NaN; a device's gather need
-/// not (NVIDIA's hands back every NaN as `0x7fffffff`), and its fetch does
-/// where its read does.
-fn half_gather(cx: &SelectCx<'_>, op: &SampleOp, form: Option<TexelForm>) -> bool {
-    use crate::device::profile::TexelNanRoute;
-    use crate::device::requirements::VkProperty;
-    matches!(op, SampleOp::Gather { dref: None, .. })
-        && form.map(|f| f.conv) == Some(TexelConv::F16)
-        && cx.profile.fields().texel_nans == TexelNanRoute::Metal
-        && !cx
-            .profile
-            .fields()
-            .enabled
-            .properties
-            .contains(&VkProperty::MetalSampler)
-}
-
-/// The format classes (`BicubicTexels` bits) whose texels the shader fetches for plain access
-/// `s`: the 32-bit float class, or for a `half` gather ([`half_gather`]) the half-float one.
-pub(super) fn classes(s: &Sampling) -> u32 {
-    match (&s.op, s.texel.map(|f| f.conv)) {
-        (SampleOp::Gather { .. }, Some(TexelConv::F16)) => BicubicTexels::HALF,
-        _ => BicubicTexels::LINEAR,
-    }
-}
+/// The format classes (`BicubicTexels` bits) whose texels the shader fetches for a plain access:
+/// the 32-bit float class.
+pub(super) const CLASSES: u32 = BicubicTexels::LINEAR;
 
 /// How the shader fetches the texels of `op` (a gather, a sample through a sampler that reads one
 /// texel, its comparison taken out, or a comparison through nearest filters under a linear mip
@@ -569,7 +541,7 @@ pub(super) fn heap(
         (_, Some(pixel)) => Some(super::emit::sampler_word(cx, fb, pixel)?),
         (_, None) => return Err(cx.fail("a word-addressed heap fetch without its word")),
     };
-    let take = bits.test(fb, &t, classes(s))?;
+    let take = bits.test(fb, &t, CLASSES)?;
     let take = match word {
         Some(w) => match word_reach(fb, &t, s, &p.fetch, w)? {
             Some(r) => fb.binary(BinOp::LogicalAnd, take, r)?,

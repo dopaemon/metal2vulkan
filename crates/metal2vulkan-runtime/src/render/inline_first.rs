@@ -134,7 +134,6 @@ use crate::clear_reach;
 use crate::device::Device;
 use crate::error::Error;
 use crate::linear_attachment;
-use crate::nan_clear::keeps_nan_sign;
 use crate::render_pass::{ColorTarget, PassLayout};
 use crate::render_target::{
     self, Feedback, FramebufferObject, PassShape, Position, RenderPassObject,
@@ -248,15 +247,8 @@ pub(super) fn opens_inline(
             // late. Else the first action ruled out.
             let loaded = match color.load {
                 LoadAction::Load => (area != layout.extent).then_some(ActionsRefused::UnequalReach),
-                LoadAction::Clear => {
-                    let signed = keeps_nan_sign(target, true);
-                    let format = texture.pixel_format();
-                    match clear_reach::cleared(layout, target.extent, true) == area {
-                        false => Some(ActionsRefused::UnequalReach),
-                        true => crate::clear_value::nan_texel(format, &color.clear, signed)
-                            .map(|_| ActionsRefused::NanClear),
-                    }
-                }
+                LoadAction::Clear => (clear_reach::cleared(layout, target.extent, true) != area)
+                    .then_some(ActionsRefused::UnequalReach),
                 LoadAction::DontCare => Some(ActionsRefused::DontCareLoad),
             };
             let refused = loaded

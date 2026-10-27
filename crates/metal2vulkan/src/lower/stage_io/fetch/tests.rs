@@ -723,18 +723,13 @@ fn every_ten_and_two_bit_code_is_correctly_rounded() {
     }
 }
 
-/// A narrow float's widening to a `float` parameter answers Metal's canonical NaN, sign and
-/// payload dropped, while a `half` parameter keeps the fetched `half`'s own bits.
-///
-/// Metal's answer, from `vertex-format-float4`'s and `attribute-format-fetches`' recordings of
-/// plain Metal on an M3 Max under macOS 27.0.1: the `half` codes `0x7E01` and `0xFE01` both reach
-/// a `float` attribute as `0x7FC00000`, and so does a `FloatRG11B10` field whose 5-bit exponent
-/// is all ones; the same `half` codes reach a `half` attribute as themselves
+/// A narrow float's widening to a `float` parameter carries a NaN field's sign and payload up into
+/// the `f32` NaN (the device's NaN encoding, `PrecisionNote::DeviceNanEncoding`, where Metal answers
+/// `0x7FC00000`), while a `half` parameter keeps the fetched `half`'s own bits, as Metal's does
 /// (`vertex-format-half4`). Every finite, zero, subnormal and infinite code is bit-exact either
 /// way, which `every_format_decodes_exactly` holds.
 #[test]
-fn a_narrow_floats_widening_answers_metals_canonical_nan() {
-    const CANONICAL: u32 = 0x7FC0_0000;
+fn a_narrow_floats_widening_carries_the_fields_nan_bits() {
     /// The `f32` bits of a `half` whose exponent field is all ones, by the IEEE widening: the
     /// sign, an all-ones `f32` exponent, and the 10-bit mantissa in the top of the 23-bit one.
     fn widened(h: u16) -> u32 {
@@ -754,11 +749,7 @@ fn a_narrow_floats_widening_answers_metals_canonical_nan() {
         let e = encoding(VertexFormat::Half4).expect("encoding");
         let m = module(e, float(4), Elem::Constant, 0, check);
         let got = run(&m, &data, [0, 0, 0, 0], 4);
-        assert_eq!(
-            got,
-            [CANONICAL, CANONICAL, CANONICAL, f32::INFINITY.to_bits()],
-            "Half4 into float4 {check:?}"
-        );
+        assert_eq!(got, halves.map(widened), "Half4 into float4 {check:?}");
         // The same codes into a `half` parameter, held widened: their own bits, as Metal's
         // `half` attribute keeps them.
         let m = module(e, half_form(4), Elem::Constant, 0, check);
@@ -767,9 +758,10 @@ fn a_narrow_floats_widening_answers_metals_canonical_nan() {
         let e = encoding(VertexFormat::FloatRG11B10).expect("encoding");
         let m = module(e, float(4), Elem::Constant, 8, check);
         let got = run(&m, &data, [0, 0, 0, 0], 4);
+        // Each field's mantissa in the top of the `f32` one: six bits, six, then five.
         assert_eq!(
             got,
-            [CANONICAL, CANONICAL, CANONICAL, 1.0f32.to_bits()],
+            [0x7FFE_0000, 0x7FFE_0000, 0x7FFC_0000, 1.0f32.to_bits()],
             "FloatRG11B10 into float4 {check:?}"
         );
     }

@@ -710,20 +710,18 @@ pub enum FloatFn {
     FlaggedFract,
     /// Metal's `sign` (`metal_sign`), with and without fast math.
     Sign,
-    /// Metal's `saturate` (`metal_saturate`).
+    /// Metal's `saturate`, `clamp(x, +0, 1)`: the device's `NClamp(x, 0, 1)`.
     Saturate,
     /// `fmin` (`air.fmin`, `air.fast_fmin`, `air.min`; `llvm.minnum` where [`FloatFn::MinNum`]
-    /// refines to it): Metal's on `float` and `half` (`metal_min_max`), the device's `NMin` on the
-    /// other formats.
+    /// refines to it): the device's `NMin`.
     Min,
-    /// `fmax`, as [`FloatFn::Min`] with the order reversed.
+    /// `fmax`, as [`FloatFn::Min`] with the order reversed: the device's `NMax`.
     Max,
-    /// `clamp(x, lo, hi)`: `fmin(fmax(x, lo), hi)` with Metal's `fmin` and `fmax` on `float` and
-    /// `half`, the device's `NClamp` on the other formats.
+    /// `clamp(x, lo, hi)`: the device's `NClamp`.
     Clamp,
-    /// `min3(a, b, c)`: `fmin(fmin(a, b), c)`, Metal's on `float` and `half`.
+    /// `min3(a, b, c)`: the device's `NMin(NMin(a, b), c)`.
     Min3,
-    /// `max3(a, b, c)`: `fmax(fmax(a, b), c)`, Metal's on `float` and `half`.
+    /// `max3(a, b, c)`: the device's `NMax(NMax(a, b), c)`.
     Max3,
     /// `llvm.minnum`: LLVM's function, the device's `NMin`, on the formats other than `float`.
     /// Metal's compiler emits it for `a < b ? a : b` under fast math, with every flag; on `float`
@@ -1005,10 +1003,13 @@ impl FloatFn {
     }
 
     /// Whether the lowering answers Metal at `f32` denormal operands and results itself, whatever
-    /// the device's denormal mode, so it records no `PrecisionNote::DeviceDenormals`: the functions
-    /// that read the operand's exponent field (`sign`, `saturate`, `fract`, `median3`, `fmin`,
-    /// `fmax`, `min3`, `max3`, and `clamp`, which compare a denormal as zero and return the
-    /// operand, and `atan2`, which also flushes a denormal generic result), `copysign` and `fabs`
+    /// the device's denormal mode, or records the device's answer under another note, so it records
+    /// no `PrecisionNote::DeviceDenormals`: the functions that read the operand's exponent field
+    /// (`sign`, `fract` and `median3`, which compare a denormal as zero and return the operand, and
+    /// `atan2`, which also flushes a denormal generic result), `fmin`, `fmax`, `min3`, `max3`,
+    /// `clamp` and `saturate`, the device's `NMin`, `NMax` and `NClamp`, whose comparison of a
+    /// denormal is Metal's where measured (`DriverDeviation::MetalMinMax`) and else
+    /// `PrecisionNote::NativeMinMax`'s bound, `copysign` and `fabs`
     /// (on `float`, [`sign_on_bits`]), which move bits, `ldexp` (on `float`, [`ldexp_bits`]), which
     /// reads a denormal operand as the zero of its sign and flushes a denormal result on the bits,
     /// and `fast::sqrt`, which selects the zero of a denormal operand's sign and has no denormal
@@ -1102,12 +1103,13 @@ impl FloatFn {
     }
 
     /// Whether the lowering on lanes of format `fmt` answers Metal's NaN bit pattern itself, so it
-    /// records no `PrecisionNote::DeviceNanEncoding` and needs no select: the functions that select
-    /// their NaN (or answer a number for one: `sign`, `saturate`, `fast::sin`, `fast::cos`),
-    /// `median3`, and on `float` and `half`
-    /// `fmin`, `fmax`, `min3`, `max3`, and `clamp` (`metal_min_max`), which return an operand,
-    /// `copysign`, which moves bits, and `fabs` on `float`, which clears the sign bit on the bits
-    /// ([`sign_on_bits`]; a `half` `fabs` answers its canonical NaN by a select).
+    /// records no NaN note of its own: the functions that select their NaN (or answer a number for
+    /// one: `sign`, `saturate`, `fast::sin`, `fast::cos`), `median3`, and on `float` and `half`
+    /// `fmin`, `fmax`, `min3`, `max3`, and
+    /// `clamp`, which return an operand (two NaNs' answer is `PrecisionNote::NativeMinMax`'s where
+    /// the device is not measured to pick Metal's), `copysign`, which moves bits, and `fabs` on
+    /// `float`, which clears the sign bit on the bits ([`sign_on_bits`]; a `half` `fabs` answers
+    /// the device's NaN, noted `NativeNanEncoding`).
     pub fn metal_nans(self, fmt: FloatFmt) -> bool {
         use FloatFn as F;
         if self == F::Abs {
@@ -1303,10 +1305,9 @@ impl FloatFn {
 
 /// Emit float function `op` on `args` (floats of form `f`; `Ldexp`'s exponent is a held `i32` and
 /// `Dot` gives the scalar), by the device's instructions, and precise `fmod` by `lib`'s routine
-/// where the module defines it. Metal's operand-picking functions (`metal_min_max`,
-/// `metal_median3`) test their operands for NaNs by `test`, the test the entry's float modes leave
-/// exact ([`NanTest::for_modes`]). A `half` `fmod` answers Metal's zero remainder
-/// (`half_fmod_zero`).
+/// where the module defines it. Metal's `median3` (`metal_median3`) tests its operands for NaNs by
+/// `test`, the test the entry's float modes leave exact ([`NanTest::for_modes`]). A `half` `fmod`
+/// answers Metal's zero remainder (`half_fmod_zero`).
 pub fn float_fn(
     fb: &mut FunctionBuilder<'_>,
     op: FloatFn,
@@ -1584,20 +1585,12 @@ fn float_fn_core(
             nonfinite_below_one(fb, f, a, r)
         }
         F::Sign => metal_sign(fb, f, a),
-        // Metal's `clamp(x, +0, 1)` at every operand: the device's `NClamp` where the minimum and
-        // maximum functions take it (measured to be Metal's, or the device's own,
-        // `PrecisionNote::NativeMinMax`).
-        F::Saturate if metal_picks(f.float_fmt()) && lib.device_min_max() => {
+        // Metal's `clamp(x, +0, 1)`: the device's `NClamp`, Metal's where measured
+        // (`DriverDeviation::MetalMinMax`), else noted `PrecisionNote::NativeMinMax`, as the
+        // minimum and maximum functions below.
+        F::Saturate => {
             let (z, one) = (fsplat(fb, f, 0.0)?, fsplat(fb, f, 1.0)?);
             glsl(fb, GlslOp::NClamp, &[a, z, one])
-        }
-        F::Saturate => metal_saturate(fb, f, a),
-        // The device's `NMin`, `NMax` and `NClamp` where they are measured to be Metal's, the arms
-        // below.
-        F::Min | F::Max | F::Clamp | F::Min3 | F::Max3
-            if metal_picks(f.float_fmt()) && !lib.device_min_max() =>
-        {
-            metal_min_max(fb, op, f, test, args)
         }
         F::Min | F::MinNum => glsl(fb, GlslOp::NMin, &[a, arg(args, 1)?]),
         F::Max | F::MaxNum => glsl(fb, GlslOp::NMax, &[a, arg(args, 1)?]),
@@ -2234,18 +2227,6 @@ fn metal_fract(
     fb.select(nan, n, r)
 }
 
-/// Metal's `saturate(x)` (A1 case aed3faaa, precise and fast alike): `x` clamped to `[0, 1]`,
-/// with `+0` for either zero, a NaN, and an `f32` denormal ([`flushed`]); a `half` denormal is
-/// kept. `NClamp` leaves the sign of a zero result to the device.
-fn metal_saturate(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let (z, one) = (fsplat(fb, f, 0.0)?, fsplat(fb, f, 1.0)?);
-    let lt = bin(fb, BinOp::FOrdLessThan, x, one)?;
-    let r = fb.select(lt, x, one)?;
-    let gt = bin(fb, BinOp::FOrdGreaterThan, x, z)?;
-    let r = fb.select(gt, r, z)?;
-    zero_where_flushed(fb, f, x, r)
-}
-
 /// An operand of [`metal_median3`] with the value it compares as.
 #[derive(Clone, Copy)]
 struct Compared {
@@ -2305,77 +2286,13 @@ fn metal_median3(
     fb.select(both, b, r)
 }
 
-/// Whether Metal's `fmin` and `fmax` family is measured on lanes of format `fmt`, so
-/// `metal_min_max` emits it: `float` (`nan_minmax` without fast math, `nan_minmax_fast` with
-/// every flag, and both at zeros and denormals) and `half` (`nan_half`, `nan_half_fast`). `bfloat`
-/// and `double` keep the device's `NMin`, `NMax`, and `NClamp`.
+/// Whether Metal's `fmin` and `fmax` family is measured on lanes of format `fmt`: `float`
+/// (`nan_minmax` without fast math, `nan_minmax_fast` with every flag, and both at zeros and
+/// denormals) and `half` (`nan_half`, `nan_half_fast`), where the device's `NMin`, `NMax` and
+/// `NClamp`, which every format takes, record `PrecisionNote::NativeMinMax` unless measured to be
+/// Metal's. On `bfloat` and `double` Metal's is not measured.
 pub fn metal_picks(fmt: Option<FloatFmt>) -> bool {
     matches!(fmt, Some(FloatFmt::F32 | FloatFmt::Half))
-}
-
-/// Metal's `fmin(p, q)` (`order` less) or `fmax(p, q)` (greater): `q` where `p` is NaN, else
-/// [`pick`]'s `p` where `q` is NaN or `p` compares before `q`, else `q`. So two NaNs answer `q`'s
-/// bits and a tie (`±0`, or an `f32` denormal beside a zero, which compares as one) answers `q`.
-fn metal_fmin(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    test: NanTest,
-    order: BinOp,
-    p: Compared,
-    q: Compared,
-) -> BResult<Compared> {
-    let p_nan = nan::is_nan(fb, f, test, p.value)?;
-    let r = pick(fb, f, test, order, p, q)?;
-    Ok(Compared {
-        value: fb.select(p_nan, q.value, r.value)?,
-        as_: fb.select(p_nan, q.as_, r.as_)?,
-    })
-}
-
-/// Metal's `fmin`, `fmax`, `min3`, `max3`, and `clamp` (`op`) of `args` on `float` or `half`
-/// lanes of form `f` ([`metal_picks`]), the NaN tests by `test`. Measured on every lane of
-/// `nan_minmax` and `nan_minmax_fast` (`float`, without fast math and with every flag, the same
-/// answers), their zeros-and-denormals cases, and `nan_half` and `nan_half_fast`: the result is an
-/// operand, bit for bit ([`metal_fmin`]: a NaN loses, two NaNs and a tie answer the second);
-/// `min3(a, b, c)` is `fmin(fmin(a, b), c)`, `max3` likewise, and `clamp(x, lo, hi)` is
-/// `fmin(fmax(x, lo), hi)`. `float` compares the operands [`flushed`] (an `f32` denormal compares
-/// as a zero) but returns the operand itself. `NMin` and `NMax` leave two NaNs, a tie of zeros,
-/// and a denormal's comparison to the device.
-pub(super) fn metal_min_max(
-    fb: &mut FunctionBuilder<'_>,
-    op: FloatFn,
-    f: Form,
-    test: NanTest,
-    args: &[Value],
-) -> BResult<Value> {
-    use FloatFn as F;
-    let compared = |fb: &mut FunctionBuilder<'_>, i: usize| -> BResult<Compared> {
-        let x = arg(args, i)?;
-        Ok(Compared {
-            value: x,
-            as_: zero_where_flushed(fb, f, x, x)?,
-        })
-    };
-    let (less, greater) = (BinOp::FOrdLessThan, BinOp::FOrdGreaterThan);
-    let (a, b) = (compared(fb, 0)?, compared(fb, 1)?);
-    let r = match op {
-        F::Min => metal_fmin(fb, f, test, less, a, b)?,
-        F::Max => metal_fmin(fb, f, test, greater, a, b)?,
-        F::Min3 | F::Max3 => {
-            let order = if op == F::Min3 { less } else { greater };
-            let ab = metal_fmin(fb, f, test, order, a, b)?;
-            let c = compared(fb, 2)?;
-            metal_fmin(fb, f, test, order, ab, c)?
-        }
-        F::Clamp => {
-            let low = metal_fmin(fb, f, test, greater, a, b)?;
-            let c = compared(fb, 2)?;
-            metal_fmin(fb, f, test, less, low, c)?
-        }
-        // Not one of Metal's minimum and maximum functions.
-        _ => return Err(BuildError::Type(TypeRule::FunctionSignature)),
-    };
-    Ok(r.value)
 }
 
 /// The largest magnitude Metal's `fast::sin` and `fast::cos` evaluate: `float(π/2) · 2^22`

@@ -87,7 +87,6 @@ pub(super) fn plan(
         numeric: IoNumeric::Uint,
         components: e.form.raw_components() as u8,
         source_bits: 32,
-        bits: 32,
     }))
 }
 

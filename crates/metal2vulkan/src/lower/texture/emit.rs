@@ -21,7 +21,7 @@ use super::slice::Slice;
 use super::{
     Coord, ImageDecl, ImageRef, QueryKind, QueryOp, Read, TexelClass, TexelConv, TexelForm,
 };
-use super::{HalfNans, NullArm, Prelude, Switch, TextureStrategy, Write};
+use super::{NullArm, Prelude, Switch, TextureStrategy, Write};
 use crate::memory::handles::{HANDLE_ALPHA_ONE, NEUTRAL_ELEMENT, NULL_HANDLE};
 
 /// Emit strategy `s` of instruction `at` into the open block.
@@ -911,9 +911,7 @@ fn from_image(
         StorageImageClass::RotateArgb => rotate_argb(fb, x, true)?,
         StorageImageClass::AlphaInRed => alpha_in_red(fb, x, true)?,
         // A `YCbCrWrite` slot is only written (`StorageImageClass::YCbCrWrite`).
-        StorageImageClass::HalfQuietNan
-        | StorageImageClass::SmallFloatQuietNan
-        | StorageImageClass::YCbCrWrite => x,
+        StorageImageClass::YCbCrWrite => x,
         // A half-float texel's bits, through its unsigned integer alias: Metal's read, whole.
         StorageImageClass::HalfBits => return half_bits_texel(fb, decl, form, x),
         // An `RGB9E5Float` word, through its `R32_UINT` alias, decoded exactly.
@@ -1692,8 +1690,7 @@ fn int_lanes(fb: &mut FunctionBuilder<'_>, elem: TypeId, lanes: &[u32]) -> BResu
 /// `x` (`f32` lanes of form `f`) rounded to nearest even onto `RG11B10Float`'s channels, as
 /// Metal's integer store rounds them: red and green to six fraction bits, blue to five, unsigned (a
 /// negative value to 0), a finite value that rounds past the largest finite one held there (65024,
-/// 64512), an infinity kept and a NaN quieted, which the float class's write stores as Metal's NaN
-/// code (`StorageImageClass::SmallFloatQuietNan`).
+/// 64512), an infinity kept and a NaN quieted, whose store the device converts.
 fn small_floats_nearest(
     fb: &mut FunctionBuilder<'_>,
     f: crate::lower::arith::legal::Form,
@@ -1794,13 +1791,6 @@ pub fn to_image(
                 crate::spirv::error::TypeRule::FunctionSignature,
             ))
         }
-        StorageImageClass::HalfQuietNan | StorageImageClass::SmallFloatQuietNan => {
-            match form.conv {
-                TexelConv::F32 => half_write(fb, decl.class, form, x)?,
-                // A `half` texel, held widened, is a half already: the device stores it exactly.
-                _ => x,
-            }
-        }
         StorageImageClass::YCbCrWrite => ycbcr_write_texel(fb, form, x)?,
         StorageImageClass::HalfBits => half_bits(fb, form, x)?,
         StorageImageClass::SharedExponentBits => shared_exponent_word(fb, form, x)?,
@@ -1867,9 +1857,9 @@ fn ycbcr_write_texel(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -
 /// `uvec4`: each channel of its format a half's bits, a channel it lacks the integer the device's
 /// read gives, 0 or alpha 1, and Metal's out-of-bounds texel's likewise): each channel's half
 /// widened exactly (`narrow::from_bits`), Metal's `half` read of the half stored, a NaN's sign
-/// and payload kept; for a `float` result every NaN `0x7fc00000`, Metal's `float` read of a half
-/// NaN (the M3 Max: every NaN, fast and safe math); a lane the format lacks its
-/// integer converted (0.0, alpha 1.0).
+/// and payload kept, a `float` result's too, where Metal's `float` read of a half NaN is
+/// `0x7fc00000` (the M3 Max: every NaN, fast and safe math; `PrecisionNote::DeviceNanEncoding`); a
+/// lane the format lacks its integer converted (0.0, alpha 1.0).
 fn half_bits_texel(
     fb: &mut FunctionBuilder<'_>,
     decl: &ImageDecl,
@@ -1898,13 +1888,6 @@ fn half_bits_texel(
         let one = f32s(fb, 1, 1.0)?;
         v = fb.composite_insert(one, v, &[3])?;
     }
-    if form.conv == TexelConv::F32 {
-        let f = Form {
-            held: Held::Float(FloatFmt::F32),
-            lanes: 4,
-        };
-        v = quiet_nans(fb, f, v)?;
-    }
     match form.lanes {
         1 => fb.composite_extract(v, &[0]),
         _ => Ok(v),
@@ -1916,7 +1899,7 @@ fn half_bits_texel(
 /// payload included). A `half` texel's lanes are halves already, widened exactly; a `float`
 /// texel's are first rounded to a half, which no conversion of the device's makes through the
 /// alias: toward zero, as Metal stores it (`color_write::small_float`: past 65504 to 65504, an
-/// infinity kept, every NaN [`QUIET_NAN`], whose bits are Metal's `0x7e00`). An integer texel is
+/// infinity kept, every NaN `0x7fc00000`, whose bits are Metal's `0x7e00`). An integer texel is
 /// not one a half-float slot takes.
 fn half_bits(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResult<SValue> {
     use crate::lower::arith::legal::{FloatFmt, Form, Held};
@@ -2070,77 +2053,6 @@ pub(crate) fn rgb9e5_word(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SV
     Ok(word)
 }
 
-/// The `f32` NaN a written `float`'s NaN becomes under `HalfQuietNan` and in a `HalfBits` slot's
-/// rounding (`color_write::small_float`'s), which a device of
-/// `DriverDeviation::MetalFloatStorageNans` stores as Metal's `0x7e00`.
-const QUIET_NAN: u32 = 0x7fc0_0000;
-
-/// The words of [`quiet_nans`]: one test and one select of the whole vector, and the constant.
-const QUIET_NAN_WORDS: u32 = 24;
-
-/// `x` (`f32` lanes of form `f`) with every NaN lane [`QUIET_NAN`]: one test and one select of
-/// the whole vector.
-fn quiet_nans(
-    fb: &mut FunctionBuilder<'_>,
-    f: crate::lower::arith::legal::Form,
-    x: SValue,
-) -> BResult<SValue> {
-    let is_nan = fb.unary(crate::spirv::ir::UnOp::IsNan, x)?;
-    let nan = crate::lower::arith::ops::splat(fb, f, u64::from(QUIET_NAN))?;
-    fb.select(is_nan, nan, x)
-}
-
-/// The channels of written `float` texel `x` (`f32` lanes of `form`) to a half-float or small
-/// float image by class `class`: under `HalfQuietNan` and `SmallFloatQuietNan` the value as
-/// computed, which the device's conversion rounds, but a NaN as [`QUIET_NAN`]. The NaN stores as
-/// the device's encoding of [`QUIET_NAN`] (Metal's `0x7e00` where measured,
-/// `DriverDeviation::MetalFloatStorageNans`).
-fn half_write(
-    fb: &mut FunctionBuilder<'_>,
-    class: StorageImageClass,
-    form: TexelForm,
-    x: SValue,
-) -> BResult<SValue> {
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
-    let f = Form {
-        held: Held::Float(FloatFmt::F32),
-        lanes: form.lanes,
-    };
-    match class {
-        StorageImageClass::HalfQuietNan | StorageImageClass::SmallFloatQuietNan => {
-            quiet_nans(fb, f, x)
-        }
-        _ => Ok(x),
-    }
-}
-
-/// Whether the texel class heap handle `handle` carries (its index in
-/// `metal::texel_format::heap_classes`) is a half-float format's (a `bool`): the index is one of
-/// [`heap_half_indices`](crate::metal::texel_format::heap_half_indices), the half-float family
-/// without a packed field (`R16Float`, `RG16Float`, `RGBA16Float`; a small float's class carries
-/// the field, and a swizzled texture's is `OTHER`, whose write the device converts). The index
-/// alone answers it, so the module needs no table of the classes.
-fn heap_half_format(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    handle: ValueId,
-) -> BResult<SValue> {
-    let indices = crate::metal::texel_format::heap_half_indices();
-    heap_class_among(cx, fb, handle, &indices)
-}
-
-/// Whether the texel class heap handle `handle` carries is a small float's (a `bool`): its index
-/// is one of [`heap_small_float_indices`](crate::metal::texel_format::heap_small_float_indices),
-/// as [`heap_half_format`] tests the half-float ones.
-fn heap_small_float_format(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    handle: ValueId,
-) -> BResult<SValue> {
-    let indices = crate::metal::texel_format::heap_small_float_indices();
-    heap_class_among(cx, fb, handle, &indices)
-}
-
 /// Whether the texel class index heap handle `handle` carries is one of `indices` (a `bool`).
 fn heap_class_among(
     cx: &mut EmitCx<'_>,
@@ -2170,183 +2082,13 @@ fn heap_class_among(
     among.ok_or_else(|| cx.fail("no heap class of the family"))
 }
 
-/// Whether a `half` texel's write keeps its widened half (a `bool`) where `nans` reads it at run
-/// time: a heap element's handle class is a half-float format's ([`heap_half_format`]), a slot's
-/// `PushField::TextureHalfChannels` is not 0. `None` where `nans` decides alone.
-fn half_kept(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    nans: HalfNans,
-    image: &ImageRef,
-) -> BResult<Option<SValue>> {
-    match (nans, image) {
-        (HalfNans::HeapClass, ImageRef::Heap { handle, .. }) => {
-            Ok(Some(heap_half_format(cx, fb, *handle)?))
-        }
-        (HalfNans::SlotWord(slot), _) => {
-            let word = cx.push_field(
-                fb,
-                crate::pipeline::sym::PushField::TextureHalfChannels(slot),
-            )?;
-            let zero = u32s(fb, 1, 0)?;
-            Ok(Some(fb.binary(BinOp::INotEqual, word, zero)?))
-        }
-        _ => Ok(None),
-    }
-}
-
-/// `texel` (`f32` lanes of `form`) as a `half` texel's write stores it under `nans`: every NaN lane
-/// [`QUIET_NAN`] (`0x7fc00000`) under [`HalfNans::Canonical`], and under a runtime choice where
-/// `kept` ([`half_kept`]) is false; as it is elsewhere, the half widened.
-fn half_nan_texel(
-    fb: &mut FunctionBuilder<'_>,
-    (nans, kept): (HalfNans, Option<SValue>),
-    form: TexelForm,
-    texel: SValue,
-) -> BResult<SValue> {
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
-    let f = Form {
-        held: Held::Float(FloatFmt::F32),
-        lanes: form.lanes,
-    };
-    match (nans, kept) {
-        (HalfNans::Canonical, _) => quiet_nans(fb, f, texel),
-        (HalfNans::HeapClass | HalfNans::SlotWord(_), Some(kept)) => {
-            let canonical = quiet_nans(fb, f, texel)?;
-            let cond = match form.lanes {
-                1 => kept,
-                n => {
-                    let b = fb.module().ty(SType::Bool)?;
-                    let ty = vec(fb, b, n)?;
-                    fb.composite_construct(ty, &vec![kept; usize::from(n)])?
-                }
-            };
-            fb.select(cond, texel, canonical)
-        }
-        _ => Ok(texel),
-    }
-}
-
-/// Held `half` texel `held` of image texel `x` (`f32` lanes: the device's value, one texel's or
-/// filtered) with Metal's NaN wherever `x` is a NaN (`texture::half_texel_nans`): `x` itself, the
-/// device's decode of the texel, where the access reads one texel (`one`: `None` where it always
-/// does, else a `bool`) of a texture the class says holds 16-bit float channels (`class`: a slot's
-/// `TexelFormat` class of the half-float family without a packed field,
-/// `metal::texel_format::half_channels`, or `TexelFormat::OTHER`, a format whose
-/// conversion is not measured, whose NaN stays the device's decode as the module notes,
-/// `DeviceNanEncoding`; a heap handle's class index, [`heap_half_format`]); [`QUIET_NAN`]
-/// elsewhere, the `half` `0x7e00` held. The NaN test reads
-/// `x`'s bits, as `narrow::round_texel`'s does, so it holds whatever float modes the device
-/// compiles the module under. A `held` of one lane takes `x`'s first.
-pub(crate) fn metal_texel_nans(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    (class, one): (super::NanClass, Option<SValue>),
-    x: SValue,
-    held: SValue,
-) -> BResult<SValue> {
-    use super::NanClass;
-    use crate::metal::bicubic::BicubicTexels;
-    use crate::metal::texel_format::TexelFormat;
-    let lanes_of = |fb: &mut FunctionBuilder<'_>, v: SValue| -> BResult<u8> {
-        let ty = fb.value_ty(v)?;
-        Ok(match fb.module().types().get(ty)? {
-            SType::Vector { len, .. } => *len,
-            _ => 1,
-        })
-    };
-    let lanes = lanes_of(fb, held)?;
-    let x = match lanes_of(fb, x)? {
-        n if n == lanes => x,
-        _ if lanes == 1 => fb.composite_extract(x, &[0])?,
-        _ => return Err(cx.fail("Metal's NaN of a texel of fewer lanes than its held value")),
-    };
-    let u = u32_ty(fb)?;
-    let ut = vec(fb, u, lanes)?;
-    let bits = fb.convert(ConvOp::Bitcast, x, ut)?;
-    let abs = u32s(fb, lanes, 0x7FFF_FFFF)?;
-    let mag = fb.binary(BinOp::BitwiseAnd, bits, abs)?;
-    let inf = u32s(fb, lanes, 0x7F80_0000)?;
-    let nan = fb.binary(BinOp::UGreaterThan, mag, inf)?;
-    let f = f32_ty(fb)?;
-    let canonical = splat(fb, f, lanes, u64::from(QUIET_NAN))?;
-    let halves = match class {
-        NanClass::Slot(index) => {
-            let Some(c) = texel_format_const(cx, index) else {
-                return Err(cx.fail(format!("texture slot {index} has no texel class")));
-            };
-            let word = fb.module().const_value(c)?;
-            let mask = u32s(fb, 1, BicubicTexels::HALF | TexelFormat::PACKED_MASK)?;
-            let half = u32s(fb, 1, BicubicTexels::HALF)?;
-            let family = fb.binary(BinOp::BitwiseAnd, word, mask)?;
-            let halves = fb.binary(BinOp::IEqual, family, half)?;
-            // A class whose conversion is not measured keeps the device's decode, as before.
-            let other = u32s(fb, 1, TexelFormat::OTHER.0)?;
-            let other = fb.binary(BinOp::IEqual, word, other)?;
-            Some(fb.binary(BinOp::LogicalOr, halves, other)?)
-        }
-        NanClass::Heap(handle) => Some(heap_half_format(cx, fb, handle)?),
-        NanClass::Never => None,
-    };
-    let own = match (halves, one) {
-        (None, _) => None,
-        (Some(h), None) => Some(h),
-        (Some(h), Some(o)) => Some(fb.binary(BinOp::LogicalAnd, h, o)?),
-    };
-    let kept = match own {
-        None => canonical,
-        Some(own) => {
-            let cond = match lanes {
-                1 => own,
-                n => {
-                    let b = fb.module().ty(SType::Bool)?;
-                    let ty = vec(fb, b, n)?;
-                    fb.composite_construct(ty, &vec![own; usize::from(n)])?
-                }
-            };
-            fb.select(cond, x, canonical)?
-        }
-    };
-    fb.select(nan, kept, held)
-}
-
-/// The words [`heap_half_format`] emits, at most: the field's shift and mask, and per half-float
-/// class its constant, comparison and union.
-pub(crate) fn heap_half_words() -> u32 {
-    let n = crate::metal::texel_format::heap_half_indices().len() as u32;
-    20 + 14 * n
-}
-
-/// `texel` (`f32` lanes of `form`), written through a heap handle whose class is a half-float
-/// format's where `is_half` ([`heap_half_format`]), as [`half_write`] writes it by class
-/// `class` there; as it is elsewhere.
-fn heap_halves(
-    fb: &mut FunctionBuilder<'_>,
-    (is_half, class): (SValue, StorageImageClass),
-    form: TexelForm,
-    texel: SValue,
-) -> BResult<SValue> {
-    let written = half_write(fb, class, form, texel)?;
-    let cond = match form.lanes {
-        1 => is_half,
-        n => {
-            let b = fb.module().ty(SType::Bool)?;
-            let ty = vec(fb, b, n)?;
-            fb.composite_construct(ty, &vec![is_half; usize::from(n)])?
-        }
-    };
-    fb.select(cond, written, texel)
-}
-
 /// The estimated words of a write's conversion by storage class `class` on four lanes: an 8-bit
-/// sRGB format's codes ([`srgb_codes`]), a half-float image's NaN ([`half_write`]), a half-float
-/// texel's bits ([`half_bits`]), an `RGB9E5Float` word ([`shared_exponent_word`]), or a YCbCr
+/// sRGB format's codes ([`srgb_codes`]), a half-float texel's bits ([`half_bits`]), an `RGB9E5Float` word ([`shared_exponent_word`]), or a YCbCr
 /// texel's bits and mark ([`ycbcr_write_texel`]), none for the other classes' swizzles, which the
 /// write's base estimate covers.
 pub(crate) fn class_write_words(class: StorageImageClass) -> u32 {
     use crate::lower::arith::color_write;
     match class {
-        StorageImageClass::HalfQuietNan | StorageImageClass::SmallFloatQuietNan => QUIET_NAN_WORDS,
         StorageImageClass::YCbCrWrite => YCBCR_WRITE_WORDS,
         StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra => SRGB_WRITE_WORDS,
         StorageImageClass::SharedExponentBits => SHARED_EXPONENT_WORDS,
@@ -3296,12 +3038,7 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
                 }
                 (_, float) => float,
             };
-            let held = from_image(cx, fb, &decl, r.texel, texel, (half, float))?;
-            // Under the NaN switch, Metal's NaN: a read reads one texel.
-            match r.half_nans {
-                Some(class) => metal_texel_nans(cx, fb, (class, None), texel, held)?,
-                None => held,
-            }
+            from_image(cx, fb, &decl, r.texel, texel, (half, float))?
         }
     };
     // A swizzled texture's swizzle at a storage slot, on the converted texel.
@@ -3604,7 +3341,8 @@ fn heap_twin(
     Ok((is_bits, img))
 }
 
-/// The words [`heap_twin`]'s class test emits, at most, as [`heap_half_words`] counts its own.
+/// The words [`heap_twin`]'s class test emits, at most: the field's shift and mask, and per
+/// member class the twin holds its constant, comparison and union.
 pub(crate) fn heap_bits_words() -> u32 {
     let n = crate::metal::texel_format::heap_half_bits_indices().len() as u32;
     20 + 14 * n
@@ -3711,27 +3449,6 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, false)?,
         _ => texel,
     };
-    // A `float` through a heap handle, rounded where the handle's class is a half-float
-    // format's.
-    let texel = match (w.heap_half, w.image) {
-        (Some(class), ImageRef::Heap { handle, .. }) => {
-            let is_half = heap_half_format(cx, fb, handle)?;
-            heap_halves(fb, (is_half, class), w.texel, texel)?
-        }
-        _ => texel,
-    };
-    // And its NaNs quieted where the handle's class is a small float's.
-    let texel = match (w.heap_small_floats, w.image) {
-        (true, ImageRef::Heap { handle, .. }) => {
-            let is_small = heap_small_float_format(cx, fb, handle)?;
-            let class = StorageImageClass::SmallFloatQuietNan;
-            heap_halves(fb, (is_small, class), w.texel, texel)?
-        }
-        _ => texel,
-    };
-    // A `half` texel's NaN, as Metal stores it in the texture's channels.
-    let kept = half_kept(cx, fb, w.half_nans, &w.image)?;
-    let texel = half_nan_texel(fb, (w.half_nans, kept), w.texel, texel)?;
     // A half-float member's bits through the group's unsigned integer twin, where the handle's
     // class names one: its image is the float element's, viewed through its integer alias.
     let twin = match (w.heap_bits, w.image) {
@@ -3908,24 +3625,6 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
     let dims = coord_len(&decl);
     let s = *s;
     let mem = texel_memory(cx, fb, &s.image)?;
-    // A `float` slice through a heap handle rounds where the handle's class is a half-float
-    // format's: the class is read once, outside the loop.
-    let is_half = match (s.heap_half, s.image) {
-        (Some(class), ImageRef::Heap { handle, .. }) => {
-            Some((heap_half_format(cx, fb, handle)?, class))
-        }
-        _ => None,
-    };
-    // And whether its NaNs are quieted, a small float's class: read once too.
-    let is_small = match (s.heap_small_floats, s.image) {
-        (true, ImageRef::Heap { handle, .. }) => Some((
-            heap_small_float_format(cx, fb, handle)?,
-            StorageImageClass::SmallFloatQuietNan,
-        )),
-        _ => None,
-    };
-    // Whether a `half` element keeps its half, read once, outside the loop.
-    let kept = half_kept(cx, fb, s.half_nans, &s.image)?;
     // Whether the handle names a member the unsigned integer twin holds, and the twin's image,
     // read once, outside the loop.
     let twin = match (s.heap_bits, s.image) {
@@ -3969,15 +3668,7 @@ fn slice<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, s: &Slice) -> BR
                     }),
                     None => None,
                 };
-                let texel = match is_half {
-                    Some(half) => heap_halves(fb, half, form, texel)?,
-                    None => texel,
-                };
-                let texel = match is_small {
-                    Some(small) => heap_halves(fb, small, form, texel)?,
-                    None => texel,
-                };
-                (half_nan_texel(fb, (s.half_nans, kept), form, texel)?, twin)
+                (texel, twin)
             }
         };
         let ty = vec(fb, u, dims)?;

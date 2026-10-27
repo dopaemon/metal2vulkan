@@ -358,11 +358,11 @@ pub fn vertex_fetch_projection_for(
 /// Clear `narrow_float` on every fixed-function attribute of `projection` that `f32_read` does
 /// not hold.
 ///
-/// The bit asks the function to canonicalize the device's widening of a narrow-float format, and
-/// `lower::stage_io::plan` emits that canonicalization only where the attribute's declared form is
-/// a 32-bit `float`: a `half`-declared attribute keeps the fetched code's own bits, as Metal's
-/// `half` attribute does, whatever the format was. So the bit changes no instruction of such a
-/// stage, and carrying it in the compile key would make one program two keys
+/// The bit asks the function to note the NaN of the device's widening of a narrow-float format
+/// (`PrecisionNote::DeviceNanEncoding`), and `lower::stage_io::plan` records that note only where
+/// the attribute's declared form is a 32-bit `float`: a `half`-declared attribute keeps the fetched
+/// code's own bits, as Metal's `half` attribute does, whatever the format was. So the bit changes
+/// nothing of such a stage, and carrying it in the compile key would make one program two keys
 /// (`tests::engine_vertex_variants`). Both sides of the key apply this: the compile
 /// (`pipeline::compile::lower_inputs`, from the specialized entry's parameter forms) and link's
 /// recomputation ([`vertex_input_state`], from the stage's own declared types), so a stage
@@ -379,8 +379,8 @@ pub fn narrow_float_of_f32_reads(
 }
 
 /// The projection entry of a resolved attribute. A fixed-function entry carries whether the Metal
-/// format's components are floats narrower than 32 bits, which the function canonicalizes after
-/// the device's widening (`VertexFetch::FixedFunction`); the rest of the format is `VertexAttribute`
+/// format's components are floats narrower than 32 bits, whose NaN after the device's widening
+/// the function notes (`VertexFetch::FixedFunction`); the rest of the format is `VertexAttribute`
 /// state.
 fn fetch_of(r: &Resolved<'_>) -> Result<VertexFetch, Error> {
     Ok(match r.fetch {

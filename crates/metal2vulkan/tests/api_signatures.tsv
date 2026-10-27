@@ -1463,7 +1463,6 @@ enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
 enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
-enum	metal2vulkan::device::NanMinMaxPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum NanMinMaxPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
@@ -2747,7 +2746,6 @@ field	metal2vulkan-runtime::WorkCounts.owned_kernel_spirv_bytes	pub owned_kernel
 field	metal2vulkan-runtime::WorkCounts.owned_kernels_made	pub owned_kernels_made: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions	pub passes_not_inline_actions: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_dont_care_load	pub passes_not_inline_actions_dont_care_load: u64
-field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_nan_clear	pub passes_not_inline_actions_nan_clear: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_resolve	pub passes_not_inline_actions_resolve: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_store	pub passes_not_inline_actions_store: u64
 field	metal2vulkan-runtime::WorkCounts.passes_not_inline_actions_unequal_reach	pub passes_not_inline_actions_unequal_reach: u64
@@ -3714,7 +3712,6 @@ field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: Handle
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
 field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
-field	metal2vulkan::device::DevicePolicy.nan_and_min_max	pub nan_and_min_max: NanMinMaxPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DevicePolicy.sampling	pub sampling: SamplingPolicy
@@ -4404,7 +4401,6 @@ field	metal2vulkan::pipeline::StageInputLayoutDescriptor.step_rate	pub step_rate
 field	metal2vulkan::pipeline::StageInputLayoutDescriptor.stride	pub stride: Option<u32>
 field	metal2vulkan::pipeline::StageModule.constant_blob	pub constant_blob: Option<Arc<[u8]>>
 field	metal2vulkan::pipeline::StageModule.entry_point	pub entry_point: String
-field	metal2vulkan::pipeline::StageModule.half_bit_colors	pub half_bit_colors: Vec<u32>
 field	metal2vulkan::pipeline::StageModule.own_pixel_textures	pub own_pixel_textures: Vec<u32>
 field	metal2vulkan::pipeline::StageModule.precision_notes	pub precision_notes: Vec<PrecisionNote>
 field	metal2vulkan::pipeline::StageModule.private_bytes	pub private_bytes: u64
@@ -5117,7 +5113,6 @@ macro-member	metal2vulkan-runtime::Degradation::SeparateDepthStencil	SeparateDep
 macro-member	metal2vulkan-runtime::Degradation::SetPastLayoutSupport	SetPastLayoutSupport = "set-past-layout-support", Validity,
 macro-member	metal2vulkan-runtime::Degradation::ShaderCacheEntryNotWritten	ShaderCacheEntryNotWritten = "shader-cache-entry-not-written", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShaderColorConversion	ShaderColorConversion = "shader-color-conversion", Performance,
-macro-member	metal2vulkan-runtime::Degradation::ShaderHalfColorBits	ShaderHalfColorBits = "shader-half-color-bits", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShaderResolve	ShaderResolve = "shader-resolve", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShaderSideDepthTest	ShaderSideDepthTest = "shader-side-depth-test", Performance,
 macro-member	metal2vulkan-runtime::Degradation::ShaderSideStencil	ShaderSideStencil = "shader-side-stencil", Performance,
@@ -12499,8 +12494,6 @@ variant	metal2vulkan::device::HostPageTexturePolicy::Shadow	Shadow
 variant	metal2vulkan::device::Independence::All	All
 variant	metal2vulkan::device::Independence::None	None
 variant	metal2vulkan::device::Independence::Only32Bit	Only32Bit
-variant	metal2vulkan::device::NanMinMaxPolicy::Exact	Exact
-variant	metal2vulkan::device::NanMinMaxPolicy::Native	Native
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
 variant	metal2vulkan::device::RenderLoweringPolicy::AtCall	AtCall
 variant	metal2vulkan::device::RenderLoweringPolicy::Worker	Worker
@@ -13652,7 +13645,6 @@ variant	metal2vulkan::pipeline::PushField::TessellationChunk	TessellationChunk
 variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	TessellationFactorInstanceStride
 variant	metal2vulkan::pipeline::PushField::TessellationFactorOffset	TessellationFactorOffset
 variant	metal2vulkan::pipeline::PushField::TessellationFactorScale	TessellationFactorScale
-variant	metal2vulkan::pipeline::PushField::TextureHalfChannels	TextureHalfChannels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::TextureIntegerChannels	TextureIntegerChannels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::TextureLevels	TextureLevels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::VertexBufferStride	VertexBufferStride(u32)
@@ -13712,7 +13704,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::DeviceAddresses	DeviceAddresses { s
 variant	metal2vulkan::pipeline::RuntimeFact::DispatchGrid	DispatchGrid
 variant	metal2vulkan::pipeline::RuntimeFact::DroppedColor	DroppedColor { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::EmulatedSimdgroups	EmulatedSimdgroups
-variant	metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit	ExactFormsOverCompilerLimit { sampling: bool, texel_conversion: bool, nan_and_min_max: bool }
+variant	metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit	ExactFormsOverCompilerLimit { sampling: bool, texel_conversion: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ExecutionStatus	ExecutionStatus
 variant	metal2vulkan::pipeline::RuntimeFact::ExtendedRangeInputBlend	ExtendedRangeInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::FlatGrid	FlatGrid
@@ -13757,7 +13749,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::SrgbTexture	SrgbTexture { slot: Slo
 variant	metal2vulkan::pipeline::RuntimeFact::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::RuntimeFact::StageInStride	StageInStride { layout: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureFormat	StorageTextureFormat { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureHalfChannels	StorageTextureHalfChannels { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureIntegerChannels	StorageTextureIntegerChannels { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureLevelViews	StorageTextureLevelViews { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureLevels	StorageTextureLevels { slot: SlotRef }
@@ -13857,11 +13848,9 @@ variant	metal2vulkan::pipeline::StorageFormatClass::NotStorage	NotStorage
 variant	metal2vulkan::pipeline::StorageFormatClass::Unknown	Unknown
 variant	metal2vulkan::pipeline::StorageImageClass::AlphaInRed	AlphaInRed
 variant	metal2vulkan::pipeline::StorageImageClass::HalfBits	HalfBits
-variant	metal2vulkan::pipeline::StorageImageClass::HalfQuietNan	HalfQuietNan
 variant	metal2vulkan::pipeline::StorageImageClass::Identity	Identity
 variant	metal2vulkan::pipeline::StorageImageClass::RotateArgb	RotateArgb
 variant	metal2vulkan::pipeline::StorageImageClass::SharedExponentBits	SharedExponentBits
-variant	metal2vulkan::pipeline::StorageImageClass::SmallFloatQuietNan	SmallFloatQuietNan
 variant	metal2vulkan::pipeline::StorageImageClass::SrgbEncode	SrgbEncode
 variant	metal2vulkan::pipeline::StorageImageClass::SrgbEncodeBgra	SrgbEncodeBgra
 variant	metal2vulkan::pipeline::StorageImageClass::SwizzleBgra	SwizzleBgra

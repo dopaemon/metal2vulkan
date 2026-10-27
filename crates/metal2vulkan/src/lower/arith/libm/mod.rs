@@ -336,42 +336,19 @@ pub fn use_words(lanes: u8, arity: usize) -> u32 {
 }
 
 /// What an entry's calls take, as emission reads them: the mode Metal compiles the entry's
-/// functions in where the device's are Metal's, the routine of precise `fmod` where the module
-/// defines one, and whether Metal's minimum and maximum functions are the device's.
+/// functions in where the device's are Metal's, and the routine of precise `fmod` where the module
+/// defines one.
 #[derive(Clone, Copy, Debug)]
 pub struct Lib {
     metal: Option<Mode>,
     fmod: Option<FuncId>,
-    /// Whether the device's `NMin`, `NMax` and `NClamp` are Metal's `fmin`, `fmax` and `clamp`
-    /// ([`Lib::with_min_max`]).
-    min_max: bool,
 }
 
 impl Lib {
     /// The library of an entry whose `float` functions are Metal's in mode `metal` (`None`: the
     /// device's), whose module defines precise `fmod`'s routine as `fmod` where it takes one.
     pub fn new(metal: Option<Mode>, fmod: Option<FuncId>) -> Lib {
-        Lib {
-            metal,
-            fmod,
-            min_max: false,
-        }
-    }
-
-    /// This library, where the device's `GLSL.std.450` `NMin`, `NMax` and `NClamp` are Metal's
-    /// own `fmin`, `fmax` and `clamp` if `device` (`ArithPlan::device_min_max`): Metal's minimum
-    /// and maximum family on `float` and `half` then takes those instructions
-    /// (`math::metal_min_max` otherwise).
-    pub fn with_min_max(self, device: bool) -> Lib {
-        Lib {
-            min_max: device,
-            ..self
-        }
-    }
-
-    /// Whether the device's `NMin`, `NMax` and `NClamp` are Metal's ([`Lib::with_min_max`]).
-    pub fn device_min_max(&self) -> bool {
-        self.min_max
+        Lib { metal, fmod }
     }
 
     /// A library that leaves every function to its instruction (a unit test's view of the

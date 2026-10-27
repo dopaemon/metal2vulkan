@@ -2443,20 +2443,6 @@ fn select_one(
     // `half` texel's on every profile, a `float` one's where it converts.
     let half_converts = half && !raw && !matches!(op, SampleOp::Bicubic(_)) && !device;
     let converts = half_converts || float_texel;
-    // Under the NaN switch, Metal's NaN of a `half` texel: by the class of the texture bound and,
-    // where a runtime sampler's word decides, whether the word reads one texel. Not of an sRGB
-    // raw texel, which decodes exactly to no NaN (`held_value` takes it first).
-    let half_nans = match half && !raw {
-        true => crate::lower::texture::texel_nans_class(cx, image, shape, one_texel)?,
-        false => None,
-    };
-    // A depth texture's NaN is `0x7e00` whatever the sampler.
-    let by_word = half_nans.is_some_and(|c| c != crate::lower::texture::NanClass::Never);
-    if let (crate::lower::texture::OneTexel::Word(n), true) = (one_texel, by_word) {
-        if let Some(s) = cx.families.sampler.slots.get_mut(&n) {
-            s.texels = true;
-        }
-    }
     if let (crate::lower::texture::OneTexel::Word(n), true, ImageRef::Slot(_)) =
         (one_texel, converts, image)
     {
@@ -2833,7 +2819,6 @@ fn select_one(
         one_texel,
         half_texel: half_converts && !shape.depth,
         float_texel,
-        half_nans,
         centre_offset,
         unmapped,
         heap_raw: None,

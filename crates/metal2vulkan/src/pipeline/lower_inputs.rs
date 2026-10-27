@@ -1426,22 +1426,12 @@ pub enum StorageImageClass {
     /// texels and `read_write` access).
     AlphaInRed,
     /// A half-float image (`R16Float`, `RG16Float`, `RGBA16Float`) written by a device not
-    /// measured to store every NaN as Metal's `0x7e00`: the shader writes a `float` channel's NaN
-    /// as `0x7fc00000`, every other value as computed, which the device's conversion rounds. A
-    /// `half` texel is written as it is, and reads are `Identity`'s.
-    HalfQuietNan,
     /// A 4:4:4 two-plane YCbCr texture a slot only writes, through an `R32G32B32A32_UINT` image
     /// of the texture's own (the consumer's write shadow): the shader writes each texel as the
     /// bits of its red, green and blue `float` channels (a `half` texel's widened exactly) and a
     /// 1, the mark of a written texel, which the consumer then encodes into the planes as Metal
     /// stores it (`bind::ycbcr_write`). The slot is declared `Rgba32ui`; it has no reads.
     YCbCrWrite,
-    /// An `RG11B10Float` image written by `float` texels, on every device: the shader writes a
-    /// channel's NaN as `0x7fc00000`, which every device measured stores as Metal's `0x7e0` (and
-    /// `0x3f0` in the 10-bit field), every other value as computed, which each rounds toward zero
-    /// as Metal does; RADV and NVIDIA keep another NaN's payload bits. A `half` texel is written
-    /// as it is, and reads are `Identity`'s.
-    SmallFloatQuietNan,
     /// A half-float image (`R16Float`, `RG16Float`, `RGBA16Float`) a slot writes, and may read,
     /// on a device not measured to store a written `half`'s NaN as its bits
     /// (`DriverDeviation::MetalHalfTexelWrites`), viewed through its unsigned integer alias of
@@ -1508,8 +1498,8 @@ pub enum VertexFetch {
     /// `narrow_float`: the Metal format's components are floats narrower than 32 bits (a `half`
     /// format, or `FloatRG11B10`), which the device's vertex input widens to a `float` attribute
     /// with a widening of its own, **and** the function reads the attribute as a 32-bit `float`.
-    /// Metal's fetch answers its canonical NaN there, so such a read canonicalizes the value it
-    /// loads (`lower::stage_io`); a `half`-declared attribute keeps the fetched code's own bits,
+    /// Metal's fetch answers its canonical NaN there, so such a read records the device's NaN
+    /// (`PrecisionNote::DeviceNanEncoding`, `lower::stage_io`); a `half`-declared attribute keeps the fetched code's own bits,
     /// as Metal's `half` attribute does, so the bit is clear for one whatever the format was
     /// (`link::vertex::narrow_float_of_f32_reads`) and no variant of it is keyed on the format.
     /// The attribute's own encoding is link-time state, and this bit is what the compile key

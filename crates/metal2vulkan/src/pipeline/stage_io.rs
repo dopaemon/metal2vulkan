@@ -46,8 +46,7 @@
 //! link; it reads the role here, never the bytes.
 //!
 //! Every interface variable is 32-bit (narrow varyings are widened at the interface, so no varying
-//! needs `storageInputOutput16`) but a color output written as the bits of the half Metal stores,
-//! 16-bit ([`IoType::bits`]); [`IoType::source_bits`] keeps the AIR element width for format
+//! needs `storageInputOutput16`); [`IoType::source_bits`] keeps the AIR element width for format
 //! checks. An attribute or color takes one whole location; a user varying takes one location at
 //! component 0 unless link packs varyings into shared locations, for which the module decorates
 //! every varying with a relocatable `Component`.
@@ -202,13 +201,6 @@ pub struct StageIo {
     /// (`StageModule::rounded_colors`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub rounded_colors: Vec<u32>,
-    /// The attachments among `color_writes` whose output the function writes as the bits of the
-    /// half Metal stores, through a 16-bit output, rounding none of its channels (a `half`
-    /// output to a half-float attachment), sorted: the device's conversion of a 32-bit output
-    /// would not keep a NaN's payload (`StageModule::half_bit_colors`). Link gives these, as
-    /// `rounded_colors`, no Vulkan blend of one and zero.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub half_bit_colors: Vec<u32>,
     /// The extended-range attachments the fragment function writes a `float` or `half` output
     /// to through output variables of dual-source index 0
     /// (`LoweringInputs::extended_range_colors`), by color index: each output variable there is
@@ -556,8 +548,8 @@ impl StageIo {
     }
 
     /// The vertex attributes the function reads in fixed function as a 32-bit `float` (`float`,
-    /// `float2`, `float3`, `float4`), which is where a narrow-float format's widening is
-    /// canonicalized (`link::vertex::narrow_float_of_f32_reads`). A `half`-declared attribute is
+    /// `float2`, `float3`, `float4`), which is where a narrow-float format's widening's NaN is
+    /// noted (`link::vertex::narrow_float_of_f32_reads`). A `half`-declared attribute is
     /// not among them, and neither is a pulled attribute, whose decode the module holds whole.
     pub fn f32_attributes(&self) -> std::collections::BTreeSet<u32> {
         self.inputs
@@ -590,7 +582,6 @@ impl StageIo {
                 numeric: IoNumeric::Uint,
                 components: 1,
                 source_bits: 32,
-                bits: 32,
             };
         }
         match self.extended_range_colors.get(&attachment) {
@@ -598,7 +589,6 @@ impl StageIo {
                 numeric: IoNumeric::Uint,
                 components: e.form.raw_components() as u8,
                 source_bits: 32,
-                bits: 32,
             },
             None => v.ty,
         }
@@ -735,7 +725,7 @@ pub struct IoVariable {
 pub enum IoRole {
     /// Vertex attribute `index`, fetched by fixed-function vertex input. `narrow_float` is the
     /// `VertexFetch::FixedFunction` bit the function was compiled under: the Metal format's
-    /// components are floats narrower than 32 bits, whose widening the function canonicalizes
+    /// components are floats narrower than 32 bits, whose widening's NaN the function notes
     /// where it reads the attribute as `float`.
     Attribute { index: u32, narrow_float: bool },
     /// A vertex output or fragment input matched by its AIR user key.
@@ -855,7 +845,7 @@ pub enum Sampling {
 }
 
 /// The declared type of an interface variable: `components` lanes (1–4) of `numeric`, each of
-/// `bits` bits.
+/// 32 bits.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -865,9 +855,6 @@ pub struct IoType {
     /// The AIR element width (8, 16, or 32; 16 for `half`; 1 for `bool`, carried as `uint` 0 or
     /// 1): narrower values are widened at the interface.
     pub source_bits: u8,
-    /// The declared lane width: 32, or 16 for a `float` color output written as the bits of the
-    /// half Metal stores into a half-float attachment (`storageInputOutput16`).
-    pub bits: u8,
 }
 
 /// The numeric class the variable is declared with.

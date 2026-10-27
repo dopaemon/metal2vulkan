@@ -419,21 +419,20 @@ fn a_half_texel_read_notes_the_device_nan_encoding_where_the_bound_format_may_ho
 /// OpIsNan.
 const OP_IS_NAN: u16 = 156;
 
-/// A `half` written to a storage texture stores a NaN as Metal does: the half's own bits in a
-/// 16-bit float channel, `0x7fc00000` in a 32-bit one. `txt_level_write` writes halves no
-/// arithmetic makes. Bound in `RGBA32Float` (where the choice declares it) its write turns every
-/// NaN lane into `0x7fc00000` (an `OpIsNan` test) and records no `DeviceNanEncoding`; bound in
-/// `RGBA16Float` it keeps the half and records the note on a profile without
+/// A `half` written to a storage texture stores a NaN as the device converts the half widened,
+/// noted where that need not be Metal's (the half's own bits in a 16-bit float channel,
+/// `0x7fc00000` in a 32-bit one). `txt_level_write` writes halves no arithmetic makes. Bound in
+/// `RGBA32Float` (where the choice declares it) its write tests no NaN and records
+/// `DeviceNanEncoding`; bound in `RGBA16Float` it records the note on a profile without
 /// `DriverDeviation::MetalHalfTexelWrites`, and requires `VkProperty::MetalHalfTexelWrites` on one
-/// with it (a choice of a class rounding to `half` is a 16-bit float format's, declared or not);
+/// with it (a choice of a class rounding to `half` is a 16-bit float format's, declared or not;
+/// such a device's own choice declares no format, so the test declares one there too);
 /// bound in `RGBA8Unorm` it records none. Where the choice declares no format and no class, the
-/// write reads the slot's `RuntimeFact::StorageTextureHalfChannels` word and records no note: the
-/// runtime announces it at the bind (`Device::degrade_half_texel_writes`). A choice of the
-/// `RGBA16Float` texture's unsigned integer alias (`StorageImageClass::HalfBits`, on a profile
-/// without the deviation) writes the half's bits and records nothing; so does `RGBX16Float`'s,
-/// whose image is `RGBA16Float`'s.
+/// write records the note. A choice of the `RGBA16Float` texture's unsigned integer alias
+/// (`StorageImageClass::HalfBits`, on a profile without the deviation) writes the half's bits and
+/// records nothing; so does `RGBX16Float`'s, whose image is `RGBA16Float`'s.
 #[test]
-fn a_half_texel_write_stores_metal_s_nans_or_records_the_device_nan_encoding() {
+fn a_half_texel_write_records_the_device_nan_encoding_where_it_may_not_be_metal_s() {
     use crate::device::requirements::VkProperty;
     use crate::error::DriverDeviation;
     let Some(bc) = fixture("txt_level_write") else {
@@ -460,10 +459,6 @@ fn a_half_texel_write_stores_metal_s_nans_or_records_the_device_nan_encoding() {
             }
         };
         let noted = |a: &FunctionArtifact| a.precision.contains(&PrecisionNote::DeviceNanEncoding);
-        let word = |a: &FunctionArtifact| {
-            a.facts
-                .contains(&RuntimeFact::StorageTextureHalfChannels { slot })
-        };
         let tests = |a: &FunctionArtifact| opcodes(&a.module.words).contains(&OP_IS_NAN);
         for pf in [
             PixelFormat::RGBA8Unorm,
@@ -474,18 +469,12 @@ fn a_half_texel_write_stores_metal_s_nans_or_records_the_device_nan_encoding() {
             let Some((a, undeclared, bits)) = compiled(pf) else {
                 continue;
             };
-            let what = format!(
-                "{stem}: {pf:?}: word {}, tests {}, noted {}",
-                word(&a),
-                tests(&a),
-                noted(&a)
-            );
+            let what = format!("{stem}: {pf:?}: tests {}, noted {}", tests(&a), noted(&a));
             if undeclared {
-                assert!(word(&a) && tests(&a) && !noted(&a), "{what}");
+                assert!(noted(&a), "{what}");
                 formatless += 1;
                 continue;
             }
-            assert!(!word(&a), "{what}");
             match pf {
                 // Through the unsigned integer alias the half's bits are written as they are:
                 // no note, no measured property.
@@ -510,10 +499,35 @@ fn a_half_texel_write_stores_metal_s_nans_or_records_the_device_nan_encoding() {
                     measured += usize::from(keeps);
                 }
                 PixelFormat::RGBA32Float => {
-                    assert!(tests(&a) && !noted(&a), "{what}");
+                    assert!(!tests(&a) && noted(&a), "{what}");
                     float += 1;
                 }
                 _ => assert!(!noted(&a), "{what}"),
+            }
+        }
+        // A device of the deviation writes a half-float texture without a format, so its
+        // committed choice declares none; one that declares `RGBA16Float` stores Metal's NaN.
+        if keeps {
+            let declared = crate::pipeline::lower_inputs::StorageImageChoice::new(
+                crate::vk::Format::R16G16B16A16_SFLOAT,
+                StorageImageClass::Identity,
+            );
+            let mut inputs = LowerInputs::new();
+            inputs.storage_images.insert(slot, declared);
+            let what = format!("{stem}: a declared RGBA16Float choice");
+            match with_inputs(&bc, "txt_level_write", &p, &inputs) {
+                Err(Error::NeedsInput(_) | Error::Unsupported(_)) => {}
+                a => {
+                    let a = ok(a, &p, &what);
+                    assert!(!noted(&a), "{what}");
+                    assert!(
+                        a.requirements
+                            .properties
+                            .contains(&VkProperty::MetalHalfTexelWrites),
+                        "{what}"
+                    );
+                    measured += 1;
+                }
             }
         }
     }

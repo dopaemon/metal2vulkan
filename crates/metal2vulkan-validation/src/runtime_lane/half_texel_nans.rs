@@ -1,7 +1,6 @@
 //! The NaNs of float texels read, sampled and gathered with `half` and `float` results, on the
-//! device the cfg selects, under the validation layer, under the lane's exact policy, under the
-//! default one (native device sampling and maths, what a consumer runs) and under the default one
-//! with the NaN switch on (`NanMinMaxPolicy::Exact`).
+//! device the cfg selects, under the validation layer, under the lane's exact policy and under the
+//! default one (native device sampling and maths, what a consumer runs).
 //!
 //! What plain Metal answers (our own probe: an Apple M3 Max under macOS 26.7,
 //! safe and fast math alike, every NaN lane of the eight formats below): a lane is a NaN where a
@@ -27,13 +26,11 @@
 //! texel (native device sampling and texel conversion): its NaN lanes are printed on
 //! `HALF-TEXEL-RAW` lines, the device's decode itself.
 //!
-//! What the switch guarantees on every device, and the test asserts: a `half` result's NaN is
-//! `0x7e00` wherever Metal's rule does not keep the texel's own bits (a 32-bit float or small
-//! float texel, a linear sample), printed on a `HALF-TEXEL-SWITCH-BREACH` line where it is not.
-//! The one-texel accesses of a 16-bit float texel keep the device's decode, Metal's bits only
-//! where the device widens a half exactly (NVIDIA), and whether a lane is a NaN at all is the
-//! device's filter's (a zero-weight tap of an infinity or a NaN may make one); both are measured
-//! and printed, not asserted.
+//! A NaN's bits are the device's (`device-nan-encoding`, `native-nan-encoding`): Metal's only where
+//! the device answers them (a 16-bit float texel's one-texel accesses where the device widens a
+//! half exactly, NVIDIA), and whether a lane is a NaN at all is the device's filter's (a
+//! zero-weight tap of an infinity or a NaN may make one); both are measured and printed, not
+//! asserted.
 //!
 //! Under every policy a `half` lane whose value is a finite `float` beyond `half`'s range (the
 //! largest `float`, alone or filtered) is infinity of its sign, or 65504 where the device's
@@ -47,7 +44,6 @@ use super::degrade_notices::{counts, on_device_with};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::device::NanMinMaxPolicy;
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::llvm_assemble_text;
@@ -516,10 +512,9 @@ fn is_nan(w: u32, half: bool) -> bool {
 /// The lanes of every access of [`OPS`], `half` and `float`, to every format of [`FORMATS`] on
 /// `device` that differ from Metal's NaN answers, printed; under the default policy (`raw`) also
 /// every NaN lane of a `float` result, the device's decode. Returns the count of differing lanes
-/// of `half` results and of `float` results, of the `half` NaN lanes that are not `0x7e00`
-/// where Metal's rule does not keep the texel's own bits (the switch's guarantee, the module
-/// docs), and of the `half` lanes beyond `half`'s range that are neither infinity nor 65504.
-fn measure(device: &Device, leg: &str, raw: bool) -> (usize, usize, usize, usize) {
+/// of `half` results and of `float` results, and of the `half` lanes beyond `half`'s range that
+/// are neither infinity nor 65504.
+fn measure(device: &Device, leg: &str, raw: bool) -> (usize, usize, usize) {
     let sampler = |filter| {
         let mut d = SamplerDescriptor::new();
         d.min_filter = filter;
@@ -533,7 +528,7 @@ fn measure(device: &Device, leg: &str, raw: bool) -> (usize, usize, usize, usize
         sampler(SamplerMinMagFilter::Linear),
     );
     let name = device.name();
-    let mut totals = (0, 0, 0, 0);
+    let mut totals = (0, 0, 0);
     for half in [true, false] {
         let result = if half { "half" } else { "float" };
         for op in OPS {
@@ -547,7 +542,6 @@ fn measure(device: &Device, leg: &str, raw: bool) -> (usize, usize, usize, usize
                 let texture = made(device, f);
                 let got = dispatch(device, (&pipeline, op, half), &texture, s);
                 let (mut nans, mut differ) = (0, 0);
-                let own = op.one_texel() && f.kind == Kind::Half;
                 for (x, lanes) in got.iter().enumerate() {
                     for (k, &g) in lanes.iter().enumerate() {
                         let want = metal_nan(f, op, x, k, half);
@@ -570,18 +564,9 @@ fn measure(device: &Device, leg: &str, raw: bool) -> (usize, usize, usize, usize
                                 shown(want)
                             );
                         }
-                        if half && !own && is_nan(g, true) && g != 0x7e00 {
-                            totals.2 += 1;
-                            if leg == "switch" {
-                                eprintln!(
-                                    "HALF-TEXEL-SWITCH-BREACH {leg} {op:?} {:?} texel {x} lane {k}: {g:04x}",
-                                    f.format
-                                );
-                            }
-                        }
                         if let (true, Some(sign)) = (half, overflows(f, op, x, k)) {
                             if g != sign | 0x7c00 && g != sign | 0x7bff {
-                                totals.3 += 1;
+                                totals.2 += 1;
                                 eprintln!(
                                     "HALF-TEXEL-OVERFLOW {leg} {op:?} {:?} texel {x} lane {k}: {g:04x}",
                                     f.format
@@ -611,30 +596,22 @@ fn measure(device: &Device, leg: &str, raw: bool) -> (usize, usize, usize, usize
 }
 
 /// Each device's NaN answers for float texels' reads, samples and gathers, `half` and `float`,
-/// under the lane's exact policy, the default one, and the default one with the NaN switch on:
-/// measured and printed, the differing lanes counted. Under the switch every `half` NaN Metal's
-/// rule does not keep is `0x7e00`.
+/// under the lane's exact policy and the default one: measured and printed, the differing lanes
+/// counted.
 #[test]
 fn float_texel_nans_by_device_and_policy() {
-    for (leg, default, switch) in [
-        ("exact", false, false),
-        ("default", true, false),
-        ("switch", true, true),
-    ] {
+    for (leg, default) in [("exact", false), ("default", true)] {
         on_device_with(
             |options| {
                 if default {
                     options.policy = DeviceOptions::default().policy;
                 }
-                if switch {
-                    options.policy.nan_and_min_max = NanMinMaxPolicy::Exact;
-                }
             },
             |device, messages| {
-                let (h, f, breaches, overflows) = measure(device, leg, default);
+                let (h, f, overflows) = measure(device, leg, default);
                 let announced = counts(&messages.take_notices());
                 eprintln!(
-                    "HALF-TEXEL-TOTAL {} {leg}: {h} half lanes differ, {f} float lanes differ, {breaches} half NaNs not 0x7e00 outside a 16-bit one-texel access, {overflows} half lanes beyond half's range neither infinity nor 65504; announced {:?}",
+                    "HALF-TEXEL-TOTAL {} {leg}: {h} half lanes differ, {f} float lanes differ, {overflows} half lanes beyond half's range neither infinity nor 65504; announced {:?}",
                     device.name(),
                     announced.keys().map(|k| k.code()).collect::<Vec<_>>()
                 );
@@ -643,13 +620,6 @@ fn float_texel_nans_by_device_and_policy() {
                     0,
                     "a half beyond half's range is infinity or 65504 (the HALF-TEXEL-OVERFLOW lines)"
                 );
-                if switch {
-                    assert_eq!(
-                        breaches,
-                        0,
-                        "under the NaN switch every half NaN Metal's rule does not keep is 0x7e00 (the HALF-TEXEL-SWITCH-BREACH lines)"
-                    );
-                }
             },
         );
     }

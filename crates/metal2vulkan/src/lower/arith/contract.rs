@@ -450,7 +450,7 @@ pub(super) fn select(
         negate: fusion.negate,
         inner: inner.into_boxed_slice(),
     };
-    Ok(Some(super::with_nan(cx, at, s, nan, f)))
+    Ok(Some(super::with_nan(cx, s, nan)))
 }
 
 /// Whether `v` is a sum: the result of a float addition or subtraction (fused or not) or of a

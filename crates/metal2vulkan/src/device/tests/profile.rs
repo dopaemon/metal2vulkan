@@ -307,12 +307,11 @@ fn below_1_2_and_contradictory_policies_are_refused() {
 }
 
 /// Each of the policy's choices between the device's answer and Metal's, with a function that
-/// flips it alone: the texel conversions, a normalized vertex attribute's conversion, the NaN and
-/// minimum and maximum, and the filter of a two-plane YCbCr texture.
-fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 4] {
+/// flips it alone: the texel conversions, a normalized vertex attribute's conversion, and the filter
+/// of a two-plane YCbCr texture.
+fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 3] {
     use crate::device::{
-        NanMinMaxPolicy as N, TexelConversionPolicy as T, VertexNormalizedPolicy as V,
-        YCbCrFilterPolicy as Y,
+        TexelConversionPolicy as T, VertexNormalizedPolicy as V, YCbCrFilterPolicy as Y,
     };
     [
         ("texel_conversion", |p| DevicePolicy {
@@ -329,13 +328,6 @@ fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 4] {
             },
             ..p
         }),
-        ("nan_and_min_max", |p| DevicePolicy {
-            nan_and_min_max: match p.nan_and_min_max {
-                N::Native => N::Exact,
-                N::Exact => N::Native,
-            },
-            ..p
-        }),
         ("ycbcr_filter", |p| DevicePolicy {
             ycbcr_filter: match p.ycbcr_filter {
                 Y::Device => Y::Exact,
@@ -346,11 +338,8 @@ fn exactness_flips() -> [(&'static str, fn(DevicePolicy) -> DevicePolicy); 4] {
     ]
 }
 
-/// On MoltenVK on the M3, whose functions, NaN, minimum and maximum are measured to be Metal's,
-/// each choice still moves the key: the texel conversions' is the policy's own field there, the
-/// NaN and minimum and maximum's moves the texel
-/// NaN route (`TexelNanRoute`): a texel's NaN is the image's decode, which no arithmetic fact
-/// covers, and the YCbCr filter's moves whether a two-plane YCbCr slot takes its variant
+/// On MoltenVK on the M3, each choice still moves the key: the texel conversions' is the policy's
+/// own field there, and the YCbCr filter's moves whether a two-plane YCbCr slot takes its variant
 /// (`ProfileFields::ycbcr_variant`), Metal's sampler filtering such a texture's converted texels
 /// otherwise.
 #[test]

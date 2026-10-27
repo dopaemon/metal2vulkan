@@ -287,8 +287,7 @@ pub fn f16_binary_words(f: Form) -> u32 {
 /// alternative, [`float_binary`]): `float`'s 24-bit significand is at least `2 · 11 + 2` bits, so
 /// rounding its correctly rounded sum, difference or product to `half` rounds the exact result once
 /// (the double rounding is innocuous). A NaN's bits are the device's, as the controlled rounding's
-/// are; Metal's NaN, where the profile asks for it, is selected around the instruction
-/// (`ArithStrategy::Nan`).
+/// are.
 ///
 /// The instruction is always kept apart, whatever the AIR's flags allow: a sum or difference
 /// decorated `NoContraction` (SPIRV-Cross writes its `[[clang::optnone]]` `spvFAdd` or `spvFSub`),

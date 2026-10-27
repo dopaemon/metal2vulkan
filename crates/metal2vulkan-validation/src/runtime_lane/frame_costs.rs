@@ -1822,7 +1822,7 @@ fn measure(runs: &[Run]) {
             "FRAME-COST {name} {label}: a frame's passes: {:.1} recorded their first instance \
              inline; not inline for the encoder {:.1}, the layout {:.1}, a memoryless color {:.1}, \
              a color's actions {:.1} (a DontCare load {:.1}, a reach not shared {:.1}, \
-             a clear to a NaN {:.1}, a resolve {:.1}, a store {:.1}), a texture over a buffer \
+             a resolve {:.1}, a store {:.1}), a texture over a buffer \
              {:.1}, another attachment kind \
              {:.1}, a storage color {:.1}, a stand-in {:.1}, a draw {:.1}; {:.1} split instances \
              recorded inline, {:.1} instances ended unrun; the replays' {:.1} render pass begins \
@@ -1834,7 +1834,6 @@ fn measure(runs: &[Run]) {
             per_frame(|c| c.passes_not_inline_actions),
             per_frame(|c| c.passes_not_inline_actions_dont_care_load),
             per_frame(|c| c.passes_not_inline_actions_unequal_reach),
-            per_frame(|c| c.passes_not_inline_actions_nan_clear),
             per_frame(|c| c.passes_not_inline_actions_resolve),
             per_frame(|c| c.passes_not_inline_actions_store),
             per_frame(|c| c.passes_not_inline_buffer_textures),

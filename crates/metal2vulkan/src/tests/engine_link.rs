@@ -612,8 +612,8 @@ fn the_projection_of_the_fixture_is_fixed_function() {
 /// (`PrecisionNote::DeviceNanEncoding`) only where the profile's driver is not measured to store
 /// Metal's NaN: a `float` output's everywhere but MoltenVK, whose conversion is Metal's (the
 /// output's own NaN reaches the device's conversion, which no other driver is measured with), a
-/// `half` output's everywhere but NVIDIA's measured GPUs and MoltenVK, which writes it through a
-/// 16-bit output. A write to an `RGBA8Unorm` attachment records none.
+/// `half` output's everywhere but NVIDIA's measured GPUs. A write to an `RGBA8Unorm` attachment
+/// records none.
 #[test]
 fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -628,7 +628,7 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
         ("intel-irisxe-rplp-anv", true, true),
         ("nvidia-rtx50-linux", true, true),
         ("nvidia-rtx5080-laptop", true, false),
-        ("moltenvk-m3", false, false),
+        ("moltenvk-m3", false, true),
     ] {
         let p = prof(stem);
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
@@ -658,91 +658,10 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
     }
 }
 
-/// Where the profile's driver is measured to store a 16-bit output's bits
-/// (`DriverDeviation::HalfColorOutputBits`) and to convert to 16 bits as Metal does
-/// (`MetalHalfConversion`), declares 16-bit outputs (with `Int16` and `Float16`), and does not
-/// store the output's NaN as Metal does, an output to a half-float attachment is written through a
-/// 16-bit output variable as the bits of the half Metal stores, valid and linked: on MoltenVK (the
-/// M3 Max and the M4) a `half` output (it stores a `float`'s NaN as Metal does). Such an output
-/// rounds nothing, so the attachment is listed as written as a half's bits, not as rounded, takes
-/// no Vulkan blend of one and zero, and the module requires both properties. RADV and ANV, which
-/// declare 16-bit outputs but store their NaNs as `0xfe00` too, keep the 32-bit output, as do
-/// lavapipe and NVIDIA, which declare none. An `RGBA8Unorm` attachment keeps the 32-bit output.
-#[test]
-fn half_float_attachments_take_the_halfs_bits_through_a_16_bit_output() {
-    let Some(bc) = assemble("rt6_samples.ll") else {
-        return;
-    };
-    for (stem, float_route, half_route) in [
-        ("amd-rdna3-radv", false, false),
-        ("intel-irisxe-rplp-anv", false, false),
-        ("moltenvk-m3", false, true),
-        ("lavapipe", false, false),
-        ("nvidia-rtx5080-laptop", false, false),
-    ] {
-        let p = prof(stem);
-        let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
-        for (entry, route) in [
-            ("rt6_fill_rgba32float", float_route),
-            ("rt6_fill_rgba16float", half_route),
-        ] {
-            for (pf, want) in [
-                (PixelFormat::RGBA16Float, route),
-                (PixelFormat::R16Float, route),
-                (PixelFormat::RGBA8Unorm, false),
-            ] {
-                let what = format!("{stem} {entry} {pf:?}");
-                let mut r = RenderLinkInputs::new();
-                r.color_attachments[0] = Some(ColorAttachmentDescriptor::new(pf));
-                let f = compile_with(&bc, entry, &p, &fragment_inputs(&r, &p))
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let l = link(&[&v, &f], &render(&r), &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-                let words = validate_all(&l, &[&v, &f], &p);
-                let text = spirv_dis(&words[1]);
-                assert_eq!(
-                    text.contains("OpCapability StorageInputOutput16"),
-                    want,
-                    "{what}\n{text}"
-                );
-                if want {
-                    assert!(
-                        text.contains("%_ptr_Output_v4half = OpTypePointer Output %v4half"),
-                        "{what}\n{text}"
-                    );
-                    assert!(f.interface.io.half_bit_colors.contains(&0), "{what}");
-                    assert!(!f.interface.io.rounded_colors.contains(&0), "{what}");
-                    for property in [
-                        crate::device::requirements::VkProperty::HalfColorOutputBits,
-                        crate::device::requirements::VkProperty::MetalHalfConversion,
-                    ] {
-                        assert!(
-                            f.requirements.properties.contains(&property),
-                            "{what}: {property:?}"
-                        );
-                    }
-                    let mut blended = r.clone();
-                    if let Some(a) = blended.color_attachments[0].as_mut() {
-                        a.blending_enabled = true;
-                    }
-                    let b = compile_with(&bc, entry, &p, &fragment_inputs(&blended, &p))
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    let l = link(&[&v, &b], &render(&blended), &p)
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    let attachment = l.graphics.as_ref().expect("graphics").color_attachments[0]
-                        .as_ref()
-                        .expect("attachment");
-                    assert!(attachment.blend.is_none(), "{what} blended");
-                }
-            }
-        }
-    }
-}
-
 /// Under `TextureWriteRoundingMode::NearestEven` a `float` output to a half-float attachment rounds
 /// to nearest even in the function on every profile, MoltenVK's included (listed as rounded, no
 /// device conversion noted, the device's blend of one and zero dropped), and the pipeline links
-/// valid; a `half` output, already a half, rounds nothing (on MoltenVK it is written as a half's
-/// bits). Under alpha-to-coverage the alpha rounds too, and a pipeline whose function rounds it
+/// valid; a `half` output, already a half, rounds nothing. Under alpha-to-coverage the alpha rounds too, and a pipeline whose function rounds it
 /// records `PrecisionNote::CoverageReadsRoundedAlpha`. After a blend of other factors the device
 /// rounds the blend's result, which Metal rounds to nearest even: the channels are written as
 /// computed and the module announces `PrecisionNote::BlendedWriteRounding` (no device conversion
@@ -887,14 +806,9 @@ fn mode_two_refuses_fragment_texture_writes_it_would_round() {
                 choice(vk::Format::UNDEFINED, identity),
                 Goes::Bound,
             ),
-            // The class the profile writes a half-float texture by (`Identity` where its device
-            // is measured to store Metal's halves).
             (
                 "tob_write",
-                choice(
-                    vk::Format::R16G16B16A16_SFLOAT,
-                    crate::metal::format::half_write_class(&p),
-                ),
+                choice(vk::Format::R16G16B16A16_SFLOAT, identity),
                 Goes::Declared,
             ),
             (

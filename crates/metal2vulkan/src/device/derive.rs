@@ -13,14 +13,12 @@ use crate::device::description::{
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::{
-    ContainmentPolicy, DevicePolicy, NanMinMaxPolicy, SamplingPolicy, Unorm8LinearFilterPolicy,
-    YCbCrFilterPolicy,
+    ContainmentPolicy, DevicePolicy, SamplingPolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
 };
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
-    ImageCaps, Independence, LeafCaps, MinMaxRoute, NanEncoding, ProfileFields, Robustness,
-    TexelNanRoute,
+    ImageCaps, Independence, LeafCaps, NanEncoding, ProfileFields, Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -365,21 +363,11 @@ fn derive_fields(
         } else {
             FloatFunctions::Native
         },
-        // The measured deviation; unmeasured, the device's NaN where the policy takes it, and the
-        // module selects Metal's NaN itself where it asks for Metal's.
+        // The measured deviation; unmeasured, the device's NaN, noted.
         nan_encoding: if deviates(DriverDeviation::MetalCanonicalNans) {
             NanEncoding::MetalCanonical
-        } else if policy.nan_and_min_max == NanMinMaxPolicy::Exact {
-            NanEncoding::Device
         } else {
             NanEncoding::Native
-        },
-        // Metal's NaN of a texel where the policy asks for Metal's, on every device: no device
-        // fact decides it.
-        texel_nans: if policy.nan_and_min_max == NanMinMaxPolicy::Exact {
-            TexelNanRoute::Metal
-        } else {
-            TexelNanRoute::Device
         },
         // Metal's filter of a two-plane YCbCr texture through the slot's variant where the policy
         // asks for it: on a device that samples through Metal's own sampler, under the YCbCr
@@ -401,16 +389,6 @@ fn derive_fields(
             desc.device_type,
             Some(vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU)
         ),
-        // Metal's picks where the device's minimum and maximum are measured to be Metal's or its
-        // functions are Metal's own; elsewhere the device's where the policy takes them.
-        min_max: if deviates(DriverDeviation::MetalMinMax)
-            || deviates(DriverDeviation::MetalFloatFunctions)
-            || policy.nan_and_min_max == NanMinMaxPolicy::Exact
-        {
-            MinMaxRoute::Metal
-        } else {
-            MinMaxRoute::Native
-        },
         // The device's measured value, keyed on its identity as the workarounds are, or the floor.
         function_storage: function_storage::of(desc),
         // The measured deviations, one per pipeline kind (the graphics one per macOS release's

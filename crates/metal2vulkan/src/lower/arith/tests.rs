@@ -1796,40 +1796,6 @@ fn median3_ref(b: [u64; 3], val: &dyn Fn(u64) -> f64, fast: bool) -> u64 {
     pick(pick(c, lo, false), hi, true)
 }
 
-/// Metal's `fmin`, `fmax`, `min3`, `max3`, or `clamp` (`op`) of operand bits `b`: `fmin(p, q)` is
-/// `q` for a NaN `p`, else `p` for a NaN `q` or `p < q`, else `q` (and `fmax` with `>`), comparing
-/// the operands' values `val` (an `f32` denormal as zero) but returning their bits; `min3` and
-/// `max3` nest it, and `clamp(x, lo, hi)` is `fmin(fmax(x, lo), hi)`.
-fn metal_min_max_ref(op: FloatFn, b: &[u64], val: &dyn Fn(u64) -> f64) -> u64 {
-    let pick = |p: u64, q: u64, less: bool| {
-        let (vp, vq) = (val(p), val(q));
-        if vp.is_nan() {
-            q
-        } else if vq.is_nan() || (less && vp < vq) || (!less && vp > vq) {
-            p
-        } else {
-            q
-        }
-    };
-    match op {
-        FloatFn::Min => pick(b[0], b[1], true),
-        FloatFn::Max => pick(b[0], b[1], false),
-        FloatFn::Min3 => pick(pick(b[0], b[1], true), b[2], true),
-        FloatFn::Max3 => pick(pick(b[0], b[1], false), b[2], false),
-        FloatFn::Clamp => pick(pick(b[0], b[1], false), b[2], true),
-        _ => panic!("{op:?} is not a minimum or maximum"),
-    }
-}
-
-/// An `f32` operand's value as Metal's `float` comparisons read it: a denormal as zero.
-fn f32_compared(b: u64) -> f64 {
-    if b & 0x7F80_0000 == 0 {
-        0.0
-    } else {
-        f64::from(f32::from_bits(b as u32))
-    }
-}
-
 fn float_ref(op: FloatFn, bits: u8, a: &[u64]) -> Option<u64> {
     let x = |i: usize| fval(bits, a[i]);
     // An `f32` zero or denormal, which Metal's `float` functions read as zero.
@@ -1882,19 +1848,8 @@ fn float_ref(op: FloatFn, bits: u8, a: &[u64]) -> Option<u64> {
                 -1.0
             })
         }
-        FloatFn::Saturate => {
-            let v = x(0);
-            r(if flushed(0) || v.is_nan() || v <= 0.0 {
-                0.0
-            } else {
-                v.min(1.0)
-            })
-        }
-        FloatFn::Min | FloatFn::Max | FloatFn::Clamp | FloatFn::Min3 | FloatFn::Max3
-            if bits == 32 =>
-        {
-            Some(metal_min_max_ref(op, a, &f32_compared))
-        }
+        // The device's `NClamp(x, 0, 1)`: a NaN answers 0, a denormal is the device's.
+        FloatFn::Saturate => r(min(max(x(0), 0.0), 1.0)),
         FloatFn::Min | FloatFn::MinNum => r(min(x(0), x(1))),
         FloatFn::Max | FloatFn::MaxNum => r(max(x(0), x(1))),
         FloatFn::Clamp => r(min(max(x(0), x(1)), x(2))),
@@ -2049,15 +2004,18 @@ fn exact_float_functions_match_metal() {
                 }
                 c
             };
-            // The device's `NMin` and `NMax` may give either zero; Metal's (`float`) gives the
-            // second operand.
-            let loose = match op {
-                FloatFn::MinNum | FloatFn::MaxNum => true,
-                FloatFn::Min | FloatFn::Max | FloatFn::Clamp | FloatFn::Min3 | FloatFn::Max3 => {
-                    bits == 64
-                }
-                _ => false,
-            };
+            // The device's `NMin`, `NMax` and `NClamp` may give either zero.
+            let loose = matches!(
+                op,
+                FloatFn::MinNum
+                    | FloatFn::MaxNum
+                    | FloatFn::Min
+                    | FloatFn::Max
+                    | FloatFn::Clamp
+                    | FloatFn::Min3
+                    | FloatFn::Max3
+                    | FloatFn::Saturate
+            );
             check(
                 &format!("{op:?} f{bits}"),
                 &vec![f; arity],
@@ -2107,176 +2065,6 @@ fn nan_operands() -> Vec<u64> {
         0xBF80_0000,
         0x0000_0001,
     ]
-}
-
-/// [`nan::select`] answers Metal's NaN bit for bit, by either test, on scalars and vectors: the
-/// canonical NaN for every NaN result (`Canonical`, `CanonicalExact`); with a NaN operand's sign or `+` for a domain error
-/// (`OperandSign`); `+` for a NaN operand and the operand's sign for a domain error
-/// (`DomainSign`); the NaN operand itself, else the canonical NaN (`Operand`); and every other
-/// result untouched. The kernel's first input is the operand, its second the result.
-#[test]
-fn nan_select_answers_metals_nan_exactly() {
-    use super::nan::{self, NanAnswer};
-    let f32_nan = |b: u64| f32::from_bits(b as u32).is_nan();
-    let vals = nan_operands();
-    let cases = pairs(&vals, &vals);
-    for answer in [
-        NanAnswer::Canonical,
-        NanAnswer::CanonicalExact,
-        NanAnswer::OperandSign,
-        NanAnswer::DomainSign,
-        NanAnswer::Operand,
-    ] {
-        for test in [NanTest::IsNan, NanTest::Bits] {
-            for lanes in [1, 3] {
-                let f = vec(float(32), lanes);
-                let lane_cases: Vec<Case> = cases
-                    .iter()
-                    .map(|c| c.iter().map(|o| vec![o[0]; usize::from(lanes)]).collect())
-                    .collect();
-                check_accept(
-                    &format!("{answer:?} {test:?} x{lanes}"),
-                    &[f, f],
-                    f,
-                    &|fb, x| nan::select(fb, f, answer, test, x[1], Some(x[0])),
-                    &lane_cases,
-                    &|c| {
-                        let (a, r) = (arg(c, 0), arg(c, 1));
-                        let sign = a & 0x8000_0000;
-                        let want = match answer {
-                            NanAnswer::Operand if f32_nan(a) => a,
-                            _ if !f32_nan(r) => r,
-                            NanAnswer::Canonical
-                            | NanAnswer::CanonicalExact
-                            | NanAnswer::Operand => nan::CANONICAL,
-                            NanAnswer::OperandSign if f32_nan(a) => sign | nan::CANONICAL,
-                            NanAnswer::OperandSign => nan::CANONICAL,
-                            NanAnswer::DomainSign if f32_nan(a) => nan::CANONICAL,
-                            NanAnswer::DomainSign => sign | nan::CANONICAL,
-                        };
-                        Some(vec![want; usize::from(lanes)])
-                    },
-                    &|g, w| g == w,
-                );
-            }
-        }
-    }
-}
-
-/// Class B: on a `half` result, held widened, [`nan::select`] of the canonical answer gives Metal's
-/// `half` NaN `0x7E00` for every NaN lane, quiet or signaling, of either sign and any payload, by
-/// either test, and keeps every other lane, infinities and zeros included.
-#[test]
-fn nan_select_answers_metals_half_nan() {
-    use super::nan::{self, NanAnswer};
-    let halves: [u64; 16] = [
-        0x7E00, 0xFE00, 0x7C01, 0xFC01, 0x7DFF, 0xFFFF, 0x7FFF, 0x7E55, 0x7C00, 0xFC00, 0, 0x8000,
-        0x3C00, 0xBC00, 0x0001, 0x7BFF,
-    ];
-    for test in [NanTest::IsNan, NanTest::Bits] {
-        for lanes in [1u8, 3] {
-            let f = vec(float(16), lanes);
-            let cases: Vec<Case> = halves
-                .iter()
-                .map(|&h| vec![vec![h; usize::from(lanes)]])
-                .collect();
-            check_accept(
-                &format!("half {test:?} x{lanes}"),
-                &[f],
-                f,
-                &|fb, x| nan::select(fb, f, NanAnswer::Canonical, test, x[0], None),
-                &cases,
-                &|c| {
-                    let h = arg(c, 0);
-                    let want = if is_nan(float(16), h) { 0x7E00 } else { h };
-                    Some(vec![want; usize::from(lanes)])
-                },
-                &|g, w| g == w,
-            );
-        }
-    }
-}
-
-/// Class F: Metal's `fmin`, `fmax`, `min3`, `max3`, and `clamp` on `float` and `half`
-/// ([`math::metal_min_max`]) answer an operand bit for bit, by either NaN test, on scalars and
-/// vectors: a NaN loses, two NaNs and a tie of zeros answer the second operand, and a `float`
-/// denormal compares as zero but is returned itself (`fmin(2^-149, +0)` is `+0`, `fmin(+0,
-/// 2^-149)` is `2^-149`), as `nan_minmax`, `nan_minmax_fast`, their zeros-and-denormals cases,
-/// `nan_half`, and `nan_half_fast` read on every lane.
-#[test]
-fn min_max_answer_metals_operand_bit_for_bit() {
-    let mut floats = nan_operands();
-    floats.extend([
-        0x8000_0001,
-        0x007F_FFFF,
-        0x0080_0000,
-        0x8080_0000,
-        0x4000_0000,
-    ]);
-    let halves: Vec<u64> = vec![
-        0x7E00, 0xFE00, 0x7C01, 0xFC01, 0x7E55, 0x7C00, 0xFC00, 0, 0x8000, 0x3C00, 0xBC00, 0x0001,
-        0x8001, 0x03FF, 0x0400,
-    ];
-    let half_compared = |b: u64| f16_to_f64(b as u16);
-    let formats: [(u8, Vec<u64>, &dyn Fn(u64) -> f64); 2] =
-        [(32, floats, &f32_compared), (16, halves, &half_compared)];
-    for (bits, vals, val) in formats {
-        let few: Vec<u64> = vals.iter().copied().step_by(2).collect();
-        let triples: Vec<Case> = few
-            .iter()
-            .flat_map(|&a| {
-                let few = &few;
-                few.iter()
-                    .flat_map(move |&b| few.iter().map(move |&c| vec![vec![a], vec![b], vec![c]]))
-            })
-            .collect();
-        for op in [
-            FloatFn::Min,
-            FloatFn::Max,
-            FloatFn::Min3,
-            FloatFn::Max3,
-            FloatFn::Clamp,
-        ] {
-            let arity = op.arity();
-            let cases = if arity == 2 {
-                pairs(&vals, &vals)
-            } else {
-                triples.clone()
-            };
-            for test in [NanTest::IsNan, NanTest::Bits] {
-                for lanes in [1u8, 3] {
-                    let f = vec(float(bits), lanes);
-                    let n = usize::from(lanes);
-                    let lane_cases: Vec<Case> = cases
-                        .iter()
-                        .map(|c| c.iter().map(|o| vec![o[0]; n]).collect())
-                        .collect();
-                    check_accept(
-                        &format!("{op:?} f{bits} {test:?} x{lanes}"),
-                        &vec![f; arity],
-                        f,
-                        &|fb, x| {
-                            math::float_fn(
-                                fb,
-                                op,
-                                f,
-                                Contraction::Forbidden,
-                                test,
-                                x,
-                                &Lib::instructions(),
-                            )
-                        },
-                        &lane_cases,
-                        &|c| {
-                            let b: Vec<u64> = c.iter().map(|l| l[0]).collect();
-                            Some(vec![metal_min_max_ref(op, &b, val); n])
-                        },
-                        &|g, w| g == w,
-                    );
-                }
-            }
-        }
-    }
 }
 
 /// Class H: Metal's `half` `fmod` answers `+0` for a zero remainder of a nonzero dividend and the
@@ -2494,14 +2282,11 @@ fn half_nan_answers_follow_the_measured_states() {
         assert_eq!(cast_answer(op, from, to), None, "{op:?} {from:?} {to:?}");
     }
     use crate::device::profile::NanEncoding;
-    assert!(A::Canonical.left_to(NanEncoding::MetalCanonical));
+    assert!(A::Canonical.device_answers(NanEncoding::MetalCanonical));
     for a in [A::CanonicalExact, A::Operand, A::OperandSign, A::DomainSign] {
-        assert!(!a.left_to(NanEncoding::MetalCanonical), "{a:?}");
+        assert!(!a.device_answers(NanEncoding::MetalCanonical), "{a:?}");
     }
-    for a in [A::Canonical, A::CanonicalExact] {
-        assert!(!a.left_to(NanEncoding::Device), "{a:?}");
-    }
-    // Native device maths leaves every answer to the device.
+    // A device not measured to answer Metal's canonical NaN answers none of Metal's NaNs.
     for a in [
         A::Canonical,
         A::CanonicalExact,
@@ -2509,7 +2294,7 @@ fn half_nan_answers_follow_the_measured_states() {
         A::OperandSign,
         A::DomainSign,
     ] {
-        assert!(a.left_to(NanEncoding::Native), "{a:?}");
+        assert!(!a.device_answers(NanEncoding::Native), "{a:?}");
     }
 }
 
@@ -2522,7 +2307,7 @@ const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     },
     metal_functions: false,
     device_denormals: false,
-    nan_native: false,
+    nans: crate::device::profile::NanEncoding::Native,
     native_min_max: false,
 };
 
@@ -4140,16 +3925,15 @@ fn the_minimum_and_maximum_family_follows_the_profile() {
     assert!(taken >= 1, "the MoltenVK capture takes it");
 }
 
-/// Where the library says the device's `NMin`, `NMax` and `NClamp` are Metal's
-/// (`Lib::with_min_max`), each of the family is those instructions alone, with no NaN test;
-/// elsewhere it is `math::metal_min_max`'s picks, with NaN tests and no such instruction.
+/// Each of the minimum and maximum family is the device's `NMin`, `NMax` and `NClamp` alone, with
+/// no NaN test.
 #[test]
-fn the_minimum_and_maximum_family_takes_the_device_instructions_where_measured() {
+fn the_minimum_and_maximum_family_takes_the_device_instructions() {
     // SPIR-V `OpExtInst`, `OpIsNan`; GLSL.std.450 `NMin`, `NMax`, `NClamp`.
     const OP_EXT_INST: u32 = 12;
     const OP_IS_NAN: u32 = 156;
     const DEVICE: [u32; 3] = [79, 80, 81];
-    let counts = |op: FloatFn, f: Form, device: bool| -> (usize, usize) {
+    let counts = |op: FloatFn, f: Form| -> (usize, usize) {
         let m = kernel(&vec![f; op.arity()], f, &|fb, a| {
             math::float_fn(
                 fb,
@@ -4158,7 +3942,7 @@ fn the_minimum_and_maximum_family_takes_the_device_instructions_where_measured()
                 Contraction::Forbidden,
                 NanTest::IsNan,
                 a,
-                &Lib::instructions().with_min_max(device),
+                &Lib::instructions(),
             )
         })
         .expect("kernel");
@@ -4185,16 +3969,12 @@ fn the_minimum_and_maximum_family_takes_the_device_instructions_where_measured()
         FloatFn::Max3,
     ] {
         for f in [float(32), float(16), vec(float(32), 4)] {
-            let (ext, nan) = counts(op, f, true);
             let want = if matches!(op, FloatFn::Min3 | FloatFn::Max3) {
                 2
             } else {
                 1
             };
-            assert_eq!((ext, nan), (want, 0), "{op:?} on {f:?}, the device's");
-            let (ext, nan) = counts(op, f, false);
-            assert_eq!(ext, 0, "{op:?} on {f:?}, picked");
-            assert!(nan > 0, "{op:?} on {f:?}, picked: no NaN test");
+            assert_eq!(counts(op, f), (want, 0), "{op:?} on {f:?}");
         }
     }
 }

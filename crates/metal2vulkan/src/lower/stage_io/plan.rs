@@ -171,7 +171,6 @@ pub(super) fn io_type(f: Form) -> IoType {
         },
         components: f.lanes,
         source_bits: f.bits(),
-        bits: 32,
     }
 }
 
@@ -206,7 +205,6 @@ fn user(
         numeric: ty.numeric,
         components: ty.components,
         deco,
-        half: ty.bits == 16,
     };
     // One key per direction: a second, different declaration of the same key is not a Metal
     // interface.
@@ -433,7 +431,6 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
     let mut at_loop_sample = false;
     let mut uniform = false;
     let mut quad_primitive = false;
-    let mut widened = false;
     let link = match (&b.role, stage) {
         // A merged draw's vertex reads its corner's command's draw values.
         (
@@ -486,15 +483,16 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 return Ok(());
             }
             // The device's fixed-function input widens a narrow-float format with a widening of
-            // its own, which carries the field's bits up into the `float` payload; Metal's fetch
-            // answers its canonical NaN. A `float` parameter's load is canonicalized
-            // (`Source::WidenedAttribute`); a `half` one keeps the fetched code's own bits, as
-            // Metal's `half` attribute does, so it is loaded as it is.
+            // its own, which may carry the field's bits up into the `float` payload; Metal's fetch
+            // answers its canonical NaN. A `float` parameter's NaN is the device's, noted; a
+            // `half` one keeps the fetched code's own bits, as Metal's `half` attribute does.
             let narrow_float = matches!(
                 entry,
                 Some(VertexFetch::FixedFunction { narrow_float: true })
             );
-            widened = narrow_float && f.float_fmt() == Some(FloatFmt::F32);
+            if narrow_float && f.float_fmt() == Some(FloatFmt::F32) {
+                cx.precision.insert(PrecisionNote::DeviceNanEncoding);
+            }
             let key = VaryingKey::attribute(index);
             let sp = &mut cx.families.stage_io;
             let object = user(
@@ -845,9 +843,7 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
     };
     cx.families.stage_io.params.push(PlannedParam {
         param: b.param,
-        source: if widened {
-            Source::WidenedAttribute(link)
-        } else if at_loop_sample {
+        source: if at_loop_sample {
             Source::AtLoopSample(link)
         } else if at_pixel {
             Source::PixelCenter(link)
@@ -949,7 +945,6 @@ fn zeroed_output(
         numeric,
         components: 4,
         source_bits: 32,
-        bits: 32,
     };
     if let Some(rules) = cx.inputs.color_writes.get(&color).copied() {
         cx.families
@@ -1395,7 +1390,6 @@ fn selected_index(sp: &mut StageIoPlan, index: RawIndex) -> Result<usize, Error>
         numeric: IoNumeric::Uint,
         components: 1,
         source_bits: 32,
-        bits: 32,
     };
     let deco = IoDecor {
         packed: true,
@@ -1453,7 +1447,6 @@ pub(super) fn window_depth(sp: &mut StageIoPlan, dir: IoDir) -> Result<usize, Er
         numeric: IoNumeric::Float,
         components: 1,
         source_bits: 32,
-        bits: 32,
     };
     let mut deco = IoDecor {
         packed: true,
@@ -1556,7 +1549,6 @@ fn barycentric_weights(sp: &mut StageIoPlan, perspective: bool) -> Result<usize,
         numeric: IoNumeric::Float,
         components: 2,
         source_bits: 32,
-        bits: 32,
     };
     let deco = IoDecor {
         interpolation: if perspective {
@@ -1649,7 +1641,6 @@ fn flat_uint(
         numeric: IoNumeric::Uint,
         components: 1,
         source_bits: 32,
-        bits: 32,
     };
     let mut deco = IoDecor {
         packed: true,
@@ -3063,11 +3054,6 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
             }
             let f = io_form(cx, ty)?;
             let io = color_type(cx, attachment, f)?;
-            // Written as a half's bits through 16-bit lanes (`color_write::half_output`).
-            let io = match index == 0 && super::color_write::half_output(cx, attachment, f) {
-                true => IoType { bits: 16, ..io },
-                false => io,
-            };
             // An extended-range attachment's raw texel, through a variable of its raw components,
             // and a word attachment's word; the interface keeps the Metal output's type.
             let declared = match super::word_color::plan(cx, attachment, index, f)? {
@@ -3177,9 +3163,6 @@ const UNIFORM_WORDS: u64 = 64;
 /// The words a use of a [`Source::QuadPrimitive`] parameter adds to a load: the shift and its
 /// constant.
 const QUAD_PRIMITIVE_WORDS: u64 = 8;
-/// The words a use of a [`Source::WidenedAttribute`] parameter adds to a load: the NaN test on the
-/// bits, the select, and their constants.
-const CANONICAL_NAN_WORDS: u64 = 32;
 
 /// The per-stage interface limits and the size estimate.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
@@ -3357,13 +3340,9 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         .values()
         .filter(|i| matches!(i.kind, crate::air::ir::InstKind::Ret(_)))
         .count() as u64;
-    // Each return also rounds every color output that rounds, writes the halves' bits, and encodes
-    // the extended-range colors' texels.
+    // Each return also rounds every color output that rounds, and encodes the extended-range
+    // colors' texels.
     let rounding = super::color_write::words(sp.rounded.values().copied())
-        .saturating_add(
-            crate::lower::arith::color_write::HALF_BITS_WORDS
-                .saturating_mul(sp.halves.len() as u64),
-        )
         .saturating_add(super::extended_color::WORDS.saturating_mul(sp.extended.len() as u64))
         .saturating_add(
             (sp.words_written.values())
@@ -3461,7 +3440,6 @@ fn param_words(cx: &SelectCx<'_>) -> u64 {
                 loaded.push((p.param, USE_WORDS + PIXEL_WORDS))
             }
             Source::Uniform(_) => loaded.push((p.param, USE_WORDS + UNIFORM_WORDS)),
-            Source::WidenedAttribute(_) => loaded.push((p.param, USE_WORDS + CANONICAL_NAN_WORDS)),
             Source::Pulled(r) => fetch_words = fetch_words.saturating_add(u64::from(r.words())),
         }
     }

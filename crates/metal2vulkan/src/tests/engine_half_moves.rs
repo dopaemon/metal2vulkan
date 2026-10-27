@@ -20,10 +20,10 @@
 //! `DevicePolicy::exact_answers`. A module may leave a NaN's bits to the device, and then says so:
 //! a `half` read from its bits by the device's widening (`PrecisionNote::NativeHalfConversion`,
 //! wherever the module rounds to `half` through the device's conversion) or a NaN's bits left to
-//! the device's arithmetic and conversions (`PrecisionNote::NativeNanEncoding`, the default
-//! `NanMinMaxPolicy::Native`). There a NaN pattern need only come back a NaN (a move through the
-//! select, the threadgroup array or a half-bits texel; a move straight to a buffer reuses the
-//! loaded bits). No other pattern may change, nor any where the module records neither note.
+//! the device's arithmetic and conversions (`PrecisionNote::NativeNanEncoding`, under either
+//! policy). There a NaN pattern need only come back a NaN (a move through the select, the
+//! threadgroup array or a half-bits texel; a move straight to a buffer reuses the loaded bits). No
+//! other pattern may change, nor any where the module records neither note.
 //!
 //! The profiles and policies compile to a few distinct modules: each runs once, all at once on
 //! threads of their own.
@@ -150,7 +150,6 @@ fn resources(plan: &Plan) -> Resources {
             (
                 PushField::SlotBindOffset(_)
                 | PushField::DispatchRegion
-                | PushField::TextureHalfChannels(_)
                 | PushField::Specialized(_),
                 PushLoc::Push { .. },
             ) => {}

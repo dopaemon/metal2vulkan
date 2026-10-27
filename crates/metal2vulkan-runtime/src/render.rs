@@ -301,7 +301,7 @@ use super::kept_bytes;
 use super::linear_attachment;
 use super::linear_merge::LinearMerge;
 use super::live_bind::{Emptied, LiveBind, Reshape};
-use super::nan_clear::{keeps_nan_sign, NanClears, NanDepthWrite};
+use super::nan_clear::{keeps_nan_sign, NanDepthWrite};
 use super::owned_kernel::OwnedModule;
 use super::pipeline::Settled;
 use super::pipeline::{BufferForms, DrawPipeline};
@@ -4678,13 +4678,8 @@ impl RenderLowering {
             scratch(&|index, c| stored(c) && !merged.iter().any(|&(at, _)| at == index));
         copied_back.extend(depth_stencil_copies(true));
         let stand_ins_out = StandInCopies::plan_aspects(&copied_back, false)?;
-        // A clear holding a `half` or small-float NaN: written before the pass as Metal writes
-        // it, through a scratch image of an integer format, and loaded in the pass
-        // (`nan_clear.rs`). After the stand-ins' copies, which keep the attachment's own load.
-        // And, in a pass whose draws reach no tile, its resolves written after the pass as
-        // Metal's resolve stores them (`nan_clear.rs`).
-        let (nan_clears, nan_resolves) =
-            NanClears::plan(core.command_buffer(), &mut layout, (called, drew))?;
+        // A clear holding a NaN the device's conversion or resolve decides (`nan_clear.rs`).
+        super::nan_clear::degrade_nan_clears(core.device(), &layout, drew);
         // A depth whose `Clear` load held a NaN, loaded instead: Metal's word written into its
         // texture over the clear's reach before the pass, before anything copies the depth out
         // of it (`nan_clear.rs`).
@@ -5059,9 +5054,6 @@ impl RenderLowering {
         // What the merged colors hold once copied in, before any step writes them.
         for (_, merge) in &merged {
             merge.record_keep(&mut core);
-        }
-        if let Some(clears) = nan_clears {
-            clears.record(&mut core);
         }
         if let Some(clears) = reach_clears {
             clears.record(&mut core);
@@ -5485,9 +5477,6 @@ impl RenderLowering {
         }
         if let Some(copies) = resolve_copies {
             copies.record(&mut core);
-        }
-        if let Some(writes) = nan_resolves {
-            writes.record(&mut core);
         }
         if let Some(results) = results {
             results.record(&mut core);
@@ -8526,7 +8515,7 @@ impl RenderLowering {
         };
         // The formats the draw binds, which a specialized notice names.
         let formats = |slot| tables.bound_format(slot);
-        device.degrade_half_texel_writes(&variant.pipeline().dependencies, Some(&formats));
+        device.degrade_half_texel_writes(&variant.pipeline().dependencies);
         (variant.objects()).degrade_bound_formats(&variant.pipeline().stages, Some(&formats));
         // A variant whose notes test no bound value is quiet at every draw, and kept as none
         // (`Device::tests_bound_values`).

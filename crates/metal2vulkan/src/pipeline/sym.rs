@@ -1100,12 +1100,6 @@ pub enum PushField {
     /// clip mode is `MTLDepthClipModeClamp` in bit 4; words 1 and 2 the bits of viewport 0's near
     /// and far depth (`f32`); word 3 is 0 (`bind::shader_tests_words`).
     ShaderTestsState,
-    /// Whether the storage texture bound to the slot holds 16-bit float channels (`u32`, 1 or 0;
-    /// 0 where the binder binds a neutral): a `half` texel's write keeps the half where it is 1
-    /// and writes every NaN as `0x7fc00000` where it is 0, as Metal stores a written half
-    /// (`RuntimeFact::StorageTextureHalfChannels`, a slot whose storage choice declares no
-    /// format).
-    TextureHalfChannels(SlotRef),
     /// The draw's capture layout for a vertex function compiled under
     /// `LoweringInputs::captured_positions` (`RuntimeFact::CapturedPositions`), a `uvec4`. In the
     /// vertices form: the draw's first vertex, its vertex count, its first instance, and 0. In the

@@ -454,11 +454,6 @@ pub(crate) struct ResourceTemplate {
     /// (`PushField::TextureLevels`): the bound texture's, 0 where a neutral stands in.
     #[cfg_attr(feature = "serde", serde(default))]
     pub texture_levels: Vec<(SlotRef, u32)>,
-    /// Whether the bound texture's channels are 16-bit floats, which the binder pushes for each
-    /// slot whose `half` writes read it (`PushField::TextureHalfChannels`): 1 or 0, 0 where a
-    /// neutral stands in.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub texture_half_channels: Vec<(SlotRef, u32)>,
     /// The integer channel widths of the bound texture, which the binder pushes for each slot
     /// whose integer writes read them (`PushField::TextureIntegerChannels`):
     /// `metal::format::integer_channels_word` of its format, 0 where a neutral stands in.

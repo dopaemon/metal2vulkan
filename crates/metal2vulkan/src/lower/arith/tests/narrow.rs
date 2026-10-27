@@ -750,13 +750,16 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
             }
             c
         };
-        // `bfloat` keeps the device's `NMin` and `NMax`, which may give either zero; `half` is
-        // Metal's, bit for bit.
-        let picks = matches!(
+        // The device's `NMin`, `NMax` and `NClamp`, which may give either zero.
+        let loose = matches!(
             op,
-            FloatFn::Min | FloatFn::Max | FloatFn::Clamp | FloatFn::Min3 | FloatFn::Max3
+            FloatFn::Min
+                | FloatFn::Max
+                | FloatFn::Clamp
+                | FloatFn::Min3
+                | FloatFn::Max3
+                | FloatFn::Saturate
         );
-        let loose = picks && !is_half;
         let flush = exact_ok(f);
         let accept = |g: u64, w: u64| flush(g, w) || (loose && is_zero(f, g) && is_zero(f, w));
         check_accept(
@@ -799,10 +802,6 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                     FloatFn::Sign => 0.0,
                     FloatFn::Saturate if x(0) > 0.0 => x(0).min(1.0),
                     FloatFn::Saturate => 0.0,
-                    _ if picks && is_half => {
-                        let b: Vec<u64> = c.iter().map(|l| l[0]).collect();
-                        return Some(vec![metal_min_max_ref(op, &b, &|v| nval(f, v))]);
-                    }
                     FloatFn::Min => x(0).min(x(1)),
                     FloatFn::Max => x(0).max(x(1)),
                     FloatFn::Clamp => x(0).max(x(1)).min(x(2)),
@@ -2887,13 +2886,13 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
     }
 }
 
-/// Under the float controls (`QuantizeForm::Controlled`), where the profile leaves a NaN's bits to
-/// the device (`ModuleBuilder::native_half_nans`, `NanMinMaxPolicy::Native`), `from_bits` is the
+/// Under the float controls (`QuantizeForm::Controlled`), where the module leaves a NaN's bits to
+/// the device (`ModuleBuilder::native_half_nans`, every profile so rounding), `from_bits` is the
 /// device's widening of the bits as a 16-bit float, with no integer decode: every half bit
 /// pattern, with junk above its 16 bits, reads as its exact `f32` value but a NaN, which reads as
 /// a NaN, one lane at a time and four at once, and `narrow::widens_bits` finds the widening.
-/// Without the flag (the NaN switch's `NanMinMaxPolicy::Exact`) the integer decode stands: every
-/// pattern exact, NaN payloads included, and `widens_bits` finds none.
+/// Without the flag the integer decode stands: every pattern exact, NaN payloads included, and
+/// `widens_bits` finds none.
 #[test]
 fn a_half_decode_under_the_float_controls_is_the_devices_widening() {
     use super::super::narrow::{f32_of_half_bits, from_bits, widens_bits};

@@ -584,8 +584,6 @@ pub(crate) enum ActionsRefused {
     /// of whole tiles (`clear_reach.rs`) reaches another extent than another color's, or loaded,
     /// or a memoryless color smaller, where another's clear reaches past the render area.
     UnequalReach,
-    /// Cleared to a NaN whose bits the device's clear would not keep (`clear_value::nan_texel`).
-    NanClear,
     /// Resolved, into a resolve attachment or by a copy after the pass.
     Resolve,
     /// Stored other than by `Store`, or late (`storeActionOptions` set after the encoder).
@@ -3739,9 +3737,6 @@ pub struct WorkCounts {
     /// smaller memoryless texture. A pass whose attachments share the reach records its first
     /// instance inline over it.
     pub passes_not_inline_actions_unequal_reach: u64,
-    /// Of those, the ones where it is a clear to a NaN whose bits the device's clear would not
-    /// keep.
-    pub passes_not_inline_actions_nan_clear: u64,
     /// Of those, the ones where it is a resolve, into a resolve attachment or by a copy after the
     /// pass.
     pub passes_not_inline_actions_resolve: u64,
@@ -5012,7 +5007,6 @@ impl Device {
                 .load(Ordering::Relaxed),
             passes_not_inline_actions_dont_care_load: actions(ActionsRefused::DontCareLoad),
             passes_not_inline_actions_unequal_reach: actions(ActionsRefused::UnequalReach),
-            passes_not_inline_actions_nan_clear: actions(ActionsRefused::NanClear),
             passes_not_inline_actions_resolve: actions(ActionsRefused::Resolve),
             passes_not_inline_actions_store: actions(ActionsRefused::Store),
             passes_not_inline_buffer_textures: not_inline(NotInline::BufferTextures),

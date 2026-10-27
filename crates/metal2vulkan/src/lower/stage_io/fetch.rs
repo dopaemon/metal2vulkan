@@ -74,7 +74,7 @@
 
 use crate::error::{DescriptorError, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::access::pulled::{self, SourceRead};
-use crate::lower::arith::{exact_division, nan, narrow, ops, FloatFmt, Form, Held};
+use crate::lower::arith::{exact_division, narrow, ops, FloatFmt, Form, Held};
 use crate::lower::dispatch;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
@@ -472,6 +472,7 @@ pub(super) fn select(
         return Err(not_lowered());
     }
     class_match(encoding, form.is_float(), attribute)?;
+    narrow_float_nans(cx, encoding, form);
     let s = slot(Stage::Vertex, buffer);
     let draw_parameters = cx.profile.fields().draw_parameters;
     // The indexed capture form's per-vertex element is the vertex its index names.
@@ -773,6 +774,18 @@ fn components(fb: &mut FunctionBuilder<'_>, e: Encoding, raw: SValue) -> BResult
     Ok(out)
 }
 
+/// Record `PrecisionNote::DeviceNanEncoding` for a read of an attribute of `encoding` as `float`
+/// lanes of `form` where the encoding is a narrow float's ([`Encoding::widens_narrow_float`]):
+/// Metal's fetch answers its canonical NaN, sign and payload dropped, where the decode carries the
+/// 16-, 11- or 10-bit field's bits up into the payload. A `half` read keeps the field's own bits,
+/// as Metal's does.
+pub(super) fn narrow_float_nans(cx: &mut SelectCx<'_>, encoding: Encoding, form: Form) {
+    if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {
+        cx.precision
+            .insert(crate::pipeline::artifact::PrecisionNote::DeviceNanEncoding);
+    }
+}
+
 /// The value of form `form` of the raw bytes `raw` of `encoding` (see the module docs).
 pub fn decode(
     fb: &mut FunctionBuilder<'_>,
@@ -794,19 +807,6 @@ pub fn decode(
         let ft = ops::ty(fb, f32_scalar())?;
         for c in &mut comps {
             *c = fb.convert(op, *c, ft)?;
-        }
-    }
-    // A narrow float's widening to `float` answers Metal's canonical NaN, sign and payload
-    // dropped (`nan::NanAnswer::CanonicalExact`, the widening class of Metal's NaN model), where
-    // ours carries the 16-, 11- or 10-bit field's bits up into the payload by construction and a
-    // device whose own widening the module takes may carry them too. Answered on the bits alone
-    // (`nan::canonical_on_bits`), which leaves no float operation for a driver that assumes no
-    // NaNs to fold: the answer here is read bit for bit. A `half` parameter is not widened at
-    // all: it keeps the fetched bits, as Metal's does, and for a field of another width
-    // `narrow::round` answers the canonical `half` NaN.
-    if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {
-        for c in &mut comps {
-            *c = nan::canonical_on_bits(fb, f32_scalar(), *c)?;
         }
     }
     let scalar = Form { lanes: 1, ..form };

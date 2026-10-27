@@ -189,7 +189,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             multisampled: true,
             planes: true,
         },
-        RuntimeFact::StorageTextureHalfChannels { slot },
         RuntimeFact::StorageTextureIntegerChannels { slot },
         RuntimeFact::CapturedPositions {
             form: crate::pipeline::CaptureForm::Indexed(crate::metal::IndexType::UInt16),
@@ -268,7 +267,6 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::ExactFormsOverCompilerLimit {
             sampling: true,
             texel_conversion: false,
-            nan_and_min_max: true,
         },
     ]
 }
@@ -348,7 +346,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::CubicSampler { .. } => 68,
         RuntimeFact::CubicArgumentSampler { .. } => 69,
         RuntimeFact::ShaderTests { .. } => 70,
-        RuntimeFact::StorageTextureHalfChannels { .. } => 71,
         RuntimeFact::CapturedPositions { .. } => 72,
         RuntimeFact::HeapRawSamples { .. } => 73,
         RuntimeFact::ShaderStencilTest { .. } => 74,
@@ -371,7 +368,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RotatedWeights => 91,
         RuntimeFact::PrivateList => 92,
         RuntimeFact::MeshLastFirst => 93,
-        RuntimeFact::YCbCrInPlace { .. } => 94,
+        RuntimeFact::YCbCrInPlace { .. } => 71,
     }
 }
 
@@ -379,7 +376,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..95).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..94).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -510,7 +507,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 RuntimeFact::StageInRegion
                 | RuntimeFact::StageInStride { .. }
                 | RuntimeFact::StorageTextureLevels { .. }
-                | RuntimeFact::StorageTextureHalfChannels { .. }
                 | RuntimeFact::StorageTextureIntegerChannels { .. }
                 | RuntimeFact::AccelerationStructureInstanceCount { .. }
                 | RuntimeFact::ViewportCount

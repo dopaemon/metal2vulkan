@@ -430,11 +430,10 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 class: SlotClass::Texture,
                 ..
             }) => return Err(not_implemented(Feature::TexelBuffer)),
-            // A storage texture's level count, and whether its channels are 16-bit floats, which
-            // the resource plan records; and a value the bound resources decide, which the plan
-            // records too (`slots::record_specialized`).
+            // A storage texture's level count and integer channel widths, which the resource plan
+            // records; and a value the bound resources decide, which the plan records too
+            // (`slots::record_specialized`).
             PushField::TextureLevels(_)
-            | PushField::TextureHalfChannels(_)
             | PushField::TextureIntegerChannels(_)
             | PushField::Specialized(_) => {}
             // A structure's instance count, which instantiation reads from the state.

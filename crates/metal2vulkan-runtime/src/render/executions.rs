@@ -1942,7 +1942,7 @@ impl RenderLowering {
         let formats = |slot| tables.bound_format(slot);
         self.core
             .device()
-            .degrade_half_texel_writes(&variant.pipeline().dependencies, Some(&formats));
+            .degrade_half_texel_writes(&variant.pipeline().dependencies);
         self.core
             .device()
             .degrade_bound_formats(&variant.pipeline().stages, Some(&formats));

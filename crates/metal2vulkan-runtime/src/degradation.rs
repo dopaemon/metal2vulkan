@@ -529,13 +529,6 @@ degradations! {
         ShaderColorConversion = "shader-color-conversion", Performance,
             "the fragment function rounds each such channel to nearest even before it writes it: \
              about 35 more instructions per channel";
-        /// A fragment function writes a `half` to a half-float color attachment as the bits of
-        /// the half Metal stores, through a 16-bit output, on a device that does not store a
-        /// 32-bit output's NaN as Metal does (`StageModule::half_bit_colors`).
-        ShaderHalfColorBits = "shader-half-color-bits", Performance,
-            "the fragment function writes each such output as its half's bits through a 16-bit \
-             output: about 20 more instructions per output, and the attachment takes no Vulkan \
-             blend of one and zero";
         /// A Metal render pass runs as several Vulkan render pass instances (`render.rs`): a
         /// framebuffer fetch through the pixel interlock keeps its attachment out of its draws'
         /// subpass, and the pass's draws leave different attachments out, or its last draws
@@ -2158,18 +2151,16 @@ degradations! {
         /// infinity where Metal answers 65504; a NaN's encoding the device's.
         NativeHalfQuantize = "native-half-quantize";
         /// Class: native device maths. The device's NaN answers a `float` or `half` operation's
-        /// NaN result where Metal's bits would be selected (`NanMinMaxPolicy::Native`, the
-        /// default on a device whose arithmetic is not measured to answer Metal's canonical NaN;
-        /// `Exact` keeps Metal's). Recorded bound: where Metal answers a NaN the device answers a
+        /// NaN result where Metal answers a NaN the device is not measured to answer (every NaN
+        /// but the canonical one on a device measured to answer Metal's canonical NaN). Recorded
+        /// bound: where Metal answers a NaN the device answers a
         /// NaN, its sign and payload the device's own, where Metal answers `0x7fc00000`
         /// (`0x7e00` as `half`), an operand's bits, or the canonical NaN with an operand's sign;
         /// every other result unchanged.
         NativeNanEncoding = "native-nan-encoding";
         /// Class: native device maths. The device's `NMin`, `NMax` or `NClamp` answers Metal's
         /// `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
-        /// `float` or `half` where the translation would select Metal's operand
-        /// (`NanMinMaxPolicy::Native`, the default on a device not measured to answer Metal's;
-        /// `Exact` keeps Metal's). Recorded bound: an operand, Metal's but at three ties: of two
+        /// `float` or `half` on a device not measured to answer Metal's operand. Recorded bound: an operand, Metal's but at three ties: of two
         /// NaNs a NaN (Metal: the second operand's bits), of `+0` and `-0` either zero (Metal: the
         /// second), and an `f32` denormal beside a zero or another denormal compared by its value
         /// where the device keeps denormals (Metal compares it as a zero and answers the second).
@@ -2521,9 +2512,6 @@ impl Kinds {
                     kinds.add(Degradation::YCbCrFilterNotExact);
                 }
             }
-            if !stage.half_bit_colors.is_empty() {
-                kinds.add(Degradation::ShaderHalfColorBits);
-            }
             if !stage.rounded_colors.is_empty() {
                 kinds.add(Degradation::ShaderColorConversion);
             }
@@ -2620,12 +2608,10 @@ pub(crate) fn dropped_exact_forms(
         metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit {
             sampling,
             texel_conversion,
-            nan_and_min_max,
         } => Some(
             [
                 (sampling, "exact sampling"),
                 (texel_conversion, "exact texel conversion"),
-                (nan_and_min_max, "exact NaN and minimum and maximum"),
             ]
             .into_iter()
             .filter_map(|(dropped, name)| dropped.then_some(name))
@@ -3110,18 +3096,6 @@ impl Device {
                     (object(), self.stage_note_reason(note, stage))
                 });
             }
-            if !stage.half_bit_colors.is_empty() {
-                self.degrade_at(at, Degradation::ShaderHalfColorBits, || {
-                    (
-                        object(),
-                        format!(
-                            "the device stores a 32-bit output's NaN to the half-float format of \
-                             color attachment(s) {:?} as another NaN than the `half`'s own bits",
-                            stage.half_bit_colors
-                        ),
-                    )
-                });
-            }
             if !stage.rounded_colors.is_empty() {
                 self.degrade_at(at, Degradation::ShaderColorConversion, || {
                     (
@@ -3289,77 +3263,13 @@ impl Device {
     }
 
     /// Announce `PrecisionNote::DeviceNanEncoding` at a draw or dispatch of a pipeline of
-    /// `dependencies` whose `half` texel writes to a texture slot read whether its texture's
-    /// channels are 16-bit floats (`RuntimeFact::StorageTextureHalfChannels`: the slot's storage
-    /// choice declares no format), where `formats` binds there a texture whose stored NaN the
-    /// device's conversion decides (`metal::format::half_write_nans_converted`: 16-bit
-    /// float channels, or a packed small float's), on a device without
-    /// `VkProperty::MetalHalfTexelWrites`; where the command's bound formats are not known
-    /// (`formats` `None`: an execution of indirect commands the GPU writes), at every such slot.
-    /// A 32-bit float, normalized or integer texture there stores Metal's answer and announces
-    /// nothing. The module records no note for such a write: this is its announcement.
-    pub(crate) fn degrade_half_texel_writes(
-        &self,
-        dependencies: &[metal2vulkan::pipeline::RuntimeDependency],
-        formats: Option<BoundFormats<'_>>,
-    ) {
-        use metal2vulkan::pipeline::RuntimeFact;
-        self.degrade_heap_half_texel_writes(dependencies);
-        let mut slots = dependencies.iter().filter_map(|d| match d.fact {
-            RuntimeFact::StorageTextureHalfChannels { slot } => Some(slot),
-            _ => None,
-        });
-        let Some(first) = slots.next() else {
-            return;
-        };
-        if !self
-            .shared()
-            .announced
-            .pending(Degradation::DeviceNanEncoding)
-            || self
-                .compile_device()
-                .profile()
-                .enabled()
-                .properties
-                .contains(&metal2vulkan::device::VkProperty::MetalHalfTexelWrites)
-        {
-            return;
-        }
-        let converted = |slot: SlotRef| match formats {
-            Some(f) => f(slot).map(|pf| (slot, Some(pf))).filter(|(_, pf)| {
-                pf.is_some_and(metal2vulkan::metal::format::half_write_nans_converted)
-            }),
-            None => Some((slot, None)),
-        };
-        let Some((slot, format)) = std::iter::once(first).chain(slots).find_map(converted) else {
-            return;
-        };
-        self.degrade(Degradation::DeviceNanEncoding, || {
-            let bound = match format {
-                Some(pf) => format!("bound as {pf:?}"),
-                None => "of a format the GPU's commands bind".to_owned(),
-            };
-            (
-                format!("the {:?} function of a pipeline state", slot.stage),
-                format!(
-                    "it writes `half` texels to texture {} {bound}, whose NaNs the device \
-                     stores as it converts them, not as Metal stores a written half (the \
-                     half's own bits in a 16-bit float channel, the format's canonical NaN in a \
-                     packed small float one)",
-                    slot.index
-                ),
-            )
-        });
-    }
-
-    /// Announce `PrecisionNote::DeviceNanEncoding` at a draw or dispatch of a pipeline of
     /// `dependencies` whose writes through heap handles store half-float members' bits through
     /// the unsigned integer twin (`RuntimeFact::HeapHalfTexelWrites`), where the device's heap
     /// holds a live texture such a write stores the device's conversion of a NaN in
     /// (`heap_sets::NanResidue`: a half-float texture the twin does not hold, and for a `half`
     /// write a packed small float one). Every texture the device holds is at its resource ID for
     /// every command (`heap_sets.rs`), so any of them may be one the function's handles name.
-    fn degrade_heap_half_texel_writes(
+    pub(crate) fn degrade_half_texel_writes(
         &self,
         dependencies: &[metal2vulkan::pipeline::RuntimeDependency],
     ) {

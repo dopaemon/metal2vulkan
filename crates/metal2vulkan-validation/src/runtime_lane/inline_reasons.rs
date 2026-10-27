@@ -112,14 +112,13 @@ fn a_pass_that_does_not_record_inline_counts_the_first_check_that_ruled_it_out()
 }
 
 /// The counts of passes kept from recording inline by a color's actions, then by the first
-/// action ruled out: a `DontCare` load, a reach past the render area not shared, a clear to a
-/// NaN, a resolve, a store.
-fn actions_counts(counts: &WorkCounts) -> [u64; 6] {
+/// action ruled out: a `DontCare` load, a reach past the render area not shared, a resolve, a
+/// store.
+fn actions_counts(counts: &WorkCounts) -> [u64; 5] {
     [
         counts.passes_not_inline_actions,
         counts.passes_not_inline_actions_dont_care_load,
         counts.passes_not_inline_actions_unequal_reach,
-        counts.passes_not_inline_actions_nan_clear,
         counts.passes_not_inline_actions_resolve,
         counts.passes_not_inline_actions_store,
     ]
@@ -131,14 +130,14 @@ fn actions_counts(counts: &WorkCounts) -> [u64; 6] {
 /// area of half the texture's side, which Metal's clear of whole 32-pixel tiles reaches past,
 /// beside a second color loaded, whose texels past the render area Metal keeps (where it is
 /// alone, the pass records inline over the reach), and a larger texture cleared past a memoryless
-/// color's side, which sets the render area; an `RGBA16Float` texture cleared to a NaN,
-/// whose bits the device's clear would not keep; resolved, a single-sampled attachment's texels
-/// copied into the resolve texture; and stored `DontCare`.
+/// color's side, which sets the render area; resolved, a single-sampled attachment's texels
+/// copied into the resolve texture; and stored `DontCare`. An `RGBA16Float` texture cleared to a
+/// NaN, which the device's clear converts, records inline.
 #[test]
 fn a_pass_kept_by_a_color_s_actions_counts_the_first_action_ruled_out() {
     let (messages, _cache, lane) = lane();
     let rgba16f = PixelFormat::RGBA16Float;
-    let ran = |descriptor: &RenderPassDescriptor, pf: PixelFormat| -> [u64; 6] {
+    let ran = |descriptor: &RenderPassDescriptor, pf: PixelFormat| -> [u64; 5] {
         let colors = descriptor
             .color_attachments
             .iter()
@@ -155,16 +154,12 @@ fn a_pass_kept_by_a_color_s_actions_counts_the_first_action_ruled_out() {
     let stored = color_pass(&target, None, StoreAction::Store, (0, 0));
     let mut undefined = stored.clone();
     undefined.color_attachments[0].load_action = LoadAction::DontCare;
-    assert_eq!(
-        ran(&undefined, RGBA8),
-        [1, 1, 0, 0, 0, 0],
-        "loaded DontCare"
-    );
+    assert_eq!(ran(&undefined, RGBA8), [1, 1, 0, 0, 0], "loaded DontCare");
     let mut part = stored.clone();
     (part.render_target_width, part.render_target_height) = (SIZE / 2, SIZE / 2);
     assert_eq!(
         ran(&part, RGBA8),
-        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
         "cleared past half its side, alone"
     );
     let beside = lane.single(RGBA8);
@@ -174,7 +169,7 @@ fn a_pass_kept_by_a_color_s_actions_counts_the_first_action_ruled_out() {
     loaded.store_action = StoreAction::Store;
     assert_eq!(
         ran(&part, RGBA8),
-        [1, 0, 1, 0, 0, 0],
+        [1, 0, 1, 0, 0],
         "cleared past half its side, beside a color loaded"
     );
     // A 64x64 texture cleared over the 4x4 render area of a memoryless color beside it, loaded and
@@ -200,13 +195,13 @@ fn a_pass_kept_by_a_color_s_actions_counts_the_first_action_ruled_out() {
     cleared.store_action = StoreAction::Store;
     assert_eq!(
         ran(&past, RGBA8),
-        [1, 0, 1, 0, 0, 0],
+        [1, 0, 1, 0, 0],
         "cleared past a memoryless color's side"
     );
     let half = lane.single(rgba16f);
     let mut nan = color_pass(&half, None, StoreAction::Store, (0, 0));
     nan.color_attachments[0].clear_color = ClearColor::new(f64::NAN, 0.0, 0.0, 1.0);
-    assert_eq!(ran(&nan, rgba16f), [1, 0, 0, 1, 0, 0], "cleared to a NaN");
+    assert_eq!(ran(&nan, rgba16f), [0, 0, 0, 0, 0], "cleared to a NaN");
     let resolve = lane.single(RGBA8);
     let resolved = color_pass(
         &target,
@@ -214,9 +209,9 @@ fn a_pass_kept_by_a_color_s_actions_counts_the_first_action_ruled_out() {
         StoreAction::MultisampleResolve,
         (0, 0),
     );
-    assert_eq!(ran(&resolved, RGBA8), [1, 0, 0, 0, 1, 0], "resolved");
+    assert_eq!(ran(&resolved, RGBA8), [1, 0, 0, 1, 0], "resolved");
     let unstored = color_pass(&target, None, StoreAction::DontCare, (0, 0));
-    assert_eq!(ran(&unstored, RGBA8), [1, 0, 0, 0, 0, 1], "stored DontCare");
+    assert_eq!(ran(&unstored, RGBA8), [1, 0, 0, 0, 1], "stored DontCare");
     drop((target, beside, scratch, wide, half, resolve));
     quiet(lane, &messages);
 }
