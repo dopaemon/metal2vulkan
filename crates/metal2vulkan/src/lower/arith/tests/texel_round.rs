@@ -111,42 +111,6 @@ fn f32_to_half_rounds_exactly_in_every_mode() {
     }
 }
 
-/// `f32_to_half_by` rounds every probe like `f32_to_half` in the mode its two `bool`s choose:
-/// toward zero wherever `toward_zero`, else ties away where `away`, else ties to even.
-#[test]
-fn f32_to_half_by_rounds_in_the_chosen_mode() {
-    let s = float(32);
-    let b = Form {
-        held: Held::Bool,
-        lanes: 1,
-    };
-    for (tz, away, mode) in [
-        (false, false, HalfRounding::NearestEven),
-        (false, true, HalfRounding::NearestAway),
-        (true, false, HalfRounding::TowardZeroSaturating),
-        (true, true, HalfRounding::TowardZeroSaturating),
-    ] {
-        let cases: Vec<Case> = half_probe_bits()
-            .into_iter()
-            .map(|x| vec![vec![x], vec![u64::from(tz)], vec![u64::from(away)]])
-            .collect();
-        check(
-            &format!("f32_to_half_by {tz} {away}"),
-            &[s, b, b],
-            s,
-            &|fb, x| texel_round::f32_to_half_by(fb, s, x[0], (x[1], x[2])),
-            &cases,
-            &|c| {
-                Some(vec![u64::from(half_of(
-                    f32::from_bits(arg(c, 0) as u32),
-                    mode,
-                ))])
-            },
-            false,
-        );
-    }
-}
-
 /// Every half magnitude's neighbourhood that decides a directed rounding, both signs: the half
 /// itself, its tie with the next half, and one `f32` ulp on either side of the tie (one below a
 /// half is one above the tie before it), for every finite half; with the `f32` denormals, the
@@ -195,7 +159,6 @@ fn f32_to_half_from_even_is_exact_on_every_tie() {
         })
         .collect();
     for q in [
-        QuantizeForm::Integer,
         QuantizeForm::Device,
         QuantizeForm::Converted,
         QuantizeForm::Controlled,

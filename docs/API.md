@@ -86,8 +86,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   feature without implementing it; there such accesses are not contained, as on native Metal.)
 - **Fast native forms off Apple's GPUs.** The device's own sampler (its filter of a two-plane
   YCbCr texture among them), maths library, divisions, fused multiply-adds, texel conversions,
-  `half` rounding, NaN bits, min/max, rounding order of `dot`/`mix`/`fast::sqrt`, and blend of a
-  `half` color. Each records a precision note with its bound, and each has an exact switch.
+  NaN bits, min/max and rounding order of `dot`/`mix`/`fast::sqrt`. Each records a precision note
+  with its bound, and each has an exact switch. The device's own `half` rounding and its blend of
+  a `half` color have none: each records its note.
   `DevicePolicy::exact_answers()` turns on every exact form but sampling's, Metal's filter of a
   two-plane YCbCr texture (`YCbCrFilterPolicy::Exact`) included; `sampling =
   SamplingPolicy::Exact` emulates Metal's sampler too.
@@ -2668,9 +2669,9 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   infinities, and NaNs run without `SignedZeroInfNanPreserve`, which the device does not support at
   their width. Under `FloatMathsPolicy::Exact` so does an operation that answers Metal's zero of
   its sign: a fused multiply-add the translation computes itself (in `double` or in integers
-  without `OpFmaKHR`, and a `half` one through `float`), one by `OpFmaKHR` whose result is at most
-  `2^-126` in magnitude, and a `float` product flushed below `2^-126`. Without the mode the device
-  may answer such a zero with either sign.
+  without `OpFmaKHR`), one by `OpFmaKHR` whose result is at most `2^-126` in magnitude, and a
+  `float` product flushed below `2^-126`. Without the mode the device may answer such a zero with
+  either sign.
 - `metal2vulkan-degrade-device-ray-intersection` (precision).
   `PrecisionNote::DeviceRayIntersection`: A ray intersection traversed by the device's ray query.
 - `metal2vulkan-degrade-fast-math-rewrites` (precision). `PrecisionNote::FastMathRewrites`: Float
@@ -3058,11 +3059,11 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   device's `OpFDiv`, not the translation's correctly rounded routine or its `RN(1 / y)`, on a device
   whose division is not Metal's own, under `FloatMathsPolicy::Native` (the default).
 - `metal2vulkan-degrade-native-fma` (precision). `PrecisionNote::NativeFma`: Native device maths: a
-  `float` fused multiply-add on a device without `OpFmaKHR`, or a `half` one where the device's
-  16-bit `Fma` is not measured to be Metal's and the device has no 16-bit `OpFmaKHR` under the
-  16-bit float controls, is the device's `GLSL.std.450 Fma` (on the `half` operands held in
-  `float`, its result rounded to `half`), not the translation's correctly rounded routine, under
-  `FloatMathsPolicy::Native` (the default).
+  `float` fused multiply-add on a device without `OpFmaKHR`, under `FloatMathsPolicy::Native` (the
+  default), not the translation's correctly rounded routine, or a `half` one, under every policy,
+  where the device's 16-bit `Fma` is not measured to be Metal's and the device has no 16-bit
+  `OpFmaKHR` under the 16-bit float controls, is the device's `GLSL.std.450 Fma` (on the `half`
+  operands held in `float`, its result rounded to `half`).
 - `metal2vulkan-degrade-device-texel-conversion` (precision).
   `PrecisionNote::DeviceTexelConversion`: Native device sampling (a texel conversion): the module
   hands a read, sample or gather with a `float` result the device's own conversion of the texel's
@@ -3071,18 +3072,17 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
 - `metal2vulkan-degrade-native-half-conversion` (precision). `PrecisionNote::NativeHalfConversion`:
   Native half rounding (a conversion): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's
-  conversion of the `float` to 16 bits and its widening, not by the translation's integer rounding,
-  on a device with `shaderFloat16` whose conversion is neither measured to be Metal's `half(float)`
-  (MoltenVK on an Apple GPU) nor made Metal's by its float controls (`RoundingModeRTE`,
+  conversion of the `float` to 16 bits and its widening, on a device with `shaderFloat16` whose
+  float controls do not make that conversion Metal's `half(float)` (`RoundingModeRTE`,
   `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV round through the
-  conversion under them, exactly, with no note), under `HalfRoundingPolicy::Native`: NVIDIA, whose
-  driver folds the conversion's round trip even under those controls
-  (`DriverWorkaround::HalfConversionPairFolded`), lavapipe, and any device without them.
+  conversion under them, exactly, with no note): NVIDIA, whose driver folds the conversion's round
+  trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK,
+  lavapipe, and any device without them.
 - `metal2vulkan-degrade-native-half-quantize` (precision). `PrecisionNote::NativeHalfQuantize`:
   Native half rounding (a quantize): the module rounds a `half` result it computes in `float` by the
   device's `OpQuantizeToF16`, a result the quantize flushes to zero rounded by the translation to
-  the half denormal grid, not by its integer rounding, on a device without `shaderFloat16` whose
-  quantize is not measured to round as Metal's conversion does, under `HalfRoundingPolicy::Native`.
+  the half denormal grid, on a device without `shaderFloat16` whose quantize is not measured to
+  round as Metal's conversion does.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, on a device whose arithmetic is not measured to answer Metal's canonical NaN, under

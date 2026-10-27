@@ -663,25 +663,29 @@ fn half_triples() -> Vec<[u64; 3]> {
     out
 }
 
-/// A `half` fused multiply-add rounds once on every profile: the exact `float` sum moved to odd,
-/// then the one rounding to `half` (no `F16FmaDoubleRounding`).
+/// A `half` fused multiply-add on 16 bits, by the device's 16-bit `Fma` ([`Route::F16`]) or by
+/// `OpFmaKHR` on 16 bits ([`Route::F16Khr`]), is the exact sum rounded once to `half` where the
+/// device rounds it once, as the interpreter does: its operands narrow and its result widens
+/// exactly.
 #[test]
-fn half_fused_multiply_add_rounds_once() {
+fn half_fused_multiply_add_on_16_bits_rounds_once() {
     let triples = half_triples();
-    for (lanes, per_lane) in [(1u8, false), (2, false), (2, true)] {
-        let fma = Fma {
-            form: vec(float(16), lanes),
-            route: Route::HalfOdd,
-            tiny: None,
-        };
-        check_fma(
-            &format!("fma half x{lanes}, per lane {per_lane}"),
-            fma,
-            per_lane,
-            &lane_cases(&triples, lanes),
-            &fma16,
-            false,
-        );
+    for route in [Route::F16, Route::F16Khr] {
+        for lanes in [1u8, 2] {
+            let fma = Fma {
+                form: vec(float(16), lanes),
+                route,
+                tiny: None,
+            };
+            check_fma(
+                &format!("fma half {route:?} x{lanes}"),
+                fma,
+                false,
+                &lane_cases(&triples, lanes),
+                &fma16,
+                false,
+            );
+        }
     }
 }
 
@@ -708,8 +712,9 @@ fn the_half_reference_rounds_the_exact_sum() {
 /// where 64-bit floats and integers are, else the integer routine; `half` has its own, the device's
 /// 16-bit `Fma` where the driver is measured to compute it as Metal's `half` `fma` and
 /// `shaderFloat16` is enabled (the MoltenVK captures alone), else `OpFmaKHR` on 16 bits where
-/// `shaderFmaFloat16` is enabled and the profile rounds under the 16-bit float controls, under
-/// either policy, and `bfloat` and `double` keep their own lowering.
+/// `shaderFmaFloat16` is enabled and the profile rounds under the 16-bit float controls, else the
+/// device's `float` `Fma` ([`Route::Native`]), under either policy, with no routine; and `bfloat`
+/// and `double` keep their own lowering.
 ///
 /// Under native device maths (the default policy) a profile whose functions are not Metal's takes
 /// the device's `Fma` ([`Route::Native`]) where it would take a routine. Under
@@ -724,18 +729,18 @@ fn the_fused_multiply_add_route_follows_the_profile() {
     use crate::pipeline::testing::exact_maths;
     use crate::spirv::testing::{committed_profiles_with, is_moltenvk_capture};
     // The `half` route a profile offers whatever its policy: Metal's measured `Fma`, or `OpFmaKHR`
-    // on 16 bits under the float controls, or none.
-    let exact_half = |p: &crate::device::DeviceProfile| {
+    // on 16 bits under the float controls, else the device's `float` `Fma`.
+    let half_route = |p: &crate::device::DeviceProfile| {
         let l = &p.fields().leaf;
         if p.takes_driver_deviation(DriverDeviation::MetalHalfFma) && l.float16 {
-            Some(Route::F16)
+            Route::F16
         } else if l.fma16
             && crate::lower::arith::narrow::quantize_form(p)
                 == crate::spirv::builder::QuantizeForm::Controlled
         {
-            Some(Route::F16Khr)
+            Route::F16Khr
         } else {
-            None
+            Route::Native
         }
     };
     let mut native = 0;
@@ -750,7 +755,7 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         let f = Fma::on(&p, float(32)).expect("float");
         assert_eq!((f.route, f.routine()), (want, None), "{stem}");
         let h = Fma::on(&p, float(16)).expect("half");
-        let half = exact_half(&p).unwrap_or(Route::Native);
+        let half = half_route(&p);
         assert_eq!((h.route, h.routine()), (half, None), "{stem}");
         khr16 += usize::from(half == Route::F16Khr);
     }
@@ -795,17 +800,9 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         flushing += usize::from(
             tiny.is_some() && p.takes_driver_deviation(DriverDeviation::MetalFloatDenormals),
         );
-        let half = exact_half(&p).unwrap_or(Route::HalfOdd);
+        let half = half_route(&p);
         let h = Fma::on(&p, float(16)).expect("half");
-        assert_eq!(h.route, half, "{stem}");
-        assert_eq!(
-            h.routine(),
-            (half == Route::HalfOdd).then_some(Routine {
-                route: half,
-                lanes: 1
-            }),
-            "{stem}"
-        );
+        assert_eq!((h.route, h.routine()), (half, None), "{stem}");
         if half == Route::F16 {
             f16.push(stem.clone());
         }
@@ -857,12 +854,10 @@ fn defined_words(defs: &dyn Fn(&mut ModuleBuilder) -> BResult<()>) -> usize {
 
 /// The routines' words stay within their estimates: each routine's function, defined alone, and
 /// each use; and a routine defined per lane, beside its route's routine on one lane, its type
-/// included. `half`'s in the integer rounding and in the device's quantize. A use of `OpFmaKHR`
-/// checked ([`Fma::checked`]) stays within its own estimate, on one lane and four, by the integer
-/// routine and by the routine of its small results.
+/// included. A use of `OpFmaKHR` checked ([`Fma::checked`]) stays within its own estimate, on one
+/// lane and four, by the integer routine and by the routine of its small results.
 #[test]
 fn fused_multiply_add_routines_fit_their_word_estimates() {
-    use crate::spirv::builder::QuantizeForm;
     let lanes_and_routes = [1u8, 4]
         .into_iter()
         .flat_map(|lanes| [(lanes, Route::Soft), (lanes, Route::Wide)]);
@@ -906,74 +901,59 @@ fn fused_multiply_add_routines_fit_their_word_estimates() {
             "{what}: {words} words against the estimate {estimate} (within its last third)"
         );
     };
-    for q in [QuantizeForm::Integer, QuantizeForm::Device] {
-        let in_q = |defs: &dyn Fn(&mut ModuleBuilder) -> BResult<()>| {
-            defined_words(&|b| {
-                b.set_quantize_form(q);
-                defs(b)
-            })
-        };
-        for route in [Route::Wide, Route::Soft, Route::HalfOdd] {
-            let one = Routine { route, lanes: 1 };
-            let alone = in_q(&|b| fma::define(b, one).map(drop));
-            for lanes in [1u8, 4] {
-                let r = Routine { route, lanes };
-                let words = in_q(&|b| fma::define(b, r).map(drop));
-                within(&format!("{route:?} x{lanes} ({q:?})"), words, r.words(q));
-            }
-            for lanes in [2u8, 4] {
-                let r = Routine { route, lanes };
-                let both = in_q(&|b| {
-                    let id = fma::define(b, one)?;
-                    fma::define_per_lane(b, r, id).map(drop)
-                });
-                within(
-                    &format!("{route:?} x{lanes} per lane ({q:?})"),
-                    both - alone,
-                    r.per_lane_words(),
-                );
-            }
-        }
-        // The routine of `OpFmaKHR`'s small results, never defined per lane.
+    for route in [Route::Wide, Route::Soft] {
+        let one = Routine { route, lanes: 1 };
+        let alone = defined_words(&|b| fma::define(b, one).map(drop));
         for lanes in [1u8, 4] {
-            let r = Routine {
-                route: Route::Khr,
-                lanes,
-            };
-            let words = in_q(&|b| fma::define(b, r).map(drop));
-            within(&format!("Khr x{lanes} ({q:?})"), words, r.words(q));
+            let r = Routine { route, lanes };
+            let words = defined_words(&|b| fma::define(b, r).map(drop));
+            within(&format!("{route:?} x{lanes}"), words, r.words());
         }
+        for lanes in [2u8, 4] {
+            let r = Routine { route, lanes };
+            let both = defined_words(&|b| {
+                let id = fma::define(b, one)?;
+                fma::define_per_lane(b, r, id).map(drop)
+            });
+            within(
+                &format!("{route:?} x{lanes} per lane"),
+                both - alone,
+                r.per_lane_words(),
+            );
+        }
+    }
+    // The routine of `OpFmaKHR`'s small results, never defined per lane.
+    for lanes in [1u8, 4] {
+        let r = Routine {
+            route: Route::Khr,
+            lanes,
+        };
+        let words = defined_words(&|b| fma::define(b, r).map(drop));
+        within(&format!("Khr x{lanes}"), words, r.words());
     }
 }
 
 /// A route a module calls on one lane and on more is defined per lane on more; one called only on
 /// `k` (two or more) vector lane counts gets its routine on one lane where the `k - 1` sequences
 /// that saves outweigh the per-lane routines twice (the integer and `double` routes on two lane
-/// counts and on three, and `half`'s on three, not on two, where its rounding is the device's
-/// quantize; in the integer rounding, on two too); a route called on one lane count keeps its one
-/// routine, on any lanes. Each routine is charged its per-lane words where it is defined per lane.
+/// counts and on three); a route called on one lane count keeps its one routine, on any lanes. Each
+/// routine is charged its per-lane words where it is defined per lane.
 #[test]
 fn a_route_on_several_lane_counts_holds_its_sequence_once() {
-    use crate::spirv::builder::QuantizeForm;
-    let q = QuantizeForm::Device;
     let r = |route, lanes| Routine { route, lanes };
     let mut fmas = BTreeSet::from([
         r(Route::Soft, 2),
         r(Route::Soft, 4),
-        r(Route::HalfOdd, 2),
-        r(Route::HalfOdd, 4),
         r(Route::Wide, 1),
         r(Route::Wide, 3),
     ]);
-    fma::complete(&mut fmas, q);
+    fma::complete(&mut fmas);
     assert_eq!(
         fmas,
         BTreeSet::from([
             r(Route::Soft, 1),
             r(Route::Soft, 2),
             r(Route::Soft, 4),
-            r(Route::HalfOdd, 2),
-            r(Route::HalfOdd, 4),
             r(Route::Wide, 1),
             r(Route::Wide, 3),
         ])
@@ -988,36 +968,24 @@ fn a_route_on_several_lane_counts_holds_its_sequence_once() {
         [r(Route::Wide, 3), r(Route::Soft, 2), r(Route::Soft, 4)]
     );
     // A double route on two vector lane counts gets its one-lane routine too, and so does one on
-    // three, which saves two sequences, as does `half`'s on three.
+    // three, which saves two sequences.
     for lanes in [&[2u8, 4][..], &[2, 3, 4]] {
         let mut double: BTreeSet<Routine> = lanes.iter().map(|&n| r(Route::Wide, n)).collect();
-        fma::complete(&mut double, q);
+        fma::complete(&mut double);
         assert!(double.contains(&r(Route::Wide, 1)), "{double:?}");
     }
-    let mut half = BTreeSet::from([
-        r(Route::HalfOdd, 2),
-        r(Route::HalfOdd, 3),
-        r(Route::HalfOdd, 4),
-    ]);
-    fma::complete(&mut half, q);
-    assert!(half.contains(&r(Route::HalfOdd, 1)), "{half:?}");
     for x in &fmas {
         let want = if per_lane.contains(x) {
             x.per_lane_words()
         } else {
-            x.words(q)
+            x.words()
         };
-        assert_eq!(x.words_among(&fmas, q), want, "{x:?}");
+        assert_eq!(x.words_among(&fmas), want, "{x:?}");
     }
     // Completing again adds nothing.
     let again = fmas.clone();
-    fma::complete(&mut fmas, q);
+    fma::complete(&mut fmas);
     assert_eq!(fmas, again);
-    // In the integer rounding a `half` sequence is the larger by its rounding: on two and four
-    // lanes too, its routines call the one-lane routine.
-    let mut half = BTreeSet::from([r(Route::HalfOdd, 2), r(Route::HalfOdd, 4)]);
-    fma::complete(&mut half, QuantizeForm::Integer);
-    assert!(half.contains(&r(Route::HalfOdd, 1)), "{half:?}");
 }
 
 /// Run Metal's `mix` ([`math::metal_mix`]) through `fma`'s route (its routine defined when it
@@ -1108,8 +1076,9 @@ fn metal_float_mixes() -> Vec<[u64; 4]> {
 /// Metal's `mix(x, y, t)` on `float` and `half` is `fma(t, y, fma(-t, x, x))`, each fused
 /// multiply-add rounding once on the profile's route, on scalars and vectors. Against the
 /// composition of each route's reference over the fused multiply-add triples (as `(x, y, t)`):
-/// bit for bit on the routines, which answer Metal's `fma` ([`metal_fma32`]); `OpFmaKHR` and the
-/// `half` route by value, a NaN for a NaN. And Metal's recorded words: [`metal_float_mixes`] on
+/// bit for bit on the routines, which answer Metal's `fma` ([`metal_fma32`]); `OpFmaKHR` and
+/// `half`'s `OpFmaKHR` on 16 bits ([`Route::F16Khr`]) by value, a NaN for a NaN. And Metal's
+/// recorded words: [`metal_float_mixes`] on
 /// every `float` route (bit for bit on the routines), and `nan_half`'s `mix(-0.3, 0.7, 0.2)`
 /// (`0xB4CD`, `0x399A`, `0x3266`), `0xAE68` where the blend gives `0xAE66`, and `mix(inf, 0, 0)`
 /// and `mix(inf, 1, 0.5)`, NaN.
@@ -1167,7 +1136,7 @@ fn mix_is_metals_two_fused_multiply_adds() {
     for lanes in [1u8, 2] {
         let fma = Fma {
             form: vec(float(16), lanes),
-            route: Route::HalfOdd,
+            route: Route::F16Khr,
             tiny: None,
         };
         check_mix(
@@ -1339,8 +1308,8 @@ fn dot_cases(triples: &[[u64; 3]], lanes: u8) -> Vec<Case> {
 /// chain of each route's fused multiply-add over the fused multiply-add triples (bit for bit on the
 /// routines, which answer Metal's `fma`; with the chain's values flushed on `OpFmaKHR` where the
 /// device may keep a denormal), and against Metal's recorded words ([`METAL_FLOAT_DOTS`], bit for
-/// bit on every route); on `half`'s routine the same against the `half` chain and
-/// [`METAL_HALF_DOTS`].
+/// bit on every route); on `half`'s `OpFmaKHR` on 16 bits ([`Route::F16Khr`]) the same against the
+/// `half` chain and [`METAL_HALF_DOTS`].
 #[test]
 fn dot_is_metals_fused_chain() {
     let triples = float_triples();
@@ -1407,7 +1376,7 @@ fn dot_is_metals_fused_chain() {
     };
     let fma = Fma {
         form: float(16),
-        route: Route::HalfOdd,
+        route: Route::F16Khr,
         tiny: None,
     };
     for lanes in [2u8, 3, 4] {

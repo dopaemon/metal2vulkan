@@ -5,8 +5,7 @@
 //! kinds a bind's notices are made of. So a variant the fit reduced while its base was not
 //! announces `exact-forms-over-compiler-limit`, once per device, naming the forms dropped and its
 //! state's kind, and a bind of it on a device asking for the kind at every occurrence announces it
-//! there; the base announces nothing of it. The notice names each dropped form, a 16-bit float
-//! texel's own bits through a read (`HalfTexelBitsPolicy::Exact`) among them, so a consumer hears
+//! there; the base announces nothing of it. The notice names each dropped form, so a consumer hears
 //! which exact answer the fit gave up.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
@@ -72,19 +71,15 @@ fn library(name: &str) -> Library {
     Library::from_air(&bitcode).unwrap()
 }
 
-/// Add to `dependencies` the fit's record of dropping exact sampling, exact float maths and the
-/// 16-bit float texel's own bits through a read.
+/// Add to `dependencies` the fit's record of dropping exact sampling and exact float maths.
 fn fit_into(dependencies: &mut Vec<RuntimeDependency>) {
     dependencies.push(RuntimeDependency::new(
         RuntimeFact::ExactFormsOverCompilerLimit {
             sampling: true,
             float_maths: true,
             texel_conversion: false,
-            half_rounding: false,
             nan_and_min_max: false,
             rounding_order: false,
-            half_blend: false,
-            half_texel_bits: true,
         },
         Mechanism::None,
     ));
@@ -200,9 +195,8 @@ fn a_variant_fitted_while_its_base_was_not_still_announces() {
     let (object, reason) = &said[0];
     assert_eq!(object, "a render pipeline state");
     assert!(
-        reason.contains(
-            "exact sampling, exact float maths, exact 16-bit float texel bits through a read"
-        ) && !reason.contains("exact half blend"),
+        reason.contains("exact sampling, exact float maths")
+            && !reason.contains("exact half blend"),
         "{reason}"
     );
     // Once per device: a later fitted variant adds no second notice.
@@ -248,9 +242,7 @@ fn every_kind_of_fitted_pipeline_announces_its_state_kind() {
     assert_eq!(said.len(), 1, "{said:?}");
     assert_eq!(said[0].0, "a compute pipeline state");
     assert!(
-        said[0].1.contains(
-            "exact sampling, exact float maths, exact 16-bit float texel bits through a read"
-        ),
+        said[0].1.contains("exact sampling, exact float maths"),
         "{said:?}"
     );
 

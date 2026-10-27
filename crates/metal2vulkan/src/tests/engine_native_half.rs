@@ -1,11 +1,9 @@
-//! Native half rounding: on a device whose conversion to 16 bits and whose `OpQuantizeToF16` are
-//! not measured to round as Metal's `half(float)` does, the default policy
-//! (`HalfRoundingPolicy::Native`) rounds a `half` result the module computes in `float` through
-//! the device's conversion and its widening where the profile has `shaderFloat16`
-//! (`QuantizeForm::Converted`), else through the device's quantize (`QuantizeForm::Device`),
-//! recording `PrecisionNote::NativeHalfConversion` or `NativeHalfQuantize` and requiring no
-//! measured fact, where `HalfRoundingPolicy::Exact` rounds in integer arithmetic. A device whose
-//! form is measured keeps it, and its requirement, under either policy.
+//! Native half rounding: a `half` result the module computes in `float` rounds through the device's
+//! conversion and its widening under the float controls that make it Metal's
+//! (`QuantizeForm::Controlled`), else through that conversion as it is where the profile has
+//! `shaderFloat16` (`QuantizeForm::Converted`), recording `PrecisionNote::NativeHalfConversion`,
+//! else through the device's quantize (`QuantizeForm::Device`), recording `NativeHalfQuantize`
+//! unless the quantize is measured to round as Metal's `half(float)` does.
 //!
 //! The kernels read two `float`s from buffer 0 and store one result after them: a `half` sum of
 //! the two narrowed, and the first narrowed alone. `llvm-as` assembles the module; without it the
@@ -13,8 +11,8 @@
 
 use crate::air::{self, SpecRequest};
 use crate::device::requirements::VkProperty;
+use crate::device::DevicePolicy;
 use crate::device::DeviceProfile;
-use crate::device::{DevicePolicy, HalfRoundingPolicy};
 use crate::error::DriverDeviation;
 use crate::lower::arith::narrow::{controlled_modes, native_rounding, quantize_form};
 use crate::lower::emit::emit_module;
@@ -22,8 +20,7 @@ use crate::lower::select::{select, LowerInputs};
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, compile_kept, exact_half, link_and_validate, llvm_assemble, meter, profile,
-    AssembleError, Scratch,
+    compile, compile_kept, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
 };
 use crate::pipeline::PrecisionNote;
 use crate::spirv::builder::QuantizeForm;
@@ -33,15 +30,6 @@ use crate::spirv::ir::{
     BinOp, ConstKind, Constant, Contraction, ConvOp, GlslOp, Inst, Type, TypedModule, ValueOrigin,
 };
 use crate::spirv::testing::committed_profiles;
-
-/// The default policy with native half rounding (`HalfRoundingPolicy::Native`), named so these
-/// tests hold whichever half rounding the default takes.
-fn native() -> DevicePolicy {
-    DevicePolicy {
-        half_rounding: HalfRoundingPolicy::Native,
-        ..DevicePolicy::default()
-    }
-}
 
 /// The kernels: a name and the body defining `%r` from `%a` and `%b`.
 const KERNELS: [(&str, &str); 2] = [
@@ -142,19 +130,13 @@ fn interpret_bytes(bitcode: &[u8], entry: &str, p: &DeviceProfile, bytes: Vec<u8
     out.buffers.swap_remove(0)
 }
 
-/// The form a profile's `half` roundings take: the measured conversion, then the controlled one
-/// where the profile has `shaderFloat16` and its float controls, then the measured quantize, under
-/// either policy; else the native forms by default and the integer form under `Exact`.
-fn expected(p: &DeviceProfile, native: bool) -> QuantizeForm {
+/// The form a profile's `half` roundings take: the controlled conversion where the profile has
+/// `shaderFloat16` and its float controls, else the conversion with `shaderFloat16`, else the
+/// quantize.
+fn expected(p: &DeviceProfile) -> QuantizeForm {
     let float16 = p.fields().leaf.float16;
-    if p.takes_driver_deviation(DriverDeviation::MetalHalfConversion) && float16 {
-        QuantizeForm::Converted
-    } else if float16 && controlled_modes(p).is_some() {
+    if float16 && controlled_modes(p).is_some() {
         QuantizeForm::Controlled
-    } else if p.takes_driver_deviation(DriverDeviation::MetalHalfQuantize) {
-        QuantizeForm::Device
-    } else if !native {
-        QuantizeForm::Integer
     } else if float16 {
         QuantizeForm::Converted
     } else {
@@ -162,22 +144,24 @@ fn expected(p: &DeviceProfile, native: bool) -> QuantizeForm {
     }
 }
 
-/// Every committed profile rounds by its measured form under either policy, else natively by
-/// default (the conversion with `shaderFloat16`, the quantize without) and in integer arithmetic
-/// under `Exact`; only a native form names a note.
+/// Every committed profile rounds by the device's own form: the controlled conversion with no
+/// note, the conversion noted `NativeHalfConversion`, and the quantize noted `NativeHalfQuantize`
+/// unless it is measured to be Metal's.
 #[test]
-fn native_half_rounding_is_the_default_where_no_form_is_measured() {
+fn half_rounding_is_the_devices_on_every_profile() {
     let profiles = committed_profiles().expect("profiles");
     let mut kinds = [0usize; 2];
     for (stem, p) in &profiles {
-        let exact = profile(stem, exact_half()).expect("profile");
-        let (native_form, exact_form) = (quantize_form(p), quantize_form(&exact));
-        assert_eq!(native_form, expected(p, true), "{stem}");
-        assert_eq!(exact_form, expected(&exact, false), "{stem} exact");
-        assert_eq!(native_rounding(&exact, exact_form), None, "{stem} exact");
-        let note = native_rounding(p, native_form);
-        let measured = native_form == exact_form;
-        assert_eq!(note.is_none(), measured, "{stem}: {note:?}");
+        let form = quantize_form(p);
+        assert_eq!(form, expected(p), "{stem}");
+        let note = native_rounding(p, form);
+        let want = match form {
+            QuantizeForm::Controlled => None,
+            QuantizeForm::Converted => Some(PrecisionNote::NativeHalfConversion),
+            QuantizeForm::Device => (!p.takes_driver_deviation(DriverDeviation::MetalHalfQuantize))
+                .then_some(PrecisionNote::NativeHalfQuantize),
+        };
+        assert_eq!(note, want, "{stem}");
         match note {
             Some(PrecisionNote::NativeHalfConversion) => kinds[0] += 1,
             Some(PrecisionNote::NativeHalfQuantize) => kinds[1] += 1,
@@ -191,13 +175,11 @@ fn native_half_rounding_is_the_default_where_no_form_is_measured() {
     );
 }
 
-/// On lavapipe (no measured form, `shaderFloat16`, no `DenormPreserve` for 16 bits) the default
-/// rounds each kernel's `half` through the conversion, records `NativeHalfConversion`, requires
-/// neither measured fact, passes L3 and is smaller than under `Exact`, which records no native
-/// note; on a profile without `shaderFloat16` the default quantizes and records
-/// `NativeHalfQuantize`; MoltenVK keeps its measured form and requires its fact; RADV takes the
-/// controlled conversion under either policy, with no fact and no note. On the interpreter, whose
-/// conversion rounds to nearest even, the native modules answer Metal's `half(float)`.
+/// On lavapipe and MoltenVK (`shaderFloat16`, no `DenormPreserve` for 16 bits) each kernel rounds
+/// its `half` through the conversion, records `NativeHalfConversion` and requires no measured
+/// fact; on a profile without `shaderFloat16` it quantizes and records `NativeHalfQuantize`; RADV
+/// takes the controlled conversion, with no fact and no note. Each passes L3. On the interpreter,
+/// whose conversion rounds to nearest even, the native modules answer Metal's `half(float)`.
 #[test]
 fn native_half_rounding_records_its_kind_and_requires_no_fact() {
     let Some(bc) = bitcode() else {
@@ -211,53 +193,32 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         VkProperty::MetalHalfConversion,
         VkProperty::MetalHalfQuantize,
     ];
-    let cases: [(&str, Option<PrecisionNote>, Option<VkProperty>); 4] = [
-        ("lavapipe", Some(natives[0]), None),
-        ("swiftshader", Some(natives[1]), None),
-        ("moltenvk-m3", None, Some(facts[0])),
-        ("amd-780m-radv", None, None),
+    let cases: [(&str, Option<PrecisionNote>); 4] = [
+        ("lavapipe", Some(natives[0])),
+        ("swiftshader", Some(natives[1])),
+        ("moltenvk-m3", Some(natives[0])),
+        ("amd-780m-radv", None),
     ];
-    for (stem, note, fact) in cases {
-        let p = profile(stem, native()).expect("profile");
-        let exact = profile(stem, exact_half()).expect("profile");
-        let (mut native_words, mut exact_words) = (0, 0);
+    for (stem, note) in cases {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (name, _) in &KERNELS {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let noted: Vec<_> = natives.iter().filter(|n| a.precision.contains(n)).collect();
             assert_eq!(noted, note.iter().collect::<Vec<_>>(), "{what}");
-            let required: Vec<_> = facts
-                .iter()
-                .filter(|f| a.requirements.properties.contains(f))
-                .collect();
-            assert_eq!(required, fact.iter().collect::<Vec<_>>(), "{what}");
-            let e = compile(&bc, name, &exact).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            link_and_validate(&e, &exact).unwrap_or_else(|e| panic!("{what}: exact L3: {e}"));
-            assert!(
-                natives.iter().all(|n| !e.precision.contains(n)),
-                "{what}: exact {:?}",
-                e.precision
-            );
-            native_words += a.module.words.len();
-            exact_words += e.module.words.len();
-        }
-        if note.is_some() {
-            assert!(
-                native_words < exact_words,
-                "{stem}: native {native_words} words, exact {exact_words}"
-            );
-        } else {
-            assert_eq!(
-                native_words, exact_words,
-                "{stem}: a measured or controlled form"
-            );
+            for fact in &facts {
+                assert!(
+                    !a.requirements.properties.contains(fact),
+                    "{what}: {fact:?}"
+                );
+            }
         }
     }
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to
     // even, the largest half below 65520 and infinity from it, and a half denormal.
     for stem in ["lavapipe", "swiftshader"] {
-        let p = profile(stem, native()).expect("profile");
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, &p, x);
         let tie = 1.0 + 2f32.powi(-11);
         assert_eq!(run("half_narrow", [tie, 0.0]), 1.0, "{stem}: a tie to even");
@@ -314,13 +275,14 @@ fn unpacks(m: &TypedModule) -> usize {
         .count()
 }
 
-/// Under native half rounding through the device's conversion (lavapipe by default), a `half`
-/// decoded where no loop holds it is the device's widening, a `half4`'s too (one `UnpackHalf2x16` a
-/// lane, though that is more words than its exact decode), and the module records
-/// `NativeHalfConversion`; a decode inside a loop stays exact, and a module whose every decode is
-/// inside a loop records no note. Under `Exact`, and where the conversion is measured to be Metal's
-/// (MoltenVK), every decode is exact and no native note is recorded. Each module passes L3 and
-/// answers the `half`s' values on the interpreter (whose widening is exact).
+/// Under native half rounding through the device's conversion (lavapipe), a `half` decoded where
+/// no loop holds it is the device's widening, a `half4`'s too (one `UnpackHalf2x16` a lane, though
+/// that is more words than its exact decode), and the module records `NativeHalfConversion`; a
+/// decode inside a loop stays exact, and a module whose every decode is inside a loop records no
+/// note. On MoltenVK every load here is widened by the device's conversion of its bits
+/// (`lower::arith::widening`: its uses read no NaN's bits), so no decode is `UnpackHalf2x16` and no
+/// native note is recorded. Each module passes L3 and answers the `half`s' values on the
+/// interpreter (whose widening is exact).
 #[test]
 fn a_half_decode_is_the_devices_only_where_no_loop_holds_it() {
     let Some(bc) = assemble("native-half-decode", &decode_module()) else {
@@ -339,18 +301,14 @@ fn a_half_decode_is_the_devices_only_where_no_loop_holds_it() {
         0x3800 | (0x3400 << 16),
         0,
     ];
-    let cases = [
-        ("lavapipe", native(), [5, 0], true),
-        ("lavapipe", exact_half(), [0, 0], false),
-        ("moltenvk-m3", native(), [0, 0], false),
-    ];
-    for (stem, policy, want_unpacks, noted) in cases {
-        let p = profile(stem, policy).expect("profile");
+    let cases = [("lavapipe", [5, 0], true), ("moltenvk-m3", [0, 0], false)];
+    for (stem, want_unpacks, noted) in cases {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (entry, want, notes) in [
             ("both", want_unpacks[0], noted),
             ("inside", want_unpacks[1], false),
         ] {
-            let what = format!("{entry} on {stem} ({:?})", p.fields().half_rounding);
+            let what = format!("{entry} on {stem}");
             let (a, plan, kept) =
                 compile_kept(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -401,8 +359,8 @@ fn minus_zero(m: &TypedModule, c: ConstId) -> bool {
 }
 
 /// The conversions to 16 bits of 32-bit values in `m` (each `half` rounding through the
-/// conversion, `narrow::converted`), and how many of them convert a barrier: an `OpFAdd`
-/// decorated `NoContraction` whose second operand is `-0.0`.
+/// conversion, `narrow::converted`), and how many of them convert an `OpFAdd` decorated
+/// `NoContraction` whose second operand is `-0.0`.
 fn barred(m: &TypedModule) -> (usize, usize) {
     let width = |v: Value| -> Option<u8> {
         let ty = m.value(v).ok()?.ty;
@@ -451,18 +409,16 @@ fn barred(m: &TypedModule) -> (usize, usize) {
     (all, barred)
 }
 
-/// Under native half rounding through the conversion (lavapipe by default) each rounding converts
-/// the value itself, with no barrier; where the conversion is measured to be Metal's (MoltenVK)
-/// each rounding converts its barrier, `x + -0.0` decorated `NoContraction`, which keeps Metal's
-/// compiler from folding the conversion into the instruction computing the value (there an operand
-/// of the device's 16-bit arithmetic, a `half` already, converts exactly with no barrier).
+/// Each rounding through the conversion converts the value itself, on lavapipe and on MoltenVK
+/// alike: no `x + -0.0` decorated `NoContraction` stands between the value and the conversion to
+/// keep the device's compiler from folding it into the instruction computing the value.
 #[test]
 fn a_native_conversion_converts_the_value_itself() {
     let Some(bc) = bitcode() else {
         return;
     };
-    for (stem, barrier) in [("lavapipe", false), ("moltenvk-m3", true)] {
-        let p = profile(stem, native()).expect("profile");
+    for stem in ["lavapipe", "moltenvk-m3"] {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (name, _) in &KERNELS {
             let what = format!("{name} on {stem}");
             let (a, _, kept) =
@@ -470,11 +426,7 @@ fn a_native_conversion_converts_the_value_itself() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let (all, barred) = barred(&kept);
             assert!(all > 0, "{what}: a rounding through the conversion");
-            if barrier {
-                assert!(barred > 0, "{what}: no conversion of a barrier, of {all}");
-            } else {
-                assert_eq!(barred, 0, "{what}: conversions of a barrier, of {all}");
-            }
+            assert_eq!(barred, 0, "{what}: conversions of an added -0.0, of {all}");
         }
     }
 }
@@ -511,7 +463,7 @@ fn a_texels_nan_is_kept_under_native_half_rounding_only_where_the_nan_switch_ask
     };
     let switched = DevicePolicy {
         nan_and_min_max: NanMinMaxPolicy::Exact,
-        ..native()
+        ..DevicePolicy::default()
     };
     let mut kept_natively = 0usize;
     for (stem, p) in &committed_profiles().expect("profiles") {
@@ -634,7 +586,7 @@ fn rounding(words: &[u32]) -> Rounding {
 /// Metal's `half(float)` by the Vulkan spec (every ANV and RADV profile), and its driver does not
 /// fold the round trip (`DriverWorkaround::HalfConversionPairFolded`, NVIDIA's), each kernel
 /// rounds its `half` through that conversion and its widening, every one decorated
-/// `NoContraction`, with no quantize, under either policy, and computes its `half` sum on the
+/// `NoContraction`, with no quantize, and computes its `half` sum on the
 /// device's 16-bit arithmetic, between conversions that are exact and undecorated; its entry
 /// declares `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits and the
 /// modes the device's independence ties to them (`RoundingModeRTE` for 32 and 64 bits on ANV,
@@ -653,13 +605,9 @@ fn a_controlled_conversion_rounds_half_where_the_float_controls_allow() {
     };
     let mut controlled = Vec::new();
     for (stem, p) in &committed_profiles().expect("profiles") {
-        let exact = profile(stem, exact_half()).expect("profile");
-        let form = quantize_form(p);
-        let exact_form = quantize_form(&exact);
-        if form != QuantizeForm::Controlled && exact_form != QuantizeForm::Controlled {
+        if quantize_form(p) != QuantizeForm::Controlled {
             continue;
         }
-        assert_eq!(form, exact_form, "{stem}: either policy");
         controlled.push(stem.clone());
         let fc = p.fields().float_controls;
         let want: std::collections::BTreeSet<(u32, u32)> = controlled_modes(p)
@@ -822,7 +770,7 @@ fn a_half_read_from_memory_widens_by_the_conversion_under_the_float_controls() {
             stem,
             DevicePolicy {
                 nan_and_min_max: NanMinMaxPolicy::Exact,
-                ..native()
+                ..DevicePolicy::default()
             },
         )
         .expect("profile");

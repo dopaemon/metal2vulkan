@@ -8,10 +8,10 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, FloatMathsPolicy,
-    HalfBlendPolicy, HalfRoundingPolicy, HalfTexelBitsPolicy, HeapCompressionPolicy,
-    HostPageTexturePolicy, MultisampleDepthTwinPolicy, NanMinMaxPolicy, RenderLoweringPolicy,
-    ResolvePolicy, RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, TileStorePolicy,
-    Unorm8LinearFilterPolicy, VertexNormalizedPolicy, YCbCrFilterPolicy,
+    HeapCompressionPolicy, HostPageTexturePolicy, MultisampleDepthTwinPolicy, NanMinMaxPolicy,
+    RenderLoweringPolicy, ResolvePolicy, RoundingOrderPolicy, SamplingPolicy,
+    TexelConversionPolicy, TileStorePolicy, Unorm8LinearFilterPolicy, VertexNormalizedPolicy,
+    YCbCrFilterPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -67,11 +67,8 @@ fn choices() -> Vec<Choice> {
         float_maths: _,
         texel_conversion: _,
         vertex_normalized: _,
-        half_rounding: _,
         nan_and_min_max: _,
         rounding_order: _,
-        half_blend: _,
-        half_texel_bits: _,
         // The runtime's: where a multisampled `Depth32Float` texture's texels are held, the
         // texels of a carried texture's decoded twin, a heap's compressed
         // texture's image, when the host sees a command buffer complete, a loaded attachment's
@@ -95,11 +92,8 @@ fn choices() -> Vec<Choice> {
         choice!(p.float_maths: FloatMathsPolicy { Native, Exact }),
         choice!(p.texel_conversion: TexelConversionPolicy { Device, Exact }),
         choice!(p.vertex_normalized: VertexNormalizedPolicy { Device, Exact }),
-        choice!(p.half_rounding: HalfRoundingPolicy { Native, Exact }),
         choice!(p.nan_and_min_max: NanMinMaxPolicy { Native, Exact }),
         choice!(p.rounding_order: RoundingOrderPolicy { Native, Exact }),
-        choice!(p.half_blend: HalfBlendPolicy { Device, Exact }),
-        choice!(p.half_texel_bits: HalfTexelBitsPolicy { Device, Exact }),
         choice!(p.multisample_depth_twin: MultisampleDepthTwinPolicy { Device, Exact }),
         choice!(p.decoded_texels: DecodedTexelsPolicy { Compact, Exact }),
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
@@ -153,9 +147,6 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             NativeMinMax,
             NativeDot,
             NativeMix,
-            NativeHalfConversion,
-            NativeHalfQuantize,
-            HalfOutputPrecision,
         ],
         NotBuilt: [
             ExtendedRangeBlendSource,
@@ -176,6 +167,9 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             ColorAttachmentGroups,
         ],
         Elsewhere: [
+            HalfOutputPrecision,
+            NativeHalfConversion,
+            NativeHalfQuantize,
             F16FmaDoubleRounding,
             F16IntConvDoubleRounding,
             GradFromBias,
@@ -392,12 +386,12 @@ fn the_ledger_readers_read_names_and_switches() {
     );
     assert_eq!(code("DeviceSignedZeroInfNan"), "device-signed-zero-inf-nan");
     let text = "`sampling = SamplingPolicy::Exact` and `DevicePolicy::exact_answers()`, \
-                `HalfRoundingPolicy::Exact`.";
+                `CompletionPolicy::Exact`.";
     assert_eq!(
         policy_values(text),
         BTreeSet::from([
             "SamplingPolicy::Exact".to_owned(),
-            "HalfRoundingPolicy::Exact".to_owned()
+            "CompletionPolicy::Exact".to_owned()
         ])
     );
     assert_eq!(

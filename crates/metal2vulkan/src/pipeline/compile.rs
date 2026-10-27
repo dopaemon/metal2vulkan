@@ -2055,58 +2055,6 @@ pub(crate) fn unattached_colors_written(
         .collect()
 }
 
-/// Whether the pipeline names color attachment `color` of descriptor `c` for Metal's own blend
-/// alone, the entry `spec` writing it: an attachment the function blends in the storage form,
-/// where the profile asks for that blend (`lower::fragment::blends_half_in_shader`) and the
-/// function does not already read the attachment.
-///
-/// A 16-bit float attachment (`R16Float`, `RG16Float`, `RGBA16Float`) of a `half` output of one to
-/// four lanes of a module that states its math mode, under a blend Metal's model holds
-/// (`fetch::half_blend_attachment`, `fetch::half_output`).
-///
-/// And a 32-bit float attachment (`R32Float`, `RG32Float`, `RGBA32Float`) of a four-lane `half` or
-/// `float` output of a module **with** fast math, blended under a state whose forms are Metal's
-/// (`extended_range::Blend::float32`, whose
-/// [`fitted`](crate::lower::arith::extended_range::Blend::fitted) is the one sweep that measured
-/// the family: the two measured pairs at two or four channels, and the forms that need no
-/// measurement), where the write stores some channel of the format and the factors are not one and
-/// zero, which the device stores as the source anyway. Metal's arithmetic for the format without
-/// fast math is measured in no state, and at an unfitted state the generic blend is the
-/// measured-closer near-equivalent, so neither is named here (`fetch`'s module docs).
-///
-/// What only the function's body or the device can answer is the lowering's: whether a lane of the
-/// output folds into Metal's blend (`fetch::folds_into_blend`), and whether the attachment's
-/// storage form is blocked. A named attachment either of those drops keeps the device's blend, so
-/// this holds of more attachments than take the form.
-fn blended_in_shader(spec: &air::Entry, c: &ColorAttachmentDescriptor, color: u32) -> bool {
-    use crate::lower::arith::extended_range;
-    use crate::metal::ColorWriteMask as Mask;
-    let eq = crate::pipeline::lower_inputs::BlendEquation::of(c);
-    let half = crate::lower::fragment::half_blend_attachment(
-        c.pixel_format,
-        c.blending_enabled,
-        c.write_mask,
-        eq,
-    ) && crate::lower::fragment::half_output(spec, color);
-    // The channels the write keeps from the texel, as `fetch::storage_form` reads them: none where
-    // the mask covers every channel of the format, all four where it covers none of them, in which
-    // case the write stores nothing and the storage form would buy nothing.
-    let kept = crate::lower::fragment::kept_channels(c.pixel_format, c.write_mask, true);
-    let float32 = crate::lower::fragment::fetch::float32_format(c.pixel_format)
-        && c.blending_enabled
-        && !crate::pipeline::color_writes::replaces(c)
-        && spec.compile.fast_math == Some(true)
-        && !c.write_mask.contains(Mask::UNSPECIALIZED)
-        && kept != Mask::ALL
-        && crate::lower::fragment::fetch::blended_output(spec, color)
-            .is_some_and(|(_, lanes)| lanes == 4)
-        && eq.is_some_and(|eq| {
-            let written = Mask::ALL.difference(kept);
-            extended_range::Blend::float32(&eq, c.pixel_format, written).is_ok_and(|b| b.fitted())
-        });
-    half || float32
-}
-
 /// The framebuffer-fetch state of pass `d` for the specialized fragment entry `spec` on `p`
 /// (`LoweringInputs::framebuffer_fetch`): on a device that orders fetch only through the pixel
 /// interlock, the state of every attachment the entry declares a `[[color(n)]]` input of a constant
@@ -2118,11 +2066,7 @@ fn blended_in_shader(spec: &air::Entry, c: &ColorAttachmentDescriptor, color: u3
 /// of every extended-range attachment the entry writes that the pass blends (whose blend the
 /// function computes over its input attachment, `lower::fragment`'s `input_blend`), and of every
 /// word attachment it writes under a mask of some of the word's channels (whose word the function
-/// merges into its input attachment's, `color_writes::merged_word`). Where the
-/// profile asks for Metal's own blend of a blended output (`DevicePolicy::half_blend`) on a
-/// device that orders fetch through the interlock, also every attachment [`blended_in_shader`]
-/// holds that the entry writes, those it names for that alone in
-/// `FramebufferFetchInputs::half_blends`.
+/// merges into its input attachment's, `color_writes::merged_word`).
 pub(crate) fn fetch_inputs(
     spec: &air::Entry,
     d: FragmentPass<'_>,
@@ -2134,22 +2078,6 @@ pub(crate) fn fetch_inputs(
     if !matches!(spec.ep.stage, AbiStage::Fragment { .. }) || !(interlock || inputs) {
         return None;
     }
-    // Each attachment the entry writes whose blend Metal computes in the function, where the
-    // profile asks for Metal's blend there: a 16-bit float one of a `half` output, and a 32-bit
-    // float one of a four-lane output under fast math ([`blended_in_shader`]). The function
-    // computes it in the storage form where that form is exact, and leaves it to the device
-    // elsewhere.
-    let half_blends: BTreeSet<u32> = match crate::lower::fragment::blends_half_in_shader(p) {
-        true => d
-            .color_attachments
-            .iter()
-            .zip(0u32..)
-            .filter_map(|(c, color)| c.as_ref().map(|c| (c, color)))
-            .filter(|&(c, color)| blended_in_shader(spec, c, color))
-            .map(|(_, color)| color)
-            .collect(),
-        false => BTreeSet::new(),
-    };
     let blended = |color: u32| {
         d.color_attachments
             .get(color as usize)
@@ -2220,26 +2148,19 @@ pub(crate) fn fetch_inputs(
             _ => None,
         }))
         .collect();
-    // Those the pipeline names for that blend alone, which the function leaves to the device
-    // where the storage form is not exact.
-    let optional: BTreeSet<u32> = half_blends.difference(&read).copied().collect();
-    let read: BTreeSet<u32> = read.union(&half_blends).copied().collect();
     if read.is_empty() {
         return None;
     }
     // The blend over an input attachment depends on the attachments' state alone: its write is
     // the fixed function's, which the tests, coverage and views take as any other's.
     Some(match interlock {
-        true => crate::pipeline::lower_inputs::FramebufferFetchInputs {
-            half_blends: optional,
-            ..crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
-                read,
-                d.color_attachments,
-                d.depth_or_stencil,
-                d.alpha_to_coverage,
-                d.max_vertex_amplification_count,
-            )
-        },
+        true => crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
+            read,
+            d.color_attachments,
+            d.depth_or_stencil,
+            d.alpha_to_coverage,
+            d.max_vertex_amplification_count,
+        ),
         false => crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
             read,
             d.color_attachments,
@@ -2759,23 +2680,9 @@ fn compile_kept<K>(
     // function that writes no memory. A variant compiled to read them so states its own: its only
     // texel access of each is the entry's copy, at the fragment's own pixel.
     let snapshots: Vec<u32> = plan.families.fragment.snapshot.keys().copied().collect();
-    // The fetches the copy of each makes: its image, and its unsigned integer alias too where the
-    // snapshot holds the texel's own 16 bits, the copy's two exclusive arms.
-    let copied: Vec<(u32, u32)> = snapshots
-        .iter()
-        .map(|&i| {
-            let half_bits = plan
-                .families
-                .texture
-                .slots
-                .get(&i)
-                .is_some_and(|s| s.half_bits_snapshot);
-            (i, 1 + u32::from(half_bits))
-        })
-        .collect();
     let snapshot_textures = match (snapshots.is_empty(), writes_memory) {
         (false, _) => {
-            if !crate::spirv::requirements::snapshot_copies_alone(&module, &copied, m)? {
+            if !crate::spirv::requirements::snapshot_copies_alone(&module, &snapshots, m)? {
                 return Err(Error::Internal(InternalError::new(
                     InternalKind::Invariant,
                     "a snapshot variant that reads its texture outside the copy",
@@ -2791,17 +2698,16 @@ fn compile_kept<K>(
             crate::spirv::requirements::snapshot_textures(&module, &own_pixel_textures, m)?
         }
     };
-    // A `half` rounded through `OpQuantizeToF16` (`QuantizeForm::Device`) because the device's
-    // is measured to round as Metal does: the module requires that fact. Elsewhere a `half` rounds
-    // by integer arithmetic, exact on every device, and no module holds a quantize.
+    // A `half` rounded through `OpQuantizeToF16` (`QuantizeForm::Device`): where the device's is
+    // measured to round as Metal does the module requires that fact, and elsewhere it records
+    // the native note.
     let mut precision = plan.precision.clone();
     let specialized = plan.specialized.clone();
     let device_quantize = plan.families.arith.quantize
         == crate::spirv::builder::QuantizeForm::Device
         && crate::lower::arith::narrow::quantizes(&module);
-    // A `half` rounded through the device's conversion to 16 bits and back, behind a barrier
-    // Metal's compiler cannot fold it through, with no quantize, because that conversion is
-    // Metal's: the module requires that fact.
+    // A `half` rounded through the device's conversion to 16 bits and back, with no quantize: the
+    // module records the native note.
     let converts = plan.families.arith.quantize == crate::spirv::builder::QuantizeForm::Converted
         && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
     // A `half` rounded through the device's conversion and its widening, each decorated
@@ -2957,12 +2863,6 @@ fn compile_kept<K>(
         requirements
             .properties
             .insert(crate::device::requirements::VkProperty::MetalHalfQuantize);
-    }
-    // A `half` rounding left to the device's conversion because it is Metal's.
-    if converts && native_half.is_none() {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalHalfConversion);
     }
     // Center varyings read as they are as their pixel form, because the device reads them at
     // the pixel center as Metal does.

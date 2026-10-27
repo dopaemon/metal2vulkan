@@ -667,9 +667,9 @@ pub enum PrecisionNote {
     /// `SignedZeroInfNanPreserve`, which the device does not support at their width. Under
     /// `FloatMathsPolicy::Exact` so does an operation that answers Metal's zero of its sign: a
     /// fused multiply-add the translation computes itself (in `double` or in integers without
-    /// `OpFmaKHR`, and a `half` one through `float`), one by `OpFmaKHR` whose result is at most
-    /// `2^-126` in magnitude, and a `float` product flushed below `2^-126`. Without the mode the
-    /// device may answer such a zero with either sign.
+    /// `OpFmaKHR`), one by `OpFmaKHR` whose result is at most `2^-126` in magnitude, and a `float`
+    /// product flushed below `2^-126`. Without the mode the device may answer such a zero with
+    /// either sign.
     DeviceSignedZeroInfNan,
     /// A ray intersection traversed by the device's ray query. The hit distance and the
     /// barycentrics are the device's arithmetic. The conventions no Metal reading has settled yet
@@ -1692,12 +1692,12 @@ pub enum PrecisionNote {
     /// once more: within one unit in the last place of the `half` result. Validation derives no
     /// tolerance from it.
     NativeDivision,
-    /// Native device maths: a `float` fused multiply-add on a device without `OpFmaKHR`, or a
-    /// `half` one where the device's 16-bit `Fma` is not measured to be Metal's and the device has
-    /// no 16-bit `OpFmaKHR` under the 16-bit float controls, is the device's `GLSL.std.450 Fma`
-    /// (on the `half` operands held in `float`, its result rounded to `half`),
-    /// not the translation's correctly rounded routine, under `FloatMathsPolicy::Native` (the
-    /// default). **Recorded bound:** a `half` result within one unit in its last place of
+    /// Native device maths: a `float` fused multiply-add on a device without `OpFmaKHR`, under
+    /// `FloatMathsPolicy::Native` (the default), not the translation's correctly rounded routine,
+    /// or a `half` one, under every policy, where the device's 16-bit `Fma` is not measured to be
+    /// Metal's and the device has no 16-bit `OpFmaKHR` under the 16-bit float controls, is the
+    /// device's `GLSL.std.450 Fma` (on the `half` operands held in `float`, its result rounded to
+    /// `half`). **Recorded bound:** a `half` result within one unit in its last place of
     /// Metal's (the product of two `half` values is exact in `float`, so only the two roundings
     /// differ); a `float` one within half a unit in the last place of the product plus half a
     /// unit in the last place of the result (Vulkan lets `Fma` round the product and then the
@@ -1728,21 +1728,21 @@ pub enum PrecisionNote {
     /// Native half rounding (a conversion): the module rounds a `half` result it computes in
     /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by
     /// the device's conversion of the `float` to 16 bits and its widening (`OpFConvert` of the
-    /// value itself, with no barrier), not by the translation's integer rounding, on a device with
-    /// `shaderFloat16` whose conversion is neither measured to be Metal's `half(float)` (MoltenVK
-    /// on an Apple GPU) nor made Metal's by its float controls (`RoundingModeRTE`,
-    /// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits, under which ANV and RADV
-    /// round through the conversion exactly and record no note), under
-    /// `HalfRoundingPolicy::Native` (the default): NVIDIA, whose driver folds the conversion's
-    /// round trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`),
-    /// lavapipe, and any device without them. Without them Vulkan leaves the conversion's
-    /// rounding mode and its 16-bit denormals to the device. The recorded
+    /// value itself), on a device with `shaderFloat16` whose float controls do not make that
+    /// conversion Metal's (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for
+    /// 16 bits, under which ANV and RADV round through the conversion exactly and record no
+    /// note): NVIDIA, whose driver folds the conversion's round trip even under those controls
+    /// (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK, lavapipe, and any device
+    /// without them. Without them Vulkan leaves the conversion's rounding mode and its 16-bit
+    /// denormals to the device. The recorded
     /// bound, against Metal's `half(float)` (to nearest even on the half grid, half denormals kept,
     /// infinity from 65520 up, `0x7E00` for a NaN):
     /// - a finite result within one unit in the last place of the `half`: NVIDIA's 615.71.09
     ///   rounds to nearest even on the RTX 5080 Laptop GPU (every `float` pattern, loaded and
     ///   computed) and toward zero on the RTX 3090; lavapipe (Mesa 26.0.8) a loaded value toward
-    ///   zero;
+    ///   zero; Metal's compiler on MoltenVK folds the conversion into the instruction computing
+    ///   the value, which rounds toward zero (`a1_half_tanh_regimes`, case 27353187: 1,204 of its
+    ///   16,384 halves one ulp toward zero on the M3 Max);
     /// - or no rounding at all: NVIDIA's 615.71.09 on the RTX 3090 drops the conversion pair, with
     ///   or without a `NoContraction` barrier; lavapipe drops it in arithmetic on Mesa 26.2.4 with
     ///   LLVM 23.1.1 and for a loaded texel on Mesa 26.0.8 with LLVM 21.1.8, barrier or not, whose
@@ -1758,10 +1758,10 @@ pub enum PrecisionNote {
     ///   computed `half` NaN is `0x7FFF` (where 18 C3 cases differed in NaNs, signs of zero,
     ///   `atan2` and `pow` at special operands, and `half` texel and pack conversions).
     ///
-    /// Under the same policy a `half` the module reads from its bits (a load, a reinterpretation,
-    /// a texel's bits) where no loop of the finished module holds the read is widened by the
-    /// device (`UnpackHalf2x16`), not by the translation's integer decode, and a module that does
-    /// so records this note too: its bound is the last two items', a half denormal read as the zero
+    /// A `half` such a module reads from its bits (a load, a reinterpretation, a texel's bits)
+    /// where no loop of the finished module holds the read is widened by the device
+    /// (`UnpackHalf2x16`), not by the translation's integer decode, and a module that does so
+    /// records this note too: its bound is the last two items', a half denormal read as the zero
     /// of its sign on a device that flushes 16-bit denormals and a NaN's payload the device's;
     /// every other `half` widens to its exact value.
     ///
@@ -1769,9 +1769,8 @@ pub enum PrecisionNote {
     NativeHalfConversion,
     /// Native half rounding (a quantize): the module rounds a `half` result it computes in
     /// `float` by the device's `OpQuantizeToF16`, a result the quantize flushes to zero rounded
-    /// by the translation to the half denormal grid, not by its integer rounding, on a device
-    /// without `shaderFloat16` whose quantize is not measured to round as Metal's conversion
-    /// does, under `HalfRoundingPolicy::Native` (the default). Vulkan leaves the quantize's
+    /// by the translation to the half denormal grid, on a device without `shaderFloat16` whose
+    /// quantize is not measured to round as Metal's conversion does. Vulkan leaves the quantize's
     /// rounding mode to the device. The recorded bound, against Metal's `half(float)`: a finite
     /// result within one unit in the last place of the `half`; a value from 65504 up to 65520 may
     /// be infinity where Metal's is 65504 (NVIDIA's 615.71.09 rounds `0x477FEFFF` to infinity); a

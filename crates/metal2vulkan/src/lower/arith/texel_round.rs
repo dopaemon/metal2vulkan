@@ -15,7 +15,6 @@
 //!   exact integer correction, the extended-range grids' quotient (`255 · 2^k`).
 //! - [`normal_half_bits`]: a non-negative `f32` rounded to a normal `half`, to nearest even or
 //!   with ties away, by an addition and a mask.
-//! - [`f32_to_half_by`]: [`f32_to_half`] in a mode two run-time `bool`s choose.
 //! - [`f32_to_half_from_even`]: toward zero saturating or ties away, derived from an exact
 //!   rounding to nearest even.
 //! - [`ones_ratio_to_half`]: `m / (2^b - 1)` correctly rounded to `half` by one multiplication,
@@ -105,19 +104,7 @@ pub fn f32_to_half(
     x: Value,
     mode: HalfRounding,
 ) -> BResult<Value> {
-    to_half(fb, f, x, Rule::Fixed(mode))
-}
-
-/// [`f32_to_half`] in a mode chosen at run time by two `bool` scalars: toward zero saturating
-/// where `toward_zero`, else to nearest with ties away from zero where `away`, else to nearest
-/// even. One sequence for the three modes, a few selects longer than one mode's.
-pub fn f32_to_half_by(
-    fb: &mut FunctionBuilder<'_>,
-    f: Form,
-    x: Value,
-    (toward_zero, away): (Value, Value),
-) -> BResult<Value> {
-    to_half(fb, f, x, Rule::Chosen { toward_zero, away })
+    to_half(fb, f, x, mode)
 }
 
 /// `x` (`f32` lanes of form `f`) rounded to `half` toward zero, saturating at `±65504`, where
@@ -140,7 +127,7 @@ pub fn f32_to_half_by(
 /// - Every test is on integer bits and the sign of `x` is set last, so no float mode changes the
 ///   answer: an infinity or a NaN is `even`, which is `x`.
 ///
-/// About thirty instructions, where [`f32_to_half_by`] takes some sixty.
+/// About thirty instructions.
 pub fn f32_to_half_from_even(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
@@ -198,15 +185,8 @@ pub fn f32_to_half_from_even(
     fb.convert(ConvOp::Bitcast, r, ft)
 }
 
-/// How [`to_half`] rounds: one mode, or the mode two `bool` scalars choose ([`f32_to_half_by`]).
-#[derive(Clone, Copy)]
-enum Rule {
-    Fixed(HalfRounding),
-    Chosen { toward_zero: Value, away: Value },
-}
-
-/// [`f32_to_half`] and [`f32_to_half_by`]: the sequence of [`f32_to_half`]'s docs.
-fn to_half(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, rule: Rule) -> BResult<Value> {
+/// [`f32_to_half`]: the sequence of its docs.
+fn to_half(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, rule: HalfRounding) -> BResult<Value> {
     let u = words(f);
     let ut = ty(fb, u)?;
     let c = |fb: &mut FunctionBuilder<'_>, v: u64| splat(fb, u, v);
@@ -228,30 +208,22 @@ fn to_half(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, rule: Rule) -> BResu
         bin(fb, BinOp::IAdd, half, lsb)
     };
     let biased = match rule {
-        Rule::Fixed(HalfRounding::NearestEven) => {
+        HalfRounding::NearestEven => {
             let bias = even_bias(fb)?;
             bin(fb, BinOp::IAdd, mag, bias)?
         }
-        Rule::Fixed(HalfRounding::NearestAway) => {
+        HalfRounding::NearestAway => {
             let half = c(fb, 0x1000)?;
             bin(fb, BinOp::IAdd, mag, half)?
         }
-        Rule::Fixed(HalfRounding::TowardZeroSaturating) => mag,
-        Rule::Chosen { toward_zero, away } => {
-            let even = even_bias(fb)?;
-            let half = c(fb, 0x1000)?;
-            let bias = fb.select(away, half, even)?;
-            let bias = fb.select(toward_zero, z, bias)?;
-            bin(fb, BinOp::IAdd, mag, bias)?
-        }
+        HalfRounding::TowardZeroSaturating => mag,
     };
     let normal = bin(fb, BinOp::BitwiseAnd, biased, keep)?;
     let max = c(fb, 0x477F_E000)?;
     let over = bin(fb, BinOp::UGreaterThan, normal, max)?;
     let past = match rule {
-        Rule::Fixed(HalfRounding::TowardZeroSaturating) => max,
-        Rule::Fixed(_) => inf,
-        Rule::Chosen { toward_zero, .. } => fb.select(toward_zero, max, inf)?,
+        HalfRounding::TowardZeroSaturating => max,
+        HalfRounding::NearestEven | HalfRounding::NearestAway => inf,
     };
     let normal = fb.select(over, past, normal)?;
     // A denormal half (or zero): round on the grid 2^-24.
@@ -285,24 +257,13 @@ fn to_half(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, rule: Rule) -> BResu
         bin(fb, BinOp::LogicalOr, gt, tie_up)
     };
     let up = match rule {
-        Rule::Fixed(HalfRounding::NearestEven) => Some(even_up(fb)?),
-        Rule::Fixed(HalfRounding::NearestAway) => {
-            Some(bin(fb, BinOp::UGreaterThanEqual, rem, tie)?)
-        }
-        Rule::Fixed(HalfRounding::TowardZeroSaturating) => None,
-        Rule::Chosen { away, .. } => {
-            let even = even_up(fb)?;
-            let ties = bin(fb, BinOp::UGreaterThanEqual, rem, tie)?;
-            Some(fb.select(away, ties, even)?)
-        }
+        HalfRounding::NearestEven => Some(even_up(fb)?),
+        HalfRounding::NearestAway => Some(bin(fb, BinOp::UGreaterThanEqual, rem, tie)?),
+        HalfRounding::TowardZeroSaturating => None,
     };
     let h = match up {
         Some(up) => {
             let inc = fb.select(up, one, z)?;
-            let inc = match rule {
-                Rule::Chosen { toward_zero, .. } => fb.select(toward_zero, z, inc)?,
-                Rule::Fixed(_) => inc,
-            };
             bin(fb, BinOp::IAdd, q, inc)?
         }
         None => q,

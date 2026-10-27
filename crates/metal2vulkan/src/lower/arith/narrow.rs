@@ -1,29 +1,20 @@
-//! Narrow floats held widened: `half` and `bfloat` values are held in an `f32` that is always
-//! exactly a value of the narrow format, on every profile.
+//! Narrow floats held widened: `half` and `bfloat` values are held in an `f32` that is a value of
+//! the narrow format wherever the device's own rounding to `half` rounds.
 //!
 //! An operation on narrow floats runs in `f32` and rounds its result back to the format
-//! ([`round`]), as Metal's conversion of a `float` to `half` does: to nearest even on the half
-//! grid, half denormals kept, infinity from 65520 up, a NaN to `0x7E00`. By default
-//! ([`QuantizeForm::Integer`]) that is integer arithmetic on the `f32`'s bits and, below the
-//! smallest normal half, an exact `RoundEven` of `x · 2^24`, the same on every device. Where the
-//! device's `OpQuantizeToF16` is measured to round as Metal's conversion does
-//! (`DriverDeviation::MetalHalfQuantize`), it is that quantize, with the same denormal arm
-//! ([`QuantizeForm::Device`]: the module requires the fact). Where the device's conversion to 16
-//! bits, of an operand its compiler cannot fold into the instruction computing it, is measured to
-//! be Metal's `half(float)` (`DriverDeviation::MetalHalfConversion`) and the profile has
-//! `shaderFloat16`, it is that conversion behind such a barrier and its widening
-//! ([`QuantizeForm::Converted`]): no quantize and no denormal arithmetic, and the module requires
-//! the fact. Where the profile has `shaderFloat16` and the float controls that make the conversion
-//! Metal's by the Vulkan spec (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
-//! for 16 bits, and the modes the device's independence ties to them), it is that conversion and
-//! its widening, each decorated `NoContraction`, in an entry declaring those modes
-//! ([`QuantizeForm::Controlled`], [`controlled_modes`]): exact on every such device whose driver
-//! keeps the pair (not NVIDIA's, `DriverWorkaround::HalfConversionPairFolded`), under either
-//! policy, with no fact and no note. Elsewhere, under native half rounding
-//! (`HalfRoundingPolicy::Native`, the default), the module takes the same forms though neither is
-//! measured to be Metal's: the conversion where the profile has `shaderFloat16`, else the quantize,
-//! recording `PrecisionNote::NativeHalfConversion` or `NativeHalfQuantize` instead of requiring a
-//! fact; `HalfRoundingPolicy::Exact` keeps the integer form. A sum or difference, exact in `f32`
+//! ([`round`]) by the device's own rounding to `half`, in the module's [`QuantizeForm`]. Where the
+//! profile has `shaderFloat16` and the float controls that make the conversion Metal's by the
+//! Vulkan spec (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits, and
+//! the modes the device's independence ties to them), it is that conversion and its widening, each
+//! decorated `NoContraction`, in an entry declaring those modes ([`QuantizeForm::Controlled`],
+//! [`controlled_modes`]): exact on every such device whose driver keeps the pair (not NVIDIA's,
+//! `DriverWorkaround::HalfConversionPairFolded`), with no fact and no note. Elsewhere, where the
+//! profile has `shaderFloat16`, it is the device's conversion to 16 bits and its widening
+//! ([`QuantizeForm::Converted`]), recording `PrecisionNote::NativeHalfConversion`; without it, the
+//! device's `OpQuantizeToF16`, a result it flushes to zero rounded to the half denormal grid
+//! ([`QuantizeForm::Device`]), recording `PrecisionNote::NativeHalfQuantize` unless the device's
+//! quantize is measured to round as Metal's conversion does (`DriverDeviation::MetalHalfQuantize`:
+//! the module then requires the fact). A sum or difference, exact in `f32`
 //! below the smallest normal half, keeps its `f32` value there instead
 //! ([`round_exact_below_normal`]); a texel's `half` takes the same rounding and keeps the NaN the
 //! device decoded ([`round_texel`]) unless the profile leaves NaN bits to the device under native
@@ -35,9 +26,9 @@
 //! controls of [`QuantizeForm::Controlled`], which make it so by the Vulkan spec and which the
 //! entry then declares ([`computes_in_16_bits`]). For `+ - * /` and square root the double
 //! rounding (the exact result to `f32`, then to the narrow format) is innocuous, because `f32`
-//! carries at least `2p + 2` significand bits for both formats; a `half` fused multiply-add is not,
-//! so it rounds its exact `f32` sum to odd first (`super::fma`), and a `bfloat` one is corrected
-//! ([`bf16_fma`]).
+//! carries at least `2p + 2` significand bits for both formats; a `half` fused multiply-add's is
+//! not, so it is the device's 16-bit one where that is Metal's, and else the device's `f32` one
+//! rounded to `half`, noted (`super::fma`), and a `bfloat` one is corrected ([`bf16_fma`]).
 //!
 //! Every other crossing is exact: [`to_bits`] and [`from_bits`] move between a value and its
 //! format bits with integer sequences and, for a half denormal, one exact scaling by `2^±24`
@@ -53,7 +44,7 @@
 //! ([`bf16_fma`]), so the final rounding is the only one that counts.
 
 use crate::budget::Meter;
-use crate::device::profile::{DriverWorkaround, HalfRoundingRoute, Independence};
+use crate::device::profile::{DriverWorkaround, Independence};
 use crate::device::DeviceProfile;
 use crate::error::{DriverDeviation, Error};
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
@@ -80,21 +71,18 @@ fn bin(fb: &mut FunctionBuilder<'_>, op: BinOp, a: Value, b: Value) -> BResult<V
 }
 
 /// An upper estimate of the SPIR-V words of one [`round`] on form `f`, where the module's
-/// [`QuantizeForm`] is not at hand: [`round_words_in`] of [`QuantizeForm::Integer`], the largest.
+/// [`QuantizeForm`] is not at hand: [`round_words_in`] of [`QuantizeForm::Device`], the largest.
 pub fn round_words(f: Form) -> u32 {
-    round_words_in(QuantizeForm::Integer, f)
+    round_words_in(QuantizeForm::Device, f)
 }
 
 /// An upper estimate of the SPIR-V words of one [`round`] on form `f` in quantize form `q`: for
-/// `half`, [`QuantizeForm::Integer`]'s twenty instructions and its twelve constants' share; the
-/// device's quantize or conversion ([`QuantizeForm::Device`], [`QuantizeForm::Converted`]), at most
-/// six instructions and their constants, the bound of 64 words and 4 per lane, so that the choices
-/// weighing it (`fma::complete`) stay as they were on those profiles; a dozen instructions for
-/// `bfloat`.
+/// `half`, the device's quantize with its denormal arm or its conversion, at most seven
+/// instructions and their constants, the bound of 64 words and 4 per lane, in every form; a dozen
+/// instructions for `bfloat`.
 pub fn round_words_in(q: QuantizeForm, f: Form) -> u32 {
     let lanes = u32::from(f.lanes);
     match (f.float_fmt(), q) {
-        (Some(FloatFmt::Half), QuantizeForm::Integer) => 200 + 12 * lanes,
         (
             Some(FloatFmt::Half),
             QuantizeForm::Device | QuantizeForm::Converted | QuantizeForm::Controlled,
@@ -107,13 +95,11 @@ pub fn round_words_in(q: QuantizeForm, f: Form) -> u32 {
 /// `x` (an `f32` of form `f`) rounded to `f`'s narrow format; the value itself for `float` and
 /// `double` forms.
 ///
-/// `half`: Metal's conversion to `half` (to nearest even, half denormals kept, infinity from
-/// 65520 up, a NaN to `0x7E00`), in the module's [`QuantizeForm`]. [`QuantizeForm::Integer`]:
-/// [`integer`], below the smallest normal half by [`scaled`]. [`QuantizeForm::Device`]: `q`,
-/// `OpQuantizeToF16(x)`, is the rounded value wherever it is not a zero. It is a zero exactly when
-/// `|x|` rounds below the smallest normal half (or `x` is a zero), and then the result is
-/// [`scaled`]'s. A NaN compares unequal to zero and keeps `q`. [`QuantizeForm:: Converted`]:
-/// [`converted`]'s alone, which is the same value where the device's conversion is Metal's.
+/// `half`: the device's rounding to `half`, in the module's [`QuantizeForm`].
+/// [`QuantizeForm::Device`]: `q`, `OpQuantizeToF16(x)`, is the rounded value wherever it is not a
+/// zero. It is a zero exactly when `|x|` rounds below the smallest normal half (or `x` is a zero),
+/// and then the result is [`scaled`]'s. A NaN compares unequal to zero and keeps `q`.
+/// [`QuantizeForm::Converted`]: [`converted`]'s alone, the device's conversion.
 /// [`QuantizeForm::Controlled`]: [`controlled`]'s alone, Metal's value by the Vulkan spec.
 pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     match f.held {
@@ -122,7 +108,6 @@ pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> 
             match fb.module().quantize_form() {
                 QuantizeForm::Converted => converted(fb, wide, x),
                 QuantizeForm::Controlled => controlled(fb, wide, x),
-                QuantizeForm::Integer => integer(fb, wide, x, Below::Scaled),
                 QuantizeForm::Device => {
                     let q = fb.unary(UnOp::QuantizeToF16, x)?;
                     let zero = fsplat(fb, wide, 0.0)?;
@@ -144,27 +129,15 @@ pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> 
     }
 }
 
-/// How profile `p`'s modules round an `f32` to `half` ([`QuantizeForm`]): the device's
-/// conversion to 16 bits and back where it is measured to be Metal's `half(float)`
-/// (`DriverDeviation::MetalHalfConversion`) and the profile has `shaderFloat16`, else that
-/// conversion under the float controls that make it Metal's by the Vulkan spec where the profile
-/// has `shaderFloat16` and them ([`QuantizeForm::Controlled`], [`controlled_modes`]), else the
-/// device's `OpQuantizeToF16` where it is measured to round as Metal does
-/// (`DriverDeviation::MetalHalfQuantize`). Where neither is measured, under native half rounding
-/// (`HalfRoundingPolicy::Native`, the default) the same forms, the conversion where the profile has
-/// `shaderFloat16` and the quantize elsewhere, each the device's rounding rather than Metal's
-/// ([`native_rounding`]); under `HalfRoundingPolicy::Exact`, integer arithmetic, Metal's on every
-/// device.
+/// How profile `p`'s modules round an `f32` to `half` ([`QuantizeForm`]): the device's conversion
+/// to 16 bits and back under the float controls that make it Metal's by the Vulkan spec where the
+/// profile has `shaderFloat16` and them ([`QuantizeForm::Controlled`], [`controlled_modes`]), else
+/// that conversion as it is where the profile has `shaderFloat16` ([`QuantizeForm::Converted`]),
+/// else the device's `OpQuantizeToF16` ([`QuantizeForm::Device`]).
 pub fn quantize_form(p: &DeviceProfile) -> QuantizeForm {
     let float16 = p.fields().leaf.float16;
-    if p.takes_driver_deviation(DriverDeviation::MetalHalfConversion) && float16 {
-        QuantizeForm::Converted
-    } else if float16 && controlled_modes(p).is_some() {
+    if float16 && controlled_modes(p).is_some() {
         QuantizeForm::Controlled
-    } else if p.takes_driver_deviation(DriverDeviation::MetalHalfQuantize) {
-        QuantizeForm::Device
-    } else if p.fields().half_rounding == HalfRoundingRoute::Metal {
-        QuantizeForm::Integer
     } else if float16 {
         QuantizeForm::Converted
     } else {
@@ -172,87 +145,19 @@ pub fn quantize_form(p: &DeviceProfile) -> QuantizeForm {
     }
 }
 
-/// The precision note of a module of profile `p` whose `half` roundings take `form` where the
-/// profile does not take the deviation that makes the form Metal's: `NativeHalfConversion` for
-/// [`QuantizeForm::Converted`] without `DriverDeviation::MetalHalfConversion`,
-/// `NativeHalfQuantize` for [`QuantizeForm::Device`] without `DriverDeviation::MetalHalfQuantize`
-/// (native half rounding, [`quantize_form`]). `None` where the form is Metal's: the measured forms,
-/// whose fact the module then requires, and the integer form.
+/// The precision note of a module of profile `p` whose `half` roundings take `form`, the device's
+/// own rounding: `NativeHalfConversion` for [`QuantizeForm::Converted`], `NativeHalfQuantize` for
+/// [`QuantizeForm::Device`] where the profile does not take `DriverDeviation::MetalHalfQuantize`.
+/// `None` where the form is Metal's: the measured quantize, whose fact the module then requires,
+/// and the float controls' conversion.
 pub fn native_rounding(p: &DeviceProfile, form: QuantizeForm) -> Option<PrecisionNote> {
     match form {
-        QuantizeForm::Converted
-            if !p.takes_driver_deviation(DriverDeviation::MetalHalfConversion) =>
-        {
-            Some(PrecisionNote::NativeHalfConversion)
-        }
+        QuantizeForm::Converted => Some(PrecisionNote::NativeHalfConversion),
         QuantizeForm::Device if !p.takes_driver_deviation(DriverDeviation::MetalHalfQuantize) => {
             Some(PrecisionNote::NativeHalfQuantize)
         }
         _ => None,
     }
-}
-
-/// What [`integer`] answers for an `|x|` below the smallest normal half, `2^-14`.
-#[derive(Clone, Copy)]
-enum Below {
-    /// [`scaled`]'s rounding to the half denormal grid ([`round`]).
-    Scaled,
-    /// `x` itself, a value of the format there ([`round_exact_below_normal`]).
-    Kept,
-}
-
-/// `x` (`f32` lanes of form `wide`) rounded to `half` by integer arithmetic on its bits
-/// ([`QuantizeForm::Integer`]), and as `below` states where `|x|` is below the smallest normal
-/// half, `2^-14`: the same on every device and in every rounding mode, since no instruction of
-/// it rounds inexactly. From `2^-14` up, the half keeps the top 11 of the `f32`'s 24 significand bits, so
-/// adding `0xFFF` plus the lowest kept bit and clearing the 13 bits below it rounds to nearest
-/// even, once, as [`round_integer`] does; a carry out of the fraction raises the exponent, as it
-/// must. From 65520 up (`0x477FF000`: halfway between 65504 and `2^16`, which rounds to the even
-/// `2^16`), and for an infinity, the result is the infinity of `x`'s sign. A NaN gives `0x7E00`'s
-/// widening, `0x7FC00000`, of either sign and any payload: Metal converts every `float` NaN to
-/// `0x7E00` (the M3 Max, fast and safe math, a loaded and a computed `float`, every one of the
-/// 2^24 NaN patterns), which the NaN model's `half` arithmetic answers too. The rounding Metal's
-/// conversion does, measured on every `f32` (`DriverDeviation::MetalHalfConversion`'s measurements)
-/// , on both chips.
-fn integer(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value, below: Below) -> BResult<Value> {
-    let u = u32_form(wide);
-    let ut = ty(fb, u)?;
-    let b = fb.convert(ConvOp::Bitcast, x, ut)?;
-    let abs_mask = splat(fb, u, 0x7FFF_FFFF)?;
-    let mag = bin(fb, BinOp::BitwiseAnd, b, abs_mask)?;
-    let k13 = splat(fb, u, 13)?;
-    let one = splat(fb, u, 1)?;
-    let lsb = bin(fb, BinOp::ShiftRightLogical, b, k13)?;
-    let lsb = bin(fb, BinOp::BitwiseAnd, lsb, one)?;
-    let half_ulp = splat(fb, u, 0xFFF)?;
-    let bias = bin(fb, BinOp::IAdd, half_ulp, lsb)?;
-    let r = bin(fb, BinOp::IAdd, b, bias)?;
-    let keep = splat(fb, u, 0xFFFF_E000)?;
-    let r = bin(fb, BinOp::BitwiseAnd, r, keep)?;
-    // From 65520 up: the infinity of the sign, or for a NaN Metal's NaN.
-    let below_edge = splat(fb, u, 0x477F_EFFF)?;
-    let over = bin(fb, BinOp::UGreaterThan, mag, below_edge)?;
-    let sign_mask = splat(fb, u, 0x8000_0000)?;
-    let sign = bin(fb, BinOp::BitwiseAnd, b, sign_mask)?;
-    let inf = splat(fb, u, 0x7F80_0000)?;
-    let signed_inf = bin(fb, BinOp::BitwiseOr, sign, inf)?;
-    let nan = bin(fb, BinOp::UGreaterThan, mag, inf)?;
-    let metal_nan = splat(fb, u, 0x7FC0_0000)?;
-    let big = fb.select(nan, metal_nan, signed_inf)?;
-    let r = fb.select(over, big, r)?;
-    // Below the smallest normal half: `below`.
-    let normal = splat(fb, u, 0x3880_0000)?;
-    let small = bin(fb, BinOp::ULessThan, mag, normal)?;
-    let below = match below {
-        Below::Scaled => {
-            let d = scaled(fb, wide, x)?;
-            fb.convert(ConvOp::Bitcast, d, ut)?
-        }
-        Below::Kept => b,
-    };
-    let r = fb.select(small, below, r)?;
-    let ft = ty(fb, wide)?;
-    fb.convert(ConvOp::Bitcast, r, ft)
 }
 
 /// `x` (`f32` lanes of form `wide`) rounded to the half denormal grid, `RoundEven(x · 2^24) ·
@@ -270,26 +175,14 @@ fn scaled(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Value> 
 }
 
 /// `x` (`f32` lanes of form `wide`) rounded to `half` by the device's conversion to 16 bits,
-/// `OpFConvert`, and widened back, exactly ([`QuantizeForm::Converted`]). The conversion's
-/// operand is `x + -0.0`, an `OpFAdd` decorated `NoContraction` ([`BARRIER`]): `x` itself in
-/// every case, but a value Metal's compiler cannot fold the conversion into. SPIRV-Cross writes
-/// the add as its `[[clang::optnone]]` helper `spvFAdd`, and the conversion of a call's result
-/// stays a conversion; without it, Metal's compiler folds the conversion into the instruction
-/// computing `x`, and that conversion rounds toward zero (`a1_half_tanh_regimes`, case 27353187:
-/// 1, 204 of its 16, 384 halves one ulp toward zero on MoltenVK). Where the profile takes
-/// `DriverDeviation::MetalHalfConversion` the conversion behind the barrier is Metal's
-/// `half(float)`, measured on every `f32`: to nearest even on the half grid, half denormals kept,
-/// infinity from 65520 up, the sign of a zero kept, a NaN to a NaN. That is [`round`]'s value in
-/// its other forms, with no quantize, no clamp and no denormal arithmetic: three instructions where
-/// they take six to twelve, which Metal's compiler takes far less time over on MoltenVK (corpus row
-/// 69a35b6f).
-///
-/// Under native half rounding (the conversion not measured to be Metal's, recorded as
-/// `PrecisionNote::NativeHalfConversion`) the conversion's operand is `x` itself, with no barrier:
-/// the barrier keeps a measured conversion Metal's. The barrier cost NVIDIA's compiler about 2% of
-/// `A2Xghfc`'s making. NVIDIA's compiler (RTX 3090) drops the pair, barrier or not, and so does
-/// lavapipe's where measured, so there the value is not rounded at all (the note's stated bound),
-/// and the store's bits saturate what passes `half`'s range ([`f32_bits_to_half_bits`]).
+/// `OpFConvert`, and widened back ([`QuantizeForm::Converted`]), recorded as
+/// `PrecisionNote::NativeHalfConversion`: three instructions where the quantize with its denormal
+/// arm takes six to twelve. The device's compiler may fold the conversion into the instruction
+/// computing `x`: Metal's compiler then rounds toward zero (`a1_half_tanh_regimes`, case 27353187:
+/// 1,204 of its 16,384 halves one ulp toward zero on MoltenVK). NVIDIA's compiler (RTX 3090) drops
+/// the pair, and so does lavapipe's where measured, so there the value is not rounded at all (the
+/// note's stated bound), and the store's bits saturate what passes `half`'s range
+/// ([`f32_bits_to_half_bits`]).
 fn converted(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Value> {
     let e = fb.module().ty(Type::Float { width: 16 })?;
     let h = match wide.lanes {
@@ -297,13 +190,7 @@ fn converted(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Valu
         len => fb.module().ty(Type::Vector { elem: e, len })?,
     };
     let w = ty(fb, wide)?;
-    let held = if fb.module().native_half() {
-        x
-    } else {
-        let minus_zero = fsplat(fb, wide, BARRIER)?;
-        fb.binary_no_contraction(BinOp::FAdd, x, minus_zero)?
-    };
-    let n = fb.convert(ConvOp::FConvert, held, h)?;
+    let n = fb.convert(ConvOp::FConvert, x, h)?;
     fb.convert(ConvOp::FConvert, n, w)
 }
 
@@ -378,15 +265,9 @@ pub fn controlled_modes(p: &DeviceProfile) -> Option<Vec<ExecMode>> {
     Some(modes)
 }
 
-/// The addend of [`converted`]'s barrier: `x + -0.0` is `x` for every `x` (`+0 + -0` is `+0`,
-/// `-0 + -0` is `-0`), and a NaN stays a NaN. The add may quiet a signalling NaN; measured on
-/// every `f32` (`DriverDeviation::MetalHalfConversion`), the half of each NaN through it has the
-/// bits of Metal's own conversion of that NaN.
-const BARRIER: f64 = -0.0;
-
 /// Whether module `m` rounds to `half` through [`converted`] or [`controlled`]: an `OpFConvert` of
-/// an `f32` to 16 bits whose result another widens back. The module then requires
-/// `VkProperty::MetalHalfConversion` ([`QuantizeForm::Converted`]) or declares
+/// an `f32` to 16 bits whose result another widens back. The module then records
+/// `PrecisionNote::NativeHalfConversion` ([`QuantizeForm::Converted`]) or declares
 /// [`controlled_modes`] ([`QuantizeForm::Controlled`]). A `half` fused multiply-add on the
 /// device's 16-bit `Fma` (`super::fma`) converts its operands, each a `half` already, exactly, and
 /// widens the `Fma`'s
@@ -487,55 +368,12 @@ pub fn round_texel(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<V
     }
 }
 
-/// [`round_texel`] of `x`, a texel an image instruction hands back (a read, fetch, sample or
-/// gather, or lanes and selections of such texels and constants: no arithmetic), of a class whose
-/// `half` result Metal's sampler makes the `float` texel rounded to nearest even
-/// (`SpecKey::PlainHalfTexels`), on a device that samples through Metal's own texture unit. Where
-/// the module rounds by the device's conversion behind its barrier ([`QuantizeForm::Converted`],
-/// [`converted`]) the conversion takes `x` itself: the barrier keeps Metal's compiler from folding
-/// the conversion into an arithmetic instruction computing the value, whose folded conversion
-/// rounds toward zero, and an image instruction computes no arithmetic. Metal's compiler then
-/// either converts `x` as its `half(float)` (`DriverDeviation::MetalHalfConversion`, to nearest
-/// even), or folds the conversion into the image instruction, whose `half` result is Metal's own
-/// `half` result of the same access: for these classes the `float` texel rounded to nearest even
-/// again. Either is [`round_texel`]'s value; the NaN keep is [`round_texel`]'s. Another form rounds
-/// as [`round_texel`] does. On MoltenVK the barrier is a call of SPIRV-Cross's `[[clang::optnone]]`
-/// helper at every access, which held a read-bound kernel at 1.83 times native Metal's time
-/// (`half4(read)` without it: native's, its every output word equal).
-pub fn round_texel_plain(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
-    let converted = fb.module().quantize_form() == QuantizeForm::Converted;
-    let native = fb.module().native_half() && !fb.module().texel_nans();
-    match f.held {
-        Held::Float(FloatFmt::Half) if converted && !native && !fb.module().native_half_nans() => {
-            let wide = f.with(Held::Float(FloatFmt::F32));
-            let e = fb.module().ty(Type::Float { width: 16 })?;
-            let h = match wide.lanes {
-                1 => e,
-                len => fb.module().ty(Type::Vector { elem: e, len })?,
-            };
-            let w = ty(fb, wide)?;
-            let n = fb.convert(ConvOp::FConvert, x, h)?;
-            let r = fb.convert(ConvOp::FConvert, n, w)?;
-            let u = u32_form(f);
-            let ut = ty(fb, u)?;
-            let b = fb.convert(ConvOp::Bitcast, x, ut)?;
-            let abs = splat(fb, u, 0x7FFF_FFFF)?;
-            let mag = bin(fb, BinOp::BitwiseAnd, b, abs)?;
-            let inf = splat(fb, u, 0x7F80_0000)?;
-            let nan = bin(fb, BinOp::UGreaterThan, mag, inf)?;
-            fb.select(nan, x, r)
-        }
-        _ => round_texel(fb, f, x),
-    }
-}
-
 /// [`round`] of an `x` that is a value of `f`'s narrow format whenever it rounds below the
 /// smallest normal half: the sum or difference of two values of the format, which is exact in `f32`
 /// there (both lie on the `2^-24` grid, and so does a sum below `2^-14`, which `f32` holds exactly
 /// in every rounding mode). `half` then needs no denormal arithmetic: below the smallest normal
 /// half the result is `x` itself, which is the half denormal, or the zero, `x` already is (with its
-/// sign). [`QuantizeForm::Integer`]: [`integer`] with `x` below.
-/// [`QuantizeForm::Device`]: `q`, the quantize of `x`, wherever it is not a zero, and `x` where
+/// sign). [`QuantizeForm::Device`]: `q`, the quantize of `x`, wherever it is not a zero, and `x` where
 /// it is. [`QuantizeForm::Converted`]: [`converted`]'s alone, as in [`round`], and
 /// [`QuantizeForm::Controlled`] [`controlled`]'s. Other forms round as [`round`] does.
 pub fn round_exact_below_normal(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
@@ -545,7 +383,6 @@ pub fn round_exact_below_normal(fb: &mut FunctionBuilder<'_>, f: Form, x: Value)
             match fb.module().quantize_form() {
                 QuantizeForm::Converted => converted(fb, wide, x),
                 QuantizeForm::Controlled => controlled(fb, wide, x),
-                QuantizeForm::Integer => integer(fb, wide, x, Below::Kept),
                 QuantizeForm::Device => {
                     let q = fb.unary(UnOp::QuantizeToF16, x)?;
                     let zero = fsplat(fb, wide, 0.0)?;
@@ -1081,7 +918,7 @@ pub fn f32_of_half_bits(h: u32) -> u32 {
 ///
 /// Under native half rounding ([`crate::spirv::builder::ModuleBuilder::native_half`]) the value
 /// need not be a half value: the device's compiler may fold [`converted`]'s conversion pair, which
-/// carries no barrier there, and hand over `x` unrounded (NVIDIA and lavapipe do). A finite
+/// is the device's own, and hand over `x` unrounded (NVIDIA and lavapipe do). A finite
 /// magnitude from `65536` up then rebiases past the half's exponent, to a NaN's code or beyond 16
 /// bits, whose bit 17 a store's pairing carries into the next lane; so there the finite code is
 /// capped at infinity's, `0x7C00`. Every other value takes the truncation, within the native
@@ -1185,13 +1022,13 @@ pub fn from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<Val
     Ok(x)
 }
 
-/// Whether the module's `half` decodes may be the device's widening: under native half rounding
-/// through the device's conversion ([`QuantizeForm::Converted`] where the profile does not take
-/// `DriverDeviation::MetalHalfConversion`), whose note, `NativeHalfConversion`, bounds what the
-/// device makes of a `half`: a denormal may be the zero of its sign on a device that flushes 16-bit
-/// denormals, and a NaN's encoding is the device's. Every other value widens exactly.
+/// Whether the module's `half` decodes may be the device's widening: where it rounds through the
+/// device's conversion ([`QuantizeForm::Converted`]), whose note, `NativeHalfConversion`, bounds
+/// what the device makes of a `half`: a denormal may be the zero of its sign on a device that
+/// flushes 16-bit denormals, and a NaN's encoding is the device's. Every other value widens
+/// exactly.
 fn native_decode(fb: &mut FunctionBuilder<'_>) -> bool {
-    fb.module().native_half() && fb.module().quantize_form() == QuantizeForm::Converted
+    fb.module().quantize_form() == QuantizeForm::Converted
 }
 
 /// The `half` values of bits `h` (the low 16 bits of each `u32` lane of form [`u32_form`]`(f)`)

@@ -44,24 +44,19 @@
 //! shares with it); and an exact zero sum or a zero factor with the unfused result, which rounds
 //! nothing there.
 //!
-//! A `half` fused multiply-add needs no route ([`Route::HalfOdd`]): its product is exact in
-//! `float` and within the normal range, so the device's `float` `Fma` is the exact sum rounded
-//! once, fused or not, and that sum with its exact error, moved to odd as above, rounds once
-//! correctly to `half` (`float` keeps `11 + 2` bits and more). It is a module-scope function per
-//! lane count too (on one lane and per lane, as above), which every use calls: the `half` pairs
-//! Metal contracts make it as frequent as the `half` arithmetic itself, and its sequence is about
-//! 40 instructions. A `bfloat` one keeps its own sequence (`narrow::bf16_fma`): its product is
-//! exact in `float`, so the device's `Fma`, fused or not, rounds the exact sum once, and its tie is
-//! corrected.
+//! A `half` fused multiply-add takes the device's `float` `Fma` on its operands held in `float`,
+//! its result rounded to `half` ([`Route::Native`], noted `NativeFma`), where the profile offers no
+//! 16-bit route below: its product is exact in `float`, so only the sum's rounding and the rounding
+//! to `half` differ from Metal's one rounding. A `bfloat` one keeps its own sequence
+//! (`narrow::bf16_fma`): its product is exact in `float`, so the device's `Fma`, fused or not,
+//! rounds the exact sum once, and its tie is corrected.
 //!
 //! Where the driver is measured to compute `GLSL.std.450 Fma` on 16-bit floats as Metal's own
 //! `half` `fma` (`DriverDeviation::MetalHalfFma`: MoltenVK 1.4.1 on Apple's GPUs) and the profile
 //! has `shaderFloat16`, a `half` one takes [`Route::F16`] instead: its operands, each a `half` held
 //! in a `float`, convert to 16 bits exactly, the device's `Fma` rounds the exact sum once as Metal
 //! does, and its result widens exactly; the module then requires `VkProperty::MetalHalfFma`. It is
-//! a few instructions per use and no routine, where MoltenVK inlines [`Route::HalfOdd`]'s routine
-//! at every call and Metal's back end compiles each copy: one corpus kernel with 800 `half` fused
-//! multiply-adds took 6 s to create through the routine.
+//! a few instructions per use and no routine.
 //!
 //! Where the profile has `shaderFmaFloat16` and rounds to `half` under the 16-bit float controls
 //! ([`QuantizeForm::Controlled`], [`narrow::controlled_modes`]), a `half` one takes
@@ -69,12 +64,11 @@
 //! sum once, and its result widens exactly. Vulkan's precision table lists `OpFmaKHR` as "Correctly
 //! rounded", "according to IEEE 754 roundTiesToEven" under `RoundingModeRTE`, with denormals kept
 //! under `DenormPreserve` and zero signs under `SignedZeroInfNanPreserve`, which the entry then
-//! declares (`narrow::computes_in_16_bits`): the one rounding [`Route::HalfOdd`]'s round-to-odd
-//! sequence emulates, and Metal's `half` `fma`, with no fact. A NaN's bits are the device's, as the
-//! controlled rounding's are; a fused pair's NaN is selected as on every route
-//! (`super::contract`). It replaces that sequence, or native device maths' `float` `Fma` and its
-//! rounding to `half` ([`Route::Native`], noted `NativeFma`), with one instruction whose
-//! conversions the device folds into its neighbours'.
+//! declares (`narrow::computes_in_16_bits`): Metal's `half` `fma`, with no fact. A NaN's bits are
+//! the device's, as the controlled rounding's are; a fused pair's NaN is selected as on every route
+//! (`super::contract`). It replaces the device's `float` `Fma` and its rounding to `half`
+//! ([`Route::Native`], noted `NativeFma`) with one instruction whose conversions the device folds
+//! into its neighbours'.
 
 use crate::device::profile::FloatFunctions;
 use crate::device::DeviceProfile;
@@ -98,17 +92,16 @@ pub enum Route {
     Wide,
     /// The 32-bit integer routine ([`Routine`]).
     Soft,
-    /// A `half` fused multiply-add: the exact `float` sum, rounded to odd, then to `half`.
-    HalfOdd,
     /// A `half` fused multiply-add by the device's `Fma` on 16-bit floats, Metal's own
     /// ([`half_route`]).
     F16,
     /// A `half` fused multiply-add by `OpFmaKHR` on 16-bit floats under the 16-bit float
     /// controls, correctly rounded by the Vulkan spec ([`half_route`]).
     F16Khr,
-    /// Native device maths (`FloatFunctions::Native`): the device's `GLSL.std.450 Fma` on the
-    /// `float` lanes (a `half`'s held in `float`, its result rounded to `half`), within
-    /// Vulkan's precision rather than rounded once (`PrecisionNote::NativeFma`).
+    /// The device's `GLSL.std.450 Fma` on the `float` lanes, within Vulkan's precision rather than
+    /// rounded once (`PrecisionNote::NativeFma`): a `float` one's under native device maths
+    /// (`FloatFunctions::Native`), a `half` one's wherever no 16-bit route is offered
+    /// ([`half_route`]: its operands held in `float`, its result rounded to `half`).
     Native,
 }
 
@@ -129,8 +122,6 @@ pub const KHR_CHECKED: &str = "arith.fma.khr.checked";
 pub const WIDE: &str = "arith.fma.double";
 /// See [`KHR`].
 pub const SOFT: &str = "arith.fma.integer";
-/// See [`KHR`].
-pub const HALF: &str = "arith.fma.half";
 /// See [`KHR`].
 pub const F16: &str = "arith.fma.f16";
 /// See [`KHR`].
@@ -182,18 +173,15 @@ pub fn tiny_route(p: &DeviceProfile) -> Option<Route> {
 /// The `half` route profile `p` offers: [`Route::F16`] where the driver is measured to compute a
 /// 16-bit `Fma` as Metal's own `half` `fma` (`DriverDeviation::MetalHalfFma`) and `shaderFloat16`
 /// is enabled, else [`Route::F16Khr`] where `shaderFmaFloat16` is and the profile rounds to `half`
-/// under the 16-bit float controls (which need `shaderFloat16`), under either policy since it is
-/// Metal's, else the device's `float` `Fma` rounded to `half` under native device maths, else
-/// [`Route::HalfOdd`].
+/// under the 16-bit float controls (which need `shaderFloat16`), else the device's `float` `Fma`
+/// rounded to `half` ([`Route::Native`]), under every policy.
 pub fn half_route(p: &DeviceProfile) -> Route {
     if p.takes_driver_deviation(DriverDeviation::MetalHalfFma) && p.fields().leaf.float16 {
         Route::F16
     } else if p.fields().leaf.fma16 && narrow::quantize_form(p) == QuantizeForm::Controlled {
         Route::F16Khr
-    } else if p.fields().float_functions == FloatFunctions::Native {
-        Route::Native
     } else {
-        Route::HalfOdd
+        Route::Native
     }
 }
 
@@ -268,7 +256,7 @@ impl Fma {
     /// one that decides only those ([`small`]), named by [`Route::Khr`].
     pub fn routine(self) -> Option<Routine> {
         let route = match (self.route, self.tiny) {
-            (Route::Wide | Route::Soft | Route::HalfOdd, _) => self.route,
+            (Route::Wide | Route::Soft, _) => self.route,
             (Route::Khr, Some(Route::Wide)) => Route::Khr,
             (Route::Khr, Some(tiny)) => tiny,
             (Route::Khr | Route::F16 | Route::F16Khr | Route::Native, _) => return None,
@@ -286,7 +274,6 @@ impl Fma {
             Route::Khr => KHR,
             Route::Wide => WIDE,
             Route::Soft => SOFT,
-            Route::HalfOdd => HALF,
             Route::F16 => F16,
             Route::F16Khr => F16_KHR,
             Route::Native => NATIVE,
@@ -302,7 +289,7 @@ impl Fma {
         match self.route {
             Route::Khr if self.checked() => 112,
             Route::Khr => 16,
-            Route::Wide | Route::Soft | Route::HalfOdd => 24,
+            Route::Wide | Route::Soft => 24,
             Route::F16 | Route::F16Khr => 32,
             // The instruction, and a `half` result's rounding.
             Route::Native => 64,
@@ -310,10 +297,9 @@ impl Fma {
     }
 }
 
-/// A module-scope fused multiply-add routine on `float` lanes (`half` values held in `float` for
-/// [`Route::HalfOdd`]): `route` is [`Route::Wide`], [`Route::Soft`], or [`Route::HalfOdd`]; or
-/// [`Route::Khr`], the routine of `OpFmaKHR`'s results at most `2^-126` in magnitude through
-/// `double` ([`small`]), which takes that result too.
+/// A module-scope fused multiply-add routine on `float` lanes: `route` is [`Route::Wide`] or
+/// [`Route::Soft`]; or [`Route::Khr`], the routine of `OpFmaKHR`'s results at most `2^-126` in
+/// magnitude through `double` ([`small`]), which takes that result too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Routine {
     pub route: Route,
@@ -322,15 +308,13 @@ pub struct Routine {
 
 impl Routine {
     /// An upper estimate of the routine's SPIR-V words, with its constants and types, defined by
-    /// [`define`] in a module whose `half` rounding takes form `q`.
-    pub fn words(self, q: QuantizeForm) -> u32 {
+    /// [`define`].
+    pub fn words(self) -> u32 {
         match self.route {
             Route::Wide => 640,
             // 43 instructions of at most six words, eight constants (a vector's carry their lanes),
             // the `double` types, and the function's type, frame and four parameters.
             Route::Khr => 340 + 25 * u32::from(self.lanes),
-            // The sequence, its rounding to `half`, and the function's frame.
-            Route::HalfOdd => 272 + narrow::round_words_in(q, half_form(self.lanes)) + 64,
             _ => 1800,
         }
     }
@@ -343,13 +327,12 @@ impl Routine {
     }
 
     /// An upper estimate of the routine's SPIR-V words among a module's routines `fmas`
-    /// ([`complete`]), its `half` rounding in form `q`: per lane where [`per_lane`] says so, else
-    /// its sequence's.
-    pub fn words_among(self, fmas: &BTreeSet<Routine>, q: QuantizeForm) -> u32 {
+    /// ([`complete`]): per lane where [`per_lane`] says so, else its sequence's.
+    pub fn words_among(self, fmas: &BTreeSet<Routine>) -> u32 {
         if per_lane(self, fmas) {
             self.per_lane_words()
         } else {
-            self.words(q)
+            self.words()
         }
     }
 
@@ -380,7 +363,6 @@ impl Routine {
         match self.route {
             Route::Khr => KHR_CHECKED,
             Route::Wide => WIDE,
-            Route::HalfOdd => HALF,
             _ => SOFT,
         }
     }
@@ -393,13 +375,10 @@ impl Routine {
 /// vector lane counts holds `k` sequences, or one and `k` per-lane routines with its one-lane
 /// routine, which it gets where the `k - 1` sequences that saves are, by their estimate, at least
 /// twice the per-lane routines together: the estimates are upper bounds, and in a module a sequence
-/// shares its constants and types, so a smaller margin grew modules (`half`'s sequence, called on
-/// two and four lanes), and weighing one sequence where `k - 1` go grew those of the `double` route
-/// on two, three and four lanes. A route called on one lane count keeps its one routine. A `half`
-/// sequence holds its rounding to `half`, weighed in the module's form `q`: the integer rounding
-/// (`QuantizeForm::Integer`) makes it the larger, so that its routines on two and four lanes call
-/// the one-lane routine there.
-pub fn complete(fmas: &mut BTreeSet<Routine>, q: QuantizeForm) {
+/// shares its constants and types, so a smaller margin grew modules, and weighing one sequence
+/// where `k - 1` go grew those of the `double` route on two, three and four lanes. A route called
+/// on one lane count keeps its one routine.
+pub fn complete(fmas: &mut BTreeSet<Routine>) {
     let add: Vec<Routine> = fmas
         .iter()
         .filter(|r| r.route != Route::Khr)
@@ -413,7 +392,7 @@ pub fn complete(fmas: &mut BTreeSet<Routine>, q: QuantizeForm) {
                 .collect();
             let per_lane: u32 = vectors.iter().map(|r| r.per_lane_words()).sum();
             let saved = vectors.len().saturating_sub(1) as u32;
-            saved > 0 && saved * one.words(q) >= 2 * per_lane
+            saved > 0 && saved * one.words() >= 2 * per_lane
         })
         .collect();
     fmas.extend(add);
@@ -469,11 +448,6 @@ pub fn define(mb: &mut ModuleBuilder, r: Routine) -> BResult<FuncId> {
         }
         Route::Wide => wide(&mut fb, f, a, b, c)?,
         Route::Soft => soft(&mut fb, f, a, b, c)?,
-        Route::HalfOdd => {
-            let h = half_form(r.lanes);
-            let s = half_sum(&mut fb, h, a, b, c)?;
-            narrow::round(&mut fb, h, s)?
-        }
         Route::F16 | Route::F16Khr | Route::Native => {
             return Err(BuildError::Type(TypeRule::FunctionSignature))
         }
@@ -522,8 +496,7 @@ pub fn emit(
         return Err(BuildError::Type(TypeRule::FunctionSignature));
     };
     match (fma.route, fma.form.float_fmt()) {
-        (Route::HalfOdd, Some(FloatFmt::Half))
-        | (Route::Khr | Route::Wide | Route::Soft, Some(FloatFmt::F32)) => {
+        (Route::Khr | Route::Wide | Route::Soft, Some(FloatFmt::F32)) => {
             float(fb, fma, a, b, c, routine)
         }
         (Route::F16, Some(FloatFmt::Half)) => f16(fb, fma.form.lanes, [a, b, c], false),
@@ -570,14 +543,6 @@ fn f16(
     fb.convert(ConvOp::FConvert, r, w)
 }
 
-/// The `half` lanes of `lanes` lanes.
-fn half_form(lanes: u8) -> Form {
-    Form {
-        held: Held::Float(FloatFmt::Half),
-        lanes,
-    }
-}
-
 /// The `float` lanes of `lanes` lanes.
 fn f32_form(lanes: u8) -> Form {
     Form {
@@ -601,7 +566,7 @@ fn float(
         (Route::Khr, Some(tiny), Some(r)) => {
             checked(fb, fma.form, [a, b, c], (r, tiny == Route::Wide))
         }
-        (Route::Wide | Route::Soft | Route::HalfOdd, _, Some(r)) => fb
+        (Route::Wide | Route::Soft, _, Some(r)) => fb
             .call(r, &[a, b, c])?
             .ok_or(BuildError::Type(TypeRule::FunctionSignature)),
         _ => Err(BuildError::Type(TypeRule::FunctionSignature)),

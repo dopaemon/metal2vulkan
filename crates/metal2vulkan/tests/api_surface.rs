@@ -230,11 +230,8 @@ surface! {
         enum FloatMathsPolicy N;
         enum TexelConversionPolicy N;
         enum VertexNormalizedPolicy N;
-        enum HalfRoundingPolicy N;
         enum NanMinMaxPolicy N;
         enum RoundingOrderPolicy N;
-        enum HalfBlendPolicy N;
-        enum HalfTexelBitsPolicy N;
         enum MultisampleDepthTwinPolicy N;
         enum DecodedTexelsPolicy N;
         enum HeapCompressionPolicy N;
@@ -929,7 +926,6 @@ surface! {
         fn image_view_type;
         fn image_type;
         fn storage_image_choice;
-        fn half_bits_read_view;
         fn storage_view_formats;
         fn ycbcr;
         fn writes_dropped;

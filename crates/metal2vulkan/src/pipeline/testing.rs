@@ -161,8 +161,7 @@ pub fn storage_buffers(a: &FunctionArtifact) -> u32 {
 }
 
 /// The default policy with the translation's routines of Metal's maths
-/// (`FloatMathsPolicy::Exact`), Metal's `half` rounding (`HalfRoundingPolicy::Exact`), and Metal's
-/// NaN, minimum and maximum and rounding order (`NanMinMaxPolicy::Exact`,
+/// (`FloatMathsPolicy::Exact`), and Metal's NaN, minimum and maximum and rounding order (`NanMinMaxPolicy::Exact`,
 /// `RoundingOrderPolicy::Exact`): the policy of the tests of those routines, which the device's
 /// forms, the defaults, leave off a device whose functions are not Metal's. The texel conversions
 /// are the default's.
@@ -171,16 +170,6 @@ pub fn exact_maths() -> DevicePolicy {
     DevicePolicy {
         texel_conversion: native.texel_conversion,
         ..native.exact_answers()
-    }
-}
-
-/// The default policy with Metal's `half` rounding (`HalfRoundingPolicy::Exact`): the policy of a
-/// test of the integer rounding's or a measured form's words, which native half rounding, the
-/// default, replaces off Apple's GPUs.
-pub fn exact_half() -> DevicePolicy {
-    DevicePolicy {
-        half_rounding: crate::device::HalfRoundingPolicy::Exact,
-        ..DevicePolicy::default()
     }
 }
 

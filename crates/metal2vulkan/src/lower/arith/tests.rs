@@ -384,9 +384,10 @@ fn wide_profile() -> DeviceProfile {
 }
 
 /// The `half` roundings the blends' checks run under (`extended_range::blend::half_of`): the
-/// integer sequence every device answers alike, and the device's conversion under the 16-bit float
-/// controls, each checked against Metal's arithmetic.
-const HALF_FORMS: [QuantizeForm; 2] = [QuantizeForm::Integer, QuantizeForm::Controlled];
+/// device's quantize with its exact denormal arm, and the device's conversion under the 16-bit
+/// float controls, each checked against Metal's arithmetic on the interpreter's nearest-even
+/// quantize and conversion.
+const HALF_FORMS: [QuantizeForm; 2] = [QuantizeForm::Device, QuantizeForm::Controlled];
 
 /// One case: per operand, per lane, the held bits.
 type Case = Vec<Vec<u64>>;
@@ -2521,11 +2522,12 @@ fn half_nan_answers_follow_the_measured_states() {
 }
 
 /// The float facts of a profile whose `float` fused multiply-add is `OpFmaKHR`, checked by the
-/// integer routine, whose `half` one is the routine, and whose `float` functions are the device's.
+/// integer routine, whose `half` one is the device's `float` `Fma`, and whose `float` functions are
+/// the device's.
 const KHR_FACTS: super::FloatFacts = super::FloatFacts {
     routes: super::fma::Routes {
         float: super::fma::Route::Khr,
-        half: super::fma::Route::HalfOdd,
+        half: super::fma::Route::Native,
         tiny: Some(super::fma::Route::Soft),
     },
     reciprocal: super::divide::Reciprocal::Rounded,

@@ -304,17 +304,6 @@ pub enum RuntimeFact {
     /// `CombinedSampler::raw`. Bound in any other format, or unbound, the slot leaves the variant,
     /// and the function reads the texture's own view.
     SrgbTexture { slot: SlotRef },
-    /// The function reads a 16-bit float texel's own 16 bits from a second binding of texture slot
-    /// `slot`, the texture's unsigned integer alias view
-    /// (`metal::format::half_bits_read_view`: `R16_UINT`, `R16G16_UINT` or `R16G16B16A16_UINT`),
-    /// and widens them exactly, as Metal's `texture2d<half>` read answers a 16-bit float texel's
-    /// own code (`HalfTexelBitsPolicy::Exact`). The binder views a bound texture of such a format
-    /// at the slot's `ResourceKind::RawTexture` binding in the alias, and binds the unsigned
-    /// integer neutral there for any other format and for an unbound slot, which the read's own
-    /// arm on the bound class never reads. The slot's own binding stays the texture's own view,
-    /// which its queries and its other classes read.
-    HalfBitsTexture { slot: SlotRef },
-
     /// A `ulong` atomic (`atomic_{min,max}`) updates the `ulong` texture bound to the slot, so the
     /// slot is declared as an `R64ui` storage image: the binder views the bound `RG32Uint` texture
     /// as `R64_UINT`, each texel's low word in R and high word in G one little-endian 64-bit
@@ -799,10 +788,7 @@ pub enum RuntimeFact {
     /// ANV's register allocator). Each `true` field is an exact form the pipeline would carry under
     /// the consumer's policy that the fitting translation gave up to fit the bound (`sampling`
     /// also for Metal's filter of a two-plane YCbCr texture, `YCbCrFilterPolicy::Exact`, which is
-    /// dropped with it; `half_texel_bits` for a 16-bit float texel's own bits, read through the
-    /// unsigned integer alias of a slot the function declares `access::read`
-    /// ([`HalfTexelBitsPolicy::Exact`](crate::device::HalfTexelBitsPolicy::Exact)), whose widening
-    /// at each such read grows the module); the stages carry
+    /// dropped with it); the stages carry
     /// the reduced policy's own precision notes besides. The consumer announces it once per device
     /// (the runtime's `Degradation::ExactFormsOverCompilerLimit`), naming the pipeline and the forms
     /// dropped. Nothing binds it.
@@ -810,11 +796,8 @@ pub enum RuntimeFact {
         sampling: bool,
         float_maths: bool,
         texel_conversion: bool,
-        half_rounding: bool,
         nan_and_min_max: bool,
         rounding_order: bool,
-        half_blend: bool,
-        half_texel_bits: bool,
     },
     /// The render pipeline was compiled under `VariantKey::quad_primitive_ids`, and its fragment
     /// function reads `[[primitive_id]]` from Vulkan's `PrimitiveId` shifted right by one

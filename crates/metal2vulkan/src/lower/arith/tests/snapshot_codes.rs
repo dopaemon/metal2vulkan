@@ -206,50 +206,10 @@ fn bits_come_back() {
     );
 }
 
-/// A snapshot of a 16-bit float texture holds the texel's own 16 bits, from the slot's unsigned
-/// integer alias, and the read widens them: each of the 65,536 half codes comes back as itself in
-/// a `half` result, the 2,046 NaN codes included, so a NaN's sign, payload and signalling bit
-/// survive the copy (`lower::fragment`'s `snapshot::fetches_half_bits`).
-///
-/// Without that path the copy fetches the slot's image and the device decodes the texel first: a
-/// device whose `f32` decode canonicalizes a NaN hands one `0x7fc00000` for every NaN code, and
-/// `encode` then stores the one code `0x7e00` ([`a_canonicalized_nan_loses_its_code`], the gap
-/// this closes).
-#[test]
-fn half_bits_come_back_through_a_snapshot_for_every_code() {
-    use crate::lower::fragment::snapshot_mask_codes;
-    use crate::lower::texture::{alias_halves, TexelConv, TexelForm};
-    // An `RGBA16Float` texture's class: the half-float family, every channel present.
-    let class = crate::metal::texel_format::texel_format(crate::metal::PixelFormat::RGBA16Float).0;
-    let form = TexelForm {
-        conv: TexelConv::F16,
-        lanes: 4,
-    };
-    // The copy's store of the alias's fetched lanes, and the read's widening of the snapshot's
-    // codes: the two halves of the path, composed as the module runs them.
-    let body = move |fb: &mut FunctionBuilder<'_>, x: &[Value]| {
-        let word = fb.u32_const(class)?;
-        let word = fb.module().const_value(word)?;
-        let codes = snapshot_mask_codes(fb, SnapshotForm::Half, x[0])?;
-        alias_halves(fb, word, form, codes)
-    };
-    let values: Vec<u64> = (0..=u16::MAX).map(u64::from).collect();
-    check_accept(
-        "half bits through a snapshot",
-        &[v4u()],
-        vec(float(16), 4),
-        &body,
-        &cases(&values),
-        &|c| Some(c[0].clone()),
-        &same,
-    );
-}
-
 /// What the copy's fetch of the slot's own image loses on a device whose `f32` decode
 /// canonicalizes a NaN: every NaN code's texel arrives as `0x7fc00000`, which `encode` stores as
 /// the one code `0x7e00`, so the read hands back that one quiet positive NaN for all 2,046 of
-/// them. The bound for `docs/FAST-PATHS.md`'s `half_texel_bits` row, and what
-/// [`half_bits_come_back_through_a_snapshot_for_every_code`] closes.
+/// them: the bound `PrecisionNote::DeviceNanEncoding` states for a 16-bit float texel's read.
 #[test]
 fn a_canonicalized_nan_loses_its_code() {
     let canonical = u64::from(f32::NAN.to_bits());

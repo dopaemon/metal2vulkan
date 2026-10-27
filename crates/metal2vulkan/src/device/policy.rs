@@ -47,11 +47,6 @@ pub struct DevicePolicy {
     /// Whether a normalized vertex attribute's value is the device's fixed-function conversion of
     /// its codes (the default) or Metal's, divided exactly in the shader.
     pub vertex_normalized: VertexNormalizedPolicy,
-    /// Whether a `half` result computed in `float` rounds to `half` through the device's own
-    /// conversion to 16 bits (or its `OpQuantizeToF16`) where neither is measured to be Metal's
-    /// (native half rounding, the default), or by the translation's integer rounding, Metal's on
-    /// every device.
-    pub half_rounding: HalfRoundingPolicy,
     /// Whether a NaN result's bits, and the operand Metal's minimum and maximum functions
     /// (`fmin`, `fmax`, `min3`, `max3`, `clamp`, `saturate`) pick at a NaN or a signed zero, are
     /// the device's own (the default) or Metal's.
@@ -60,14 +55,6 @@ pub struct DevicePolicy {
     /// the products, its two fused multiply-adds, its `x · rsqrt(x)`) or are the device's single
     /// instructions (the default).
     pub rounding_order: RoundingOrderPolicy,
-    /// Whether a `half4` color output of a module that states its math mode blends into a 16-bit
-    /// float attachment in the device's blend (the default) or in Metal's own arithmetic, which
-    /// the function computes in the shader.
-    pub half_blend: HalfBlendPolicy,
-    /// Whether a `half` or `float` read of a 16-bit float texture is the device's decode of the
-    /// texel (the default) or the texel's own bits, read through the texture's unsigned-integer
-    /// alias so no device decode sees them.
-    pub half_texel_bits: HalfTexelBitsPolicy,
 
     /// Whether a multisampled `Depth32Float` texture the program only reads is held in a depth
     /// image (the default) or, where the device's depth images may not keep its texels, in a
@@ -120,9 +107,9 @@ impl DevicePolicy {
     /// The untrusted-guest production policy: containment and isolation on, Metal's 8-bit linear
     /// filter emulated exactly where the emulation runs, native device sampling (a two-plane YCbCr texture's samples among them),
     /// native device maths, the device's own texel
-    /// conversions, native half rounding, the device's NaN and minimum and maximum, the device's
-    /// rounding order, the device's blend of a `half` output into a 16-bit float attachment, the device's decode of a
-    /// 16-bit float texel a read answers, a multisampled `Depth32Float` texture's texels in a
+    /// conversions, the device's NaN and minimum and maximum, the device's
+    /// rounding order, a
+    /// multisampled `Depth32Float` texture's texels in a
     /// depth image, compact codes in a carried texture's decoded twin, the driver's compressed image of a
     /// heap's texture Metal keeps compressed, command buffers ready together in one kernel
     /// submission, the device's load and store of a signed normalized or `RGB9E5Float` color
@@ -140,11 +127,8 @@ impl DevicePolicy {
         float_maths: FloatMathsPolicy::Native,
         texel_conversion: TexelConversionPolicy::Device,
         vertex_normalized: VertexNormalizedPolicy::Device,
-        half_rounding: HalfRoundingPolicy::Native,
         nan_and_min_max: NanMinMaxPolicy::Native,
         rounding_order: RoundingOrderPolicy::Native,
-        half_blend: HalfBlendPolicy::Device,
-        half_texel_bits: HalfTexelBitsPolicy::Device,
         multisample_depth_twin: MultisampleDepthTwinPolicy::Device,
         decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
@@ -159,11 +143,9 @@ impl DevicePolicy {
     /// This policy with Metal's answer wherever the choices offer it: its maths functions,
     /// divisions and fused multiply-adds ([`FloatMathsPolicy::Exact`]), its texel conversions
     /// ([`TexelConversionPolicy::Exact`]), its normalized vertex attributes
-    /// ([`VertexNormalizedPolicy::Exact`]), its `half` rounding ([`HalfRoundingPolicy::Exact`]), its
+    /// ([`VertexNormalizedPolicy::Exact`]), its
     /// NaN and minimum and maximum ([`NanMinMaxPolicy::Exact`]), its rounding order
-    /// ([`RoundingOrderPolicy::Exact`]), its 16-bit float blend of a `half` output
-    /// ([`HalfBlendPolicy::Exact`]), a 16-bit float texel's own bits through a read of the
-    /// texture's unsigned-integer alias ([`HalfTexelBitsPolicy::Exact`]), its filter of a
+    /// ([`RoundingOrderPolicy::Exact`]), its filter of a
     /// two-plane YCbCr texture
     /// ([`YCbCrFilterPolicy::Exact`]), its decode of a carried texture's texels
     /// ([`DecodedTexelsPolicy::Exact`]), a heap's texture whose bytes alias the heap's
@@ -182,11 +164,8 @@ impl DevicePolicy {
             float_maths: FloatMathsPolicy::Exact,
             texel_conversion: TexelConversionPolicy::Exact,
             vertex_normalized: VertexNormalizedPolicy::Exact,
-            half_rounding: HalfRoundingPolicy::Exact,
             nan_and_min_max: NanMinMaxPolicy::Exact,
             rounding_order: RoundingOrderPolicy::Exact,
-            half_blend: HalfBlendPolicy::Exact,
-            half_texel_bits: HalfTexelBitsPolicy::Exact,
             multisample_depth_twin: MultisampleDepthTwinPolicy::Exact,
             decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -301,7 +280,7 @@ pub enum YCbCrFilterPolicy {
 /// are Metal's (MoltenVK on an Apple GPU, `DriverDeviation::MetalFloatFunctions`), the device's
 /// instructions are Metal's own whatever the policy. A NaN such a function answers is
 /// [`NanMinMaxPolicy`]'s, `dot`, `mix` and `fast::sqrt` are [`RoundingOrderPolicy`]'s, and a `half`
-/// result's rounding is [`HalfRoundingPolicy`]'s.
+/// result's rounding is the device's own (`lower::arith::narrow`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -388,37 +367,6 @@ pub enum VertexNormalizedPolicy {
     Exact,
 }
 
-/// How a `half` result the module computes in `float` (every `half` arithmetic but the device's
-/// 16-bit arithmetic and `Fma` where they are measured to be Metal's) is rounded to `half` on a
-/// device whose conversion to 16 bits and whose `OpQuantizeToF16` are not measured to round as
-/// Metal's `half(float)` does (the owner's "tiny half-precision values flushed to zero on some
-/// GPUs" of 2026-10-11, which the device's conversion may do besides its rounding, native by
-/// default). Where either is measured to be Metal's (`DriverDeviation::MetalHalfConversion`,
-/// MoltenVK on an Apple GPU; `DriverDeviation::MetalHalfQuantize`, MoltenVK, RADV and ANV where
-/// measured), or the device's float controls make the conversion Metal's by the Vulkan spec
-/// (`shaderFloat16` with `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for
-/// 16 bits, on a driver that keeps the conversion's round trip: ANV and RADV, which take it before
-/// a measured quantize), the module rounds through it under either policy.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum HalfRoundingPolicy {
-    /// Native half rounding (the default): the device's conversion of the `float` to 16 bits
-    /// and its widening where the profile has `shaderFloat16`, else the device's
-    /// `OpQuantizeToF16` with a result below the smallest normal `half` rounded exactly. Such a
-    /// module records
-    /// [`PrecisionNote::NativeHalfConversion`](crate::pipeline::PrecisionNote::NativeHalfConversion)
-    /// or
-    /// [`PrecisionNote::NativeHalfQuantize`](crate::pipeline::PrecisionNote::NativeHalfQuantize),
-    /// whose docs state the bound, and requires no measured fact.
-    #[default]
-    Native,
-    /// Metal's rounding on every device: integer arithmetic on the `float`'s bits, about twenty
-    /// instructions a rounding, where the native forms take three: larger modules and longer
-    /// pipeline creation.
-    Exact,
-}
-
 /// Whose NaN a `float` or `half` result answers, and which operand Metal's minimum and maximum
 /// functions (`fmin`, `fmax`, `min3`, `max3`, `clamp`, and `saturate`, Metal's
 /// `clamp(x, +0, 1)`) pick at a NaN, a signed zero or an `f32` denormal, on a device not measured
@@ -445,8 +393,8 @@ pub enum NanMinMaxPolicy {
     /// Metal's: the translation selects Metal's NaN where the device may answer another, and
     /// Metal's operand where the device's instructions may pick another; a `half` widened to
     /// `float` answers `0x7fc00000` for every NaN, as Metal does. A `half` texel read, sampled or
-    /// gathered keeps the NaN the device decoded through native half rounding too
-    /// (`HalfRoundingPolicy::Native`) and through the conversion under the float controls, and a
+    /// gathered keeps the NaN the device decoded through native half rounding too and through the
+    /// conversion under the float controls, and a
     /// `half` read from its bits is decoded in integer arithmetic where the default takes the
     /// device's widening (a `half` stored back unchanged keeps its bits under either).
     Exact,
@@ -472,76 +420,6 @@ pub enum RoundingOrderPolicy {
     Native,
     /// Metal's order: `dot` the fused chain of its products, `mix` `fma(t, y, fma(-t, x, x))`, and
     /// `fast::sqrt` `x · rsqrt(x)` with Metal's answers at a zero, a denormal and `+inf`.
-    Exact,
-}
-
-/// How a `half4` color output of a module that states its math mode blends into an `R16Float`,
-/// `RG16Float` or `RGBA16Float` attachment.
-///
-/// Without fast math (`air.compile.fast_math_disable`, safe or relaxed math) Metal blends it in
-/// `half` arithmetic: the `half` the function returns, each factor (`1 - x` and the blend color's
-/// `half` included), each product and the sum rounded to `half`, nearest even. With fast math
-/// (`air.compile.fast_math_enable`) Metal's compiler folds the blend into the function before its
-/// fast-math passes, which fuse and regroup it: the blend is a form the blend state decides only
-/// where that form is measured (`extended_range::blend::Blend::fitted`) and no lane of the output
-/// folds into it (`lower::fragment::fetch`), and Metal rounds the source's product to the
-/// attachment and carries the destination's into the sum unrounded where a pair is contracted,
-/// where a device's own blend is the mirror image. A module naming no math mode is not governed
-/// here: what Metal's compiler does to its blend was not measured.
-///
-/// A device's own blend adds in its arithmetic and rounds once. This governs an attachment the
-/// function does not read: one the function fetches in the interlocked storage form takes Metal's
-/// blend there whatever this says, no Vulkan blend applying to a storage write.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum HalfBlendPolicy {
-    /// The device's blend (the default): a blended channel may store a value apart from Metal's
-    /// within the bound
-    /// [`PrecisionNote::HalfOutputPrecision`](crate::pipeline::PrecisionNote::HalfOutputPrecision)
-    /// records, which the pipeline then records.
-    #[default]
-    Device,
-    /// Metal's blend, computed by the function in the interlocked storage form of the attachment
-    /// (`lower::fragment::fetch`) on a device that orders framebuffer fetch through the pixel
-    /// interlock: the attachment becomes a storage image the function reads and writes, so its
-    /// image needs `STORAGE` usage (a pass renders a texture without it into a stand-in) and a
-    /// pass splits where its draws change the attachment's role. Where that form is not exact
-    /// for the pipeline (a device without the interlock, a depth or stencil test the write would
-    /// precede, alpha to coverage, multiview, a format the device does not store, a blend of the
-    /// second source, and under fast math a blend state whose form is not measured or an output
-    /// a lane of which folds into the blend), the device blends and the pipeline records the note
-    /// as under [`HalfBlendPolicy::Device`].
-    Exact,
-}
-
-/// Whose bits a `half` or `float` read of a 16-bit float texture (`R16Float`, `RG16Float`,
-/// `RGBA16Float`, `RGBX16Float`: `metal::texel_format::half_channels`) answers. Metal's
-/// `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code, sign,
-/// payload and signalling bit kept; a device that decodes the texel into `f32` before the shader
-/// sees it canonicalizes that NaN, and the code is gone before any keep of ours. Measured on
-/// MoltenVK (Apple M3 Max, API 1.2): all three read sites of `half-texel-nans-r16f`, `-rg16f` and
-/// `-rgba16f` answer `0x7e00` for every NaN texel, 515, 1,026 and 2,045 words of 4,096 a site.
-/// A finite, zero, denormal or infinite texel is the device's own under either value, and every
-/// other format's NaN is Metal's `0x7e00` already.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum HalfTexelBitsPolicy {
-    /// The device's decode of the texel (the default): a NaN texel answers whatever the device's
-    /// decode of it into `f32` leaves, which the module records
-    /// [`PrecisionNote::DeviceNanEncoding`](crate::pipeline::PrecisionNote::DeviceNanEncoding),
-    /// whose docs state the bound. One descriptor a slot, and no decode in the shader.
-    #[default]
-    Device,
-    /// The texel's own bits: a read-only 16-bit float texture is read through its unsigned-integer
-    /// alias (`metal::format::half_bits_read_view`: `R16_UINT`, `R16G16_UINT` or
-    /// `R16G16B16A16_UINT`) at a second binding of the slot
-    /// (`pipeline::sym::ResourceKind::RawTexture`), and the shader widens each channel's 16 bits
-    /// exactly, as the write side of `StorageImageClass::HalfBits` stores them. Costs a sampled-image
-    /// descriptor and a view at each such slot, the texture's image a mutable format, and the
-    /// widening at each read. A slot the function also samples, gathers, compares, writes or
-    /// updates atomically keeps the device's decode and its note, the declaration being one.
     Exact,
 }
 

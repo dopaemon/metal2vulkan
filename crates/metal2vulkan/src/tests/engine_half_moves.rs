@@ -16,16 +16,14 @@
 //!   device's there, recorded as `PrecisionNote::DeviceNanEncoding`), so the texel must be the exact
 //!   widening of each value that is not a NaN, and a NaN for each NaN.
 //!
-//! Each runs on every committed profile under the default policy and under Metal's answers
-//! (`DevicePolicy::exact_answers`). Under Metal's answers every pattern comes back as its bits from
-//! every move on every profile, and on MoltenVK under both. Elsewhere a fast form of
-//! `docs/FAST-PATHS.md` may leave a NaN's bits to the device, and the module says so: a `half`
-//! read from its bits by the device's widening (`PrecisionNote::NativeHalfConversion`, the default
-//! `HalfRoundingPolicy::Native`) or a NaN's bits left to the device's arithmetic and conversions
-//! (`PrecisionNote::NativeNanEncoding`, the default `NanMinMaxPolicy::Native`). There a NaN pattern
-//! need only come back a NaN (a move through the select, the threadgroup array or a half-bits
-//! texel; a move straight to a buffer reuses the loaded bits). No other pattern may change, nor any
-//! where the module records neither note.
+//! Each runs on every committed profile under the default policy and under
+//! `DevicePolicy::exact_answers`. A module may leave a NaN's bits to the device, and then says so:
+//! a `half` read from its bits by the device's widening (`PrecisionNote::NativeHalfConversion`,
+//! wherever the module rounds to `half` through the device's conversion) or a NaN's bits left to
+//! the device's arithmetic and conversions (`PrecisionNote::NativeNanEncoding`, the default
+//! `NanMinMaxPolicy::Native`). There a NaN pattern need only come back a NaN (a move through the
+//! select, the threadgroup array or a half-bits texel; a move straight to a buffer reuses the
+//! loaded bits). No other pattern may change, nor any where the module records neither note.
 //!
 //! The profiles and policies compile to a few distinct modules: each runs once, all at once on
 //! threads of their own.
@@ -305,29 +303,25 @@ fn run_once(c: &Compiled, what: &str) -> Found {
 }
 
 /// Every `half` pattern comes back as its bits from each move (buffer, select, threadgroup array,
-/// half-bits texel) on every profile under Metal's answers and on MoltenVK under every policy;
-/// elsewhere a NaN pattern may come back another NaN only where the module records the note that
-/// leaves a NaN's bits to the device (the module docs).
+/// half-bits texel) on every profile under every policy, but that a NaN pattern may come back
+/// another NaN where the module records the note that leaves a NaN's bits to the device (the module
+/// docs).
 #[test]
 fn every_half_pattern_moves_as_its_bits() {
     let Some(bc) = assemble() else { return };
     // Each (policy, profile) and the module it compiles to; each distinct module runs once.
-    let mut runs: Vec<(&str, bool, String, Arc<[u32]>)> = Vec::new();
+    let mut runs: Vec<(&str, String, Arc<[u32]>)> = Vec::new();
     let mut modules: BTreeMap<Arc<[u32]>, Compiled> = BTreeMap::new();
-    for (policy_name, policy, exact) in [
-        ("default", DevicePolicy::default(), false),
-        (
-            "exact answers",
-            DevicePolicy::default().exact_answers(),
-            true,
-        ),
+    for (policy_name, policy) in [
+        ("default", DevicePolicy::default()),
+        ("exact answers", DevicePolicy::default().exact_answers()),
     ] {
         for (stem, p) in committed_profiles_with(policy).expect("profiles") {
             let Some((words, compiled)) = compile_once(&stem, &p, &bc, policy_name) else {
                 continue;
             };
             modules.entry(Arc::clone(&words)).or_insert(compiled);
-            runs.push((policy_name, exact, stem, words));
+            runs.push((policy_name, stem, words));
         }
     }
     let found: BTreeMap<Arc<[u32]>, Found> = std::thread::scope(|s| {
@@ -344,14 +338,12 @@ fn every_half_pattern_moves_as_its_bits() {
     eprintln!("{} runs, {} distinct modules", runs.len(), modules.len());
     let mut report = Vec::new();
     let mut device_nans = Vec::new();
-    for (policy_name, exact, stem, words) in &runs {
+    for (policy_name, stem, words) in &runs {
         let (c, found) = (&modules[words], &found[words]);
         let notes = &c.notes;
-        let noted = !exact
-            && !stem.starts_with("moltenvk")
-            && notes
-                .iter()
-                .any(|n| n == "NativeHalfConversion" || n == "NativeNanEncoding");
+        let noted = notes
+            .iter()
+            .any(|n| n == "NativeHalfConversion" || n == "NativeNanEncoding");
         let nan_only = |list: &[(u16, u16)]| list.iter().all(|&(h, got)| is_nan(h) && is_nan(got));
         let nan_texels = found
             .texels

@@ -1133,14 +1133,14 @@ fn metal_half_operands() -> Vec<u32> {
     xs
 }
 
-/// In `QuantizeForm::Integer`, the default, `round` is Metal's conversion of a `float` to `half`
-/// ([`metal_half`]) bit for bit over [`metal_half_operands`] (NaNs and signed zeros included) on
-/// scalars and vectors, with no `OpQuantizeToF16` in the module, and `round_exact_below_normal` is
+/// In `QuantizeForm::Device`, the default, through the interpreter's quantize (to nearest even),
+/// `round` is Metal's conversion of a `float` to `half` ([`metal_half`]) over
+/// [`metal_half_operands`] (signed zeros included, a NaN a NaN) on scalars and vectors, its
+/// quantize's flush to zero rounded onto the half denormal grid, and `round_exact_below_normal` is
 /// too wherever its operand is a value of the format below the smallest normal half (every other
-/// operand). In `QuantizeForm::Device`, through the interpreter's quantize (to nearest even), both
-/// give the same values, a NaN a NaN.
+/// operand).
 #[test]
-fn integer_half_rounding_is_metals_conversion() {
+fn device_half_rounding_is_metals_conversion_on_a_nearest_even_quantize() {
     use crate::spirv::builder::QuantizeForm;
     let xs = metal_half_operands();
     let (f32f, h) = (float(32), half());
@@ -1161,10 +1161,7 @@ fn integer_half_rounding_is_metals_conversion() {
     let want = |c: &Case| Some(c[0].iter().map(|b| metal_half(*b)).collect::<Vec<u64>>());
     // The device form's quantize is the interpreter's: a quarter of the operands shows the
     // routine around it.
-    for (form_name, form, step) in [
-        ("integer", QuantizeForm::Integer, 1),
-        ("device", QuantizeForm::Device, 4),
-    ] {
+    for (form_name, form, step) in [("device", QuantizeForm::Device, 4)] {
         for (name, round, exact_only) in rounds {
             let ops: Vec<u32> = xs
                 .iter()
@@ -1187,20 +1184,13 @@ fn integer_half_rounding_is_metals_conversion() {
                 let what = format!("{form_name} {name} on {lanes:?}");
                 let m = kernel_with(&[input], lanes, &body, true, false)
                     .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
-                assert_eq!(
+                assert!(
                     crate::lower::arith::narrow::quantizes(&m),
-                    form == QuantizeForm::Device,
                     "{what}: OpQuantizeToF16"
                 );
-                // The integer form answers Metal's NaN; the interpreter's quantize keeps a NaN
-                // a NaN, which the device form's measured fact covers alone.
-                let exact = |g: u64, w: u64| g == w;
+                // The interpreter's quantize keeps a NaN a NaN, its bits the device's.
                 let nan_loose = exact_ok(lanes);
-                let accept: &dyn Fn(u64, u64) -> bool = match form {
-                    QuantizeForm::Integer => &exact,
-                    _ => &nan_loose,
-                };
-                check_module(&what, m, &[input], lanes, cs, &want, accept);
+                check_module(&what, m, &[input], lanes, cs, &want, &nan_loose);
             }
         }
     }

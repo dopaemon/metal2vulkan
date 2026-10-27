@@ -1153,7 +1153,7 @@ pub enum PushField {
     ColorWriteRule(u32),
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
     /// function that blends a 16-bit float attachment in the shader under a blend that reads it
-    /// (`DevicePolicy::half_blend`): one `uvec4` holding the four `f32`s' bits as the encoder
+    /// (a fetched attachment's blend): one `uvec4` holding the four `f32`s' bits as the encoder
     /// set them (`BindState::blend_color`), which the function rounds to `half`.
     HalfBlendColor,
     /// The draw's depth bias for a fragment stage that stores Metal's `Depth16Unorm` codes itself

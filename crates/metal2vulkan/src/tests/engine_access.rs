@@ -35,6 +35,7 @@ use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs, Plan};
 use crate::memory::static_root::analyze_memory;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::{BufferForm, DescriptorView, PushLoc, SlotInterface, Window};
@@ -1742,7 +1743,9 @@ fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
 /// 2023 baseline, both on `moltenvk-m3`), every generated leaf kernel is exact in bounds and
 /// contained out of bounds at bind residuals that are not multiples of 4: a narrow unit's index
 /// follows the binder contract (descriptor base congruent to the Metal address modulo 4), and a
-/// sub-word store through a unit leaves its neighbours unchanged.
+/// sub-word store through a unit leaves its neighbours unchanged. A `half` NaN loaded need only
+/// come back a NaN where the module reads a `half` from its bits by the device's widening
+/// (`PrecisionNote::NativeHalfConversion`), whose NaN encoding is the device's.
 #[test]
 fn narrow_units_are_exact_at_every_bind_residual() {
     let size = 32u64;
@@ -1760,6 +1763,11 @@ fn narrow_units_are_exact_at_every_bind_residual() {
                 return;
             };
             check_l3(&bc, k.name, &p, &what);
+            let native_halves = k.ty.contains("half")
+                && compile(&bc, k.name, &p)
+                    .unwrap_or_else(|e| panic!("{what}: {e}"))
+                    .precision
+                    .contains(&PrecisionNote::NativeHalfConversion);
             let (plan, m) = typed_module(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let mut probes: Vec<u32> = (0..=9).collect();
             probes.extend(size as u32 - 9..=size as u32 + 1);
@@ -1799,11 +1807,15 @@ fn narrow_units_are_exact_at_every_bind_residual() {
                             } else {
                                 vec![0; k.bytes as usize]
                             };
-                            assert_eq!(
-                                out.buffers[1][..k.bytes as usize],
-                                want[..],
-                                "{what} r={r} off={o}"
-                            );
+                            let got = &out.buffers[1][..k.bytes as usize];
+                            if native_halves {
+                                assert!(
+                                    same_halves(got, &want),
+                                    "{what} r={r} off={o}: {got:?} for {want:?}"
+                                );
+                            } else {
+                                assert_eq!(got, &want[..], "{what} r={r} off={o}");
+                            }
                         }
                         Some((_, bytes)) => {
                             let mut want = dbuf.bytes.clone();
@@ -1817,6 +1829,21 @@ fn narrow_units_are_exact_at_every_bind_residual() {
             }
         }
     }
+}
+
+/// Whether the little-endian `half` patterns `got` are `want`'s, a NaN pattern any NaN.
+fn same_halves(got: &[u8], want: &[u8]) -> bool {
+    let nan = |h: u16| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
+    got.len() == want.len()
+        && got
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(want.as_chunks::<2>().0)
+            .all(|(g, w)| {
+                let (g, w) = (u16::from_le_bytes(*g), u16::from_le_bytes(*w));
+                g == w || (nan(g) && nan(w))
+            })
 }
 
 /// The variables bound to kernel buffer slot `index`: its word view and its narrow views.

@@ -240,18 +240,6 @@ pub struct SlotPlan {
     /// texel's raw code from the slot's raw view (`ResourceKind::RawTexture`), the slot being one
     /// of `LoweringInputs::srgb_textures` (`RuntimeFact::SrgbTexture`).
     pub raw: bool,
-    /// A read of the slot takes a 16-bit float texel's own 16 bits from the slot's unsigned
-    /// integer alias view (`ResourceKind::RawTexture` of an unsigned integer image type,
-    /// `RuntimeFact::HalfBitsTexture`) where the bound format's class names such channels, and
-    /// widens them exactly (`HalfTexelBitsPolicy::Exact`). Never together with
-    /// [`raw`](Self::raw): a slot read through one alias view is read through the one view.
-    pub half_bits: bool,
-    /// The slot is read through a snapshot (`LoweringInputs::snapshot_textures`) and its
-    /// snapshot holds the alias's codes, not the copy's fetch of the slot's image: the copy
-    /// fetches the alias where the class names 16-bit float channels, and the read widens those
-    /// codes instead of the device's decode (`lower::fragment`'s `snapshot`,
-    /// `HalfTexelBitsPolicy::Exact`). Implies [`half_bits`](Self::half_bits).
-    pub half_bits_snapshot: bool,
     /// A read of the slot, a texture buffer, applies the bound texture buffer's swizzle, which
     /// the slot's `TextureSwizzle` specialization gives (`RuntimeFact::TextureSwizzle`); or the
     /// slot, a storage slot of `LoweringInputs::swizzled_storage`, applies the bound texture's to
@@ -297,8 +285,6 @@ impl SlotPlan {
             float_format: false,
             norm_write: false,
             raw: false,
-            half_bits: false,
-            half_bits_snapshot: false,
             swizzle: false,
             constant_lanes: false,
             offset_base: false,
@@ -1187,7 +1173,7 @@ fn declare_slot(
         // 16-bit float texture's own bits.
         counts.sampled_images = counts
             .sampled_images
-            .saturating_add(if s.raw || s.half_bits { 2 } else { 1 });
+            .saturating_add(if s.raw { 2 } else { 1 });
     }
     Ok(ImageDecl {
         dim,

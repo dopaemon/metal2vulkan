@@ -14,8 +14,7 @@ use crate::metal::PixelFormat as P;
 use crate::spirv::builder::QuantizeForm;
 
 /// The module roundings the routine is built under.
-const FORMS: [QuantizeForm; 4] = [
-    QuantizeForm::Integer,
+const FORMS: [QuantizeForm; 3] = [
     QuantizeForm::Device,
     QuantizeForm::Converted,
     QuantizeForm::Controlled,
@@ -593,19 +592,16 @@ fn the_half_texel_routine_words_bound_its_emission() {
             Ok(x[0])
         }) - without;
         // The routine of a device whose texel is Metal's tells apart fewer families, so it is
-        // shorter wherever it differs (the `Integer` form tells apart every one).
+        // shorter.
         let metal = size(&|fb, x| {
             fb.module().set_quantize_form(q);
             half::define(fb.module(), HalfFamilies::MetalSampler)?;
             Ok(x[0])
         }) - without;
-        match q {
-            QuantizeForm::Integer => assert_eq!(metal, defined, "{q:?}"),
-            QuantizeForm::Device | QuantizeForm::Converted | QuantizeForm::Controlled => assert!(
-                metal < defined,
-                "{q:?}: the Metal sampler's routine is {metal} words, every family's {defined}"
-            ),
-        }
+        assert!(
+            metal < defined,
+            "{q:?}: the Metal sampler's routine is {metal} words, every family's {defined}"
+        );
         eprintln!("half texel routine {q:?}: Metal sampler's {metal} words");
         let called =
             size(&body_lanes(HalfForm::Sample, TexelLanes::Filtered, q)) - without - defined;
@@ -1123,21 +1119,21 @@ parts!(grid16_forms_agree, 8;
 
 /// The grid families' `half` comes from integer arithmetic, selected after the rounding of the
 /// texel itself, so every rounding the routine leaves to the device (the `Converted` form's
-/// barrier, a `NoContraction` `x + -0.0`, and the `Device` form's `OpQuantizeToF16`) reads the
-/// routine's texel parameter directly: where a device specializes a grid class, the selection
+/// `OpFConvert` to `half` and the `Device` form's `OpQuantizeToF16`) reads the routine's texel
+/// parameter directly: where a device specializes a grid class, the selection
 /// drops it whole, and no `[[clang::optnone]]` call is left at the access on MoltenVK.
 #[test]
 fn the_device_rounding_reads_the_texel_alone() {
     use crate::spirv::serialize::serialize;
     use std::collections::BTreeSet;
-    // SPIR-V opcodes and the `NoContraction` decoration.
-    const OP_DECORATE: u32 = 71;
+    // SPIR-V opcodes.
+    const OP_TYPE_FLOAT: u32 = 22;
+    const OP_TYPE_VECTOR: u32 = 23;
     const OP_FUNCTION: u32 = 54;
     const OP_FUNCTION_PARAMETER: u32 = 55;
     const OP_FUNCTION_END: u32 = 56;
+    const OP_FCONVERT: u32 = 115;
     const OP_QUANTIZE_TO_F16: u32 = 116;
-    const OP_FADD: u32 = 129;
-    const NO_CONTRACTION: u32 = 42;
     for q in [QuantizeForm::Device, QuantizeForm::Converted] {
         let m = kernel(&[v4(), int(32)], v4(), &|fb, x| {
             fb.module().set_quantize_form(q);
@@ -1153,11 +1149,19 @@ fn the_device_rounding_reads_the_texel_alone() {
             insts.push(&words[i..(i + n).min(words.len())]);
             i += n;
         }
-        let decorated: BTreeSet<u32> = insts
-            .iter()
-            .filter(|w| w[0] & 0xFFFF == OP_DECORATE && w.get(2) == Some(&NO_CONTRACTION))
-            .map(|w| w[1])
-            .collect();
+        // The `half` scalar and vector types, the results of a conversion to `half`.
+        let mut halves = BTreeSet::new();
+        for w in &insts {
+            match w[0] & 0xFFFF {
+                OP_TYPE_FLOAT if w.get(2) == Some(&16) => {
+                    halves.insert(w[1]);
+                }
+                OP_TYPE_VECTOR if halves.contains(&w[2]) => {
+                    halves.insert(w[1]);
+                }
+                _ => {}
+            }
+        }
         // The routine is the module's function whose first parameter is a `vec4` and that has
         // four parameters; its texel is that first parameter.
         let mut texel = None;
@@ -1177,7 +1181,7 @@ fn the_device_rounding_reads_the_texel_alone() {
                         roundings = body.clone();
                     }
                 }
-                OP_FADD if decorated.contains(&w[2]) => body.push((w[2], w[3])),
+                OP_FCONVERT if halves.contains(&w[1]) => body.push((w[2], w[3])),
                 OP_QUANTIZE_TO_F16 => body.push((w[2], w[3])),
                 _ => {}
             }
@@ -1193,7 +1197,7 @@ fn the_device_rounding_reads_the_texel_alone() {
     }
 }
 
-/// The plain arm (`narrow::round_texel_plain`, `SpecKey::PlainHalfTexels`) answers as the
+/// The plain arm (`narrow::round_texel`, `SpecKey::PlainHalfTexels`) answers as the
 /// Metal-sampler routine does for every class that takes it: for each pixel format whose class
 /// `plain_on_metal_sampler` holds, the routine at that class, read and sample, one texel's lanes, a
 /// filtered value's and gathered channels', is the texel rounded to nearest even with its NaN
@@ -1296,7 +1300,7 @@ fn the_plain_arm_is_the_metal_sampler_routine_for_its_classes() {
                     held: Held::Float(FloatFmt::Half),
                     lanes: 4,
                 };
-                crate::lower::arith::narrow::round_texel_plain(fb, half4, x[0])
+                crate::lower::arith::narrow::round_texel(fb, half4, x[0])
             },
             &cases,
             &|c| Some(c[0].iter().map(|x| rte(*x)).collect()),

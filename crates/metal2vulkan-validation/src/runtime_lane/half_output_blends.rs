@@ -26,13 +26,9 @@
 //! the largest distances. A measurement, not a check: it asserts only that each draw completes
 //! and, where the pipeline announces no `half-output-precision`, that every channel is Metal's.
 //!
-//! The draws run twice: under the device's blend (`HalfBlendPolicy::Device`, the default) into
-//! every format, and under Metal's 16-bit float blend computed by the function
-//! (`HalfBlendPolicy::Exact`) into the 16-bit float formats. A `HALF-BLEND-EXACT` line counts the
-//! blended draws whose pipeline announced nothing, which must store Metal's value in every channel:
-//! under the exact blend every one on a device that orders framebuffer fetch through the pixel
-//! interlock (NVIDIA, RADV, ANV), none on lavapipe, whose fetch is its input attachments, so the
-//! device blends there and the pipeline announces it. The rule reads the blend color's `half`
+//! The draws run under the device's blend into every format. A `HALF-BLEND-EXACT` line counts the
+//! blended draws whose pipeline announced nothing, which must store Metal's value in every channel.
+//! The rule reads the blend color's `half`
 //! before its one minus (the fit of `RGBA16Float`'s blue lane, a blend color of 0.9: `h(1 - h(c))`)
 //! and keeps a term whose factor is `Zero` in the 16-bit float formats' sum, as Metal does there
 //! (`+0` where the other term is `-0`, a product of a destination of zero), but
@@ -55,7 +51,6 @@ use super::degrade_notices::counts;
 use super::{validated_device_with, Messages, ScratchCache, WAIT};
 use crate::air_library::AirLibrary;
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::HalfBlendPolicy;
 use metal2vulkan::metal::{
     BlendFactor as F, BlendOperation as O, PixelFormat as P, PrimitiveType, TextureUsage,
 };
@@ -671,34 +666,26 @@ fn texel(bytes: &[u8], i: usize, c: usize, channels: usize, wide: bool) -> f64 {
 
 #[test]
 fn half_output_blends_against_metals_rule() {
-    let mut failures = Vec::new();
-    for setting in [HalfBlendPolicy::Device, HalfBlendPolicy::Exact] {
-        failures.extend(blends_under(setting));
-    }
+    let failures = blends();
     assert!(
         failures.is_empty(),
         "blends announced as Metal's that are not: {failures:?}"
     );
 }
 
-/// Every draw of the probe under `setting` (the 16-bit float formats alone under
-/// `HalfBlendPolicy::Exact`), its lines printed: the draws whose pipeline announced no
+/// Every draw of the probe, its lines printed: the draws whose pipeline announced no
 /// `half-output-precision` that store another value than Metal's in some channel.
-fn blends_under(setting: HalfBlendPolicy) -> Vec<String> {
+fn blends() -> Vec<String> {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     let precision = Degradation::from_precision_note(PrecisionNote::HalfOutputPrecision);
     // Every draw of a noted pipeline announces the note: whether one did is the draw's own.
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
         options.announce_each = [precision].into_iter().collect();
-        options.policy.half_blend = setting;
     })
     .unwrap();
     let name = device.name().to_owned();
-    let label = match setting {
-        HalfBlendPolicy::Device => "device blend",
-        _ => "exact blend",
-    };
+    let label = "device blend";
     let queue = device.new_command_queue().unwrap();
     let library = device
         .new_library_with_air(&llvm_assemble_text(SAFE).unwrap())
@@ -751,11 +738,7 @@ fn blends_under(setting: HalfBlendPolicy) -> Vec<String> {
     let mut failures = Vec::new();
     // The blended draws whose pipeline announced nothing, of all blended draws.
     let mut quiet = (0usize, 0usize);
-    let exact_only = setting != HalfBlendPolicy::Device;
     for (fname, format, channels, wide) in FORMATS {
-        if exact_only && wide {
-            continue;
-        }
         let bpp = channels * if wide { 4 } else { 2 };
         let under = if wide { &floats } else { &halves };
         let mut exact = (0usize, 0usize);

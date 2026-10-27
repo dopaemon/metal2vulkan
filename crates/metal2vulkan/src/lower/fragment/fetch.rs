@@ -183,8 +183,7 @@
 //! refused whatever the policy (the runtime keeps such a draw off the shadow).
 //!
 //! **A 16-bit float attachment's blend** (`R16Float`, `RG16Float`, `RGBA16Float`): no Vulkan blend
-//! applies to a storage write, so the shader computes Metal's, whatever `DevicePolicy::half_blend`
-//! says: the write reads the texel at the pixel inside the interlock, blends the function's `half`
+//! applies to a storage write, so the shader computes Metal's: the write reads the texel at the pixel inside the interlock, blends the function's `half`
 //! or `float` output of one to four lanes over it (a second (index 1) output beside it, and a
 //! factor of the second source, take the generic blend, below), and stores the
 //! result (`extended_range::Blend::half_float`, [`half_blended`]). Metal's compiler appends the
@@ -226,11 +225,9 @@
 //! storage image's store converts, Metal's where the profile takes
 //! `DriverDeviation::MetalFloatStorageNans` and the device's elsewhere, noted
 //! `PrecisionNote::DeviceNanEncoding` (`stage_io::color_write`; ANV stores `0xfe00`). An
-//! attachment the function does not read takes the form only where its blend is exact: one a draw
-//! moved into the storage form (`VariantKey::interlocked_colors`; elsewhere the variant is refused
-//! and the render pass splits around the draw, whose blend is the device's), or one the pipeline
-//! names for the blend alone (`FramebufferFetchInputs::half_blends`; elsewhere it stays a color
-//! attachment).
+//! attachment the function does not read takes the form only where a draw moved it into the
+//! storage form (`VariantKey::interlocked_colors`) and its blend is exact; elsewhere the variant
+//! is refused and the render pass splits around the draw, whose blend is the device's.
 //!
 //! **An 8-bit unorm attachment's blend** (`R8Unorm`, `RG8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`) of a
 //! `half4` or `float4` output the shader computes as Metal does ([`unorm8_blended`]): the write
@@ -276,11 +273,8 @@
 //! the output folds into it ([`folds_into_blend`]) and the module states its math, as a 16-bit
 //! float one's is; where a lane folds, the forms stay and the function notes
 //! `PrecisionNote::HalfOutputFastMathBlend`. An attachment the function does not read takes the
-//! form on the same terms a 16-bit float one does, and only where its blend is exact: one a draw
-//! moved into the storage form (`VariantKey::interlocked_colors`), or one the pipeline names for
-//! the blend alone (`FramebufferFetchInputs::half_blends`, `compile::fetch_inputs`'s
-//! `blended_in_shader`, which names the fitted states of a four-lane output under fast math);
-//! elsewhere it stays a color attachment and the device blends it.
+//! form on the same terms a 16-bit float one does: only where a draw moved it into the storage
+//! form (`VariantKey::interlocked_colors`) and its blend is exact.
 //!
 //! **Another format's blend** (a format held directly whose channels read as floats, but a 16-bit
 //! float, a 32-bit float, an sRGB, a word or an extended-range one: a 16-bit normalized, 8-bit
@@ -320,7 +314,6 @@ use crate::air::ir::{Callee, InstKind, Type as AirType, TypeId as AirTypeId, Val
 use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
-use crate::device::HalfBlendPolicy;
 use crate::error::{
     Attachment, Capability, DescriptorError, Error, ExtendedRangeBlend, Feature, RuntimeInput,
     Unsupported,
@@ -364,13 +357,6 @@ pub(crate) fn interlock_orders(p: &DeviceProfile) -> bool {
 /// rasterization-order color attachment access, which [`interlock_orders`] excludes.
 pub(crate) fn inputs_order(p: &DeviceProfile) -> bool {
     p.fields().fragment.rasterization_order_color_access
-}
-
-/// Whether `p` asks for Metal's 16-bit float blend of a `half4` output, computed by the function
-/// in the storage form (`DevicePolicy::half_blend`), which a device that orders fetch through
-/// the pixel interlock alone ([`interlock_orders`]) takes.
-pub(crate) fn blends_half_in_shader(p: &DeviceProfile) -> bool {
-    p.fields().half_blend == HalfBlendPolicy::Exact && interlock_orders(p)
 }
 
 /// Whether `pf` is a 16-bit float color format, whose blend of a `half` output of a module
@@ -487,23 +473,6 @@ fn generic(
 ) -> Result<extended_range::Blend, Error> {
     let has_alpha = channels(pf).contains(ColorWriteMask::ALPHA);
     extended_range::Blend::generic(eq, has_alpha, written)
-}
-
-/// Whether entry `e`, of a module that states its math mode (`air.compile.fast_math_disable` or
-/// `air.compile.fast_math_enable`), writes color attachment `color` through a first (index 0)
-/// output of one to four `half`s and through no second (index 1) one, whose 16-bit float blend
-/// Metal computes in the arithmetic of that mode ([`blended_output`]): in `half`, each factor,
-/// product and sum rounded, without fast math, and in the fast forms with it.
-///
-/// A module naming no math mode is out: what Metal's compiler does to the blend there was not
-/// measured. Under fast math the storage form is Metal's only where the fast forms are fitted and
-/// no lane of the output folds into the blend ([`folds_into_blend`]), which the lowering checks
-/// for the pipeline it compiles against; elsewhere the attachment named for the blend alone
-/// stays a color attachment and the device blends it.
-pub(crate) fn half_output(e: &crate::air::Entry, color: u32) -> bool {
-    e.compile.fast_math.is_some()
-        && blended_output(e, color)
-            .is_some_and(|(arith, _)| arith == extended_range::blend::BlendArith::Half)
 }
 
 /// The arithmetic of Metal's 16-bit float blend of entry `e`'s write of color attachment `color`,
@@ -721,27 +690,6 @@ fn folds_into_blend(
         }
     }
     Ok(false)
-}
-
-/// Whether a color attachment of `pf` whose blend is enabled where `blending_enabled`, whose
-/// write mask is `mask` and whose blend is `equation` takes Metal's 16-bit float blend of a
-/// `half4` output in the shader: a 16-bit float format, blended, some channel written, under a
-/// blend Metal's model holds there (`extended_range::Blend::half_float`: no factor of the second
-/// source).
-pub(crate) fn half_blend_attachment(
-    pf: crate::metal::PixelFormat,
-    blending_enabled: bool,
-    mask: ColorWriteMask,
-    equation: Option<BlendEquation>,
-) -> bool {
-    let rounded = extended_range::blend::BlendMath::Rounded;
-    half_float_format(pf)
-        && blending_enabled
-        && !mask.contains(ColorWriteMask::UNSPECIALIZED)
-        && !channels(pf).intersection(mask).is_empty()
-        && equation.is_some_and(|eq| {
-            extended_range::Blend::half_float(&eq, pf, ColorWriteMask::ALL, rounded).is_ok()
-        })
 }
 
 /// What the function does that the storage form of one color depends on.
@@ -1390,7 +1338,6 @@ pub(crate) fn extended_range_blend(
         depth_or_stencil: false,
         alpha_to_coverage: false,
         amplified: false,
-        half_blends: BTreeSet::new(),
     };
     let use_ = ColorUse {
         writes: true,
@@ -1628,21 +1575,18 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // Metal's does), and stores before the tests, Metal's where its draws' tests drop no fragment;
     // it has no early-tests variant. (its form checks the driver's defect itself, and the device
     // blends it where that blocks it)
-    let writes_read = read
-        .iter()
-        .filter(|c| !inputs.half_blends.contains(c))
-        .any(|&color| {
-            outputs.iter().any(|o| {
-                matches!(
-                    o.role,
-                    OutputRole::RenderTarget {
-                        attachment: AbiInt::Const(a),
-                        index: 0,
-                        ..
-                    } if a == color
-                )
-            })
-        });
+    let writes_read = read.iter().any(|&color| {
+        outputs.iter().any(|o| {
+            matches!(
+                o.role,
+                OutputRole::RenderTarget {
+                    attachment: AbiInt::Const(a),
+                    index: 0,
+                    ..
+                } if a == color
+            )
+        })
+    });
     let dropped = cx.inputs.multisampled
         && inputs.depth_or_stencil
         && writes_read
@@ -1685,14 +1629,10 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 } if a == color
             )
         });
-        // An attachment the pipeline names only for Metal's 16-bit float blend: the storage form
-        // where it is exact before the draw's tests, else the device's blend. Its write never
-        // waits on each draw's check of its tests.
-        let optional = inputs.half_blends.contains(&color);
         let use_ = ColorUse {
             writes,
             early_tests,
-            draw_tested: (tested || untested) && !early_tests && !optional,
+            draw_tested: (tested || untested) && !early_tests,
             math: blend_math(cx),
         };
         let tied = |e: Error| e.at_attachment(Attachment::Color(color));
@@ -1701,9 +1641,8 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // Metal's blend of a 16-bit float attachment, computed by the shader: exact where its
         // forms are fitted and Metal cannot fold the output's arithmetic into it
         // ([`folds_into_blend`]), else a near-equivalent the function notes. An attachment the
-        // function does not read (one a draw moved into the storage form, or one named for the
-        // blend alone) takes it only where it is exact: elsewhere the device blends it, as the
-        // render pass splits around the draw.
+        // function does not read (one a draw moved into the storage form) takes it only where it
+        // is exact: elsewhere the device blends it, as the render pass splits around the draw.
         let mut sixteen_exact = true;
         // The generic float blend of a format whose Metal arithmetic is not built, a
         // near-equivalent the function notes: taken only where the function reads the
@@ -1867,8 +1806,6 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 return Err(tied(not_implemented().into()));
             }
             Err(blocked) if shadowed => return Err(tied(blocked.into())),
-            // Where the storage form is not exact, the device blends the attachment.
-            Err(_) if optional => continue,
             form => form,
         };
         match form {

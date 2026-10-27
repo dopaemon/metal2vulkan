@@ -139,8 +139,7 @@ pub struct ModuleBuilder {
     /// How the lowering clears the bits above a narrow integer's width
     /// ([`ModuleBuilder::mask_form`]).
     mask_form: MaskForm,
-    /// How the lowering rounds an `f32` to `half` through `OpQuantizeToF16`
-    /// ([`ModuleBuilder::quantize_form`]).
+    /// How the lowering rounds an `f32` to `half` ([`ModuleBuilder::quantize_form`]).
     quantize_form: QuantizeForm,
     /// Whether that rounding is the device's own rather than one measured to be Metal's
     /// ([`ModuleBuilder::native_half`]).
@@ -192,28 +191,21 @@ pub enum MaskForm {
     Extract,
 }
 
-/// How the lowering rounds an `f32` to `half` (`lower::arith::narrow`). Lowering takes it from
-/// the profile's measured driver deviations, its float-controls properties and its half rounding
-/// policy (`ArithPlan::quantize`). Every form gives Metal's conversion to `half` (to nearest even
-/// on the half grid, half denormals kept, infinity from 65520 up) where it is measured, controlled
-/// or integer; under native half rounding `Device` and `Converted` are the device's rounding where
-/// neither is measured, within `PrecisionNote::NativeHalfQuantize`'s or `NativeHalfConversion`'s
-/// bound.
+/// How the lowering rounds an `f32` to `half` (`lower::arith::narrow`): the device's own
+/// rounding. Lowering takes it from the profile's `shaderFloat16` and float-controls properties
+/// (`ArithPlan::quantize`). `Controlled` gives Metal's conversion to `half` (to nearest even on the
+/// half grid, half denormals kept, infinity from 65520 up) by the Vulkan spec, and `Device` where
+/// the device's quantize is measured to round as Metal does; elsewhere `Device` and `Converted`
+/// are within `PrecisionNote::NativeHalfQuantize`'s or `NativeHalfConversion`'s bound.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum QuantizeForm {
-    /// No device rounding: integer arithmetic on the `f32`'s bits, and an exact scaling below
-    /// the smallest normal half, the same on every device; a NaN gives Metal's `half` NaN,
-    /// `0x7E00` (`narrow::round`).
+    /// The device's `OpQuantizeToF16`, a result it flushes to zero rounded exactly to the half
+    /// denormal grid, on a profile without `shaderFloat16`: Metal's where the quantize is
+    /// measured to round as Metal does (`DriverDeviation::MetalHalfQuantize`).
     #[default]
-    Integer,
-    /// The device's `OpQuantizeToF16`, where it is measured to round as Metal does
-    /// (`DriverDeviation::MetalHalfQuantize`), or under native half rounding on a profile
-    /// without `shaderFloat16`.
     Device,
-    /// No quantize: `OpFConvert` to a 16-bit float and back, where the device's conversion is
-    /// measured to be Metal's `half(float)` on every `f32`, half denormals included
-    /// (`DriverDeviation::MetalHalfConversion`), or under native half rounding, and the profile has
-    /// `shaderFloat16`.
+    /// No quantize: `OpFConvert` to a 16-bit float and back, on a profile with `shaderFloat16`
+    /// whose float controls do not make the conversion Metal's.
     Converted,
     /// No quantize: `OpFConvert` to a 16-bit float and back, each decorated `NoContraction`, in
     /// an entry that declares `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
@@ -268,8 +260,7 @@ impl ModuleBuilder {
     }
 
     /// Round an `f32` to `half` in `form`. Emission sets it before any instruction, from the
-    /// profile's measured driver deviations; a builder that never sets it emits
-    /// [`QuantizeForm::Integer`].
+    /// profile; a builder that never sets it emits [`QuantizeForm::Device`].
     pub fn set_quantize_form(&mut self, form: QuantizeForm) {
         self.quantize_form = form;
     }
@@ -280,8 +271,8 @@ impl ModuleBuilder {
     }
 
     /// Whether the [`ModuleBuilder::quantize_form`] is the device's own rounding, native half
-    /// rounding, rather than one measured to be Metal's or the integer one. Emission sets it with
-    /// the form; a builder that never sets it rounds as Metal does.
+    /// rounding, rather than one measured or controlled to be Metal's. Emission sets it with the
+    /// form; a builder that never sets it takes its form as Metal's.
     pub fn set_native_half(&mut self, native: bool) {
         self.native_half = native;
     }

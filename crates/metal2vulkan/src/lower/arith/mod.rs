@@ -955,15 +955,12 @@ pub struct ArithPlan {
     /// then requires `VkProperty::MetalFloatDenormals`.
     pub device_denormals: bool,
     /// How the module rounds an `f32` to `half` ([`narrow::round`]), decided by [`finish`] from
-    /// the profile's measured driver deviations: the device's `OpQuantizeToF16` where it is
-    /// measured to round as Metal does (`DriverDeviation::MetalHalfQuantize`; a module that
-    /// quantizes then requires `VkProperty::MetalHalfQuantize`); where the device's conversion
-    /// to 16 bits is measured to be Metal's and the profile has `shaderFloat16`, the conversion
-    /// and its widening (`DriverDeviation::MetalHalfConversion`; a module that rounds so then
-    /// requires `VkProperty::MetalHalfConversion`); where neither is measured, under native half
-    /// rounding (the default), the same forms as the device's own rounding, noted
-    /// (`NativeHalfConversion`, `NativeHalfQuantize`); else integer arithmetic, exact on every
-    /// device.
+    /// the profile ([`narrow::quantize_form`]): the device's conversion to 16 bits and its
+    /// widening under the float controls that make it Metal's, else that conversion as it is
+    /// where the profile has `shaderFloat16` (noted `NativeHalfConversion`), else the device's
+    /// `OpQuantizeToF16` (noted `NativeHalfQuantize`, but where it is measured to round as Metal
+    /// does, `DriverDeviation::MetalHalfQuantize`: a module that quantizes then requires
+    /// `VkProperty::MetalHalfQuantize`).
     pub quantize: QuantizeForm,
     /// Whether [`ArithPlan::quantize`] is the device's own rounding (native half rounding,
     /// [`narrow::native_rounding`]), decided with it by [`finish`].
@@ -1094,12 +1091,11 @@ pub fn routine_words(plan: &ArithPlan) -> impl Iterator<Item = (&'static str, u6
     plan.divides
         .iter()
         .map(|d| (wide::DIVIDE, u64::from(d.words())))
-        .chain(plan.fmas.iter().map(|r| {
-            (
-                r.name(),
-                u64::from(r.words_among(&plan.fmas, plan.quantize)),
-            )
-        }))
+        .chain(
+            plan.fmas
+                .iter()
+                .map(|r| (r.name(), u64::from(r.words_among(&plan.fmas)))),
+        )
         .chain(
             plan.precise
                 .iter()
@@ -1215,7 +1211,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.libm_fma = fma::float_route(cx.profile) == fma::Route::Khr;
     let arith = &mut cx.families.arith;
     // Every family selected its fused multiply-adds by now (a cube position's at selection).
-    fma::complete(&mut arith.fmas, arith.quantize);
+    fma::complete(&mut arith.fmas);
     // The measured device fact, never the driver's name.
     arith.metal_functions = match cx.profile.fields().float_functions {
         FloatFunctions::Metal => Some(libm::module_mode(&arith.modes)),
@@ -3409,8 +3405,7 @@ fn float_call_of(
 /// The precision notes this family's lowering records for the `air` math call `call` with
 /// fast-math flags `fmf` on profile `p`: exactly what [`select`] records for the call itself
 /// (its operands' and result's own instructions record theirs; a `half` result's rounding is
-/// noted from the emitted module: Metal's under `HalfRoundingPolicy::Exact` and where measured,
-/// native half rounding's elsewhere). `None` where the family does not lower `call` as a float
+/// noted from the emitted module: native half rounding's where its form is not Metal's). `None` where the family does not lower `call` as a float
 /// function: an integer function, `sincos` (selected with its store), or a function its type
 /// refuses.
 ///

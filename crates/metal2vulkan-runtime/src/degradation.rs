@@ -2193,9 +2193,10 @@ degradations! {
         /// last place.
         NativeDivision = "native-division";
         /// Class: native device maths. The device's `GLSL.std.450 Fma` answers a `half` fused
-        /// multiply-add, or a `float` one on a device without `OpFmaKHR`, where the correctly
-        /// rounded routine would (`FloatMathsPolicy::Native`, the default; `Exact` keeps Metal's).
-        /// Recorded bound: a `half` result within one unit in its last place of Metal's; a
+        /// multiply-add on a device whose 16-bit `Fma` is not measured to be Metal's and that has
+        /// no 16-bit `OpFmaKHR` under the 16-bit float controls, on every policy, or a `float` one
+        /// on a device without `OpFmaKHR`, where the correctly rounded routine would
+        /// (`FloatMathsPolicy::Native`, the default; `Exact` keeps Metal's). Recorded bound: a `half` result within one unit in its last place of Metal's; a
         /// `float` one within half a unit in the last place of the product plus half a unit in
         /// the last place of the result.
         NativeFma = "native-fma";
@@ -2211,9 +2212,8 @@ degradations! {
         /// `0x7fc00000`.
         DeviceTexelConversion = "device-texel-conversion";
         /// Class: native half rounding. The device's own conversion of a `float` to 16 bits
-        /// rounds the pipeline's `half` results where Metal's `half(float)` would be computed in
-        /// integer arithmetic (`HalfRoundingPolicy::Native`, the default, on a device whose
-        /// conversion is not measured to be Metal's). Recorded bound: a finite result within one
+        /// rounds the pipeline's `half` results, on a device with `shaderFloat16` whose float
+        /// controls do not make that conversion Metal's `half(float)`. Recorded bound: a finite result within one
         /// unit in the last place of the `half` (to nearest even on NVIDIA's RTX 5080 Laptop
         /// GPU, toward zero on its RTX 3090 and lavapipe); where the device rounds toward zero,
         /// 65504 from 65520 up where Metal answers infinity; a result below `2^-14` the zero of
@@ -2222,7 +2222,7 @@ degradations! {
         NativeHalfConversion = "native-half-conversion";
         /// Class: native half rounding. The device's `OpQuantizeToF16` rounds the pipeline's
         /// `half` results on a device without `shaderFloat16` whose quantize is not measured to
-        /// be Metal's (`HalfRoundingPolicy::Native`, the default). Recorded bound: a finite
+        /// be Metal's. Recorded bound: a finite
         /// result within one unit in the last place of the `half`; 65504 to 65520 possibly
         /// infinity where Metal answers 65504; a NaN's encoding the device's.
         NativeHalfQuantize = "native-half-quantize";
@@ -2692,24 +2692,15 @@ pub(crate) fn dropped_exact_forms(
             sampling,
             float_maths,
             texel_conversion,
-            half_rounding,
             nan_and_min_max,
             rounding_order,
-            half_blend,
-            half_texel_bits,
         } => Some(
             [
                 (sampling, "exact sampling"),
                 (float_maths, "exact float maths"),
                 (texel_conversion, "exact texel conversion"),
-                (half_rounding, "exact half rounding"),
                 (nan_and_min_max, "exact NaN and minimum and maximum"),
                 (rounding_order, "exact rounding order"),
-                (half_blend, "exact half blend"),
-                (
-                    half_texel_bits,
-                    "exact 16-bit float texel bits through a read",
-                ),
             ]
             .into_iter()
             .filter_map(|(dropped, name)| dropped.then_some(name))

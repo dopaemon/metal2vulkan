@@ -1265,14 +1265,6 @@ pub struct FramebufferFetchInputs {
     /// The descriptor's `maxVertexAmplificationCount` is above 1: the pipeline may draw
     /// multiview.
     pub amplified: bool,
-    /// The attachments of [`attachments`](Self::attachments) the pipeline names only for Metal's
-    /// own blend of a blended output (`DevicePolicy::half_blend`): a 16-bit float one of a `half`
-    /// output, and a 32-bit float one of a four-lane output under fast math. The function takes
-    /// the storage form there where it is exact for the pipeline, and otherwise leaves the write
-    /// to the attachment and its blend to the device. Empty unless the profile asks for that
-    /// blend.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub half_blends: std::collections::BTreeSet<u32>,
 }
 
 impl FramebufferFetchInputs {
@@ -1312,7 +1304,6 @@ impl FramebufferFetchInputs {
             depth_or_stencil,
             alpha_to_coverage,
             amplified: max_vertex_amplification_count > 1,
-            half_blends: std::collections::BTreeSet::new(),
         }
     }
 }

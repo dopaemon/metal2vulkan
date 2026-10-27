@@ -621,9 +621,9 @@ fn half_operands() -> Vec<[f32; 2]> {
     (0..COUNT).map(|_| [one(), one()]).collect()
 }
 
-/// With native half rounding on, on a device whose conversion to 16 bits is neither measured to be
-/// Metal's nor made Metal's by its float controls, the stage records `NativeHalfConversion` (or
-/// `NativeHalfQuantize` without `shaderFloat16`) and the pipeline state announces it, and each
+/// On a device whose float controls do not make its conversion to 16 bits Metal's, the stage
+/// records `NativeHalfConversion` (or `NativeHalfQuantize` without `shaderFloat16`, unless its
+/// quantize is measured to round as Metal's does) and the pipeline state announces it, and each
 /// `half` narrowing and sum is within the bound the note records: one unit in the last place of the
 /// `half`, 65504 where Metal answers infinity from 65520 up on a device that rounds toward zero,
 /// and the zero of its sign below `2^-14` on one that flushes 16-bit denormals; or the `float`
@@ -631,140 +631,128 @@ fn half_operands() -> Vec<[f32; 2]> {
 /// lavapipe's (Mesa 26.2.4 with LLVM 23.1.1; 2526 of 8192 sums Metal's) compilers drop the
 /// conversion pair, so `half(a)` is `a` and the sum `a + b` rounded to `float` once (or of the
 /// operands rounded, or rounded itself), exactly. CI's lavapipe (Mesa 26.0.8 with LLVM 21.1.8)
-/// rounds here (8192 of 8192). With it off (Metal's integer rounding) each is Metal's `half(float)`
-/// exactly, and neither kind is recorded. A device measured to round as Metal does (MoltenVK), or
-/// whose float controls make its conversion Metal's (the module declares `RoundingModeRTE`,
-/// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV), records neither
-/// under either setting and answers Metal's exactly.
+/// rounds here (8192 of 8192). A device whose float controls make its conversion Metal's (the
+/// module declares `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16
+/// bits: ANV and RADV), or whose quantize is measured to be Metal's, records neither and answers
+/// Metal's exactly.
 #[test]
-fn half_rounding_answers_within_its_recorded_bound_on_and_metal_s_off() {
-    use metal2vulkan::device::HalfRoundingPolicy;
+fn half_rounding_answers_within_its_recorded_bound() {
     let bitcode = llvm_assemble_text(&half_kernel()).unwrap();
     let kinds = [
         PrecisionNote::NativeHalfConversion,
         PrecisionNote::NativeHalfQuantize,
     ];
-    for on in [false, true] {
-        on_device_with(
-            |options| {
-                if on {
-                    options.policy.half_rounding = HalfRoundingPolicy::Native;
-                }
-            },
-            |device, messages| {
-                let name = format!("{} half rounding on {on}", device.name());
-                let profile = device.compile_device().profile();
-                let measured = profile.takes_driver_deviation(DriverDeviation::MetalHalfQuantize)
-                    || profile.takes_driver_deviation(DriverDeviation::MetalHalfConversion);
-                // A module rounding under the float controls that make the device's conversion
-                // Metal's declares `DenormPreserve` for 16 bits, and so requires its property.
-                let controlled = {
-                    let library = Library::from_air(&bitcode).unwrap();
-                    let function = FunctionDescriptor::new(library.function("hr").unwrap());
-                    let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
-                    device
-                        .compile_device()
-                        .compile_function(&function, &inputs, &Budget::standard())
-                        .unwrap()
-                        .requirements()
-                        .properties
-                        .contains(&VkProperty::FloatControl(
-                            FloatControl::DenormPreserve,
-                            FloatWidth::F16,
-                        ))
-                };
-                let metal_s = measured || controlled;
-                let library = device.new_library_with_air(&bitcode).unwrap();
-                let function = library.new_function_with_name("hr").unwrap();
-                let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-                    function.function_descriptor(),
-                ));
-                let state = device
-                    .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
-                    .unwrap();
-                let announced: BTreeSet<PrecisionNote> = counts(&messages.take_notices())
-                    .into_keys()
-                    .filter_map(|kind| kind.precision_note())
-                    .filter(|note| kinds.contains(note))
-                    .collect();
-                eprintln!(
-                    "{name}: measured {measured}, float controls {controlled}; announced \
-                     {announced:?}"
-                );
-                assert_eq!(announced.len(), usize::from(on && !metal_s), "{name}");
-                let operands = half_operands();
-                let bytes: Vec<u8> = operands
-                    .iter()
-                    .flatten()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect();
-                let input = buffer_with(device, &bytes).unwrap();
-                let output = buffer_with(device, &vec![0xAB; COUNT as usize * 2 * 4]).unwrap();
-                let queue = device.new_command_queue().unwrap();
-                let command_buffer = queue.command_buffer().unwrap();
-                let mut encoder = command_buffer.compute_command_encoder().unwrap();
-                encoder.set_compute_pipeline_state(&state).unwrap();
-                encoder.set_buffer(Some(&input), 0, 0).unwrap();
-                encoder.set_buffer(Some(&output), 0, 1).unwrap();
-                encoder
-                    .dispatch_threadgroups(
-                        Size::new(COUNT / THREADS, 1, 1),
-                        Size::new(THREADS, 1, 1),
-                    )
-                    .unwrap();
-                encoder.end_encoding().unwrap();
-                command_buffer.commit().unwrap();
-                command_buffer.wait_until_completed_for(WAIT).unwrap();
-                assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-                let results: Vec<f32> = read_buffer(&output, 0, COUNT * 2 * 4)
+    on_device_with(
+        |_| {},
+        |device, messages| {
+            let name = format!("{} half rounding", device.name());
+            // A module rounding under the float controls that make the device's conversion
+            // Metal's declares `DenormPreserve` for 16 bits, and so requires its property; one
+            // rounding through a quantize measured to be Metal's requires that fact.
+            let required = {
+                let library = Library::from_air(&bitcode).unwrap();
+                let function = FunctionDescriptor::new(library.function("hr").unwrap());
+                let inputs = VariantKey::new().lowering_inputs(Stage::Kernel);
+                device
+                    .compile_device()
+                    .compile_function(&function, &inputs, &Budget::standard())
                     .unwrap()
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|w| f32::from_le_bytes([w[0], w[1], w[2], w[3]]))
-                    .collect();
-                let mut failures = Vec::new();
-                let mut exact = 0;
-                for (i, (&[a, b], r)) in operands
-                    .iter()
-                    .zip(results.as_chunks::<2>().0.iter())
-                    .enumerate()
-                {
-                    let ha = metal_half(f64::from(a));
-                    let sum = metal_half(ha + metal_half(f64::from(b)));
-                    // The `float` computation with the device's dropped roundings left out.
-                    let hb = metal_half(f64::from(b));
-                    let unrounded_sum = [
-                        a + b,
-                        ha as f32 + hb as f32,
-                        metal_half(f64::from(a + b)) as f32,
-                    ];
-                    for (what, got, want, unrounded) in [
-                        ("half(a) + half(b)", r[0], sum, &unrounded_sum[..]),
-                        ("half(a)", r[1], ha, &[a][..]),
-                    ] {
-                        let same = got.to_bits() == (want as f32).to_bits();
-                        exact += u32::from(same);
-                        let within = same
-                            || (want.is_finite()
-                                && (f64::from(got) - want).abs() <= half_ulp(want))
-                            || (want.is_infinite() && f64::from(got) == 65504f64.copysign(want))
-                            || (want.abs() < 2f64.powi(-14) && got == 0.0)
-                            || unrounded.iter().any(|u| u.to_bits() == got.to_bits());
-                        if !((on && !metal_s && within) || same) {
-                            failures.push(format!(
-                                "thread {i}: {what} of {a:e}, {b:e}: {got:e} for Metal's {want:e}"
-                            ));
-                        }
+                    .requirements()
+                    .properties
+                    .clone()
+            };
+            let controlled = required.contains(&VkProperty::FloatControl(
+                FloatControl::DenormPreserve,
+                FloatWidth::F16,
+            ));
+            let measured = required.contains(&VkProperty::MetalHalfQuantize);
+            let metal_s = measured || controlled;
+            let library = device.new_library_with_air(&bitcode).unwrap();
+            let function = library.new_function_with_name("hr").unwrap();
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                function.function_descriptor(),
+            ));
+            let state = device
+                .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
+                .unwrap();
+            let announced: BTreeSet<PrecisionNote> = counts(&messages.take_notices())
+                .into_keys()
+                .filter_map(|kind| kind.precision_note())
+                .filter(|note| kinds.contains(note))
+                .collect();
+            eprintln!(
+                "{name}: measured {measured}, float controls {controlled}; announced \
+                     {announced:?}"
+            );
+            assert_eq!(announced.len(), usize::from(!metal_s), "{name}");
+            let operands = half_operands();
+            let bytes: Vec<u8> = operands
+                .iter()
+                .flatten()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            let input = buffer_with(device, &bytes).unwrap();
+            let output = buffer_with(device, &vec![0xAB; COUNT as usize * 2 * 4]).unwrap();
+            let queue = device.new_command_queue().unwrap();
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut encoder = command_buffer.compute_command_encoder().unwrap();
+            encoder.set_compute_pipeline_state(&state).unwrap();
+            encoder.set_buffer(Some(&input), 0, 0).unwrap();
+            encoder.set_buffer(Some(&output), 0, 1).unwrap();
+            encoder
+                .dispatch_threadgroups(Size::new(COUNT / THREADS, 1, 1), Size::new(THREADS, 1, 1))
+                .unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+            let results: Vec<f32> = read_buffer(&output, 0, COUNT * 2 * 4)
+                .unwrap()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| f32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+                .collect();
+            let mut failures = Vec::new();
+            let mut exact = 0;
+            for (i, (&[a, b], r)) in operands
+                .iter()
+                .zip(results.as_chunks::<2>().0.iter())
+                .enumerate()
+            {
+                let ha = metal_half(f64::from(a));
+                let sum = metal_half(ha + metal_half(f64::from(b)));
+                // The `float` computation with the device's dropped roundings left out.
+                let hb = metal_half(f64::from(b));
+                let unrounded_sum = [
+                    a + b,
+                    ha as f32 + hb as f32,
+                    metal_half(f64::from(a + b)) as f32,
+                ];
+                for (what, got, want, unrounded) in [
+                    ("half(a) + half(b)", r[0], sum, &unrounded_sum[..]),
+                    ("half(a)", r[1], ha, &[a][..]),
+                ] {
+                    let same = got.to_bits() == (want as f32).to_bits();
+                    exact += u32::from(same);
+                    let within = same
+                        || (want.is_finite() && (f64::from(got) - want).abs() <= half_ulp(want))
+                        || (want.is_infinite() && f64::from(got) == 65504f64.copysign(want))
+                        || (want.abs() < 2f64.powi(-14) && got == 0.0)
+                        || unrounded.iter().any(|u| u.to_bits() == got.to_bits());
+                    if !((!metal_s && within) || same) {
+                        failures.push(format!(
+                            "thread {i}: {what} of {a:e}, {b:e}: {got:e} for Metal's {want:e}"
+                        ));
                     }
                 }
-                eprintln!("{name}: {exact} of {} answers Metal's exactly", 2 * COUNT);
-                assert!(
-                    failures.is_empty(),
-                    "{name}: {:#?}",
-                    &failures[..failures.len().min(24)]
-                );
-            },
-        );
-    }
+            }
+            eprintln!("{name}: {exact} of {} answers Metal's exactly", 2 * COUNT);
+            assert!(
+                failures.is_empty(),
+                "{name}: {:#?}",
+                &failures[..failures.len().min(24)]
+            );
+        },
+    );
 }

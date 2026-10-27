@@ -584,8 +584,9 @@ fn a_half_texels_sample_and_gather_take_metals_nan_under_the_nan_switch() {
 /// narrows itself (through MoltenVK on the Apple M3 Max a 32-bit float texel's NaN read as `half`
 /// kept its payload's top bits). So under `NanMinMaxPolicy::Exact` the access takes Metal's rule
 /// there too (`TexelNanRoute::Metal`): a read, on the interpreter, hands back a 16-bit float
-/// texel's NaN as its own bits and every NaN of a 32-bit float texel, in any lane, as `0x7e00`,
-/// where under the default some such NaN reads back otherwise; a read, a nearest sample and a
+/// texel's NaN as its own bits and every NaN of a 32-bit float texel, in any lane, as `0x7e00`
+/// (under the default a NaN is the device's conversion's, which the interpreter's makes `0x7e00`
+/// too); a read, a nearest sample and a
 /// gather read the slot's class, and every access holds more `0x7e00` than under the default (the
 /// default's half texel conversion reads the class too, so its reading proves nothing there).
 /// Every module validates and the plan's estimate bounds it.
@@ -655,7 +656,6 @@ fn a_half_texels_nan_is_metals_under_the_nan_switch_where_the_arithmetic_answers
                     }
                 }
             }
-            let mut native_differs = false;
             for nan in FLOAT_NANS {
                 for lane in 0..4 {
                     let mut texel = [0x3f80_0000; 4];
@@ -666,15 +666,8 @@ fn a_half_texels_nan_is_metals_under_the_nan_switch_where_the_arithmetic_answers
                     for got in run_words(&bc, &exact, texel, float32, &at) {
                         assert_eq!(got, want, "{at}: got {got:04x?}, Metal {want:04x?}");
                     }
-                    native_differs |= run_words(&bc, &native, texel, float32, &at)
-                        .iter()
-                        .any(|got| *got != want);
                 }
             }
-            assert!(
-                native_differs,
-                "{what}: the default answered Metal's NaNs too"
-            );
         }
     }
 }

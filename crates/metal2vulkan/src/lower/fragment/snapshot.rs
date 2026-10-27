@@ -103,19 +103,6 @@
 //! the one the binder names the form by: the slot's raw view where the slot's reads take the raw
 //! codes (an 8-bit sRGB texel's, `metal::texel_format::srgb_raw_view`), else the slot's own image
 //! ([`fetches_raw`]).
-//!
-//! A slot's unsigned-integer alias (a 16-bit float texel's own 16 bits,
-//! `HalfTexelBitsPolicy::Exact`) shares that one `ResourceKind::RawTexture` binding and is no such
-//! view: a read of such a slot fetches the slot's image and reads the alias beside it, under the
-//! bound format's class (`texture::emit`'s `half_bits_alias_texel`). The copy takes that same
-//! branch, on the same class word, in its own arms ([`fetches_half_bits`]): the alias's codes
-//! where the class names 16-bit float channels, and the image's encode for every other class,
-//! both the form's codes. Only one arm runs in a pipeline -- the class word is a specialization
-//! constant -- so one snapshot holds whichever the class selects, and the slot needs no second
-//! image, descriptor or byte. The read then widens the snapshot's codes where the copy stored the
-//! texel's own 16 bits, so a NaN's sign, payload and signalling bit survive the snapshot as they
-//! do without one. A read the shader checks is not the plain fetch the copy makes and keeps the
-//! device's decode, as it does without a snapshot.
 
 use std::collections::BTreeMap;
 
@@ -258,37 +245,8 @@ pub(super) fn declare(
 /// through the slot's raw view rather than through its image: where the slot's reads take the raw
 /// codes (an 8-bit sRGB texel's, `SlotPlan::raw`), the view the binder names the snapshot's form
 /// by (`bind::plan::slots`'s `snapshot_forms`, `metal::texel_format::srgb_raw_view`).
-///
-/// A slot's unsigned integer alias (a 16-bit float texel's own 16 bits,
-/// `HalfTexelBitsPolicy::Exact`) shares that one `ResourceKind::RawTexture` binding and is not
-/// such a view: a read of such a slot fetches the slot's image and reads the alias beside it
-/// (`texture::emit`'s `half_bits_alias_texel`, which no read through a snapshot takes), and the
-/// binder names the form by the slot's own sampled view. The copy of such a slot fetches its
-/// image, as its reads do.
 pub(crate) fn fetches_raw(cx: &EmitCx<'_>, index: u32) -> bool {
-    let texture = &cx.decl.families.texture;
-    texture.raw.contains_key(&index) && !texture.half_bits.contains_key(&index)
-}
-
-/// Whether the snapshot of slot `index` holds the texel's own 16 bits where the bound format's
-/// class names 16-bit float channels: the copy fetches the slot's unsigned integer alias on that
-/// branch and stores its codes, and the read widens them (`texture::emit`'s
-/// `half_bits_alias_texel`) instead of the device's decode. Off the branch both the copy and the
-/// read keep the device's decode, so one snapshot holds whichever arm the class selects and the
-/// slot needs no second image.
-///
-/// The slot's plan states it ([`SlotPlan::half_bits_snapshot`](crate::lower::texture::SlotPlan)),
-/// decided where the read's own shape is known: only the plain fetch the copy makes takes the
-/// arm, and only a form a 16-bit float texture's snapshot takes ([`SnapshotForm::Half`] or
-/// [`SnapshotForm::Bits`]). Both sites read this one predicate, so they cannot drift.
-pub(crate) fn fetches_half_bits(cx: &EmitCx<'_>, index: u32) -> bool {
-    cx.plan
-        .families
-        .texture
-        .slots
-        .get(&index)
-        .is_some_and(|s| s.half_bits_snapshot)
-        && cx.decl.families.texture.half_bits.contains_key(&index)
+    cx.decl.families.texture.raw.contains_key(&index)
 }
 
 /// The image variable the copy of slot `index` fetches from, with its image type: the slot's raw
@@ -330,13 +288,11 @@ fn sampled_type(fb: &mut FunctionBuilder<'_>, ty: TypeId) -> BResult<Option<Type
     })
 }
 
-/// One slot's copy ([`emit_entry`]): the image the slot's reads fetch, its unsigned integer alias
-/// with the class word's test where the snapshot holds the texel's own 16 bits
-/// ([`fetches_half_bits`]), the slot's snapshot, and the form its codes are in.
+/// One slot's copy ([`emit_entry`]): the image the slot's reads fetch, the slot's snapshot, and
+/// the form its codes are in.
 #[derive(Clone, Copy, Debug)]
 struct SlotCopy {
     image: GlobalId,
-    alias: Option<(GlobalId, SValue)>,
     snapshot: GlobalId,
     form: SnapshotForm,
 }
@@ -404,32 +360,8 @@ pub(super) fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> B
                 "the copy of snapshot slot {index} fetches lanes its form {form:?} does not hold"
             )));
         }
-        // The slot's unsigned integer alias, where the snapshot holds the texel's own 16 bits
-        // under the bound format's class ([`fetches_half_bits`]): the class word's test, which
-        // the read branches on too, stands outside the copy's own arm.
-        let alias = match fetches_half_bits(cx, index) {
-            false => None,
-            true => {
-                if !matches!(form, SnapshotForm::Half | SnapshotForm::Bits) {
-                    return Err(cx.fail(format!(
-                        "the snapshot of slot {index} holds a texel's 16 bits in form {form:?}"
-                    )));
-                }
-                let Some(&g) = cx.decl.families.texture.raw.get(&index) else {
-                    return Err(cx.fail(format!(
-                        "snapshot slot {index} has no unsigned integer alias view"
-                    )));
-                };
-                let Some((_, halves)) = crate::lower::texture::half_bits_class(cx, fb, index)?
-                else {
-                    return Err(cx.fail(format!("snapshot slot {index} has no texel class")));
-                };
-                Some((g, halves))
-            }
-        };
         copies.push(SlotCopy {
             image: t,
-            alias,
             snapshot: s,
             form,
         });
@@ -461,34 +393,12 @@ pub(super) fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> B
         let pixel = pixel(fb, frag)?;
         for &SlotCopy {
             image,
-            alias,
             snapshot,
             form,
         } in &copies
         {
-            match alias {
-                None => {
-                    let bits = fetched_codes(fb, image, form, pixel)?;
-                    store(fb, snapshot, pixel, bits)?;
-                }
-                // Under the bound format's class the alias holds the texel's own 16 bits, which
-                // the read widens exactly: the copy stores its codes there, and the image's
-                // encode for every other class, both the form's codes in the one snapshot.
-                Some((g, halves)) => {
-                    let taken: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                        let x = fetch(fb, g, pixel)?;
-                        let bits = mask_codes(fb, form, x)?;
-                        store(fb, snapshot, pixel, bits)?;
-                        Ok(ArmEnd::FallThrough(Vec::new()))
-                    });
-                    let kept: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                        let bits = fetched_codes(fb, image, form, pixel)?;
-                        store(fb, snapshot, pixel, bits)?;
-                        Ok(ArmEnd::FallThrough(Vec::new()))
-                    });
-                    fb.if_(&mut (), halves, taken, Some(kept))?;
-                }
-            }
+            let bits = fetched_codes(fb, image, form, pixel)?;
+            store(fb, snapshot, pixel, bits)?;
         }
         Ok(ArmEnd::FallThrough(Vec::new()))
     });
@@ -577,14 +487,8 @@ pub(crate) fn encode(
 }
 
 /// The `uvec4` of codes `codes` (32-bit lanes) kept to `form`'s code width: the snapshot's image
-/// holds that many bits a lane, so a lane of a wider value loses the rest. Every lane an
-/// unsigned integer alias view returns is a code of 16 bits at most, so a form of 16-bit codes,
-/// or [`SnapshotForm::Bits`], holds one unchanged.
-pub(crate) fn mask_codes(
-    fb: &mut FunctionBuilder<'_>,
-    form: SnapshotForm,
-    codes: SValue,
-) -> BResult<SValue> {
+/// holds that many bits a lane, so a lane of a wider value loses the rest.
+fn mask_codes(fb: &mut FunctionBuilder<'_>, form: SnapshotForm, codes: SValue) -> BResult<SValue> {
     let u = lanes(Held::Int {
         bits: 32,
         container: 32,
@@ -690,10 +594,6 @@ pub(crate) struct SnapshotRead {
     other: SValue,
     texel: TypeId,
     form: SnapshotForm,
-    /// The snapshot holds the texel's own 16 bits under the bound format's class
-    /// ([`fetches_half_bits`]), so the read hands its codes back beside the decoded value, for
-    /// that arm to widen (`texture::emit`'s `half_bits_alias_texel`).
-    half_bits: bool,
 }
 
 /// The snapshot read standing for a fetch of texture slot `index` from image `img` (loaded from
@@ -746,25 +646,20 @@ pub(crate) fn prepare(
         other,
         texel,
         form,
-        half_bits: fetches_half_bits(cx, index),
     }))
 }
 
 /// The texel at `coord` a read of `r` returns: the snapshot's codes decoded as the slot's lanes
-/// ([`decode`]), in a non-helper invocation, and 0 in a helper, which reads nothing. With the
-/// codes themselves where the snapshot holds the texel's own 16 bits ([`fetches_half_bits`]), for
-/// the alias arm of the read to widen (`texture::emit`'s `half_bits_alias_texel`): the decoded
-/// value is that arm's other one, the device's decode, as it is without a snapshot.
+/// ([`decode`]), in a non-helper invocation, and 0 in a helper, which reads nothing.
 pub(crate) fn read(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     r: SnapshotRead,
     coord: SValue,
-) -> BResult<(SValue, Option<SValue>)> {
+) -> BResult<SValue> {
     let texel = r.texel;
     let snapshot = r.snapshot;
     let form = r.form;
-    let bits = r.half_bits;
     let read: ArmFn<'_, ()> = Box::new(move |fb, _| {
         let codes = fb.read(
             snapshot,
@@ -773,31 +668,16 @@ pub(crate) fn read(
             TexelMemory::PRIVATE,
         )?;
         let value = decode(fb, form, codes, texel)?;
-        let mut out = vec![value];
-        if bits {
-            out.push(codes);
-        }
-        Ok(ArmEnd::FallThrough(out))
+        Ok(ArmEnd::FallThrough(vec![value]))
     });
     let nothing: ArmFn<'_, ()> = Box::new(move |fb, _| {
         let zero = fb.module().constant(Constant::Null { ty: texel })?;
         let zero = fb.module().const_value(zero)?;
-        let mut out = vec![zero];
-        if bits {
-            let u = lanes(Held::Int {
-                bits: 32,
-                container: 32,
-            });
-            let uvec4 = ty(fb, u)?;
-            let none = fb.module().constant(Constant::Null { ty: uvec4 })?;
-            out.push(fb.module().const_value(none)?);
-        }
-        Ok(ArmEnd::FallThrough(out))
+        Ok(ArmEnd::FallThrough(vec![zero]))
     });
     let merged = fb.if_(&mut (), r.other, read, Some(nothing))?;
     match merged.0.as_slice() {
-        [v] if !bits => Ok((*v, None)),
-        [v, codes] if bits => Ok((*v, Some(*codes))),
+        [v] => Ok(*v),
         _ => Err(cx.fail("a snapshot read without its merged texel")),
     }
 }

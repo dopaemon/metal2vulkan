@@ -552,10 +552,7 @@ fn a_fast_division_fits_its_word_estimate() {
             });
             let bound = (super::super::ArithStrategy::FastFmod { fma, reciprocal }.words()
                 + routine.words()
-                + fma
-                    .routine()
-                    .map_or(0, |r| r.words(crate::spirv::builder::QuantizeForm::Integer)))
-                as usize;
+                + fma.routine().map_or(0, |r| r.words())) as usize;
             if used - bare > bound {
                 over.push(format!(
                     "fast fmod {route:?} x{}: {} over {bound}",

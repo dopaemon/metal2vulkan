@@ -133,27 +133,17 @@ const OP_F_ORD_EQUAL: u16 = 180;
 const OP_TYPE_FLOAT: u16 = 22;
 const OP_TYPE_VECTOR: u16 = 23;
 const OP_F_CONVERT: u16 = 115;
-const OP_CONSTANT: u16 = 43;
-const OP_CONSTANT_COMPOSITE: u16 = 44;
-const OP_BITWISE_AND: u16 = 199;
 
-/// `a`'s module rounds a `half` exactly, by one of the forms `lower::arith::narrow::round` takes,
-/// at least once: on a profile that takes neither measured fact below, the integer rounding,
-/// which clears the 13 bits below the half's last with an `OpBitwiseAnd` of `0xFFFFE000`; where the
-/// device's quantize is measured Metal's (`DriverDeviation::MetalHalfQuantize`), each
-/// `OpQuantizeToF16` feeds an `OpFOrdEqual`, the test of the rounding that keeps half subnormals
-/// where the quantize gives a zero, so none rounds a `half` alone, which flushes them; or, on a
-/// profile that takes `DriverDeviation::MetalHalfConversion` (moltenvk-m3), an `OpFConvert` of an
-/// `f32` to 16 bits widened back by another, the device's conversion that is measured to be
-/// Metal's, or the same pair on a profile whose float controls make it Metal's
+/// `a`'s module rounds a `half` by one of the forms `lower::arith::narrow::round` takes, at least
+/// once: each `OpQuantizeToF16` feeds an `OpFOrdEqual`, the test of the rounding that keeps half
+/// subnormals where the quantize gives a zero, so none rounds a `half` alone, which flushes them;
+/// or an `OpFConvert` of an `f32` to 16 bits widened back by another, the device's conversion
+/// (moltenvk-m3), or the same pair on a profile whose float controls make it Metal's
 /// (`narrow::controlled_modes`).
-fn assert_exact_half_rounding(a: &FunctionArtifact) {
+fn assert_half_rounding(a: &FunctionArtifact) {
     let w = &a.module.words;
     let mut quantized = Vec::new();
     let mut compared = Vec::new();
-    // The ids of `0xFFFFE000` (scalar, and composites of it), and each `OpBitwiseAnd`'s operands.
-    let mut keep = Vec::new();
-    let mut anded = Vec::new();
     // Float types by width (scalar, and vectors by their component's width), and each
     // `OpFConvert`'s (result type, result, operand).
     let mut widths = std::collections::BTreeMap::new();
@@ -173,16 +163,10 @@ fn assert_exact_half_rounding(a: &FunctionArtifact) {
                 }
             }
             OP_F_CONVERT => converts.push((w[i + 1], w[i + 2], w[i + 3])),
-            OP_CONSTANT if n == 4 && w[i + 3] == 0xFFFF_E000 => keep.push(w[i + 2]),
-            OP_CONSTANT_COMPOSITE if n > 3 && w[i + 3..i + n].iter().all(|c| keep.contains(c)) => {
-                keep.push(w[i + 2])
-            }
-            OP_BITWISE_AND => anded.extend_from_slice(&w[i + 3..i + n]),
             _ => {}
         }
         i += n;
     }
-    let integer = anded.iter().filter(|v| keep.contains(v)).count();
     let narrowed: Vec<u32> = converts
         .iter()
         .filter(|(ty, _, _)| widths.get(ty) == Some(&16))
@@ -192,10 +176,7 @@ fn assert_exact_half_rounding(a: &FunctionArtifact) {
         .iter()
         .filter(|(ty, _, operand)| widths.get(ty) == Some(&32) && narrowed.contains(operand))
         .count();
-    assert!(
-        quantized.len() + converted + integer > 0,
-        "no half rounding"
-    );
+    assert!(quantized.len() + converted > 0, "no half rounding");
     for q in quantized {
         assert!(compared.contains(&q), "%{q} rounds a half alone");
     }
@@ -856,9 +837,9 @@ fn gathers_gradients_and_pixel_constexpr_samplers() {
     assert!(combined(&g)[0].3, "an integer texture's binding");
     let h = ok(&bc, "sample_grad", &p);
     assert_eq!(uses(&h, "sampler.sample_grad"), 1);
-    // The sampled `half` texel is rounded exactly: no bare quantize; its NaN is the device's
-    // decode.
-    assert_exact_half_rounding(&h);
+    // The sampled `half` texel is rounded by the module's form: no bare quantize; its NaN is the
+    // device's decode.
+    assert_half_rounding(&h);
     assert!(h.precision.contains(&PrecisionNote::DeviceNanEncoding));
     // A linear pixel sample, which Metal's own sampler filters on this profile, snapped onto the
     // centre of its footprint step: exact, so no `PixelSamplerScaling`.

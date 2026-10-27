@@ -1470,9 +1470,6 @@ enum	metal2vulkan::device::FloatWidth	#[derive(Clone, Copy, Debug, PartialEq, Eq
 enum	metal2vulkan::device::FormatUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FormatUsage
 enum	metal2vulkan::device::FunctionStorage	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FunctionStorage
 enum	metal2vulkan::device::GuestIsolation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum GuestIsolation
-enum	metal2vulkan::device::HalfBlendPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HalfBlendPolicy
-enum	metal2vulkan::device::HalfRoundingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HalfRoundingPolicy
-enum	metal2vulkan::device::HalfTexelBitsPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HalfTexelBitsPolicy
 enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HandleDomain
 enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
 enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
@@ -3748,9 +3745,6 @@ field	metal2vulkan::device::DevicePolicy.completion	pub completion: CompletionPo
 field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
 field	metal2vulkan::device::DevicePolicy.decoded_texels	pub decoded_texels: DecodedTexelsPolicy
 field	metal2vulkan::device::DevicePolicy.float_maths	pub float_maths: FloatMathsPolicy
-field	metal2vulkan::device::DevicePolicy.half_blend	pub half_blend: HalfBlendPolicy
-field	metal2vulkan::device::DevicePolicy.half_rounding	pub half_rounding: HalfRoundingPolicy
-field	metal2vulkan::device::DevicePolicy.half_texel_bits	pub half_texel_bits: HalfTexelBitsPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
@@ -4173,7 +4167,6 @@ field	metal2vulkan::pipeline::FramebufferFetchInputs.alpha_to_coverage	pub alpha
 field	metal2vulkan::pipeline::FramebufferFetchInputs.amplified	pub amplified: bool
 field	metal2vulkan::pipeline::FramebufferFetchInputs.attachments	pub attachments: BTreeMap<u32, Option<FetchedAttachment>>
 field	metal2vulkan::pipeline::FramebufferFetchInputs.depth_or_stencil	pub depth_or_stencil: bool
-field	metal2vulkan::pipeline::FramebufferFetchInputs.half_blends	pub half_blends: std::collections::BTreeSet<u32>
 field	metal2vulkan::pipeline::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan::pipeline::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan::pipeline::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
@@ -4721,7 +4714,6 @@ fn	metal2vulkan::metal::format::direct_format	pub fn direct_format(pf: PixelForm
 fn	metal2vulkan::metal::format::explicit_imageblock_sample_length	pub fn explicit_imageblock_sample_length(data_size: u32, alignment: u32, colors: u32) -> Option<u32>
 fn	metal2vulkan::metal::format::extended_range_blend	pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<(), Unsupported>
 fn	metal2vulkan::metal::format::footprint	pub fn footprint(pf: PixelFormat) -> Option<Footprint>
-fn	metal2vulkan::metal::format::half_bits_read_view	pub fn half_bits_read_view(pf: PixelFormat, profile: &DeviceProfile) -> Option<vk::Format>
 fn	metal2vulkan::metal::format::half_write_nans_converted	pub fn half_write_nans_converted(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::image_type	pub fn image_type(ty: TextureType) -> Option<(vk::ImageType, vk::ImageCreateFlags)>
 fn	metal2vulkan::metal::format::image_view_type	pub fn image_view_type(ty: TextureType) -> Option<vk::ImageViewType>
@@ -8852,7 +8844,6 @@ method	metal2vulkan::device::DeviceProfile::limits	pub fn limits(&self) -> &Limi
 method	metal2vulkan::device::DeviceProfile::link_standalone	pub fn link_standalone(&self, f: &CompiledFunction) -> Result<StandaloneModule, Error>
 method	metal2vulkan::device::DeviceProfile::module_word_bound	pub fn module_word_bound(&self) -> Option<u32>
 method	metal2vulkan::device::DeviceProfile::plan_entry	pub fn plan_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<EntryPlan, Error>, CompileReport)
-method	metal2vulkan::device::DeviceProfile::reads_half_texel_bits	pub fn reads_half_texel_bits(&self) -> bool
 method	metal2vulkan::device::DeviceProfile::reads_ycbcr_planes_in_place	pub fn reads_ycbcr_planes_in_place(&self) -> bool
 method	metal2vulkan::device::DeviceProfile::simd_tier	pub fn simd_tier(&self, class: &SimdClass, stage: Stage) -> Result<Tier, Unsupported>
 method	metal2vulkan::device::DeviceProfile::specialized_entry	pub fn specialized_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> Result<Entry, Error>
@@ -12558,12 +12549,6 @@ variant	metal2vulkan::device::FunctionStorage::Assumed	Assumed(u64)
 variant	metal2vulkan::device::FunctionStorage::Measured	Measured(u64)
 variant	metal2vulkan::device::GuestIsolation::Off	Off
 variant	metal2vulkan::device::GuestIsolation::On	On
-variant	metal2vulkan::device::HalfBlendPolicy::Device	Device
-variant	metal2vulkan::device::HalfBlendPolicy::Exact	Exact
-variant	metal2vulkan::device::HalfRoundingPolicy::Exact	Exact
-variant	metal2vulkan::device::HalfRoundingPolicy::Native	Native
-variant	metal2vulkan::device::HalfTexelBitsPolicy::Device	Device
-variant	metal2vulkan::device::HalfTexelBitsPolicy::Exact	Exact
 variant	metal2vulkan::device::HandleDomain::Table	Table
 variant	metal2vulkan::device::HeapCompressionPolicy::Compressed	Compressed
 variant	metal2vulkan::device::HeapCompressionPolicy::Uncompressed	Uncompressed
@@ -13800,7 +13785,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::DeviceAddresses	DeviceAddresses { s
 variant	metal2vulkan::pipeline::RuntimeFact::DispatchGrid	DispatchGrid
 variant	metal2vulkan::pipeline::RuntimeFact::DroppedColor	DroppedColor { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::EmulatedSimdgroups	EmulatedSimdgroups
-variant	metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit	ExactFormsOverCompilerLimit { sampling: bool, float_maths: bool, texel_conversion: bool, half_rounding: bool, nan_and_min_max: bool, rounding_order: bool, half_blend: bool, half_texel_bits: bool }
+variant	metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit	ExactFormsOverCompilerLimit { sampling: bool, float_maths: bool, texel_conversion: bool, nan_and_min_max: bool, rounding_order: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ExecutionStatus	ExecutionStatus
 variant	metal2vulkan::pipeline::RuntimeFact::ExtendedRangeInputBlend	ExtendedRangeInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::FlatGrid	FlatGrid
@@ -13808,7 +13793,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::FoldedGroups	FoldedGroups
 variant	metal2vulkan::pipeline::RuntimeFact::FragmentImageblock	FragmentImageblock { words: u32, writes: bool, master: Hash256, data_size: u32, alignment: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::FramebufferFetch	FramebufferFetch { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::FunctionTableRange	FunctionTableRange { addressed: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::HalfBitsTexture	HalfBitsTexture { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapCrossClassNeutral	HeapCrossClassNeutral { stage: Stage, class: ImageHandleClass, every_member: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapHalfTexelWrites	HeapHalfTexelWrites { stage: Stage, packed: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapNumericType	HeapNumericType { class: ImageHandleClass }

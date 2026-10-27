@@ -4,7 +4,9 @@
 //!   store of its element is a `Workgroup` variable of its own type, each element in its held form:
 //!   its stores and loads are plain, with no word atomics and no conversion to and from the `half`
 //!   bits, and every `half` bit pattern (NaN payloads, signalling NaNs, denormals, both zeros)
-//!   reads back as it was stored, on the CPU interpreter.
+//!   reads back as it was stored, on the CPU interpreter, but that a NaN's bits are the device's
+//!   where the module reads a `half` from its bits by the device's widening
+//!   (`PrecisionNote::NativeHalfConversion`).
 //! - The reported static threadgroup length stays Metal's layout's, and the arena holds only the
 //!   other objects.
 //! - Where the structure does not allow it the array stays in the arena: an access through a
@@ -19,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
@@ -177,12 +180,21 @@ fn run_both(m: &TypedModule, res: &Resources) -> Vec<u32> {
     outs.swap_remove(0)
 }
 
-/// `got` against the bit patterns `want`. On lavapipe the default policy rounds `half` natively
-/// (`PrecisionNote::NativeHalfConversion`), whose reinterpretation of a NaN's bits is the device's:
-/// there a NaN pattern need only read back as a NaN. Elsewhere every pattern is exact.
-fn assert_bits(stem: &str, got: &[u32], want: &[u32], what: &str) {
+/// Whether entry `entry` of `bc` on `prof` reads a `half` from its bits by the device's widening
+/// (`PrecisionNote::NativeHalfConversion`), whose reinterpretation of a NaN's bits is the device's.
+fn native_halves(bc: &[u8], entry: &str, prof: &DeviceProfile) -> bool {
+    compile(bc, entry, prof)
+        .expect("compile")
+        .precision
+        .contains(&PrecisionNote::NativeHalfConversion)
+}
+
+/// `got` against the bit patterns `want`. Where the module reads a `half` from its bits by the
+/// device's widening (`noted`, [`native_halves`]), a NaN pattern need only read back as a NaN.
+/// Elsewhere every pattern is exact.
+fn assert_bits(noted: bool, got: &[u32], want: &[u32], what: &str) {
     let nan = |h: u32| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
-    if stem != "lavapipe" {
+    if !noted {
         assert_eq!(got, want, "{what}");
         return;
     }
@@ -237,7 +249,8 @@ fn a_half_threadgroup_array_is_a_typed_workgroup_object() {
         );
         assert_eq!(workgroup_variables(&m), 1, "{stem}");
         let want: Vec<u32> = (0..64u32).map(|t| pattern(63 - t)).collect();
-        assert_bits(stem, &run_both(&m, &resources(&plan)), &want, stem);
+        let noted = native_halves(&bc, "halves", &prof);
+        assert_bits(noted, &run_both(&m, &resources(&plan)), &want, stem);
         // Metal's static length: the 128 bytes of the array.
         let a = compile(&bc, "halves", &prof).expect("compile");
         assert_eq!(a.kernel.static_threadgroup_bytes, 128, "{stem}");
@@ -271,7 +284,8 @@ fn a_float_array_beside_the_half_one_is_typed_too() {
         assert_eq!(local.typed.len(), 2, "{stem}");
         assert_eq!(workgroup_variables(&m), 2, "{stem}");
         let want: Vec<u32> = (0..64u32).map(|t| pattern(63 - t)).collect();
-        assert_bits(stem, &run_both(&m, &resources(&plan)), &want, stem);
+        let noted = native_halves(&bc, "mixed", &prof);
+        assert_bits(noted, &run_both(&m, &resources(&plan)), &want, stem);
         let a = compile(&bc, "mixed", &prof).expect("compile");
         assert_eq!(a.kernel.static_threadgroup_bytes, 384, "{stem}");
     }
@@ -320,7 +334,8 @@ fn the_array_stays_in_the_arena_where_the_structure_does_not_allow_a_typed_objec
                 "{what}: {census:?}"
             );
             let want: Vec<u32> = (0..64u32).map(|t| pattern(63 - t)).collect();
-            assert_bits(stem, &run_both(&m, &resources(&plan)), &want, &what);
+            let noted = native_halves(&bc, name, &prof);
+            assert_bits(noted, &run_both(&m, &resources(&plan)), &want, &what);
         }
     }
 }

@@ -328,7 +328,6 @@ mod serde_round_trips {
                 depth_or_stencil: true,
                 alpha_to_coverage: false,
                 amplified: true,
-                half_blends: BTreeSet::from([0]),
             }),
             srgb_textures: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),
             srgb_twins: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),

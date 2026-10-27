@@ -1,27 +1,14 @@
-//! A texture read through a snapshot at a slot that has a second alias binding beside its image.
+//! A texture read through a snapshot at a slot whose reads may take a raw view beside its image.
 //!
 //! The copy that fills a snapshot (`lower::fragment`'s `snapshot`) fetches through one view, and
 //! the read the snapshot stands for must be the fetch through that same view: the slot's raw view
 //! where the slot's reads take the raw codes (an 8-bit sRGB texel's, whose view the binder names
 //! the snapshot's form by), else the slot's own image.
 //!
-//! A slot's unsigned integer alias (a 16-bit float texel's own 16 bits, `HalfTexelBitsPolicy::
-//! Exact`) shares that one `ResourceKind::RawTexture` binding and is not such a view: a read of
-//! such a slot fetches the slot's image and reads the alias beside it, under the bound format's
-//! class. The copy takes that same branch in its own arms, so the snapshot holds the texel's own
-//! 16 bits where the class names 16-bit float channels and the image's encode elsewhere.
-//!
-//! - Under `DevicePolicy::exact_answers` a `texture2d<float, access::read>` slot takes that alias,
-//!   and every form the binder can name for it — the bound view's codes, or the fetched lanes'
-//!   bits — translates and passes L3, as it does under the fast default. An 8-bit sRGB texture,
-//!   whose codes the reads do take, keeps its raw view on both.
-//! - The copy fetches the alias under `exact_answers` wherever the form holds a 16-bit code: two
-//!   fetches in the module, the copy's two exclusive arms, one through an image of unsigned
-//!   integer sampled type. One fetch, of the slot's float image, under the fast default and at a
-//!   form of narrower codes.
-//! - Every format whose class names 16-bit float channels names `SnapshotForm::Half` or
-//!   `SnapshotForm::Bits`, the two the arm stores the texel's own 16 bits in, so the arm stands
-//!   wherever the class can select it.
+//! - Every form the binder can name for a `texture2d<float, access::read>` slot — the bound
+//!   view's codes, or the fetched lanes' bits — translates and passes L3, under the fast default
+//!   and under `exact_answers`. An 8-bit sRGB texture, whose codes the reads do take, keeps its
+//!   raw view on both.
 //! - The copy pairs the form with its fetch's lanes where the invariant lives: a form whose codes
 //!   those lanes do not hold is named, not left to the builder to refuse (a float code form over
 //!   integer lanes walks into `FClamp`, and an integer form over float lanes bitcasts the value).
@@ -186,12 +173,11 @@ fn state(pixel_format: Option<PixelFormat>) -> BindState {
 }
 
 /// A `texture2d<float, access::read>` slot the draw reads through a snapshot translates under
-/// every form the binder names for it, on the fast default and under `exact_answers`, where the
-/// slot takes an unsigned integer alias binding beside its image. An 8-bit sRGB texture, whose
-/// raw codes the read does take, keeps its raw view on both. Each variant passes L3 and binds the
-/// snapshot as a storage image.
+/// every form the binder names for it, on the fast default and under `exact_answers`. An 8-bit
+/// sRGB texture, whose raw codes the read does take, keeps its raw view on both, and no other
+/// texture takes one. Each variant passes L3 and binds the snapshot as a storage image.
 #[test]
-fn a_snapshot_slot_with_an_integer_alias_beside_its_image_translates_under_every_form() {
+fn a_snapshot_slot_translates_under_every_form() {
     let Some(bc) = fixture("tob_renders") else {
         return;
     };
@@ -209,7 +195,6 @@ fn a_snapshot_slot_with_an_integer_alias_beside_its_image_translates_under_every
         (PixelFormat::RGBA32Float, SnapshotForm::Bits),
         (PixelFormat::RGBA8UnormSRGB, SnapshotForm::Unorm8),
     ];
-    let mut aliased = 0;
     for stem in PROFILES {
         for (label, policy) in [
             ("the fast default", DevicePolicy::default()),
@@ -241,9 +226,7 @@ fn a_snapshot_slot_with_an_integer_alias_beside_its_image_translates_under_every
                         .any(|b| b.source == BindingSource::SnapshotTexels(0)),
                     "{stem}/{label}/{pf:?}: no snapshot binding"
                 );
-                // The alias binding beside the slot's image, the leg under test: under
-                // `exact_answers` a `float` read takes it, and an sRGB slot's raw view is that
-                // one binding on both policies.
+                // The raw view beside the slot's image: an sRGB slot's, on both policies.
                 let raw = variant
                     .layout
                     .sets
@@ -251,9 +234,7 @@ fn a_snapshot_slot_with_an_integer_alias_beside_its_image_translates_under_every
                     .flat_map(|s| &s.bindings)
                     .any(|b| b.source == BindingSource::RawTexture(SLOT));
                 let srgb = pf == PixelFormat::RGBA8UnormSRGB;
-                let exact = label == "exact answers";
-                assert_eq!(raw, srgb || exact, "{stem}/{label}/{pf:?}: raw view");
-                aliased += u32::from(raw && !srgb);
+                assert_eq!(raw, srgb, "{stem}/{label}/{pf:?}: raw view");
                 for m in &variant.stages {
                     check_words_valid(&m.spirv, &variant.requirements, dev.profile())
                         .unwrap_or_else(|e| panic!("{stem}/{label}/{pf:?}: L3: {e}"));
@@ -261,7 +242,6 @@ fn a_snapshot_slot_with_an_integer_alias_beside_its_image_translates_under_every
             }
         }
     }
-    assert!(aliased >= 7, "{aliased} variants took the alias binding");
 }
 
 /// The copy of a snapshot slot names a form whose codes its fetch's lanes do not hold, where that
@@ -315,191 +295,8 @@ fn the_copy_of_a_snapshot_slot_refuses_a_form_its_fetch_s_lanes_do_not_hold() {
     }
 }
 
-/// Each `OpImageFetch` of module `words`, with whether the image it fetches has an unsigned
-/// integer sampled type: a slot's unsigned integer alias view, as against its own float image.
-pub(super) fn fetched_sampled_types(words: &[u32]) -> Vec<bool> {
-    use crate::spirv_binary::{parse_bytes, Operand};
-    use crate::spv::Op;
-    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let parsed = parse_bytes(&bytes).expect("parse");
-    let word = |o: Option<&Operand>| match o {
-        Some(Operand::Word(w) | Operand::IdRef(w)) => Some(*w),
-        _ => None,
-    };
-    // The sampled type of each `OpTypeImage`, the result type of each value, and the integer
-    // types: a declaration's own order puts each before its uses.
-    let mut sampled = std::collections::HashMap::new();
-    let mut types = std::collections::HashMap::new();
-    let mut integers = std::collections::HashSet::new();
-    let mut fetches = Vec::new();
-    for i in &parsed.instructions {
-        if let (Some(t), Some(id)) = (i.result_type, i.result_id) {
-            types.insert(id, t);
-        }
-        match i.opcode {
-            Op::TypeInt => integers.extend(i.result_id),
-            Op::TypeImage => {
-                if let (Some(id), Some(s)) = (i.result_id, word(i.operands.first())) {
-                    sampled.insert(id, s);
-                }
-            }
-            Op::ImageFetch => {
-                let s = word(i.operands.first())
-                    .and_then(|img| types.get(&img))
-                    .and_then(|t| sampled.get(t));
-                fetches.push(s.is_some_and(|s| integers.contains(s)));
-            }
-            _ => {}
-        }
-    }
-    fetches
-}
-
-/// The copy of a snapshot whose form holds a 16-bit code fetches the slot's unsigned integer
-/// alias under `exact_answers`, so the snapshot holds the texel's own 16 bits where the class
-/// names 16-bit float channels and the read widens them (`lower::fragment`'s
-/// `snapshot::fetches_half_bits`): the module fetches the slot twice, the copy's two exclusive
-/// arms, one of them through an image of unsigned integer sampled type. The copy carries both
-/// arms wherever the read does, the class word choosing between them in each pipeline.
-///
-/// On the fast default, where the slot takes no alias, and at a form of narrower codes, whose
-/// texture's class names no such channels, the copy fetches the slot's own image alone: one
-/// fetch, through its float image. The ledger's `half_texel_bits` row states which value each
-/// policy answers.
-#[test]
-fn the_copy_of_a_half_float_snapshot_fetches_the_alias_under_exact_answers() {
-    let Some(bc) = fixture("tob_renders") else {
-        return;
-    };
-    let mut d = RenderPipelineDescriptor::new(function(&bc, "tob_rect"));
-    d.fragment = Some(function(&bc, "tob_read"));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-    // A 16-bit float texture of each channel count, whose snapshot takes the arm, and the
-    // normalized formats whose form is a narrower code's, whose copy fetches the image alone.
-    // `RGBA32Float`'s form is the fetched lanes' bits, which hold a 16-bit code too, so its copy
-    // carries the arm as well; its class names 32-bit float channels, so nothing takes it.
-    let bound = [
-        PixelFormat::R16Float,
-        PixelFormat::RG16Float,
-        PixelFormat::RGBA16Float,
-        PixelFormat::RGBA8Unorm,
-        PixelFormat::RGBA16Unorm,
-        PixelFormat::RGBA32Float,
-    ];
-    let mut aliased = 0;
-    for stem in PROFILES {
-        for (label, policy) in [
-            ("the fast default", DevicePolicy::default()),
-            ("exact answers", DevicePolicy::default().exact_answers()),
-        ] {
-            let desc = crate::pipeline::testing::description(stem).expect("description");
-            let dev = Device::new(desc, policy).expect("device");
-            let base = dev
-                .compile_render_pipeline(&d, &Budget::standard())
-                .unwrap_or_else(|e| panic!("{stem}/{label}: {e}"));
-            for pf in bound {
-                let plan = base
-                    .plan(&dev, &state(Some(pf)).shape())
-                    .unwrap_or_else(|e| panic!("{stem}/{label}/{pf:?}: plan: {e}"));
-                let form = plan
-                    .variant
-                    .snapshot_textures
-                    .get(&SLOT)
-                    .copied()
-                    .unwrap_or_else(|| panic!("{stem}/{label}/{pf:?}: no snapshot form"));
-                let variant = dev
-                    .compile_render_variant(&d, &plan.variant, &Budget::standard())
-                    .unwrap_or_else(|e| panic!("{stem}/{label}/{pf:?}: {e}"));
-                let fetches: Vec<bool> = variant
-                    .stages
-                    .iter()
-                    .flat_map(|m| fetched_sampled_types(&m.spirv))
-                    .collect();
-                // The copy carries the arm wherever the form holds a 16-bit code, as the read
-                // carries it wherever the slot takes the alias: the class word, a specialization
-                // constant, picks one of the two in each pipeline.
-                let takes_alias = label == "exact answers"
-                    && matches!(form, SnapshotForm::Half | SnapshotForm::Bits);
-                let want: &[bool] = match takes_alias {
-                    // The copy's arms: the slot's own image, and its unsigned integer alias.
-                    true => &[false, true],
-                    false => &[false],
-                };
-                let mut got = fetches.clone();
-                got.sort_unstable();
-                let mut want = want.to_vec();
-                want.sort_unstable();
-                assert_eq!(
-                    got, want,
-                    "{stem}/{label}/{pf:?} ({form:?}): fetched sampled types"
-                );
-                aliased += u32::from(takes_alias);
-                for m in &variant.stages {
-                    check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-                        .unwrap_or_else(|e| panic!("{stem}/{label}/{pf:?}: L3: {e}"));
-                }
-            }
-        }
-    }
-    assert_eq!(
-        aliased,
-        4 * PROFILES.len() as u32,
-        "variants whose copy fetched the alias"
-    );
-}
-
-/// Every snapshot form a texture whose class names 16-bit float channels of its own can take is
-/// `SnapshotForm::Half` or `SnapshotForm::Bits`, the two the copy's alias arm stores the texel's
-/// own 16 bits in: so the arm stands at every slot whose class can select it, and nowhere else
-/// (`lower::texture`'s `half_bits_snapshot`).
-///
-/// The class word the binder states (`metal::texel_format::texel_format`) and the form it names
-/// (`SnapshotForm::of` the slot's bound sampled view) are two readings of the one bound format,
-/// so this pins them to each other over every `MTLPixelFormat` and every declared sampled type.
-/// A swizzle only clears the class's bits (`TexelFormat::swizzled`), so it names no further
-/// format.
-#[test]
-fn every_half_channel_format_names_a_snapshot_form_of_16_bit_codes() {
-    use crate::device::requirements::FormatUsage;
-    use crate::metal::texel_format::half_channels;
-    use crate::pipeline::sym::SampledType;
-    let usages: std::collections::BTreeSet<_> = [FormatUsage::SampledImage].into();
-    let types = [
-        SampledType::Float,
-        SampledType::Sint,
-        SampledType::Uint,
-        SampledType::Uint64,
-    ];
-    let mut halves = 0;
-    for stem in PROFILES {
-        let desc = crate::pipeline::testing::description(stem).expect("description");
-        let dev = Device::new(desc, DevicePolicy::default().exact_answers()).expect("device");
-        for &pf in PixelFormat::ALL {
-            if !half_channels(pf) {
-                continue;
-            }
-            halves += 1;
-            let Ok(m) = crate::metal::format::vk_format(pf, &usages, dev.profile()) else {
-                continue;
-            };
-            for ty in types {
-                let form = SnapshotForm::of(m.format, ty);
-                assert!(
-                    matches!(form, SnapshotForm::Half | SnapshotForm::Bits),
-                    "{stem}/{pf:?}/{ty:?}: {form:?} is no form of the texel's own 16 bits"
-                );
-            }
-        }
-    }
-    assert!(
-        halves > 0,
-        "a format whose class names 16-bit float channels"
-    );
-}
-
-/// The entry's size estimate bounds the words every snapshot copy emits, the alias arm's among
-/// them (`lower::fragment`'s `snapshot::SLOT_WORDS`): every form, on the fast default and under
-/// `exact_answers`, where the copy has the second arm.
+/// The entry's size estimate bounds the words every snapshot copy emits (`lower::fragment`'s
+/// `snapshot::SLOT_WORDS`): every form, on the fast default and under `exact_answers`.
 #[test]
 fn the_snapshot_estimate_bounds_the_copy_it_emits() {
     use crate::library::function::FunctionConstantValues;
@@ -539,8 +336,7 @@ fn the_snapshot_estimate_bounds_the_copy_it_emits() {
                 let words = a.module.words.len() as u64;
                 assert!(
                     plan.estimate.words >= words,
-                    "{stem} {form:?} {:?}: estimate {} < emitted {words}",
-                    policy.half_texel_bits,
+                    "{stem} {form:?}: estimate {} < emitted {words}",
                     plan.estimate.words
                 );
                 checked += 1;

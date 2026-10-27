@@ -14,7 +14,7 @@ use std::path::Path;
 use super::{Fitted, ReducedForms};
 use crate::budget::{Budget, Meter};
 use crate::cache::VariantKey;
-use crate::device::policy::{HalfTexelBitsPolicy, SamplingPolicy};
+use crate::device::policy::SamplingPolicy;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::library::Library;
 use crate::metal;
@@ -65,26 +65,20 @@ fn device(stem: &str, policy: DevicePolicy) -> Device {
 
 /// The forms a fitted pipeline's `dependencies` record it dropped, in the fact's field order;
 /// `None` where it records none.
-fn dropped(dependencies: &[RuntimeDependency]) -> Option<[bool; 8]> {
+fn dropped(dependencies: &[RuntimeDependency]) -> Option<[bool; 5]> {
     dependencies.iter().find_map(|d| match d.fact {
         RuntimeFact::ExactFormsOverCompilerLimit {
             sampling,
             float_maths,
             texel_conversion,
-            half_rounding,
             nan_and_min_max,
             rounding_order,
-            half_blend,
-            half_texel_bits,
         } => Some([
             sampling,
             float_maths,
             texel_conversion,
-            half_rounding,
             nan_and_min_max,
             rounding_order,
-            half_blend,
-            half_texel_bits,
         ]),
         _ => None,
     })
@@ -98,11 +92,8 @@ fn fitted_as<P: Fitted>(reduced: P, compiled: &P) -> P {
         sampling: true,
         float_maths: true,
         texel_conversion: true,
-        half_rounding: true,
         nan_and_min_max: true,
         rounding_order: true,
-        half_blend: true,
-        half_texel_bits: true,
     };
     let mut reduced = reduced;
     reduced
@@ -182,7 +173,7 @@ fn a_module_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
     assert_eq!(largest(&pipe), w_fast, "reduced to the fast default");
     assert_eq!(
         dropped(&pipe.dependencies),
-        Some([true; 8]),
+        Some([true; 5]),
         "every exact form dropped"
     );
 
@@ -193,7 +184,7 @@ fn a_module_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         assert_eq!(largest(&pipe), w_sampling_native);
         assert_eq!(
             dropped(&pipe.dependencies),
-            Some([true, false, false, false, false, false, false, false]),
+            Some([true, false, false, false, false]),
             "only sampling dropped"
         );
     }
@@ -245,7 +236,7 @@ fn a_module_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         .expect("fitted from the functions");
     assert_eq!(fitted.key, keys.pipeline);
     assert_eq!(largest(&fitted), w_fast);
-    assert_eq!(dropped(&fitted.dependencies), Some([true; 8]));
+    assert_eq!(dropped(&fitted.dependencies), Some([true; 5]));
 }
 
 /// A mesh render pipeline is fitted as a vertex and fragment pipeline is: past the bound, its
@@ -364,10 +355,7 @@ fn a_mesh_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
 /// from the `Compiled` stage) it is fitted from the function's descriptor and left as it is from
 /// the `Compiled` one. On ANV's UHD 770 profile, whose own bound the fixture fits, and a device
 /// without a bound. Uses the owned `ttg_tile_simd_blur` fixture (`half` arithmetic into an
-/// `RGBA16Float` attachment), its threadgroup the tile's size. Its two reads of a
-/// `texture2d<half, access::read>` slot also pin that a 16-bit float texel's own bits
-/// (`HalfTexelBitsPolicy::Exact`) is one of the forms the step drops: kept exact alone it holds
-/// the module over the fast default's words.
+/// `RGBA16Float` attachment), its threadgroup the tile's size.
 #[test]
 fn a_tile_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
     let Some(lib) = library(&engine_dir().join("ttg_tile_simd_blur.ll")) else {
@@ -413,25 +401,6 @@ fn a_tile_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         );
         let w_exact = compiled.largest_stage_words();
         assert!(w_fast < w_exact, "{stem}: fast {w_fast} < exact {w_exact}");
-        // A 16-bit float texel's own bits through a read is one of the module-growing forms the
-        // step drops, and the tile function reads its `half` slot (`access::read`, an
-        // `RGBA16Float` attachment): with that form alone kept exact and every other native, the
-        // alias's widening at each read still holds the module over the fast default's words, so
-        // the step that left it out could not reach them.
-        let kept = device(
-            stem,
-            DevicePolicy {
-                half_texel_bits: HalfTexelBitsPolicy::Exact,
-                ..ReducedForms::AllNative.of(exact())
-            },
-        )
-        .tile_pipeline(&d, &inputs, &mut Meter::new(&b))
-        .expect(stem);
-        let w_kept = kept.largest_stage_words();
-        assert!(
-            w_kept > w_fast,
-            "{stem}: the texel bits grow the module: kept {w_kept} > fast {w_fast}"
-        );
         let expected = fitted_as(reduced, &compiled);
         let fit = |d: &TileRenderPipelineDescriptor, pipeline, bound| {
             dev.fit_tile_within(d, &inputs, &b, pipeline, bound)
@@ -543,7 +512,7 @@ fn a_compute_pipeline_over_the_compiler_bound_drops_its_exact_forms_to_fit() {
         assert_eq!(pipe.stage, sampled.stage, "{stem}: native sampling");
         assert_eq!(
             dropped(&pipe.dependencies),
-            Some([true, false, false, false, false, false, false, false]),
+            Some([true, false, false, false, false]),
             "{stem}: only sampling dropped"
         );
         assert_eq!(

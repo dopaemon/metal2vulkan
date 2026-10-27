@@ -13,14 +13,14 @@ use crate::device::description::{
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::{
-    ContainmentPolicy, DevicePolicy, FloatMathsPolicy, HalfRoundingPolicy, NanMinMaxPolicy,
-    RoundingOrderPolicy, SamplingPolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
+    ContainmentPolicy, DevicePolicy, FloatMathsPolicy, NanMinMaxPolicy, RoundingOrderPolicy,
+    SamplingPolicy, Unorm8LinearFilterPolicy, YCbCrFilterPolicy,
 };
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
-    HalfRoundingRoute, ImageCaps, Independence, LeafCaps, MinMaxRoute, NanEncoding, ProfileFields,
-    Robustness, RoundingOrderRoute, TexelNanRoute,
+    ImageCaps, Independence, LeafCaps, MinMaxRoute, NanEncoding, ProfileFields, Robustness,
+    RoundingOrderRoute, TexelNanRoute,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -341,18 +341,6 @@ fn derive_fields(
         isolation: policy.isolation,
         texel_conversion: policy.texel_conversion,
         vertex_normalized: policy.vertex_normalized,
-        half_blend: policy.half_blend,
-        half_texel_bits: policy.half_texel_bits,
-        // Metal's where a form is measured to be Metal's or the policy asks for Metal's rounding;
-        // elsewhere the device's own.
-        half_rounding: if policy.half_rounding == HalfRoundingPolicy::Exact
-            || (deviates(DriverDeviation::MetalHalfConversion) && leaf.float16)
-            || deviates(DriverDeviation::MetalHalfQuantize)
-        {
-            HalfRoundingRoute::Metal
-        } else {
-            HalfRoundingRoute::Native
-        },
         leaf,
         subgroup: subgroup_model(desc, deviates(DriverDeviation::MetalVertexSimdgroups)),
         images,
