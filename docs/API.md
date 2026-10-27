@@ -1016,17 +1016,7 @@ assert_eq!(linked, pipeline);
   the attributes its entry reads, and the kernel keys and compiles under those, so states that
   differ only in an attribute it never reads share one compiled function. What a creation reads of
   the descriptor past the fetch -- its layout agreement, its reflection, and `compute_pipeline_key`
-  -- reads it whole. Each pipeline kind's compile (`compile_render_variant`,
-  `compile_mesh_variant`, `compile_compute_pipeline`, `compile_tile_pipeline`) holds a pipeline of
-  `Function` stages to the device's compiler word bound (`DeviceProfile::module_word_bound`,
-  ANV's) itself; one linked from `Compiled` stages it cannot translate again. A caller who
-  compiles stages ahead must pass the linked pipeline, with the descriptor of its functions, to
-  the kind's fit, or its module goes to the driver unreduced: `device.fit_render_variant(
-  &descriptor, &variant, &budget, pipeline)`, `fit_mesh_variant` likewise, and
-  `fit_compute_pipeline(&descriptor, &inputs, &budget, pipeline)` or `fit_tile_pipeline` with the
-  `LoweringInputs` the kernel or tile function was compiled under. The call translates the
-  functions again with the policy's exact forms dropped where the largest stage passes the bound
-  (`exact-forms-over-compiler-limit`), under the same key.
+  -- reads it whole.
 - A key names an artifact by its inputs and versions; a content digest names it by what it says.
   `pipeline.content_digest()` hashes everything but the key and profile, and `plan.content_digest()`
   (with `serde`) everything a plan states. A cache of driver objects keyed on the digest survives a
@@ -1408,17 +1398,6 @@ fast forms record, and each `PrecisionNote`'s rustdoc states its bound.
   function. Announced at the state's making, naming which. Cost: each draw runs a geometry stage of
   its topology class between the vertex and fragment stages, which emits each primitive's vertices
   with the barycentric weights or the first vertex's slice and viewport.
-- `metal2vulkan-degrade-exact-forms-over-compiler-limit` (precision). `ExactFormsOverCompilerLimit`:
-  A pipeline state (render, mesh render, tile render or compute) whose largest stage module, under
-  the consumer's exact forms, exceeded the device's compiler word bound
-  (`RuntimeFact::ExactFormsOverCompilerLimit`;
-  `DriverWorkaround::RegisterAllocatorOverflowsLargeModules`, ANV's register allocator faults
-  compiling a module past it), so the translation dropped those forms until it fit: native sampling
-  first, then every module-growing exact answer native. Announced where the runtime makes a variant
-  whose pipeline the fit reduced, the base variant or another, naming the state's kind and the
-  forms dropped; the reduced stages announce their own precision notes besides.
-  Cost: the dropped exact forms' results can differ from Metal's as their notes' documentation
-  states, where the device's compiler would fault on the exact module.
 - `metal2vulkan-degrade-landed-visibility-results` (performance). `LandedVisibilityResults`:
   Visibility results start where Vulkan writes no query result. Cost: they land in an upload region
   and are copied on into the buffer after the pass.

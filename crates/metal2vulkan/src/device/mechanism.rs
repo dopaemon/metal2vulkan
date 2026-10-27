@@ -259,6 +259,5 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::SynthesizedGeometry { .. } => Mechanism::None,
         // The pipeline's exact forms were dropped to fit the device's compiler word bound; the
         // consumer announces it, and the reduced stages carry their own notes.
-        RuntimeFact::ExactFormsOverCompilerLimit { .. } => Mechanism::None,
     }
 }

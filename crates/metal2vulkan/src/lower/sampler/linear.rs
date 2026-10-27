@@ -1,7 +1,6 @@
 //! What the device-sampled filters share with the emulated ones the device has no form for
-//! (`extended`, `heap_raw`, `in_place`, `bicubic`): the texture whose bound format's class a
-//! filter reads ([`LinearImage`]), the census words of a filter's footprint and of a runtime
-//! sampler's word, the rule of an axis whose two taps read one texel ([`merged`]), the samplers
+//! (`extended`, `heap_raw`, `in_place`, `bicubic`): the census words of a filter's footprint and
+//! of a runtime sampler's word, the rule of an axis whose two taps read one texel ([`merged`]), the samplers
 //! that read one texel of one level ([`unfiltered`], [`word_filters`]), and the note of a filtered
 //! sample that Metal's own sampler answers otherwise than Metal filters the format bound there
 //! ([`filter_note`]).
@@ -37,26 +36,6 @@ use crate::spirv::ir::BinOp;
 use super::bicubic::{scalar, value, Tap, Tys};
 use super::SampleOp;
 
-/// The texture whose bound format's treatment a sample reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LinearImage {
-    /// Texture slot `n`, whose `TexelFormat` specialization states the bound format's class.
-    Slot(u32),
-    /// The sample's heap texture, whose handle carries its class's index
-    /// (`memory::handles::HANDLE_TEXEL_CLASS`).
-    Heap,
-}
-
-impl LinearImage {
-    /// The texture slot, or `None` for a heap texture.
-    pub(super) fn slot(self) -> Option<u32> {
-        match self {
-            LinearImage::Slot(n) => Some(n),
-            LinearImage::Heap => None,
-        }
-    }
-}
-
 /// The census words a runtime sampler's emulation adds once per sample: the word's filter test and
 /// each axis's mode test (`reaches_word`), each axis's mode and the coordinates' extraction, the
 /// border color's selection, and a 3D sample's reflected-axis test, with their constants.
@@ -66,11 +45,6 @@ pub(super) const WORD_WORDS: u32 = 448;
 /// each of its modes (`MirrorClampToEdge`'s included), the mode's tests and selects, and its border
 /// test.
 pub(super) const WORD_TAP_WORDS: u32 = 160;
-
-/// The census words a heap texture's emulation adds: its class's read
-/// (`texture::HEAP_CLASS_WORDS`), its element's access chain, load, and sampled image in the
-/// emulation's arm, and the branch and its merge, with their constants.
-pub(super) const HEAP_WORDS: u32 = crate::lower::texture::HEAP_CLASS_WORDS + 64;
 
 /// [`Linear::words`] of a 2D sample.
 pub(super) const PLANE_WORDS: u32 = 576;

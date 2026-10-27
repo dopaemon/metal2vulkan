@@ -1084,45 +1084,13 @@ impl At {
     }
 }
 
-/// [`footprint`] of a sample whose plain data is `at`.
-pub(super) fn footprint_from(
-    fb: &mut FunctionBuilder<'_>,
-    t: &Tys,
-    at: &At,
-    (si, image): (SValue, CombinedImage),
-    bits: Bits,
-    taps: &Taps<'_>,
-) -> BResult<(Footprint, SValue)> {
-    let img = fb.image(si)?;
-    let zero_u = fb.u32_const(0)?;
-    let zero_u = value(fb, zero_u)?;
-    // A level's taps read its size, and Metal's offset rule the base level's too where an offset
-    // moves them.
-    let offset = at.offset.is_some() || taps.offset.is_some_and(|o| o.iter().any(|o| *o != 0));
-    let fp = match taps.level {
-        Some(level) => {
-            let size = fb.query(ImageQuery::SizeLod(level), img)?;
-            let base = match offset {
-                true => Some(fb.query(ImageQuery::SizeLod(zero_u), img)?),
-                false => None,
-            };
-            footprint_at(fb, t, at, (size, base, image), bits, taps)?
-        }
-        None => {
-            let size = fb.query(ImageQuery::SizeLod(zero_u), img)?;
-            footprint_at(fb, t, at, (size, None, image), bits, taps)?
-        }
-    };
-    Ok((fp, img))
-}
-
 /// The footprint over `taps` of a sample at plane coordinate `coord` (and array layer `layer`)
 /// of image `img` (image facts `image`) at the taps' level, whose taps are fetched from `img`, the
 /// border color seen through the channels of the format's treatment `bits`: an extended-range
 /// texture's emulated sample (`super::extended`), which reads its slot's own image, its offset
 /// (its taps' constant one, or a sampling routine's call's value `offset`, as [`At::offset`])
 /// placed by the slot's `SpecKey::OffsetBaseAxes` tests `parent` where it reads them (a level's
-/// taps read its size, and the offset rule the base level's too, as [`footprint_from`]'s).
+/// taps read its size, and the offset rule the base level's too).
 pub(super) fn footprint_of_image(
     fb: &mut FunctionBuilder<'_>,
     t: &Tys,

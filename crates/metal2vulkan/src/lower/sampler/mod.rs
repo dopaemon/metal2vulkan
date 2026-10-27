@@ -149,7 +149,6 @@ mod constexpr;
 mod emit;
 pub mod extended;
 pub mod face;
-pub mod fetched;
 pub mod footprint;
 pub mod heap_raw;
 pub mod in_place;
@@ -605,10 +604,6 @@ pub struct Sampling {
     /// before anything reads it, as Metal's texture unit reads it, a bit per axis
     /// ([`position::subnormal_flush`]).
     pub flush_subnormals: u8,
-    /// A `half` gather whose texels the shader fetches where the slot is bound in (or a heap
-    /// texture's handle carries the class of) a half-float format ([`fetched`]); the device's
-    /// gather answers otherwise.
-    pub fetched: Option<fetched::Plain>,
     /// It reads a cube by a direction, whose ties between major axes the device is handed broken
     /// as Metal breaks them ([`face`]).
     pub cube: bool,
@@ -744,16 +739,13 @@ impl Sampling {
     /// The shape the arms of a switch-at-use share where it emulates once (SEMANTICS 1012,
     /// `sampler::shared_value`): this sampling with its texture slot and sampler taken out, where
     /// it is an emulation on a combined binding whose residency the function does not observe: a
-    /// bicubic sample, fetched texels, or a snapped gather or sample but a runtime sampler's word
-    /// snap. Arms of one shape differ only in the binding they read: each emulation states its
+    /// bicubic sample, or a snapped gather or sample but a runtime sampler's word snap. Arms of one shape differ only in the binding they read: each emulation states its
     /// sampler's addressing in its own fields, and the device's access stays in each arm.
     pub(crate) fn shared_shape(&self) -> Option<Sampling> {
         let Source::Combined(key) = self.source else {
             return None;
         };
-        // A plain fetch of the base level fetches its taps on the named candidate's facts once; one of another level
-        // reads in each arm's own branch, its level clamped into the arm's own levels. A texture of
-        // another class's words are handed back as declared in each arm's own access. A swizzled
+        // A texture of another class's words are handed back as declared in each arm's own access. A swizzled
         // slot's sampling swizzles under its own slot's swizzle; an offset placed by a slot's
         // `OffsetBaseAxes` is placed by its own slot's.
         if self.residency
@@ -770,10 +762,6 @@ impl Sampling {
             sampler: SamplerRef::Slot(0),
             ..key
         });
-        if let Some(p) = &mut k.fetched {
-            p.image = linear::LinearImage::Slot(0);
-            return Some(k);
-        }
         match (&mut k.op, &k.snap) {
             (SampleOp::Bicubic(b), None) => b.texture = 0,
             // A runtime sampler's word snap alone is no emulation to share.
@@ -812,13 +800,7 @@ impl Sampling {
         const ARM: u32 = 48;
         // A read in an arm: the fetch or access with its operands, and its merge operands.
         const READ: u32 = 16;
-        // The facts' merge operands of the lanes Metal reads as constants, eight lane tests, where
-        // a plain fetch takes them.
-        let lanes = match (self.unmapped, self.fetched.is_some()) {
-            (Unmapped::Constants | Unmapped::Named, true) => 8 * 2,
-            _ => 0,
-        };
-        let facts = ARM + 3 * READ + lanes;
+        let facts = ARM + 3 * READ;
         let half = match self.texel {
             Some(f) if f.conv == crate::lower::texture::TexelConv::F16 => {
                 crate::lower::texture::half::CALL_WORDS.max(f.read_words())
@@ -826,14 +808,6 @@ impl Sampling {
             Some(f) => f.read_words(),
             None => 0,
         };
-        // A plain fetch's dispatch of its taps, and the device's access in a second.
-        if self.fetched.is_some() {
-            let taps = match self.op {
-                SampleOp::Gather { .. } => 4,
-                _ => 1,
-            };
-            return facts + (ARM + taps * READ) + ARM + READ + half;
-        }
         match (&self.op, &self.snap) {
             (SampleOp::Bicubic(b), _) => {
                 // A 1D texture's one row of two taps, else each row of four and the half sum's
@@ -1070,7 +1044,6 @@ impl Sampling {
                 .as_ref()
                 .filter(|_| offset.is_some())
                 .map_or(0, position::Snap::offset_words)
-            + self.fetched.as_ref().map_or(0, |p| p.words())
             + match self.flush_subnormals {
                 0 => 0,
                 _ => position::FLUSH_WORDS,
@@ -1138,19 +1111,8 @@ pub struct RuntimeSlot {
     /// An extended-range or heap raw texture's emulated filter reads it: the function reads its
     /// word's filter, coordinates, address modes, and border color.
     pub linear: bool,
-    /// A sample whose texel the shader fetches where its word reads one texel reads it
-    /// (`fetched::word_reach`): the function reads its word's filter.
-    pub filters: bool,
-    /// Texels the shader fetches by its word (`fetched::FetchAddress::Word`): the function reads
-    /// its word's coordinates, its plane axes' address modes, and its border color.
-    pub fetched: bool,
-    /// A 3D texture's texel the shader fetches by its word (`fetched::FetchAddress::Word`): the
-    /// function reads its word's `r` address mode too.
-    pub fetched_depth: bool,
-    /// A fetched texel is read from the level its word reads (`fetched::FetchLevel::Word`), or an
-    /// extended-range sample reads its levels by its word
-    /// (`extended::Level::Word`): the function reads its word's mip filter and the levels its
-    /// clamp leaves.
+    /// An extended-range sample reads its levels by its word (`extended::Level::Word`): the function
+    /// reads its word's mip filter and the levels its clamp leaves.
     pub fetch_levels: bool,
     /// A cube's explicit gradients take their footprint by its word (`CubeFootprint::Word`): the
     /// function reads whether its word is anisotropic.
@@ -1201,27 +1163,13 @@ impl RuntimeSlot {
             cells: _,
             min_level: _,
             linear,
-            filters,
-            fetched,
-            fetched_depth,
             fetch_levels,
             anisotropy,
             gathers,
             texels,
             emulated,
         } = *self;
-        ![
-            linear,
-            filters,
-            fetched,
-            fetched_depth,
-            fetch_levels,
-            anisotropy,
-            emulated,
-            gathers,
-            texels,
-        ]
-        .contains(&true)
+        ![linear, fetch_levels, anisotropy, emulated, gathers, texels].contains(&true)
     }
 
     /// The fields the slot's uses read of its word, without [`SamplerWord::PIXEL_GATED`].
@@ -1235,18 +1183,6 @@ impl RuntimeSlot {
         }
         if self.linear {
             fields |= SamplerWord::LINEAR_STATE;
-        }
-        if self.filters {
-            fields |= SamplerWord::LINEAR_FILTER;
-        }
-        if self.fetched {
-            fields |= SamplerWord::PIXEL_COORDINATES
-                | SamplerWord::ADDRESS[0]
-                | SamplerWord::ADDRESS[1]
-                | SamplerWord::BORDER;
-        }
-        if self.fetched_depth {
-            fields |= SamplerWord::ADDRESS[2];
         }
         if self.fetch_levels {
             fields |= SamplerWord::MIP_FILTER | SamplerWord::LEVEL_MIN | SamplerWord::LEVEL_MAX;
@@ -1774,9 +1710,6 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
                 coordinates: false,
                 nearest: false,
                 linear: false,
-                filters: false,
-                fetched: false,
-                fetched_depth: false,
                 fetch_levels: false,
                 anisotropy: false,
                 gathers: false,

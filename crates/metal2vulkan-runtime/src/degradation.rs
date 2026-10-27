@@ -445,19 +445,6 @@ degradations! {
             "each draw runs a geometry stage of its topology class between the vertex and \
              fragment stages, which emits each primitive's vertices with the barycentric weights \
              or the first vertex's slice and viewport";
-        /// A pipeline state (render, mesh render, tile render or compute) whose largest stage
-        /// module, under the consumer's exact forms, exceeded the device's compiler word bound
-        /// ([`metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit`];
-        /// [`metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules`],
-        /// ANV's register allocator faults compiling a module past it), so the translation dropped
-        /// the consumer's exact forms: every module-growing exact answer native. Announced where the runtime makes a variant whose
-        /// pipeline the fit reduced, the base variant or another (`pipeline/render.rs` for a
-        /// render or mesh render state, `pipeline/mod.rs` for a compute or tile render state, from
-        /// the pipeline's dependencies), naming the state's kind and the forms dropped; the
-        /// reduced stages announce their own precision notes besides.
-        ExactFormsOverCompilerLimit = "exact-forms-over-compiler-limit", Precision,
-            "the dropped exact forms' results can differ from Metal's as their notes' \
-             documentation states, where the device's compiler would fault on the exact module";
         /// Visibility results start where Vulkan writes no query result.
         LandedVisibilityResults = "landed-visibility-results", Performance,
             "they land in an upload region and are copied on into the buffer after the pass";
@@ -2514,9 +2501,6 @@ impl Kinds {
                 kinds.add(Degradation::UnadvertisedVertexSimdgroups);
             }
         }
-        if dropped_exact_forms(pipeline.dependencies()).is_some() {
-            kinds.add(Degradation::ExactFormsOverCompilerLimit);
-        }
         kinds
     }
 
@@ -2541,14 +2525,6 @@ impl<'a> CompiledPipeline<'a> {
         match self {
             CompiledPipeline::Render(p) => &p.layout,
             CompiledPipeline::Kernel(p) => &p.layout,
-        }
-    }
-
-    /// The pipeline's runtime dependencies.
-    fn dependencies(self) -> &'a [metal2vulkan::pipeline::RuntimeDependency] {
-        match self {
-            CompiledPipeline::Render(p) => &p.dependencies,
-            CompiledPipeline::Kernel(p) => &p.dependencies,
         }
     }
 
@@ -2582,25 +2558,6 @@ impl<'a> CompiledPipeline<'a> {
             }
         }
     }
-}
-
-/// The exact forms a pipeline's translation dropped to fit the device's compiler word bound
-/// (`RuntimeFact::ExactFormsOverCompilerLimit` among its `dependencies`), named; `None` where it
-/// dropped none.
-pub(crate) fn dropped_exact_forms(
-    dependencies: &[metal2vulkan::pipeline::RuntimeDependency],
-) -> Option<Vec<&'static str>> {
-    dependencies.iter().find_map(|d| match d.fact {
-        metal2vulkan::pipeline::RuntimeFact::ExactFormsOverCompilerLimit {
-        } => Some(
-            [
-            ]
-            .into_iter()
-            .filter_map(|(dropped, name)| dropped.then_some(name))
-            .collect(),
-        ),
-        _ => None,
-    })
 }
 
 /// Where a variant's notices are announced: as the variant (or a `VkPipeline` of it) is made,
@@ -3107,27 +3064,14 @@ impl Device {
 
 impl Device {
     /// Announce, `at` its variant's making or a bind ([`Occurrence`]), what a variant's `pipeline`
-    /// records beside its stages: exact forms the translation dropped to fit the device's compiler
-    /// word bound ([`Degradation::ExactFormsOverCompilerLimit`]), naming the pipeline state's kind
-    /// (render, mesh render, tile render or compute), and, for a render variant, requirements that
-    /// hold a vertex function's subgroup operations on a driver that runs them as Metal does
-    /// without advertising the vertex stage ([`Degradation::UnadvertisedVertexSimdgroups`]), and,
-    /// for any, a set layout its driver refuses though it runs it
-    /// ([`Degradation::SetPastLayoutSupport`], before any layout of the variant is made); for the
-    /// base variant and every other alike, each pipeline by its own records.
+    /// records beside its stages: for a render variant, requirements that hold a vertex
+    /// function's subgroup operations on a driver that runs them as Metal does without advertising
+    /// the vertex stage ([`Degradation::UnadvertisedVertexSimdgroups`]), and, for any, a set
+    /// layout its driver refuses though it runs it ([`Degradation::SetPastLayoutSupport`], before
+    /// any layout of the variant is made), naming the pipeline state's kind (render, mesh render,
+    /// tile render or compute); for the base variant and every other alike, each pipeline by its
+    /// own records.
     pub(super) fn degrade_pipeline(&self, pipeline: CompiledPipeline<'_>, at: Occurrence<'_>) {
-        if let Some(dropped) = dropped_exact_forms(pipeline.dependencies()) {
-            self.degrade_at(at, Degradation::ExactFormsOverCompilerLimit, || {
-                (
-                    pipeline.object().to_owned(),
-                    format!(
-                        "its largest stage module passed the device's compiler word bound, so its \
-                         translation dropped {} to the device's answer",
-                        dropped.join(", ")
-                    ),
-                )
-            });
-        }
         if self
             .shared()
             .announced

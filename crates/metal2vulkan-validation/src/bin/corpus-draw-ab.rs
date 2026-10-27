@@ -146,9 +146,7 @@
 //! consumer's shaders: they stay on the hosts the guest data rule allows and are never committed.
 
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::device::{
-    DevicePolicy,
-};
+use metal2vulkan::device::DevicePolicy;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::CompareFunction;
 use metal2vulkan::metal::{
@@ -312,11 +310,7 @@ fn policy(options: &BTreeMap<String, String>) -> Result<DevicePolicy, String> {
     for name in names.split(',').filter(|name| !name.is_empty()) {
         match name {
             "exact-answers" => policy = policy.exact_answers(),
-            _ => {
-                return Err(format!(
-                    "--policy {name:?}: exact-answers"
-                ))
-            }
+            _ => return Err(format!("--policy {name:?}: exact-answers")),
         }
     }
     Ok(policy)

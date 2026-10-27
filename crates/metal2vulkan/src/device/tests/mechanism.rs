@@ -263,8 +263,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             static_bytes: 0,
             payload: None,
         },
-        RuntimeFact::ExactFormsOverCompilerLimit {
-        },
     ]
 }
 
@@ -356,13 +354,12 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::MovableStorageWrites { .. } => 83,
         RuntimeFact::SynthesizedGeometry { .. } => 84,
         RuntimeFact::ObjectThreadgroupArena { .. } => 85,
-        RuntimeFact::ExactFormsOverCompilerLimit { .. } => 86,
         RuntimeFact::WordInputMerge { .. } => 87,
         RuntimeFact::ReplayBindings => 88,
         RuntimeFact::MergedDraws => 89,
         RuntimeFact::QuadPrimitiveIds => 90,
         RuntimeFact::RotatedWeights => 91,
-        RuntimeFact::PrivateList => 92,
+        RuntimeFact::PrivateList => 86,
         RuntimeFact::MeshLastFirst => 71,
         RuntimeFact::YCbCrInPlace { .. } => 65,
     }
@@ -372,7 +369,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..93).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..92).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -510,8 +507,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 RuntimeFact::AliasedImageblock { .. } => Mechanism::None,
                 RuntimeFact::CallStackDepth { .. }
                 | RuntimeFact::AbsentArgumentRead { .. }
-                | RuntimeFact::SynthesizedGeometry { .. }
-                | RuntimeFact::ExactFormsOverCompilerLimit { .. } => Mechanism::None,
+                | RuntimeFact::SynthesizedGeometry { .. } => Mechanism::None,
             };
             assert_eq!(m, expected, "{stem}: {fact:?}");
         }

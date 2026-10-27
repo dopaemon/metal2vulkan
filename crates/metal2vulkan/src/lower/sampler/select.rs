@@ -1581,9 +1581,8 @@ fn select_extended(
 /// Select sampling call `inst` (sample, gather, or LOD query) of `image` (a texture slot, or a
 /// heap element) through sampler `sampler` (a static one, or an argument buffer's heap sampler),
 /// decoded as `t`. `arm` is set for an arm of a switch-at-use: with `Some(true)`, a fragment
-/// implicit-LOD sample reads the gradients its switch hoisted; and a texel the device reads through
-/// a runtime sampler's word stays its read (no `fetched::FetchAddress::Word` fetch), so that the
-/// arms share one emulation (SEMANTICS 1012, `Sampling::shared_shape`).
+/// implicit-LOD sample reads the gradients its switch hoisted, so that the arms share one emulation
+/// (SEMANTICS 1012, `Sampling::shared_shape`).
 fn select_one(
     cx: &mut SelectCx<'_>,
     call: Call<'_>,
@@ -2163,10 +2162,6 @@ fn select_one(
     // footprint cell. The note holds where none of them runs and the device's filter reads the
     // scaled coordinate, as `pixel_note` says. An argument buffer's sampler records a note of its
     // own, which the runtime announces only while a bound state can need it.
-    let argument = match sampler {
-        SamplerArg::Heap(h) => Some(h),
-        SamplerArg::Static(..) => None,
-    };
     let when = pixel_note(&op, pixel, (centred, integer), snap.as_ref());
     let note = match pixel {
         Pixel::Heap(_) => PrecisionNote::ArgumentPixelSamplerScaling,
@@ -2175,34 +2170,6 @@ fn select_one(
     cx.note_when(note, when, m)?;
     if let SampleOp::Bicubic(b) = &mut op {
         b.raw = raw;
-    }
-    // A bicubic sample rounds its `half` result exactly, keeping denormals, as a raw texel's decode
-    // does; another converts its texel by the bound format's class. A `half` gather's texels
-    // fetched where Metal's footprint is known (`fetched::select`).
-    let fetched = match (observed, raw) {
-        (false, false) => {
-            super::fetched::select(cx, &op, form, (stat, argument.is_some()), (image, shape))?
-                .filter(|p| {
-                    arm.is_none()
-                        || matches!(p.fetch.address, super::fetched::FetchAddress::Modes { .. })
-                })
-        }
-        _ => None,
-    };
-    // A runtime sampler's word addresses the fetch: the function reads its coordinates, address
-    // modes and border color.
-    if let Some(super::fetched::Plain {
-        fetch:
-            super::fetched::Fetch {
-                address: super::fetched::FetchAddress::Word { sampler: n, .. },
-                ..
-            },
-        ..
-    }) = &fetched
-    {
-        if let Some(s) = cx.families.sampler.slots.get_mut(n) {
-            s.fetched = true;
-        }
     }
     // Whether the access reads one texel of one level, whose `half` or `float` texel a packed or
     // normalized class converts from its codes; a runtime sampler's word decides it, which the
@@ -2233,30 +2200,18 @@ fn select_one(
         }
         other => other,
     };
-    // A heap texture's fetches read its handle's texel class, no slot's format.
-    let by_format = fetched.as_ref().is_some_and(|p| p.image.slot().is_some());
-    // Where a sample's `half` texel is the device's, no conversion declares the slot's class: the
-    // emulation that reads it declares it itself.
+    // A bicubic sample rounds its `half` result exactly, keeping denormals, as a raw texel's decode
+    // does; another `half` access converts its texel: the device's where the device's texel is
+    // the answer, else by the bound format's class (a heap color texture's by the class its
+    // handle carries: the module's routine, called with the class read from the handle).
     let device = crate::lower::texture::device_texels(cx);
-    if by_format && !raw && half && device {
-        crate::lower::texture::texel_format_spec(cx, image)?;
-    }
-    match (by_format, raw) {
-        (true, true) => crate::lower::texture::texel_format_spec(cx, image)?,
-        (true, false) if !half => crate::lower::texture::texel_format_spec(cx, image)?,
-        // A runtime sampler's emulation of raw codes converts the device's texel on its device
-        // arm alone.
-        (_, false) if half && !matches!(op, SampleOp::Bicubic(_)) => {
-            // A heap color texture's `half` texels convert by the class its handle carries: the
-            // module's routine, called with the class read from the handle.
-            if image.heap() && !shape.depth && !device {
-                cx.families.texture.heap_half = true;
-                cx.families.access.heap_class = true;
-                cx.families.texture.half_families = crate::lower::texture::half_families(cx);
-            }
-            crate::lower::texture::half_texels(cx, image, shape, (one_texel, None), device, m)?
+    if !raw && half && !matches!(op, SampleOp::Bicubic(_)) {
+        if image.heap() && !shape.depth && !device {
+            cx.families.texture.heap_half = true;
+            cx.families.access.heap_class = true;
+            cx.families.texture.half_families = crate::lower::texture::half_families(cx);
         }
-        _ => {}
+        crate::lower::texture::half_texels(cx, image, shape, (one_texel, None), device, m)?
     }
     // A `float` texel that may be one texel's is the device's conversion of its codes: not an sRGB
     // raw texel's (decoded exactly), a bicubic sample's, or an LOD query's; nor a depth
@@ -2395,7 +2350,7 @@ fn select_one(
     // Metal's anisotropic filter emulated by the device's samples at explicit levels, where it
     // reaches the sample; the device's anisotropic filter, recorded, where it does not. An
     // isotropic cube's level too, where no exact path of its own answers it.
-    let answered = snap.is_some() || fetched.is_some() || centred;
+    let answered = snap.is_some() || centred;
     let anisotropic = super::anisotropic::select(
         cx,
         &op,
@@ -2448,7 +2403,6 @@ fn select_one(
         footprint,
         snap,
         flush_subnormals,
-        fetched,
         cube,
         centred,
         centre_word,

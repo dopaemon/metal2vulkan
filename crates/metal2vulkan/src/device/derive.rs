@@ -12,9 +12,7 @@ use crate::device::description::{
 };
 use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
-use crate::device::policy::{
-    ContainmentPolicy, DevicePolicy,
-};
+use crate::device::policy::{ContainmentPolicy, DevicePolicy};
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
@@ -51,10 +49,6 @@ struct DeviceInner {
     /// The description's allocation sizes, which the Metal-facing `maxBufferLength` and the
     /// runtime's heap sizes read; not a profile field, as above.
     allocation: AllocationLimits,
-    /// The description the device was made from, kept so a compile over a device's compiler word
-    /// bound can rebuild the device under a reduced policy (`Device::fit_render_variant` and the
-    /// other kinds' fits); not a profile field, as above.
-    description: DeviceDescription,
 }
 
 impl Device {
@@ -125,7 +119,6 @@ impl Device {
             robust_buffer_access_update_after_bind: desc.robust_buffer_access_update_after_bind,
             generated_commands: desc.generated_commands,
             allocation: desc.allocation,
-            description: desc,
         })))
     }
 
@@ -149,13 +142,6 @@ impl Device {
     /// The policy the device was created with.
     pub fn policy(&self) -> &DevicePolicy {
         &self.0.policy
-    }
-
-    /// The description the device was made from, for a compile that rebuilds the device under a
-    /// reduced policy to fit a compiler word bound (`Device::fit_render_variant` and the other
-    /// kinds' fits).
-    pub(crate) fn description(&self) -> &DeviceDescription {
-        &self.0.description
     }
 
     /// The description's `robustBufferAccessUpdateAfterBind`.

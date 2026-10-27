@@ -1,8 +1,7 @@
 //! docs/FAST-PATHS.md, the ledger of the defaults that trade exactness against Metal for making
 //! time, stays accurate by construction: it names every accuracy choice of `DevicePolicy` with each
-//! of its values, as `field = Type::Value`, and every precision note a fast default, a
-//! not-yet-built accurate form or a listed device gap records, with its degrade code;
-//! and it names no policy value that no longer exists. The lists below are exhaustive matches: a
+//! of its values, as `field = Type::Value`, and every precision note a not-yet-built accurate
+//! form or a listed device gap records, with its degrade code; and it names no policy value that no longer exists. The lists below are exhaustive matches: a
 //! field, a policy value or a precision note added to the crate fails to compile here until it is
 //! classed, and so reaches the ledger.
 
@@ -79,8 +78,6 @@ fn choices() -> Vec<Choice> {
 /// Where a precision note stands in the ledger.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ledger {
-    /// Recorded by a fast default whose accurate form is a switch: a row of the first table.
-    FastDefault,
     /// The default's form where the accurate one is not built yet: a row of the first table.
     NotBuilt,
     /// A device gap, no speed choice: a row of the second table.
@@ -104,8 +101,6 @@ macro_rules! notes {
 
 fn notes() -> Vec<(&'static str, Ledger)> {
     notes! {
-        FastDefault: [
-        ],
         NotBuilt: [
             ExtendedRangeBlendSource,
             ExtendedRangeFloatBlendSource,
@@ -305,8 +300,8 @@ fn the_ledger_names_only_choices_the_policy_has() {
     }
 }
 
-/// The ledger names every precision note a fast default, a not-yet-built accurate form or a
-/// listed device gap records, each with its degrade code, which docs/API.md's catalogue lists.
+/// The ledger names every precision note a not-yet-built accurate form or a listed device gap
+/// records, each with its degrade code, which docs/API.md's catalogue lists.
 #[test]
 fn the_ledger_names_every_note_of_its_rows_with_its_code() {
     let ledger = text("../../docs/FAST-PATHS.md");

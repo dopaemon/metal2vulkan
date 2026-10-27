@@ -1095,12 +1095,11 @@ fn uniform_reads_outpace_storage_reads_on_anv_and_narrow_lavapipe() {
 }
 
 /// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` is keyed on ANV, whatever its GPU
-/// and release; every committed ANV profile carries it and gives a 400,000-word module bound, and
-/// no other profile carries it or bounds a module. The UHD 770's description under RADV or
-/// NVIDIA's driver loses it.
+/// and release; every committed ANV profile carries it, and no other profile does. The UHD 770's
+/// description under RADV or NVIDIA's driver loses it.
 #[test]
 fn register_allocator_overflow_is_keyed_on_anv() {
-    use crate::device::profile::{DriverWorkaround, REGISTER_ALLOCATOR_MODULE_WORD_BOUND};
+    use crate::device::profile::DriverWorkaround;
     let fact = DriverWorkaround::RegisterAllocatorOverflowsLargeModules;
     let profile_of = |desc: &DeviceDescription| {
         Device::new(desc.clone(), DevicePolicy::default())
@@ -1113,11 +1112,6 @@ fn register_allocator_overflow_is_keyed_on_anv() {
         let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
         let p = profile_of(&desc);
         assert_eq!(p.workarounds().contains(&fact), anv, "{stem}");
-        assert_eq!(
-            p.module_word_bound(),
-            anv.then_some(REGISTER_ALLOCATOR_MODULE_WORD_BOUND),
-            "{stem}"
-        );
     }
     let mut desc = profile("intel-irisxe-rplp-anv");
     assert!(profile_of(&desc).workarounds().contains(&fact));
@@ -1125,7 +1119,6 @@ fn register_allocator_overflow_is_keyed_on_anv() {
         desc.driver_id = Some(other);
         let p = profile_of(&desc);
         assert!(!p.workarounds().contains(&fact), "{other:?}");
-        assert_eq!(p.module_word_bound(), None, "{other:?}");
     }
 }
 

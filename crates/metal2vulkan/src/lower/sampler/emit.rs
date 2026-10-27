@@ -1210,23 +1210,6 @@ pub(super) fn sampled_value(
             let mut ops = ImageOperands::default();
             offset_operands(cx, fb, offset, s.lanes, &mut ops)?;
             let component = *component;
-            // A `half` gather whose taps the shader fetches, where the bound format is a
-            // half-float one: component `component` of each tap's texel, else the device's gather.
-            // It observes no residency, so the word is 0.
-            if let (Some((p, texture)), Source::Combined(key)) = (
-                s.fetched.as_ref().and_then(|p| Some((p, p.image.slot()?))),
-                s.source,
-            ) {
-                let x = super::fetched::branch(
-                    cx,
-                    fb,
-                    (s, key),
-                    (texture, &p.fetch),
-                    image,
-                    &|fb, si| fb.gather(si, coord, component, &ops),
-                )?;
-                return texel_value(cx, fb, s, image, (x, TexelOrigin::Computed), None);
-            }
             let dref = match dref {
                 Some(r) => Some(reference(cx, fb, s, *r)?),
                 None => None,
@@ -1279,12 +1262,6 @@ pub(super) fn sampled_value(
     };
     // Metal's value of texels in a sparse image's block that holds no mapped tile.
     let texel = unmapped_value(cx, fb, s, texel, named)?;
-    // A heap texture's `half` gather: the texels the shader fetches where the class its handle
-    // carries is the half-float one, else the device's.
-    let texel = match s.fetched.as_ref().filter(|p| p.image.slot().is_none()) {
-        Some(p) => super::fetched::heap(cx, fb, s, image, p, texel)?,
-        None => texel,
-    };
     let texel = live_or_zero(fb, live, texel)?;
     texel_value(cx, fb, s, image, (texel, TexelOrigin::Image), word)
 }

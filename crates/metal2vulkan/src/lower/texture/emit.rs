@@ -1225,11 +1225,6 @@ impl HalfClass {
     }
 }
 
-/// Texture slot `index`'s `TexelFormat` specialization constant, where it declares one.
-pub(crate) fn texel_format_const(cx: &EmitCx<'_>, index: u32) -> Option<ConstId> {
-    cx.decl.families.texture.half_format.get(&index).copied()
-}
-
 /// How the `half` texels of a read, gather, or sample of `image` in form `texel` convert: by the
 /// bound format's class where the slot takes its `TexelFormat` specialization, else (any other
 /// result, a heap element, a depth texture) through [`held_texel`].
@@ -2546,18 +2541,6 @@ pub(crate) fn constant_lanes(
     let Some(tests) = cx.decl.families.texture.constant_lanes.get(&index).copied() else {
         return Err(cx.fail(format!("texture slot {index} has no constant lanes")));
     };
-    constant_lanes_by(cx, fb, tests, x, gathered)
-}
-
-/// [`constant_lanes`] by the lane tests `tests`: a slot's, or the ones a switch's arms merged
-/// (`sampler::shared_value`).
-pub(crate) fn constant_lanes_by(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    tests: super::LaneConstants,
-    x: SValue,
-    gathered: Option<u32>,
-) -> BResult<SValue> {
     let ty = fb.value_ty(x)?;
     let elem = match fb.module().types().get(ty)? {
         SType::Vector { elem, len: 4 } => *elem,

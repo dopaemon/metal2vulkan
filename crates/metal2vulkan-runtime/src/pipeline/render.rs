@@ -2628,9 +2628,6 @@ impl RenderVariant {
             )?));
         }
         let pipeline = compile.compile_render_variant(&linked, key, &budget)?;
-        // Held to the driver's compiler word bound, translated again from the functions where its
-        // largest stage passes it; it keeps its key, so the cache stores and finds it as compiled.
-        let pipeline = compile.fit_render_variant(descriptor, key, &budget, pipeline)?;
         // The stages the link was given, whichever way they arrived: the ones this creation
         // compiled, and the ones the descriptor already carried compiled.
         let functions: Vec<CompiledFunction> = [Some(&linked.vertex), linked.fragment.as_ref()]

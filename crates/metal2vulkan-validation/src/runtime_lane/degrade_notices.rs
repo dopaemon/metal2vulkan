@@ -63,9 +63,7 @@
 //! `provoking_mesh` ([`PROVOKING`]),
 //! render pipeline states whose draws run a synthesized geometry stage in `barycentric_weights`
 //! ([`SYNTHESIZED_GEOMETRY`]), tessellated draws emulated on a device without
-//! `tessellationShader` in `patches` ([`EMULATED_TESSELLATION`]), render and compute pipeline
-//! states whose exact forms a stage past the device's compiler word bound dropped here
-//! ([`EXACT_FORMS_OVER_LIMIT`]),
+//! `tessellationShader` in `patches` ([`EMULATED_TESSELLATION`]),
 //! vertex-stage reads in place of bytes a fragment stage of the pass wrote in `pass_start_reads`
 //! ([`IN_PLACE_VERTEX_READS`]) and a vertex stage's write of bytes one wrote there
 //! ([`FRAGMENTS_BEFORE_GEOMETRY`]), constant biases of 16-bit unorm depths the device converts
@@ -244,11 +242,9 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::MeshPipelineDescriptor;
 use metal2vulkan::pipeline::PipelineLayout;
 use metal2vulkan::pipeline::StageModule;
-use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, RenderPipelineDescriptor, Stage, StageSource,
-};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, Reconvergence};
 use metal2vulkan::pipeline::{PrecisionNote, SlotRef, SpecKey};
+use metal2vulkan::pipeline::{RenderPipelineDescriptor, Stage, StageSource};
 use metal2vulkan::vk::DriverId;
 use metal2vulkan::vk::ResolveModeFlags as Mode;
 use metal2vulkan::Budget;
@@ -261,7 +257,6 @@ use metal2vulkan_runtime::{
     StorageMode, StoreAction, TextureDescriptor,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 use std::time::Duration;
 
 /// The longest a command buffer here may take.
@@ -578,7 +573,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &UNSIZED_POINTS,
         &SYNTHESIZED_GEOMETRY,
         &EMULATED_TESSELLATION,
-        &EXACT_FORMS_OVER_LIMIT,
         &GROUPED,
         &WORD_PAST_BUFFER,
         &XR_RESOLVE,
@@ -662,86 +656,6 @@ fn moltenvk_argument_buffers_are_announced_where_unread_and_refused_off() {
         Ok(_) => panic!("argument buffers off: the device opened"),
     }
     assert_eq!(off.take(), Vec::new(), "the validation layer reported");
-}
-
-/// The kind a pipeline state takes where a stage of its translation, with the device's exact
-/// forms, is longer than the device's compiler word bound, and the translation dropped exact
-/// forms to fit it ([`exact_forms_past_the_compiler_bound_are_announced_exactly_there`]).
-const EXACT_FORMS_OVER_LIMIT: [Degradation; 1] = [Degradation::ExactFormsOverCompilerLimit];
-
-/// A render pipeline state, and a compute pipeline state, announces [`EXACT_FORMS_OVER_LIMIT`]
-/// exactly where a stage of its translation with the lane's exact forms
-/// (`runtime_lane::validated_options`) is longer than the device's compiler word bound
-/// (`DeviceProfile::module_word_bound`: ANV's, `None` elsewhere). No owned fixture's stage reaches
-/// ANV's bound, so no venue announces it today; each checks the rule on its own device, with the
-/// owned `runtime_examples` render pipeline and kernel. The runtime's own tests
-/// (`fitted_variant_notice`) take the announcement of a fitted variant of every kind of state,
-/// and the translator's (`pipeline::compile::fit`) the fit of every kind of pipeline.
-#[test]
-fn exact_forms_past_the_compiler_bound_are_announced_exactly_there() {
-    on_device(|device, messages| {
-        let ll = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("fixtures/public/examples/runtime_examples.ll");
-        let library = device
-            .new_library_with_air(&llvm_assemble(&ll).unwrap())
-            .unwrap();
-        let function = |name| {
-            library
-                .new_function_with_name(name)
-                .unwrap()
-                .function_descriptor()
-        };
-        let mut descriptor =
-            RenderPipelineDescriptor::new(StageSource::Function(function("colored_vertex")));
-        descriptor.fragment = Some(StageSource::Function(function("colored_fragment")));
-        descriptor.color_attachments[0] =
-            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-        let compile = device.compile_device();
-        let bound = compile.profile().module_word_bound();
-        // The notices a state's creation made, against whether its longest stage passes the bound.
-        let check = |what: &str, longest: usize| {
-            let past = bound.is_some_and(|bound| longest > bound as usize);
-            let announced = counts(&messages.take_notices())
-                .get(&Degradation::ExactFormsOverCompilerLimit)
-                .copied()
-                .unwrap_or(0);
-            eprintln!(
-                "{}: {what}: longest stage {longest} words, compiler word bound {bound:?}",
-                device.name()
-            );
-            assert_eq!(
-                announced,
-                usize::from(past),
-                "{what}: {:?} exactly past the bound",
-                EXACT_FORMS_OVER_LIMIT
-            );
-        };
-        let compiled = compile
-            .compile_render_pipeline(&descriptor, &Budget::standard())
-            .unwrap();
-        let longest = compiled
-            .stages
-            .iter()
-            .map(|stage| stage.spirv.len())
-            .max()
-            .unwrap_or(0);
-        let _state = device
-            .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-            .unwrap();
-        check("render", longest);
-        let kernel =
-            ComputePipelineDescriptor::new(StageSource::Function(function("scale_and_offset")));
-        let longest = compile
-            .compile_compute_pipeline(&kernel, &Budget::standard())
-            .unwrap()
-            .stage
-            .spirv
-            .len();
-        let _state = device
-            .new_compute_pipeline_state(&kernel, &PipelineOptions::default())
-            .unwrap();
-        check("compute", longest);
-    });
 }
 
 /// The kind an anisotropy past the device's largest takes

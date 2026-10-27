@@ -1,8 +1,7 @@
 //! The shared emulation of a switch-at-use (SEMANTICS 1012).
 //!
 //! A switch-at-use whose every arm takes the same emulated sampling on its own texture slot
-//! ([`Sampling::shared_shape`]): a bicubic sample, a snapped gather or sample, or a `half` gather
-//! whose base-level texels the shader fetches. Emitted per arm, each arm repeats the whole
+//! ([`Sampling::shared_shape`]): a bicubic sample, or a snapped gather or sample. Emitted per arm, each arm repeats the whole
 //! emulation (its position, weights, sums, and routine calls), so the switch's words grow with arms × emulation, and so does
 //! the driver's work once the bound formats make every arm's emulation live (an Intel ANV pipeline
 //! of 32 such arms took 6 s to create).
@@ -11,14 +10,12 @@
 //! facts, and dispatches only what reads a candidate's own image:
 //!
 //! - a facts dispatch, whose arms yield their level-0 size (`OpImageQuerySizeLod` 0), the bound
-//!   format's bits (the slot's `BicubicTexels` or `TexelFormat` specialization) and `true`, and
+//!   format's bits (the slot's `BicubicTexels` specialization) and `true`, and
 //!   whose null arm yields a size of ones, bits 0 and `false`;
 //! - the emulation on those facts (its footprint, weights and routine calls once), whose taps a
 //!   dispatch reads from each arm's image (the null arm's are zero);
 //! - a snapped sample's coordinate snapped once on the named size, and the device's access and
-//!   texel conversion in each arm, the null arm yielding the switch's null value;
-//! - a plain fetch's taps on the named size, fetched in one dispatch where the named format is of
-//!   the class the fetch names, else the device's access (its coordinate snapped once) in another.
+//!   texel conversion in each arm, the null arm yielding the switch's null value.
 //!
 //! Where a handle names a candidate the facts are that candidate's, so every value is the one its
 //! own arm computed; elsewhere the switch's null value is selected. The emulation of a null handle
@@ -33,10 +30,10 @@ use crate::spirv::ids::{ConstId, Value as SValue};
 use crate::spirv::ir::{ConstBits, Constant, ImageOperands, ImageQuery, Type as SType};
 
 use super::emit::{
-    held_value, layered, offset_operands, op_offset, pixel_coordinates, plane_and_gradients,
-    sample_access, sample_operands, scaled, snap_offsets, texel_value,
+    layered, offset_operands, op_offset, pixel_coordinates, plane_and_gradients, sample_access,
+    sample_operands, scaled, snap_offsets, texel_value,
 };
-use super::{Binding, CombinedImage, SampleOp, Sampling, Source, Unmapped};
+use super::{Binding, CombinedImage, SampleOp, Sampling, Source};
 
 /// The candidates of a switch-at-use that emulates once: the handles' values dispatched on,
 /// outermost first, and each arm's case literals and sampling.
@@ -97,15 +94,10 @@ fn binding(cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<(Binding, CombinedImage
 enum Emulation<'a> {
     Bicubic(&'a super::bicubic::Bicubic),
     Snap(&'a super::position::Snap),
-    /// A plain fetch of the base level, its device arm snapped where it has a snap.
-    Fetched(&'a super::fetched::Plain),
 }
 
 impl<'a> Emulation<'a> {
     fn of(s: &'a Sampling) -> Option<Emulation<'a>> {
-        if let Some(p) = &s.fetched {
-            return Some(Emulation::Fetched(p));
-        }
         match (&s.op, &s.snap) {
             (SampleOp::Bicubic(b), None) => Some(Emulation::Bicubic(b)),
             (SampleOp::Sample { .. } | SampleOp::Gather { .. }, Some(p)) if !p.by_word() => {
@@ -116,16 +108,12 @@ impl<'a> Emulation<'a> {
     }
 
     /// The specialization holding the bound format's bits of arm sampling `a`'s slot, where the
-    /// emulation reads them: a bicubic sample's `BicubicTexels`, a fetch's `TexelFormat`.
+    /// emulation reads them: a bicubic sample's `BicubicTexels`.
     fn bits(self, cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<Option<ConstId>> {
         let spec = match (self, Emulation::of(a)) {
             (Emulation::Bicubic(_), Some(Emulation::Bicubic(b))) => {
                 cx.decl.families.sampler.bicubic.get(&b.texture).copied()
             }
-            (Emulation::Fetched(_), Some(Emulation::Fetched(p))) => p
-                .image
-                .slot()
-                .and_then(|t| crate::lower::texture::texel_format_const(cx, t)),
             (Emulation::Snap(_), Some(Emulation::Snap(_))) => return Ok(None),
             _ => return Err(cx.fail("a shared switch's arms of different emulations")),
         };
@@ -162,26 +150,10 @@ pub(crate) fn shared_value(
         [size, rest @ ..] => (*size, rest),
         _ => return Err(cx.fail("a shared switch's facts without their sizes")),
     };
-    let (bits, named, lanes) = match (kind, rest) {
-        (Emulation::Snap(_), &[]) => (None, None, None),
-        (Emulation::Bicubic(_) | Emulation::Fetched(_), &[bits, named]) => {
-            (Some(bits), Some(named), None)
-        }
-        (Emulation::Fetched(_), &[bits, named, c0, c1, c2, c3, o0, o1, o2, o3]) => (
-            Some(bits),
-            Some(named),
-            Some(crate::lower::texture::LaneConstants {
-                constant: [c0, c1, c2, c3],
-                one: [o0, o1, o2, o3],
-            }),
-        ),
+    let (bits, named) = match (kind, rest) {
+        (Emulation::Snap(_), &[]) => (None, None),
+        (Emulation::Bicubic(_), &[bits, named]) => (Some(bits), Some(named)),
         _ => return Err(cx.fail("a shared switch's facts without their values")),
-    };
-    // The lanes Metal reads as constants, by the named candidate's tests: each arm's own conversion
-    // is the shared one, so they are set after it.
-    let constants = |cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, x: SValue| match lanes {
-        Some(tests) => crate::lower::texture::constant_lanes_by(cx, fb, tests, x, None),
-        None => Ok(x),
     };
     let x = match (kind, bits) {
         (Emulation::Bicubic(b), Some(bits)) => {
@@ -190,32 +162,7 @@ pub(crate) fn shared_value(
         (Emulation::Snap(p), _) => {
             return snapped(cx, fb, c, (first, p), grads, (size, image), null);
         }
-        (Emulation::Fetched(p), Some(bits)) => {
-            let x = fetched(cx, fb, c, (first, p), grads, (size, image), bits)?;
-            // The conversion, then the lanes Metal reads as constants by the merged tests, not
-            // the named candidate's own.
-            let x = held_value(
-                cx,
-                fb,
-                first,
-                image,
-                (x, crate::lower::texture::half::TexelOrigin::Computed),
-            )?;
-            let x = constants(cx, fb, x)?;
-            let x = with_word(cx, fb, &first.result, x, None)?;
-            let Some(named) = named else {
-                return Err(cx.fail("a shared fetch without its named test"));
-            };
-            let [n] = null(cx, fb)?[..] else {
-                return Err(cx.fail("a shared switch without its null value"));
-            };
-            return fb.select(named, x, n);
-        }
         _ => return Err(cx.fail("a shared emulation without its format bits")),
-    };
-    let x = match first.depth {
-        true => x,
-        false => constants(cx, fb, x)?,
     };
     let x = with_word(cx, fb, &first.result, x, None)?;
     let Some(named) = named else {
@@ -228,9 +175,7 @@ pub(crate) fn shared_value(
 }
 
 /// The facts dispatch (module docs): each arm's level-0 size, and where `kind` reads them its
-/// format's bits and `true`, then where the shared value takes the lanes Metal reads
-/// as constants (`shared_constants`) its slot's eight lane tests (`LaneConstants`); the null arm's
-/// ones, 0, and `false`.
+/// format's bits and `true`; the null arm's ones, 0, and `false`.
 fn facts(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -265,7 +210,6 @@ fn facts(
     let yes = scalar(fb, bool_, 1)?;
     let no = scalar(fb, bool_, 0)?;
     let with_bits = !matches!(kind, Emulation::Snap(_));
-    let lanes_read = shared_constants(kind, c);
     let read = |cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, a: &Sampling| {
         let img = c.image(cx, fb, a)?;
         let level = fb.module().const_value(zero)?;
@@ -274,11 +218,6 @@ fn facts(
             v.push(fb.module().const_value(bits)?);
             v.push(fb.module().const_value(yes)?);
         }
-        if lanes_read {
-            let tests = lane_tests(cx, a)?;
-            v.extend(tests.constant);
-            v.extend(tests.one);
-        }
         Ok(v)
     };
     let null_facts = |_: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>| {
@@ -286,10 +225,6 @@ fn facts(
         if with_bits {
             v.push(fb.module().const_value(zero)?);
             v.push(fb.module().const_value(no)?);
-        }
-        if lanes_read {
-            let no = fb.module().const_value(no)?;
-            v.extend([no; 8]);
         }
         Ok(v)
     };
@@ -434,58 +369,5 @@ fn snapped(
     match values[..] {
         [x] => Ok(x),
         _ => Err(cx.fail("a shared snapped access without its value")),
-    }
-}
-
-/// A shared `half` gather's fetch (module docs): the device's coordinate snapped once on the named
-/// size where the sampling has a snap, and `fetched::emit_shared`'s fetches of each arm's texels
-/// where the named format `bits` is of the half-float class, else each arm's device gather of
-/// component `component`.
-fn fetched(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    c: &Candidates<'_>,
-    (first, p): (&Sampling, &super::fetched::Plain),
-    grads: Option<(SValue, SValue)>,
-    (size, image): (SValue, CombinedImage),
-    bits: SValue,
-) -> BResult<SValue> {
-    let ((_, coord), _) =
-        device_coordinate(cx, fb, first, grads, (size, image), first.snap.as_ref())?;
-    let SampleOp::Gather {
-        component,
-        dref: None,
-        offset,
-    } = &first.op
-    else {
-        return Err(cx.fail("a shared fetch without its gather"));
-    };
-    let mut ops = ImageOperands::default();
-    offset_operands(cx, fb, offset, first.lanes, &mut ops)?;
-    let component = *component;
-    let device = |fb: &mut FunctionBuilder<'_>, si: SValue| fb.gather(si, coord, component, &ops);
-    super::fetched::emit_shared(cx, fb, first, (size, image), p, (bits, c), &device)
-}
-
-/// Whether the shared value of `kind` over `c` sets the lanes Metal reads as constants by its
-/// arms' merged lane tests: a plain fetch's, whose arms take them
-/// ([`Unmapped`]). A snapped access converts each arm's texel in its arm, with its own slot's; a
-/// bicubic sample's fetches take none.
-fn shared_constants(kind: Emulation<'_>, c: &Candidates<'_>) -> bool {
-    matches!(kind, Emulation::Fetched(_))
-        && c.arms.iter().any(|(_, a)| a.unmapped != Unmapped::Device)
-}
-
-/// The lane tests of arm sampling `a`'s texture slot.
-fn lane_tests(cx: &mut EmitCx<'_>, a: &Sampling) -> BResult<crate::lower::texture::LaneConstants> {
-    let Source::Combined(key) = a.source else {
-        return Err(cx.fail("a shared sampling of a heap element"));
-    };
-    match cx.decl.families.texture.constant_lanes.get(&key.texture) {
-        Some(&tests) => Ok(tests),
-        None => Err(cx.fail(format!(
-            "texture slot {} has no constant lanes",
-            key.texture
-        ))),
     }
 }

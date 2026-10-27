@@ -133,12 +133,11 @@ pub(crate) use absent::absent_arm;
 pub use absent::ABSENT_ARM;
 pub use atomic::TexAtomic;
 pub(crate) use emit::{
-    constant_lanes, constant_lanes_by, dispatch, extended_table, half_class, heap_element,
-    heap_half_class, heap_raw_form, heap_raw_image, live_or_zero, reinterpret, resident_access,
-    rgb9e5_word, slot_image, sparse_spec, srgb_filtered_texel, srgb_raw_tap, srgb_raw_texel,
-    swizzled_float, swizzled_gather, swizzled_held, texel_format_const, tile_map, tiled_word,
-    with_word, NullLeaf, TileLevel, RGB9E5_WORDS, SRGB_FILTERED_WORDS, SRGB_RAW_WORDS,
-    SRGB_TAP_WORDS, SRGB_TEXEL,
+    constant_lanes, dispatch, extended_table, half_class, heap_element, heap_half_class,
+    heap_raw_form, heap_raw_image, live_or_zero, reinterpret, resident_access, rgb9e5_word,
+    slot_image, sparse_spec, srgb_filtered_texel, srgb_raw_tap, srgb_raw_texel, swizzled_float,
+    swizzled_gather, swizzled_held, tile_map, tiled_word, with_word, NullLeaf, TileLevel,
+    RGB9E5_WORDS, SRGB_FILTERED_WORDS, SRGB_RAW_WORDS, SRGB_TAP_WORDS, SRGB_TEXEL,
 };
 pub use emit::{emit, held_texel, to_image};
 pub(crate) use slot::depth_comparison;
@@ -733,16 +732,14 @@ impl FamilyStrategy for TextureStrategy {
 impl TextureStrategy {
     /// The sampled images of combined bindings this strategy makes: its own sampling's, or its
     /// switch's arms' (each the static sampling of one binding). Under the separate form each is
-    /// made from the separate texture and sampler. A sampling makes one in its open block, and a
-    /// plain fetch one in each arm of its branch, the fetch's and the device's access's. A switch that emulates once ([`Switch::shared`],
+    /// made from the separate texture and sampler. A sampling makes one in its open block. A switch
+    /// that emulates once ([`Switch::shared`],
     /// SEMANTICS 1012) makes them only for its arms' device accesses
     /// ([`Sampling::shared_sampled_images`]).
     pub fn combined_samplings(&self) -> u32 {
         match self {
             TextureStrategy::Sampling(s) => match s.source {
-                crate::lower::sampler::Source::Combined(_) => {
-                    1 + 2 * u32::from(s.fetched.is_some())
-                }
+                crate::lower::sampler::Source::Combined(_) => 1,
                 _ => 0,
             },
             TextureStrategy::Switch(w) => match w.shared() {
@@ -1749,24 +1746,6 @@ fn unconverted_class(cx: &mut SelectCx<'_>, index: u32) -> Result<NoteClause, Er
         0,
     )]
     .into())
-}
-
-/// An access of texture slot `image` that reads its class without converting a texel to `half` by
-/// it: a raw sRGB access, whose decode reads the `UNORM`, `SRGB`, and channel bits, a fetched
-/// gather and a NaN texel's rule. The slot's `TexelFormat` specialization
-/// (`RuntimeFact::TexelFormat`), without the conversion routine. Nothing is noted here: a raw
-/// access's decode is exact, and the access's selection records its own notes.
-pub(crate) fn texel_format_spec(cx: &mut SelectCx<'_>, image: ImageRef) -> Result<(), Error> {
-    let ImageRef::Slot(index) = image else {
-        return Err(cx.invariant("a slot's class of a heap element"));
-    };
-    let slot = slot_of(cx, index)?.slot;
-    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-        s.texel_format = true;
-    }
-    cx.facts
-        .insert(crate::pipeline::facts::RuntimeFact::TexelFormat { slot });
-    Ok(())
 }
 
 /// The address-mode map constexpr sampler `words` samples texture slot `index` under: the map

@@ -279,8 +279,6 @@ impl Device {
     /// call stack was sized for another depth (`RuntimeFact::CallStackDepth`) is
     /// `InvalidDescriptor(MaxCallStackDepth)`. A stage-input attribute whose buffer has no layout,
     /// read or not, is `InvalidDescriptor(StageInputLayout)`, where Metal stops at an assertion.
-    /// A `Function` kernel's pipeline is held to the device's compiler word bound
-    /// ([`Device::fit_compute_pipeline`]).
     pub fn compile_compute_pipeline(
         &self,
         d: &ComputePipelineDescriptor,
@@ -288,9 +286,7 @@ impl Device {
     ) -> Result<ComputePipeline, Error> {
         guarded(|| {
             let inputs = kernel_inputs(d);
-            let first = self.compute_pipeline(d, &inputs, &mut Meter::new(b))?;
-            let bound = self.profile().module_word_bound();
-            self.fit_compute_within(d, &inputs, b, first, bound)
+            self.compute_pipeline(d, &inputs, &mut Meter::new(b))
         })
     }
 
@@ -321,8 +317,7 @@ impl Device {
     /// `InvalidDescriptor(ColorAttachment)`. A multisampled pass (`raster_sample_count` above 1) is
     /// `Unsupported{TileShading, NotImplemented}`: what its imageblock's samples are is not read.
     /// The tile function's recursion is sized for `d`'s `maxCallStackDepth` as a compute kernel's
-    /// is. A `Function` tile function's pipeline is held to the device's compiler word bound
-    /// ([`Device::fit_tile_pipeline`]).
+    /// is.
     pub fn compile_tile_pipeline(
         &self,
         d: &TileRenderPipelineDescriptor,
@@ -330,9 +325,7 @@ impl Device {
     ) -> Result<ComputePipeline, Error> {
         guarded(|| {
             let inputs = tile_inputs(d);
-            let first = self.tile_pipeline(d, &inputs, &mut Meter::new(b))?;
-            let bound = self.profile().module_word_bound();
-            self.fit_tile_within(d, &inputs, b, first, bound)
+            self.tile_pipeline(d, &inputs, &mut Meter::new(b))
         })
     }
 
@@ -490,18 +483,14 @@ impl Device {
     /// compiled under the same inputs; link refuses a vertex stage compiled under another
     /// projection. Each stage's recursion is sized for `d`'s `maxVertexCallStackDepth` or
     /// `maxFragmentCallStackDepth`, as a compute kernel's is for its pipeline's; a `Compiled` stage
-    /// sized for another depth is `InvalidDescriptor(MaxCallStackDepth)`. A pipeline of `Function`
-    /// stages is held to the device's compiler word bound ([`Device::fit_render_variant`]).
+    /// sized for another depth is `InvalidDescriptor(MaxCallStackDepth)`.
     pub fn compile_render_variant(
         &self,
         d: &RenderPipelineDescriptor,
         v: &VariantKey,
         b: &Budget,
     ) -> Result<RenderPipeline, Error> {
-        guarded(|| {
-            let first = self.render_pipeline(d, v, &mut Meter::new(b))?;
-            self.fit_render_within(d, v, b, first, self.profile().module_word_bound())
-        })
+        guarded(|| self.render_pipeline(d, v, &mut Meter::new(b)))
     }
 
     /// Compile the mesh render pipeline `d` under budget `b`: its object function (when it has one)
@@ -528,21 +517,17 @@ impl Device {
     /// Compile the mesh render pipeline `d` under the variant `v` a plan of it asked for
     /// (`BindingPlan::variant`) and budget `b`, as [`Device::compile_mesh_pipeline`] does: each
     /// `Function` stage under [`VariantKey::lowering_inputs`] of its stage, the fragment function's
-    /// for the mesh function's outputs. A pipeline of `Function` stages is held to the device's
-    /// compiler word bound ([`Device::fit_mesh_variant`]).
+    /// for the mesh function's outputs.
     pub fn compile_mesh_variant(
         &self,
         d: &MeshPipelineDescriptor,
         v: &VariantKey,
         b: &Budget,
     ) -> Result<RenderPipeline, Error> {
-        guarded(|| {
-            let first = self.mesh_pipeline(d, v, &mut Meter::new(b))?;
-            self.fit_mesh_within(d, v, b, first, self.profile().module_word_bound())
-        })
+        guarded(|| self.mesh_pipeline(d, v, &mut Meter::new(b)))
     }
 
-    /// [`Device::compile_mesh_variant`] with the caller's meter, unfitted.
+    /// [`Device::compile_mesh_variant`] with the caller's meter.
     pub(crate) fn mesh_pipeline(
         &self,
         d: &MeshPipelineDescriptor,
@@ -710,8 +695,7 @@ impl Device {
     }
 
     /// [`Device::compile_compute_pipeline`] with the caller's meter (tests count its work),
-    /// unfitted, a `Function` kernel compiled under `inputs` (`d`'s own, `kernel_inputs`, or a
-    /// fit's).
+    /// a `Function` kernel compiled under `inputs` (`d`'s own, `kernel_inputs`).
     pub(crate) fn compute_pipeline(
         &self,
         d: &ComputePipelineDescriptor,
@@ -749,8 +733,8 @@ impl Device {
         })
     }
 
-    /// [`Device::compile_tile_pipeline`] with the caller's meter, unfitted, a `Function` tile
-    /// function compiled under `inputs` (`d`'s own, `tile_inputs`, or a fit's).
+    /// [`Device::compile_tile_pipeline`] with the caller's meter, a `Function` tile function
+    /// compiled under `inputs` (`d`'s own, `tile_inputs`).
     pub(crate) fn tile_pipeline(
         &self,
         d: &TileRenderPipelineDescriptor,
@@ -798,7 +782,7 @@ impl Device {
         })
     }
 
-    /// [`Device::compile_render_variant`] with the caller's meter, unfitted. A variant of one of
+    /// [`Device::compile_render_variant`] with the caller's meter. A variant of one of
     /// the pipeline's color groups (`VariantKey::color_group`) compiles and links as the pipeline
     /// of its group's attachments (`color_group`), its key's choices of colors naming the group's.
     pub(crate) fn render_pipeline(

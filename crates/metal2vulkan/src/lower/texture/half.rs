@@ -111,8 +111,7 @@ pub enum TexelOrigin {
     /// An image instruction's texel (a read, fetch, sample or gather), or lanes and selections of
     /// such texels and constants: no arithmetic computes it.
     Image,
-    /// A value the translation computes from texels (an emulated filter, a comparison, a fetched
-    /// footprint's sum).
+    /// A value the translation computes from texels (an emulated filter's sum).
     Computed,
 }
 

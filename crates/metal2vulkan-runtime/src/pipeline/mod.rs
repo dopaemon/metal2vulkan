@@ -489,27 +489,6 @@ impl Kernel {
         }
         inputs
     }
-
-    /// `pipeline`, this descriptor's compile with its kernel or tile function compiled under
-    /// `inputs` ([`Kernel::inputs`]), held to the device's compiler word bound
-    /// (`fit_compute_pipeline`, `fit_tile_pipeline`): translated again from the function this
-    /// descriptor holds, with the exact forms dropped, where its module passes the bound.
-    fn fit(
-        &self,
-        compile: &metal2vulkan::device::Device,
-        inputs: &metal2vulkan::pipeline::LoweringInputs,
-        budget: &metal2vulkan::Budget,
-        pipeline: ComputePipeline,
-    ) -> Result<ComputePipeline, metal2vulkan::error::Error> {
-        match self {
-            Kernel::Compute(descriptor) => {
-                compile.fit_compute_pipeline(descriptor, inputs, budget, pipeline)
-            }
-            Kernel::Tile(descriptor) => {
-                compile.fit_tile_pipeline(descriptor, inputs, budget, pipeline)
-            }
-        }
-    }
 }
 
 /// One compiled variant of a state.
@@ -1581,9 +1560,8 @@ impl Variant {
     /// the variant of it the memo knows live, or the pipeline `sources` give, each stage found or
     /// compiled under one budget. The function compiles under the descriptor's stage input
     /// descriptor or color attachment formats ([`Kernel::inputs`]), and the pipeline under its
-    /// other fields, held to the device's compiler word bound from `descriptor`, which holds the
-    /// function ([`Kernel::fit`]); with `descriptor` holding the function as compiled. A refusal is
-    /// the compile layer's.
+    /// other fields; with `descriptor` holding the function as compiled. A refusal is the compile
+    /// layer's.
     ///
     /// The compile reads the kernel's specialized entry from the device's stage entries, as a
     /// render creation's stages do: a sibling pipeline of the same kernel at the same call-stack
@@ -1611,7 +1589,7 @@ impl Variant {
         let compiled =
             sources.function(function, &inputs, (&function_key, Some(entries)), &budget)?;
         let compiled = descriptor.with_stage(StageSource::Compiled(compiled));
-        let found = sources.kernel(&compiled, (descriptor, &inputs), &budget)?;
+        let found = sources.kernel(&compiled, &budget)?;
         Ok((found, compiled))
     }
 

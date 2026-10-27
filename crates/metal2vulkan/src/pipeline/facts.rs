@@ -736,17 +736,6 @@ pub enum RuntimeFact {
         static_bytes: u32,
         payload: Option<u32>,
     },
-    /// The pipeline (render, mesh render, compute or tile render) was retranslated with some of the
-    /// consumer's exact forms dropped to native, because its largest stage module exceeded the
-    /// device's compiler word bound and that driver faults compiling a module past it
-    /// ([`DriverWorkaround::RegisterAllocatorOverflowsLargeModules`](crate::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules):
-    /// ANV's register allocator). Each `true` field is an exact form the pipeline would carry under
-    /// the consumer's policy that the fitting translation gave up to fit the bound; the stages carry
-    /// the reduced policy's own precision notes besides. The consumer announces it once per device
-    /// (the runtime's `Degradation::ExactFormsOverCompilerLimit`), naming the pipeline and the forms
-    /// dropped. Nothing binds it.
-    ExactFormsOverCompilerLimit {
-    },
     /// The render pipeline was compiled under `VariantKey::quad_primitive_ids`, and its fragment
     /// function reads `[[primitive_id]]` from Vulkan's `PrimitiveId` shifted right by one
     /// (`LoweringInputs::quad_primitive_ids`): for a draw of Metal's private quads or quad strip,

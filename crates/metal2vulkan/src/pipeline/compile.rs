@@ -11,12 +11,11 @@
 //!
 //! The public surface (`Device::compile_function`, `function_compile_key`,
 //! `compile_compute_pipeline`, `compile_render_pipeline`, and the pipeline keys) is [`api`]; the
-//! key derivation is [`key`]; holding a pipeline to the device's compiler word bound is `fit`.
+//! key derivation is [`key`].
 
 pub mod api;
 pub(crate) mod color_group;
 mod entry;
-mod fit;
 pub mod key;
 mod numbered;
 mod partition;
