@@ -2842,7 +2842,6 @@ fn heap_linear_samples_are_the_device_s() {
                 false => "sampler.heap.sample",
             };
             assert_eq!(uses(&a, census), 1, "{what}");
-            assert_eq!(uses(&a, "sampler.linear"), 0, "{what}");
             assert_eq!(
                 mask_constants(&a).contains(&!HANDLE_TEXEL_CLASS),
                 raw,

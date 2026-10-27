@@ -318,7 +318,6 @@ fn a_runtime_samplers_sample_is_the_device_s() {
             "{stem}"
         );
         assert_eq!(uses(&a, "sampler.sample"), 1, "{stem}");
-        assert_eq!(uses(&a, "sampler.linear"), 0, "{stem}");
         let property = match p
             .fields()
             .enabled

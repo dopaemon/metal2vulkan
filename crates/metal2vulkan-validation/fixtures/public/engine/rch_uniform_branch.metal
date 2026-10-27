@@ -1,8 +1,8 @@
-// Owned fixture: a fragment function that samples a texture through a
-// runtime sampler at a coordinate it divides by the texture's size where a constant block's flag
-// says, a branch every invocation of a draw takes alike, and writes a buffer. Under the sampler's
-// YCbCr variant the emulated linear filter branches on the sampler's specialization
-// constants, and its device-sample arm converts a `half` texel through a rounded add.
+// Owned fixture: a fragment function that, where a constant block's flag says (a branch every
+// invocation of a draw takes alike), divides a coordinate by a texture's size and takes the high
+// word of a product (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes through its `optnone`
+// `spvMulExtended`), then samples the texture through a runtime sampler at the coordinate and
+// writes the sample, plus the product's lowest bit, to a buffer.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -23,9 +23,11 @@ fragment float4 rch_uniform_branch(float4 position [[position]],
 {
     uint2 g = uint2(position.xy);
     float2 at = p.origin + float2(g) * p.step;
+    uint bit = 0u;
     if (p.normalized != 0) {
         at /= float2(t.get_width(), t.get_height());
+        bit = mulhi(g.x, p.columns) & 1u;
     }
-    out[g.y * p.columns + g.x] = t.sample(s, at);
+    out[g.y * p.columns + g.x] = t.sample(s, at) + half(bit);
     return float4(0.0f, 0.0f, 0.0f, 1.0f);
 }

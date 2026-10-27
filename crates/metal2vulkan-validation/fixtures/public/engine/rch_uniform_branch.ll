@@ -20,31 +20,46 @@ define <4 x float> @rch_uniform_branch(<4 x float> noundef %0, ptr addrspace(1) 
   %15 = getelementptr inbounds %struct.UniformProbe, ptr addrspace(2) %4, i64 0, i32 3
   %16 = load i32, ptr addrspace(2) %15, align 4, !tbaa !35, !alias.scope !28, !noalias !31
   %17 = icmp eq i32 %16, 0
-  br i1 %17, label %26, label %18
+  br i1 %17, label %18, label %22
 
 18:                                               ; preds = %5
-  %19 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #5, !alias.scope !38, !noalias !39
-  %20 = tail call fast float @air.convert.f.f32.u.i32(i32 %19) #4
-  %21 = insertelement <2 x float> undef, float %20, i64 0
-  %22 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #5, !alias.scope !38, !noalias !39
-  %23 = tail call fast float @air.convert.f.f32.u.i32(i32 %22) #4
-  %24 = insertelement <2 x float> %21, float %23, i64 1
-  %25 = fdiv fast <2 x float> %14, %24
-  br label %26
+  %19 = getelementptr inbounds %struct.UniformProbe, ptr addrspace(2) %4, i64 0, i32 2
+  %20 = load i32, ptr addrspace(2) %19, align 8, !tbaa !38, !alias.scope !28, !noalias !31
+  %21 = extractelement <2 x i32> %7, i64 0
+  br label %35
 
-26:                                               ; preds = %18, %5
-  %27 = phi <2 x float> [ %25, %18 ], [ %14, %5 ]
-  %28 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) readonly captures(none) %2, <2 x float> %27, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #6, !alias.scope !40, !noalias !41
-  %29 = extractvalue { <4 x half>, i8 } %28, 0
-  %30 = extractelement <2 x i32> %7, i64 1
+22:                                               ; preds = %5
+  %23 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #5, !alias.scope !39, !noalias !40
+  %24 = tail call fast float @air.convert.f.f32.u.i32(i32 %23) #4
+  %25 = insertelement <2 x float> undef, float %24, i64 0
+  %26 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #5, !alias.scope !39, !noalias !40
+  %27 = tail call fast float @air.convert.f.f32.u.i32(i32 %26) #4
+  %28 = insertelement <2 x float> %25, float %27, i64 1
+  %29 = fdiv fast <2 x float> %14, %28
+  %30 = extractelement <2 x i32> %7, i64 0
   %31 = getelementptr inbounds %struct.UniformProbe, ptr addrspace(2) %4, i64 0, i32 2
-  %32 = load i32, ptr addrspace(2) %31, align 8, !tbaa !42, !alias.scope !28, !noalias !31
-  %33 = mul i32 %32, %30
-  %34 = extractelement <2 x i32> %7, i64 0
-  %35 = add i32 %33, %34
-  %36 = zext i32 %35 to i64
-  %37 = getelementptr inbounds <4 x half>, ptr addrspace(1) %3, i64 %36
-  store <4 x half> %29, ptr addrspace(1) %37, align 8, !tbaa !25, !alias.scope !43, !noalias !44
+  %32 = load i32, ptr addrspace(2) %31, align 8, !tbaa !38, !alias.scope !28, !noalias !31
+  %33 = tail call i32 @air.mul_hi.u.i32(i32 %30, i32 %32) #4
+  %34 = and i32 %33, 1
+  br label %35
+
+35:                                               ; preds = %22, %18
+  %36 = phi i32 [ %21, %18 ], [ %30, %22 ]
+  %37 = phi i32 [ %20, %18 ], [ %32, %22 ]
+  %38 = phi i32 [ 0, %18 ], [ %34, %22 ]
+  %39 = phi <2 x float> [ %14, %18 ], [ %29, %22 ]
+  %40 = tail call { <4 x half>, i8 } @air.sample_texture_2d.v4f16(ptr addrspace(1) readonly captures(none) %1, ptr addrspace(2) readonly captures(none) %2, <2 x float> %39, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #6, !alias.scope !41, !noalias !42
+  %41 = extractvalue { <4 x half>, i8 } %40, 0
+  %42 = tail call fast half @air.convert.f.f16.u.i32(i32 %38) #4
+  %43 = insertelement <4 x half> poison, half %42, i64 0
+  %44 = shufflevector <4 x half> %43, <4 x half> poison, <4 x i32> zeroinitializer
+  %45 = fadd fast <4 x half> %44, %41
+  %46 = extractelement <2 x i32> %7, i64 1
+  %47 = mul i32 %37, %46
+  %48 = add i32 %47, %36
+  %49 = zext i32 %48 to i64
+  %50 = getelementptr inbounds <4 x half>, ptr addrspace(1) %3, i64 %49
+  store <4 x half> %45, ptr addrspace(1) %50, align 8, !tbaa !25, !alias.scope !43, !noalias !44
   ret <4 x float> <float 0.000000e+00, float 0.000000e+00, float 0.000000e+00, float 1.000000e+00>
 }
 
@@ -56,6 +71,12 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32>) local_unnamed_addr #
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #1
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare half @air.convert.f.f16.u.i32(i32) local_unnamed_addr #1
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare i32 @air.mul_hi.u.i32(i32, i32) local_unnamed_addr #1
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
 declare i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none), i32) local_unnamed_addr #2
@@ -119,10 +140,10 @@ attributes #6 = { convergent nounwind willreturn memory(argmem: read) }
 !35 = !{!36, !37, i64 20}
 !36 = !{!"_ZTS12UniformProbe", !26, i64 0, !26, i64 8, !37, i64 16, !37, i64 20}
 !37 = !{!"int", !26, i64 0}
-!38 = !{!32}
-!39 = !{!33, !34, !29}
-!40 = !{!32, !33}
-!41 = !{!34, !29}
-!42 = !{!36, !37, i64 16}
+!38 = !{!36, !37, i64 16}
+!39 = !{!32}
+!40 = !{!33, !34, !29}
+!41 = !{!32, !33}
+!42 = !{!34, !29}
 !43 = !{!34}
 !44 = !{!32, !33, !29}

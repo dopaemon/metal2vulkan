@@ -5229,12 +5229,15 @@ fn helper_invocations_skip_an_optnone_branch_on_a_driver_that_drops_a_simdgroups
 
 /// A selection whose condition every invocation of a draw computes alike (a constant block's flag)
 /// holds no branch only helper invocations take, so an `optnone` call in its arm is neither guarded
-/// nor noted. The owned fixture `rch_uniform_branch` samples a `half` texture through a runtime
-/// sampler after a branch on a constant block's flag and writes a buffer. On `moltenvk-m3`: no
-/// helper census entry, no guard, no `HelperBranchDropsSimdgroupStores`, no emulated filter, and
-/// L3.
+/// nor noted. The owned fixture `rch_uniform_branch` divides a coordinate by a texture's size and
+/// takes the high word of a product (`mulhi`, an `OpUMulExtended`, which SPIRV-Cross writes
+/// through its `optnone` `spvMulExtended`) in a branch on a constant block's flag, then samples
+/// the texture at the coordinate and writes the sample and the product to a buffer. On
+/// `moltenvk-m3` the module holds the product, and no helper census entry, no guard, no
+/// `HelperBranchDropsSimdgroupStores`, and L3.
 #[test]
 fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
+    use crate::spirv::ir::BinOp;
     let Some(bc) = fixture("rch_uniform_branch") else {
         return;
     };
@@ -5252,10 +5255,21 @@ fn a_branch_every_invocation_takes_alike_leaves_no_helper_alone() {
         .keys()
         .filter(|k| k.starts_with("fragment.helper"))
         .collect();
-    assert!(
-        !a.strategies.entries.contains_key("sampler.linear"),
-        "{what}: the emulated filter"
-    );
+    let products = m
+        .blocks()
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|n| {
+            matches!(
+                n.inst,
+                Inst::Binary {
+                    op: BinOp::UMulExtended,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(products, 1, "{what}: the products");
     assert!(helper.is_empty(), "{what}: {helper:?}");
     assert_eq!(helper_guards(&m), 0, "{what}");
     assert!(!a.precision.contains(&noted), "{what}: the note");
