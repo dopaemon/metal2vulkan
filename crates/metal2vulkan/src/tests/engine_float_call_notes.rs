@@ -9,8 +9,9 @@
 //! committed profile per class of the facts the notes read: the `float` fused multiply-add route,
 //! whether the `float` functions are Metal's, and whether the device reads `f32` denormals as
 //! Metal does. Each artifact's notes are exactly what the exported function answers for that call
-//! in that entry's math mode; the loads and stores around it record none, and a `half` result's
-//! rounding none.
+//! in that entry's math mode. The loads and stores around it record none, but a `half` kernel's
+//! widening and rounding, which the module records once by the profile's own form
+//! (`narrow::native_rounding`), and the test sets aside.
 //!
 //! `llvm-as` assembles the modules; without it the test skips visibly.
 
@@ -22,7 +23,7 @@ use crate::device::DeviceProfile;
 use crate::error::DriverDeviation;
 use crate::lower::arith::fma::{self, Route};
 use crate::lower::arith::libm::Mode;
-use crate::lower::arith::{denormal, float_binop_notes, float_call_notes, FloatFmt};
+use crate::lower::arith::{denormal, float_binop_notes, float_call_notes, narrow, FloatFmt};
 use crate::pipeline::artifact::{EntryMath, PrecisionNote};
 use crate::pipeline::testing::{compile, exact_maths, llvm_assemble, AssembleError, Scratch};
 use crate::spirv::testing::committed_profiles_with;
@@ -354,7 +355,12 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                     let want = want.unwrap_or_else(|| panic!("{what}: no exported notes"));
                     let a =
                         compile(&bitcode, &k.name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                    let got: BTreeSet<PrecisionNote> = a.precision.iter().copied().collect();
+                    let mut got: BTreeSet<PrecisionNote> = a.precision.iter().copied().collect();
+                    if matches!(elem, Elem::F16) {
+                        if let Some(own) = narrow::native_rounding(p, narrow::quantize_form(p)) {
+                            got.remove(&own);
+                        }
+                    }
                     assert_eq!(got, want, "{what}");
                     compared += 1;
                 }
