@@ -3222,8 +3222,8 @@ fn select_write(
             let format = match image {
                 ImageRef::Slot(index) => {
                     let slot = slot_of(cx, index)?.slot;
-                    // The bound image's own format: an alias view's image (a half-float
-                    // texture written through its integer alias), else the declared one.
+                    // The bound image's own format: an alias view's image (an `RGB9E5Float`
+                    // texture written through its `R32_UINT` view), else the declared one.
                     cx.inputs
                         .storage_images
                         .get(&slot)

@@ -758,7 +758,7 @@ pub enum VkProperty {
     /// [`DriverDeviation::MetalHalfTexelWrites`](crate::error::DriverDeviation::MetalHalfTexelWrites)).
     /// No Vulkan query reports it. A module whose `half` texel write to a 16-bit float format
     /// leaves its NaN to the device requires it; without it, the write records
-    /// `PrecisionNote::DeviceNanEncoding`, or takes the texture's unsigned integer alias.
+    /// `PrecisionNote::DeviceNanEncoding`.
     MetalHalfTexelWrites,
     /// The device stores a `float` texel a shader writes to a unorm or snorm storage image as
     /// Metal's code, the exact product rounded to nearest with a tie away from zero (the driver's

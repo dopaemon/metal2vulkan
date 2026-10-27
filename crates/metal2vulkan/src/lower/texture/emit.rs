@@ -2657,8 +2657,7 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
     // A slot the draw reads through a snapshot (`LoweringInputs::snapshot_textures`): its
     // interface fact admits only the plain fetch of a level the snapshot's copy makes, through the
     // image the copy fetches from (`snapshot_fetches_raw`: the slot's raw view where its reads
-    // take the raw codes, else its image, so a slot with an unsigned integer alias beside its
-    // image is read through its image, as the copy fetches it).
+    // take an 8-bit sRGB texel's raw codes, else its image).
     let snapshot = match r.image {
         ImageRef::Slot(index) => {
             let plain = sampled

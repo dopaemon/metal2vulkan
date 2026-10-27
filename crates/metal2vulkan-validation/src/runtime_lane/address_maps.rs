@@ -892,10 +892,8 @@ const CODE_STRIDE: usize = 256;
 /// Every one of the 65,536 `half` codes an `RGBA16Float` texture's alpha can hold reads 1 through
 /// a texture whose alpha reads 1, and stays the texture's own code: the code is written into texel
 /// `(0, 0)` by `replace_region`, read back by `get_bytes`, and read by `rrp_sw_read_f` through the
-/// slot the swizzle reaches ([`CODES_AT_ONCE`] textures a round, one pipeline). The slot reads a
-/// 16-bit float texel's own bits from its unsigned integer alias view under the exact policy, in
-/// which the swizzle's `One` is the code 1 (the `half` 2 ^ -24) and not the value 1: the read
-/// answered that for every code before the function applied the swizzle itself.
+/// slot the swizzle reaches ([`CODES_AT_ONCE`] textures a round, one pipeline). The swizzle's
+/// `One` is the value 1 whatever code the texel holds, a NaN's included.
 #[test]
 fn every_alpha_code_of_a_texture_whose_alpha_reads_one_reads_one() {
     on_device(|device, _| {

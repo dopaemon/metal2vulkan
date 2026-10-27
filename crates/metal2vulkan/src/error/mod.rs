@@ -739,10 +739,8 @@ pub enum DriverDeviation {
     /// signalling NaN's unquieted, in the first, and the format's canonical NaN in the second.
     /// Where the profile takes it, a write to a slot whose storage choice declares a 16-bit float
     /// format records no `PrecisionNote::DeviceNanEncoding` and the module requires the property.
-    /// Unmeasured, such a slot writes the half's bits through the texture's unsigned integer alias
-    /// where the device stores one (`StorageImageClass::HalfBits`), and otherwise records the
-    /// note, which the runtime announces at the bind of such a texture to a slot whose storage
-    /// choice declares no format. A packed small float channel's NaN, the half widened, records
+    /// Unmeasured, such a write records the note, which the runtime announces at the bind of such
+    /// a texture to a slot whose storage choice declares no format. A packed small float channel's NaN, the half widened, records
     /// the note on every device.
     MetalHalfTexelWrites,
     /// The device stores a `float` texel a shader writes to a unorm or snorm storage image (not
