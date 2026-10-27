@@ -49,7 +49,7 @@
 //!   own encoding would store 0x2c; alpha takes 0x20 either way. Both `BGRA8` pairs and both
 //!   directions alike, at 2 and 4 samples (the counts an M3 Max makes of these formats), each case
 //!   deterministic over four to six processes. So the runtime resolves it by the crate-owned
-//!   resolve in the resolve texture's format, under either `ResolvePolicy` (`color_resolve.rs`): a
+//!   resolve in the resolve texture's format (`color_resolve.rs`): a
 //!   subpass resolve writes only the attachment's own format
 //!   (`VUID-VkSubpassDescription-pResolveAttachments-00850`), so no device's average resolves
 //!   across the pair. The other channel order of the family, whose probes covered samples that
@@ -137,12 +137,12 @@
 //! - **Color** through the subpass's resolve attachments. Vulkan averages a resolve of a
 //!   normalized or floating-point format (`VK_RESOLVE_MODE_AVERAGE_BIT`) and leaves the
 //!   average's rounding to the device, so a device may differ from Metal by one unit at a tie
-//!   (the exact path is a resolve shader). A resolve into the attachment's format's sRGB twin
+//!   (`device-rounded-resolve`). A resolve into the attachment's format's sRGB twin
 //!   takes no subpass resolve at all: the resolve attachment of a subpass is of the color
 //!   attachment's own format, so only the crate-owned resolve writes the twin's encoding.
 //! - **The samples a resolve after the pass reads.** A resolve the runtime draws after the pass
-//!   (`color_resolve.rs`: the twin's, an extended-range attachment's, and every one under
-//!   `ResolvePolicy::Exact`) reads the samples the pass stores, so the pass stores them
+//!   (`color_resolve.rs`: the twin's and an extended-range attachment's) reads the samples the
+//!   pass stores, so the pass stores them
 //!   (`render_target::color_ops`) where Metal's `MultisampleResolve` stores nothing of the
 //!   attachment and leaves its texture as it was. Such a pass renders the attachment through the
 //!   image its texture keeps for the queue, the samples copied into it where the pass loads them

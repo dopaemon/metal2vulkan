@@ -680,29 +680,6 @@ fn a_gpu_under_another_of_its_device_ids_takes_its_measured_rows() {
     );
 }
 
-/// A driver measured to lay depth and stencil images apart from their memory is measured to keep
-/// every `float` in a depth image too, so it holds no `Depth32Float`
-/// texture with a depth twin and no heap texture's twin is kept apart on it. A driver measured
-/// otherwise would reach the twin's `heap-depth-stencil-apart` route, which then needs a shadow of
-/// its own.
-#[test]
-fn a_driver_that_lays_depth_images_apart_holds_no_depth_twin() {
-    let apart: Vec<_> = MEASURED.iter().filter(|row| row.fact == APART).collect();
-    assert!(
-        !apart.is_empty(),
-        "no driver is measured to lay depth images apart"
-    );
-    for row in apart {
-        let gpu = (row.vendor.unwrap_or(APPLE), row.device.unwrap_or(0));
-        let facts = among(MEASURED, Some(row.driver), gpu);
-        assert!(
-            facts.contains(&DENORMALS) && facts.contains(&OUTSIDE),
-            "{:?} lays depth images apart but may lose a depth texel: {facts:?}",
-            row.driver,
-        );
-    }
-}
-
 /// NVIDIA's driver stalls a submission about once in every thousand semaphore operations on the
 /// two GPUs measured, the RTX 5080 Laptop GPU and the RTX 3090, which take the fact at every
 /// release; another GPU of the driver (an RTX 5080 desktop GPU) does not, so it waits for

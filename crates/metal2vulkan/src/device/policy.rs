@@ -4,14 +4,12 @@
 use crate::device::profile::{GuestIsolation, HandleDomain, PointerDomain};
 
 /// Policy inputs of `Device::new`. Every field but `decoded_texels`, `heap_compression`,
-/// `completion`, `tile_store`, `resolve`, `batch_order`, `render_lowering` and
-/// `host_page_textures` can change emitted code, so the profile carries it (containment as the
-/// encoding it selects) and its fingerprint covers it; those eight are the runtime's alone (the
-/// texels of a carried texture's decoded twin, a heap's compressed texture's image, when the host
-/// sees a command buffer complete, what a render pass's load leaves in the texels its draws do not
-/// write, how a multisampled color attachment resolves, how a batch begins after the earlier ones
-/// of its queue, where a render encoder's calls are lowered, and what holds a sampled texture over
-/// host pages), and no profile carries them.
+/// `completion`, `batch_order`, `render_lowering` and `host_page_textures` can change emitted
+/// code, so the profile carries it (containment as the encoding it selects) and its fingerprint
+/// covers it; those six are the runtime's alone (the texels of a carried texture's decoded twin, a
+/// heap's compressed texture's image, when the host sees a command buffer complete, how a batch
+/// begins after the earlier ones of its queue, where a render encoder's calls are lowered, and
+/// what holds a sampled texture over host pages), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -56,11 +54,6 @@ pub struct DevicePolicy {
     /// instructions (the default).
     pub rounding_order: RoundingOrderPolicy,
 
-    /// Whether a multisampled `Depth32Float` texture the program only reads is held in a depth
-    /// image (the default) or, where the device's depth images may not keep its texels, in a
-    /// colour image, as a single-sampled one of it already is. The runtime's choice alone: no
-    /// emitted code changes.
-    pub multisample_depth_twin: MultisampleDepthTwinPolicy,
     /// Whether a texture whose format the device lacks, held in a carrier (an ASTC LDR texture,
     /// or an EAC 11-bit one), samples a decoded twin of compact codes (the default) or of Metal's
     /// values exactly. The runtime's choice alone: no emitted code changes.
@@ -76,16 +69,6 @@ pub struct DevicePolicy {
     /// submission of its own, seen complete at its own end. The runtime's choice alone: no
     /// emitted code changes.
     pub completion: CompletionPolicy,
-    /// Whether a render pass that loads a signed normalized or `RGB9E5Float` color attachment and
-    /// draws keeps the texels its draws do not write as the device's load and store leave them
-    /// (the default), or as Metal's tile store writes them back in the tiles a draw reaches. The
-    /// runtime's choice alone: no emitted code changes.
-    pub tile_store: TileStorePolicy,
-    /// Whether a multisampled color attachment whose format has Metal's resolve rule resolves by
-    /// the device's own `AVERAGE` in the pass (the default), or by Metal's rule in one more render
-    /// pass instance after it, on a device whose average is not measured to be Metal's. The
-    /// runtime's choice alone: no emitted code changes.
-    pub resolve: ResolvePolicy,
     /// Whether a batch of command buffers on one `VkQueue` begins after the batches before it
     /// there by their ends (the default, on a driver measured to run no two kernel submissions of
     /// one queue side by side), or by a barrier for each access that depends on theirs. The
@@ -107,14 +90,10 @@ impl DevicePolicy {
     /// The untrusted-guest production policy: containment and isolation on, Metal's 8-bit linear
     /// filter emulated exactly where the emulation runs, native device sampling (a two-plane YCbCr texture's samples among them),
     /// native device maths, the device's own texel
-    /// conversions, the device's NaN and minimum and maximum, the device's
-    /// rounding order, a
-    /// multisampled `Depth32Float` texture's texels in a
-    /// depth image, compact codes in a carried texture's decoded twin, the driver's compressed image of a
-    /// heap's texture Metal keeps compressed, command buffers ready together in one kernel
-    /// submission, the device's load and store of a signed normalized or `RGB9E5Float` color
-    /// attachment, the device's resolve of a multisampled color attachment, batches of one
-    /// queue ordered by their ends where the driver runs them one after another, and a sampled
+    /// conversions, the device's NaN and minimum and maximum, the device's rounding order, compact
+    /// codes in a carried texture's decoded twin, the driver's compressed image of a heap's texture
+    /// Metal keeps compressed, command buffers ready together in one kernel submission, batches of
+    /// one queue ordered by their ends where the driver runs them one after another, and a sampled
     /// texture over host pages in place where the device's check passed.
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
@@ -129,12 +108,9 @@ impl DevicePolicy {
         vertex_normalized: VertexNormalizedPolicy::Device,
         nan_and_min_max: NanMinMaxPolicy::Native,
         rounding_order: RoundingOrderPolicy::Native,
-        multisample_depth_twin: MultisampleDepthTwinPolicy::Device,
         decoded_texels: DecodedTexelsPolicy::Compact,
         heap_compression: HeapCompressionPolicy::Compressed,
         completion: CompletionPolicy::Grouped,
-        tile_store: TileStorePolicy::Device,
-        resolve: ResolvePolicy::Device,
         batch_order: BatchOrderPolicy::Ends,
         render_lowering: RenderLoweringPolicy::AtCall,
         host_page_textures: HostPageTexturePolicy::InPlace,
@@ -150,9 +126,8 @@ impl DevicePolicy {
     /// ([`YCbCrFilterPolicy::Exact`]), its decode of a carried texture's texels
     /// ([`DecodedTexelsPolicy::Exact`]), a heap's texture whose bytes alias the heap's
     /// as written ([`HeapCompressionPolicy::Uncompressed`]), each command buffer seen complete
-    /// at its own end ([`CompletionPolicy::Exact`]), a loaded attachment's texels as its tile
-    /// store leaves them ([`TileStorePolicy::Exact`]), its multisample color resolve
-    /// ([`ResolvePolicy::Exact`]), each batch ordered after the earlier ones of its queue by
+    /// at its own end ([`CompletionPolicy::Exact`]), each batch ordered after the earlier ones of
+    /// its queue by
     /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), each render encoder
     /// call lowered inside the call, which returns every refusal
     /// ([`RenderLoweringPolicy::AtCall`]), and every texture over host pages a shadow, whose
@@ -166,12 +141,9 @@ impl DevicePolicy {
             vertex_normalized: VertexNormalizedPolicy::Exact,
             nan_and_min_max: NanMinMaxPolicy::Exact,
             rounding_order: RoundingOrderPolicy::Exact,
-            multisample_depth_twin: MultisampleDepthTwinPolicy::Exact,
             decoded_texels: DecodedTexelsPolicy::Exact,
             heap_compression: HeapCompressionPolicy::Uncompressed,
             completion: CompletionPolicy::Exact,
-            tile_store: TileStorePolicy::Exact,
-            resolve: ResolvePolicy::Exact,
             batch_order: BatchOrderPolicy::Exact,
             render_lowering: RenderLoweringPolicy::AtCall,
             host_page_textures: HostPageTexturePolicy::Shadow,
@@ -423,38 +395,6 @@ pub enum RoundingOrderPolicy {
     Exact,
 }
 
-/// Where the runtime holds the texels of a multisampled `Depth32Float` texture the program only
-/// reads (shader-read usage, no render target, not memoryless) on a device whose depth images may
-/// not keep them (`image_plan::ImageFacts::depth_loss`: without `VK_EXT_depth_range_unrestricted`
-/// enabled or a driver measured to keep a value outside `[0, 1]` there, or without a driver
-/// measured to keep a denormal). A single-sampled such texture is already held in an
-/// `R32_SFLOAT` image, which keeps every `float` a copy writes
-/// (`image_plan::plan_depth_twin`); a multisampled one was left out of that on the reading that
-/// it has no writer, and `BlitCommandEncoder::fill_texture` is one. Metal's fill stores the
-/// pattern's bytes as given, a denormal included, where RADV gives a denormal a GPU write puts
-/// into a `D32_SFLOAT` image back as a zero and keeps only a CPU store's, which a multisampled
-/// image takes none of (`sample-fills-d32-2`, `-d32-4`, `-d32s8-4` and
-/// `runtime_lane::sample_fills::multisample_fills_write_metal_s_samples`, both RADV chips, exact
-/// on MoltenVK, whose depth images keep denormals). Metal has no multisampled depth comparison
-/// (`depth2d_ms` reads alone), so such a texture needs no depth twin beside the colour image.
-/// The runtime's choice alone: no emitted code changes.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum MultisampleDepthTwinPolicy {
-    /// A depth image (the default): a write that may store a value the device's depth images do
-    /// not keep stores what they keep, announced `depth-denormals` or `restricted-depth-upload`
-    /// at the write.
-    #[default]
-    Device,
-    /// A colour image (`R32_SFLOAT`), which keeps every `float` the fills and the sample copies
-    /// write, where the device holds a multisampled image of it for the texture's uses; elsewhere
-    /// the depth image, announced as under [`MultisampleDepthTwinPolicy::Device`]. Costs the
-    /// texture its depth attachment usage, which such a texture does not ask for, and nothing
-    /// else: the image is of the same extent, samples and layers.
-    Exact,
-}
-
 /// What texels the runtime holds in the decoded twin of a texture whose blocks it holds in a
 /// carrier on a device without the format (the runtime's `texture/decoded_twin.rs`), which the
 /// texture's samples, reads and gathers read: an ASTC LDR texture's (`bind::AstcDecode`), and an
@@ -534,64 +474,6 @@ pub enum CompletionPolicy {
     /// Each batch in a submission of its own that signals its own values, so each command buffer
     /// is seen complete, and its event signals land, at its own end, as Metal's are; each batch's
     /// submission checks run once the batch before it was submitted.
-    Exact,
-}
-
-/// What a render pass that loads a single-sampled color attachment of a signed normalized format
-/// (`R8Snorm`, `RG8Snorm`, `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`) or of
-/// `RGB9E5Float`, stores it and draws leaves in the texels its draws do not write. An Apple GPU
-/// writes each 32 x 32 tile a draw reaches back through its texels' values (an Apple M3 Max under
-/// macOS 27.0.1): a channel's minimum code (-128, or -32768), which reads as -1.0 as the code above
-/// it does, is stored as that code (-127, -32767), and an `RGB9E5Float` word whose largest
-/// mantissa is below 256 under an exponent above 0 is stored normalized (its mantissas shifted up
-/// as its exponent steps down, to 0 at most). No Metal write leaves such a code or word: only
-/// uploaded or copied bytes hold one. The extended-range, padded 10-bit and bfloat attachments'
-/// tile store, the runtime's load pass, runs under either value. The runtime's choice alone: no
-/// emitted code changes.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TileStorePolicy {
-    /// The device's load and store (the default): such a texel keeps its code or word, announced
-    /// `snorm-minimum-kept` or `shared-exponent-kept` at each draw in such a pass.
-    #[default]
-    Device,
-    /// The runtime's load pass rewrites such an attachment's texels in the tiles the pass's draws
-    /// reach, as Metal's tile store leaves them, before the pass (as it does an extended-range
-    /// attachment's): a copy of the render area into a scratch buffer and back, with a dispatch.
-    /// An attachment the load pass cannot take (a texture held as a shadow, a sparse one, or one
-    /// whose image the device does not copy both ways) keeps the device's, announced as under
-    /// [`Device`](Self::Device).
-    Exact,
-}
-
-/// How a multisampled color attachment resolves into its resolve texture where its format has
-/// Metal's resolve rule at its sample count (`bind::ColorResolveFormat`: unorm, snorm, sRGB,
-/// 32-bit float and packed 16-bit unorm formats at every count, 16-bit float, `RG11B10Float` and
-/// `RGB9E5Float` ones at 2 and 4 samples), on a device whose own `AVERAGE` resolve is not measured
-/// to write Metal's (`DriverFact::ColorResolveAverageIsMetals`, which only MoltenVK on Apple's GPUs
-/// holds: there the device's resolve is Metal's under either value, and nothing is announced).
-/// Metal's resolve rounds each average by its format's rule; Vulkan's `AVERAGE` leaves the
-/// rounding, an sRGB average's space and what a NaN or infinite sample makes of it to the device.
-/// An attachment whose samples a fetching pass holds in its sample planes as it ends resolves from
-/// them by Metal's rule under either value, which costs less than merging them back for the
-/// device's resolve. The runtime's choice alone: no emitted code changes.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ResolvePolicy {
-    /// The device's `AVERAGE` resolve in the pass (the default), announced
-    /// `device-rounded-resolve`: a resolved channel can differ from Metal's by one code (an sRGB
-    /// channel by two) where the average lies near a rounding boundary, a float channel in its
-    /// last bits, and wholly where a sample is a NaN or an infinity. Measured at 2 and 4 samples
-    /// on RADV, ANV, NVIDIA and lavapipe; each rounds an 8-bit unorm tie down (RADV: 32512 of
-    /// `R8Unorm`'s 65536 pairs of samples one code below Metal's at 2 samples).
-    #[default]
-    Device,
-    /// Metal's rule, drawn after the pass: one more render pass instance per resolved attachment,
-    /// between barriers, reads its samples (as an input attachment, or from a copy of them where
-    /// its image takes no input attachment usage) and writes the resolve texture, announced
-    /// `shader-resolve` (a performance note).
     Exact,
 }
 

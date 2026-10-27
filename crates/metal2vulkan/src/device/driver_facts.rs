@@ -962,19 +962,16 @@ pub enum DriverFact {
     /// A `D32_SFLOAT` image keeps each denormal value a copy writes into it, as Metal's
     /// `Depth32Float` texel keeps any `float`. Vulkan states no such rule, and RADV's and ANV's
     /// depth images answer a denormal as zero (RADV's of its sign), to a copy out of them and, on
-    /// RADV, to the shader's reads. On a driver without it `new_texture` holds a `Depth32Float`
-    /// texture the program only reads or samples in an `R32_SFLOAT` image with a `D32_SFLOAT` twin
-    /// for the comparisons the device makes (`image_plan::plan_depth_twin`). A clear to a denormal
-    /// and a copy from a buffer keep it too on such a driver; RADV and ANV store either as a zero,
-    /// and keep only a host copy's (`replace_region` on the host), so a write on the GPU that may
-    /// store a denormal there announces `depth-denormals`.
+    /// RADV, to the shader's reads. A clear to a denormal and a copy from a buffer keep it too on
+    /// such a driver; RADV and ANV store either as a zero, and keep only a host copy's
+    /// (`replace_region` on the host), so a write on the GPU that may store a denormal there
+    /// announces `depth-denormals`.
     DepthImageKeepsDenormals,
     /// Without `VK_EXT_depth_range_unrestricted` enabled, a `D32_SFLOAT` image keeps each value
     /// outside `[0, 1]` a copy writes into it, where Vulkan leaves such a value undefined
     /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`) and ANV stores it clamped. With the extension
-    /// Vulkan keeps it on every driver. On a driver without either, `new_texture` holds a
-    /// `Depth32Float` texture the program only reads or samples with a twin, as above, and an
-    /// upload into a depth image announces `restricted-depth-upload`.
+    /// Vulkan keeps it on every driver. On a driver without either, an upload into a depth image
+    /// announces `restricted-depth-upload`.
     DepthImageKeepsValuesOutsideUnitRange,
     /// A fragment shader's `FragDepth` is stored in a 32-bit float depth attachment unchanged:
     /// each value in `[0, 1]` it is given, and, for the rest, the value it stored when given it
@@ -996,10 +993,8 @@ pub enum DriverFact {
     /// ([`ColorResolveFormat`](crate::bind::ColorResolveFormat)): unorm's `(sum + n/2) / n`,
     /// snorm's `floor((2·sum + n) / 2n)`, sRGB's mean of 12-bit linear values encoded by Metal's
     /// thresholds, and `float`'s flushed sequential sum times `1/n`. Vulkan leaves the average's
-    /// rounding to the implementation. On a driver with it the runtime resolves such an attachment
-    /// in its pass under either [`ResolvePolicy`](crate::device::ResolvePolicy); elsewhere, and at
-    /// 8 samples or more, by that exact shader after the pass under `ResolvePolicy::Exact`, and in
-    /// its pass by the device's average, announced, under `ResolvePolicy::Device`
+    /// rounding to the implementation. The runtime resolves such an attachment in its pass by the
+    /// device's average on every driver; elsewhere, and at 8 samples or more, it announces it
     /// (`color_resolve.rs`).
     /// The fact holds for every colour format the driver resolves, those without a crate-owned
     /// rule too (half floats, packed 16-bit, `RG11B10Float`, `RGB9E5Float`): MoltenVK 1.4.1
@@ -1186,12 +1181,10 @@ pub enum DriverFact {
     /// own (MoltenVK) it holds by construction: the pass's depth test is Metal's test of a
     /// `Depth32Float` texture on that GPU, which gives that GPU's Metal answer, and its pass
     /// stores what Metal's stores (a pass with depth writes stores each texel it leaves without
-    /// its sign) wherever a draw hands it a state with depth writes. On a driver with it no render
-    /// target's depth renders over a magnitude stand-in, a single-sample `Depth32Float` one is
-    /// stripped of its signs after a pass that sets such a state but draws under none, and a write
-    /// that may store a negative value or a NaN announces nothing (`texture/signed_depth.rs`);
-    /// elsewhere a single-sample `Depth32Float` target renders over the stand-in, and a
-    /// multisampled or combined depth/stencil one announces `signed-depth-test`.
+    /// its sign) wherever a draw hands it a state with depth writes. On a driver with it a write
+    /// that may store a negative value or a NaN in a render target's depth announces nothing, and
+    /// a pass that sets such a state but draws under none, which keeps the signs, announces
+    /// `signed-depth-test`; elsewhere such a write announces it.
     DepthTestComparesMagnitudes,
     /// The device's first sparse resource's creation (`vkCreateImage` or `vkCreateBuffer` with
     /// `SPARSE_BINDING`) waits for the work submitted before it on every queue: ANV through
@@ -1472,8 +1465,7 @@ pub enum DriverFact {
     /// Metal's own load and store actions load and store
     /// (`MVKAttachmentDescription::getMTLStoreAction` at 1.4.1), so the GPU's tile store is
     /// Metal's by construction. On a driver with it the runtime announces no `snorm-minimum-kept`
-    /// or `shared-exponent-kept`, and its exact tile store (`TileStorePolicy::Exact`) adds no load
-    /// pass for such an attachment.
+    /// or `shared-exponent-kept`.
     TileStoreIsMetals,
     /// A buffer bound to memory the driver imported from a host pointer
     /// (`VK_EXT_external_memory_host`) reads and writes, at each submission, the pages mapped at

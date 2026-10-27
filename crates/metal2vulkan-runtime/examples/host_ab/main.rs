@@ -405,9 +405,7 @@ fn child(side: &str, options: &Options) {
                  requirement_images_made {} arena_pools_made {} owned_descriptor_pools {} \
                  draws_settled {} stage_tables_read {} graphics_pipelines_looked_up {} \
                  draws_pushing_set_zero {} set_zero_writes_pushed {} set_zero_sets_reused {} \
-                 set_zero_sets_found {} draw_shapes_reused {} signed_depth_switch_ons {} \
-                 sign_strips {} \
-                 magnitude_stand_in_passes {} \
+                 set_zero_sets_found {} draw_shapes_reused {} \
                  completed_waits {} bare_starts {} submit_infos {} finales_folded {} \
                  finales_apart {} pending_none {} pending_one {} pending_two_three {} \
                  pending_four_more {}",
@@ -433,9 +431,6 @@ fn child(side: &str, options: &Options) {
                 c.set_zero_sets_reused,
                 c.set_zero_sets_found,
                 c.draw_shapes_reused,
-                c.signed_depth_switch_ons,
-                c.sign_strips,
-                c.magnitude_stand_in_passes,
                 c.completed_waits,
                 c.bare_starts,
                 c.submit_infos,

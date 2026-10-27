@@ -21,10 +21,7 @@
 //!   value outside `[0, 1]` undefined without `VK_EXT_depth_range_unrestricted`
 //!   (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and such a copy into a depth image announces
 //!   `restricted-depth-upload` where the device's driver is not measured to keep such a value
-//!   (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`). A texture with a depth twin takes a
-//!   copy in both its images, its texels kept in colour; a copy out of it into a depth texture
-//!   without a twin reads its twin, and one into it from such a texture writes its `R32_SFLOAT`
-//!   image through a scratch buffer of the encoder.
+//!   (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`).
 //! - **Textures over buffers**. A copy that names a texture over a buffer runs on the buffer's
 //!   bytes at Metal's layout, whatever else holds the texels (an aliasing image, or a shadow image
 //!   the next encoder that uses it copies in from the bytes): one buffer-to-buffer copy of its
@@ -85,7 +82,7 @@ use super::sample_interleave;
 use super::sample_planes;
 use super::shadow::Covered;
 use super::sparse::emulated::{Scrub, Written};
-use super::texture::{buffer_image_copy, texture_aspects, texture_region, twin_copy, Texture};
+use super::texture::{buffer_image_copy, texture_aspects, texture_region, Texture};
 use super::tracker::Access;
 use super::two_planes;
 use super::values::{Origin, Region, ResourceOptions, Size, StorageMode};
@@ -383,8 +380,7 @@ fn image_copy(region: &ImageCopyRegion) -> vk::ImageCopy {
 
 /// Whether two regions of one texture's texels share texels: of one level, layer and texel,
 /// unless one lies in a depth/stencil image's depth and the other in its stencil, which Vulkan
-/// keeps apart. Any other two aspects are the same texels (a texture's colour image and its
-/// depth twin's depth hold one texture's).
+/// keeps apart.
 fn regions_meet(a: &ImageRegion, b: &ImageRegion) -> bool {
     let meet = |a0: u32, an: u32, b0: u32, bn: u32| {
         u64::from(a0) < u64::from(b0) + u64::from(bn)
@@ -542,8 +538,8 @@ impl BlitCommandEncoder {
                             )?;
                             // A depth written as the single-sample path writes one announces as it
                             // does.
-                            destination_texture.degrade_depth_upload(CALL, aspect, true, true);
-                            destination_texture.degrade_depth_denormals(CALL, aspect, false, true);
+                            destination_texture.degrade_depth_upload(CALL, aspect, true);
+                            destination_texture.degrade_depth_denormals(CALL, aspect, false);
                             copy.announce(this.core().device(), CALL, destination_texture);
                             let format = destination_texture.pixel_format();
                             copy.announce_staging(this.core().device(), format, true);
@@ -609,8 +605,8 @@ impl BlitCommandEncoder {
                 let plan = plan_copy(CALL, texture, &region, &unit, &layout, source_buffer, true)?;
                 let written: Vec<ImageRegion> = plan.regions.iter().map(|r| r.image).collect();
                 this.buffer_texture_copy(source_buffer, texture, plan, true)?;
-                texture.degrade_depth_upload(CALL, unit.aspect, true, true);
-                texture.degrade_depth_denormals(CALL, unit.aspect, false, true);
+                texture.degrade_depth_upload(CALL, unit.aspect, true);
+                texture.degrade_depth_denormals(CALL, unit.aspect, false);
                 // Into a texture Metal keeps compressed: the texels its blit writes.
                 if let Some(rule) = rule_of(texture) {
                     this.compressed_image(texture, &written, &[rule])?;
@@ -911,10 +907,6 @@ impl BlitCommandEncoder {
             .iter()
             .map(|region| buffer_image_region(&image_buffer_region(image_plan, *region)))
             .collect();
-        // A copy into a texture with a depth twin writes the twin too.
-        let twin = texture.twin_image().filter(|_| into_texture);
-        let twin_regions: Vec<vk::BufferImageCopy> =
-            regions.iter().copied().map(twin_copy).collect();
         let buffer_use = if into_texture {
             reads(buffer, plan.span.clone())
         } else {
@@ -941,15 +933,6 @@ impl BlitCommandEncoder {
                                 vk::ImageLayout::GENERAL,
                                 &regions,
                             );
-                            if let Some(twin) = twin {
-                                device.cmd_copy_buffer_to_image(
-                                    raw,
-                                    raw_buffer,
-                                    twin,
-                                    vk::ImageLayout::GENERAL,
-                                    &twin_regions,
-                                );
-                            }
                         } else {
                             device.cmd_copy_image_to_buffer(
                                 raw,
@@ -1008,15 +991,6 @@ impl BlitCommandEncoder {
                                 vk::ImageLayout::GENERAL,
                                 &regions,
                             );
-                            if let Some(twin) = twin {
-                                device.cmd_copy_buffer_to_image(
-                                    raw,
-                                    through,
-                                    twin,
-                                    vk::ImageLayout::GENERAL,
-                                    &twin_regions,
-                                );
-                            }
                         } else {
                             device.cmd_copy_image_to_buffer(
                                 raw,
@@ -1321,13 +1295,10 @@ impl BlitCommandEncoder {
     }
 
     /// Record checked copies between two textures. `copies` run between the images [`pair`]
-    /// presents, a texture with a depth twin by its twin, each in its texture's aspect. Each image
-    /// holding the destination's texels ([`held`]: both of a texture with a twin) takes them from
-    /// an image of the source Vulkan copies into it (colour into colour, a depth or stencil aspect
-    /// into the same aspect of the same format, regions of one size), else through a scratch
-    /// buffer of the encoder out of the image the source's texels are read from. So out of a
-    /// texture with a twin into a depth texture without one they read its twin, and into it from a
-    /// depth texture they write its twin directly and its image through the buffer.
+    /// presents, each in its texture's aspect. The image holding the destination's texels
+    /// ([`held`]) takes them from the source's image where Vulkan copies them into it (colour into
+    /// colour, a depth or stencil aspect into the same aspect of the same format, regions of one
+    /// size), else through a scratch buffer of the encoder.
     pub(super) fn texture_copies(
         &mut self,
         call: &'static str,
@@ -1444,11 +1415,11 @@ impl BlitCommandEncoder {
             .map(|copy| (copy.src.aspect.into(), Written::of(&copy.src)))
             .collect();
         let fresh_reads = FreshUnwritten::reads(self.core().device(), source, &boxes)?;
-        // Each image of the destination takes the regions from an image of the source that
-        // Vulkan copies into it, else through a scratch buffer from the source's texels.
+        // The destination's image takes the regions from the source's where Vulkan copies them
+        // into it, else through a scratch buffer from the source's texels.
         let from = held(source, first.src.aspect)?;
         let into = held(destination, first.dst.aspect)?;
-        let mut direct = Vec::with_capacity(into.len());
+        let mut direct = Vec::with_capacity(1);
         let mut staged = Vec::new();
         // The regions in each image's texels: a 2-bit PVRTC texture's carrier halves them across
         // (`pvrtc::image_region`).
@@ -1466,15 +1437,13 @@ impl BlitCommandEncoder {
         let one_extent = in_images.iter().all(|copy| copy.src.size == copy.dst.size);
         let samples = source.record().samples;
         let mut bits = Vec::new();
-        for to in &into {
-            match from
-                .iter()
-                .find(|from| from.copies_into(to))
-                .filter(|_| !overlap && one_extent)
-            {
+        for to in [into] {
+            match Some(&from).filter(|from| from.copies_into(&to) && !overlap && one_extent) {
                 Some(from) => {
-                    let mut regions: Vec<ImageCopyRegion> =
-                        in_images.iter().map(|copy| from.region(to, copy)).collect();
+                    let mut regions: Vec<ImageCopyRegion> = in_images
+                        .iter()
+                        .map(|copy| from.region(&to, copy))
+                        .collect();
                     // Into a multisampled float image whose NaNs the device's copy converts:
                     // the regions at one origin in both images by the sample planes' copies,
                     // which move every sample's bits; the rest, or all where those cannot run,
@@ -1510,12 +1479,12 @@ impl BlitCommandEncoder {
                         let regions: Vec<vk::ImageCopy> = regions.iter().map(image_copy).collect();
                         direct.push((from.image, to.image, regions));
                         // A depth that may hold a negative value or a NaN, copied as it is.
-                        if to.aspect == ImageAspectFlags::DEPTH && source.may_hold_signed_depth() {
-                            destination.degrade_signed_depth(call, true);
+                        if to.aspect == ImageAspectFlags::DEPTH {
+                            destination.degrade_signed_depth(call);
                         }
                     }
                 }
-                None => staged.push(*to),
+                None => staged.push(to),
             }
         }
         for copy in &bits {
@@ -1535,8 +1504,7 @@ impl BlitCommandEncoder {
             self.core().retain(bits);
         }
         // Multisampled images, which Vulkan copies into no buffer, copy through colour images
-        // of their samples instead, by copies or by draws (`sample_copy.rs`). A multisampled
-        // texture has no twin, so its one image takes them.
+        // of their samples instead, by copies or by draws (`sample_copy.rs`).
         if samples > 1 && !staged.is_empty() {
             let side = |texture, held: &Held| sample_copy::Side {
                 texture,
@@ -1550,21 +1518,21 @@ impl BlitCommandEncoder {
                 let regions: Vec<(ImageRegion, ImageRegion)> = in_images
                     .iter()
                     .map(|copy| {
-                        let copy = from[0].region(to, copy);
+                        let copy = from.region(to, copy);
                         (copy.src, copy.dst)
                     })
                     .collect();
                 let copy = sample_copy::plan(
                     self.core().command_buffer(),
                     &regions,
-                    side(source, &from[0]),
+                    side(source, &from),
                     side(destination, to),
                     samples,
                 )?;
                 uses.extend(copy.uses.iter().cloned());
                 stages |= copy.stages;
-                destination.degrade_depth_upload(call, to.aspect, true, true);
-                destination.degrade_depth_denormals(call, to.aspect, false, true);
+                destination.degrade_depth_upload(call, to.aspect, true);
+                destination.degrade_depth_denormals(call, to.aspect, false);
                 planned.push(copy);
             }
             self.command_in_reading(stages, &uses, (&fresh_reads, &[]), |device, raw| {
@@ -1608,8 +1576,8 @@ impl BlitCommandEncoder {
             false => Some(
                 through_buffer(
                     &in_images,
-                    &from[0],
-                    image_block_extent(from[0].format, source.pixel_format()).unwrap_or([1, 1]),
+                    &from,
+                    image_block_extent(from.format, source.pixel_format()).unwrap_or([1, 1]),
                     &staged,
                 )
                 .map_err(|refusal| copy_error(call, refusal))?,
@@ -1629,7 +1597,7 @@ impl BlitCommandEncoder {
                     reads_source.push(source.image_use(levels, layers, read(), false)?);
                 }
                 reads_source.push(writes(&scratch, 0..length));
-                let (image, out_of) = (from[0].image, &staging.out_of);
+                let (image, out_of) = (from.image, &staging.out_of);
                 self.command_reading(&reads_source, (&fresh_reads, &[]), |device, raw| {
                     // SAFETY: the encoder's command buffer is recording; the image and the
                     // scratch buffer are live and retained until it completes, the image is in
@@ -1646,9 +1614,8 @@ impl BlitCommandEncoder {
                 })?;
                 uses.push(reads(&scratch, 0..length));
                 for (to, _) in &staging.into {
-                    let signed = source.may_hold_signed_depth();
-                    destination.degrade_depth_upload(call, to.aspect, signed, true);
-                    destination.degrade_depth_denormals(call, to.aspect, false, true);
+                    destination.degrade_depth_upload(call, to.aspect, true);
+                    destination.degrade_depth_denormals(call, to.aspect, false);
                 }
                 Some((scratch, through))
             }
@@ -1789,8 +1756,8 @@ impl BlitCommandEncoder {
                         )
                         .map_err(copy_problem)?;
                         if into_texture {
-                            texture.degrade_depth_upload(call, image_unit.aspect, true, true);
-                            texture.degrade_depth_denormals(call, image_unit.aspect, false, true);
+                            texture.degrade_depth_upload(call, image_unit.aspect, true);
+                            texture.degrade_depth_denormals(call, image_unit.aspect, false);
                         }
                         self.buffer_texture_copy(buffer, texture, plan, into_texture)?;
                     }
@@ -2173,12 +2140,11 @@ pub(super) fn check_slice_level(
     Ok(())
 }
 
-/// The plan's view of two textures: a texture with a depth twin by its twin, which holds its
-/// texels as a depth image (`texture_copies` writes its image too); a texture buffer by none.
+/// The plan's view of two textures: a texture by its image's plan, a texture buffer by none.
 fn pair<'a>(source: &'a Texture, destination: &'a Texture) -> Result<CopyPair<'a>, Error> {
     let image = |texture: &'a Texture| match texture.texels() {
         Some(_) => Ok(None),
-        None => texture.depth_plan().map(Some),
+        None => texture.image_plan().map(Some),
     };
     Ok(CopyPair {
         src: source.record(),
@@ -2239,29 +2205,12 @@ impl Held {
     }
 }
 
-/// The images holding `texture`'s texels, the one its texels are read from first: a texture that
-/// holds a depth format's texels in a colour image ([`Texture::holds_depth_in_colour`]) holds them
-/// in colour in its image, and a depth twin beside it, where it has one, in `aspect` (depth); any
-/// other texture in `aspect` of its image.
-fn held(texture: &Texture, aspect: ImageAspectFlags) -> Result<Vec<Held>, Error> {
-    let image = Held {
+/// The image holding `texture`'s texels, in `aspect`.
+fn held(texture: &Texture, aspect: ImageAspectFlags) -> Result<Held, Error> {
+    Ok(Held {
         image: texture.raw_image()?,
-        aspect: match texture.holds_depth_in_colour() {
-            true => ImageAspectFlags::COLOR,
-            false => aspect,
-        },
+        aspect,
         format: texture.image_plan()?.format,
-    };
-    Ok(match texture.twin_image() {
-        Some(twin) => vec![
-            image,
-            Held {
-                image: twin,
-                aspect,
-                format: texture.depth_plan()?.format,
-            },
-        ],
-        None => vec![image],
     })
 }
 

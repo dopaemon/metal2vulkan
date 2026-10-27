@@ -29,12 +29,6 @@
 //!     output at `Location` 0, into a multisampled unsigned colour attachment (`R32_UINT`,
 //!     `R8_UINT`) with no depth/stencil attachment: the other way, a depth or stencil aspect's
 //!     samples into colour.
-//!   - [`DepthStencilCopy::DepthMagnitude`] and [`DepthStencilCopy::MagnitudeBits`]: a 32-bit
-//!     float depth's bits without the sign bit (`bits & 0x7fffffff`, integer operations, so a
-//!     NaN's payload and a denormal are kept), the first from a depth aspect, written as
-//!     `FragDepth` as [`DepthStencilCopy::Depth`] writes it, the second from an unsigned colour
-//!     image of such bits (`R32_UINT`), written as [`DepthStencilCopy::DepthBits`] writes them:
-//!     a multisampled depth stored without its signs.
 //!   - [`DepthStencilCopy::Depth16Code`] and [`DepthStencilCopy::Depth16Bits`]: a 16-bit unsigned
 //!     normalized depth, carried as its **code** rather than as a float, in an unsigned colour
 //!     image of the code's bits (`R16_UINT`). `Depth16Code` reads a code `c` there and writes
@@ -141,13 +135,6 @@ pub enum DepthStencilCopy {
     /// The stencil's value as the first component of the unsigned colour output at `Location` 0,
     /// from a sampled view of a stencil aspect.
     StencilBits,
-    /// The depth without its sign, its `f32` bits with the sign bit cleared, as `FragDepth`,
-    /// from a sampled view of a depth aspect.
-    DepthMagnitude,
-    /// The bits without the sign bit, `bits & 0x7fffffff`, as the first component of the
-    /// unsigned colour output at `Location` 0, from a sampled view of an unsigned colour image
-    /// of a 32-bit float depth's bits.
-    MagnitudeBits,
     /// The depth a 16-bit unsigned normalized code stands for, `code / 65535`, as `FragDepth`,
     /// from a sampled view of an unsigned colour image of such codes (`R16_UINT`): a 16-bit
     /// depth's copy in, exact by construction (the module docs).
@@ -337,8 +324,6 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
         DepthStencilCopy::Depth
         | DepthStencilCopy::DepthBits
         | DepthStencilCopy::StencilBits
-        | DepthStencilCopy::DepthMagnitude
-        | DepthStencilCopy::MagnitudeBits
         | DepthStencilCopy::Depth16Code
         | DepthStencilCopy::Depth16Bits
         | DepthStencilCopy::DepthFromStandIn { .. } => CopySource::Aspect,
@@ -350,10 +335,7 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
     let source_ty = match (copy, source) {
         (DepthStencilCopy::DepthFromStandIn { form }, _) => stand_in_image(&mut b, f32_, form)?,
         (
-            DepthStencilCopy::Depth
-            | DepthStencilCopy::DepthBits
-            | DepthStencilCopy::DepthMagnitude
-            | DepthStencilCopy::Depth16Bits,
+            DepthStencilCopy::Depth | DepthStencilCopy::DepthBits | DepthStencilCopy::Depth16Bits,
             _,
         ) => multisampled_image(
             &mut b,
@@ -437,17 +419,6 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
             let output = f.module().global_value(output)?;
             f.store(output, value, MemAccess::default())?;
         }
-        DepthStencilCopy::DepthMagnitude => {
-            let bits = f.convert(ConvOp::Bitcast, value, u32_)?;
-            let mask = uint(&mut f, 0x7fff_ffff)?;
-            let bits = f.binary(BinOp::BitwiseAnd, bits, mask)?;
-            let magnitude = f.convert(ConvOp::Bitcast, bits, f32_)?;
-            let output = f
-                .module()
-                .builtin(crate::spv::BuiltIn::FragDepth, IoDir::Output, f32_)?;
-            let output = f.module().global_value(output)?;
-            f.store(output, magnitude, MemAccess::default())?;
-        }
         DepthStencilCopy::Depth16Code => {
             // The code's depth: one correctly rounded division, so the `float` nearest
             // `code / 65535` (the module docs).
@@ -462,17 +433,12 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
         }
         DepthStencilCopy::DepthBits
         | DepthStencilCopy::StencilBits
-        | DepthStencilCopy::MagnitudeBits
         | DepthStencilCopy::Depth16Bits => {
             // The colour output, at `Location` 0.
             let uvec4 = f.module().ty(Type::Vector { elem: u32_, len: 4 })?;
             let output = f.module().fixed_io(0, IoDir::Output, uvec4, false)?;
             let bits = match copy {
                 DepthStencilCopy::DepthBits => f.convert(ConvOp::Bitcast, value, u32_)?,
-                DepthStencilCopy::MagnitudeBits => {
-                    let mask = uint(&mut f, 0x7fff_ffff)?;
-                    f.binary(BinOp::BitwiseAnd, value, mask)?
-                }
                 // `round(depth * 65535)`: the conversion to unsigned truncates, so the half is
                 // added first. Exact for every code (the module docs).
                 DepthStencilCopy::Depth16Bits => {
@@ -497,12 +463,10 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
         DepthStencilCopy::StencilPlane { .. } => {}
         DepthStencilCopy::StencilExport { .. } => modes.push(ExecMode::StencilRefReplacing),
         DepthStencilCopy::Depth
-        | DepthStencilCopy::DepthMagnitude
         | DepthStencilCopy::Depth16Code
         | DepthStencilCopy::DepthFromStandIn { .. } => modes.push(ExecMode::DepthReplacing),
         DepthStencilCopy::DepthBits
         | DepthStencilCopy::StencilBits
-        | DepthStencilCopy::MagnitudeBits
         | DepthStencilCopy::Depth16Bits => {}
     }
     b.entry(ExecModel::Fragment, id, modes)?;

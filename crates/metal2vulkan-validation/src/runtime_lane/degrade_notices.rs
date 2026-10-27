@@ -28,9 +28,8 @@
 //! resource IDs ([`UNLISTED`]),
 //! indirect command buffers' commands naming a released state ([`RELEASED_STATES`]) and their host
 //! steps ([`HOST_STEPS`]), indirect dispatches' host reads ([`INDIRECT_DISPATCHES`]), indexed draws
-//! past their index buffer ([`INDEX_FETCHES`]), depth twins ([`TWINS`]) and uploads into depth
-//! images ([`UPLOADS`]), a MoltenVK whose
-//! argument-buffer state is unread ([`ARGUMENT_BUFFERS`]), mipmaps within Metal's
+//! past their index buffer ([`INDEX_FETCHES`]), uploads into depth images ([`UPLOADS`]), a
+//! MoltenVK whose argument-buffer state is unread ([`ARGUMENT_BUFFERS`]), mipmaps within Metal's
 //! spread ([`MIPMAPS`]), a heap's depth or stencil texture laid apart from the heap ([`APART`]),
 //! a multisample depth or stencil texture without GPU-optimized contents that stays optimized
 //! ([`OPTIMIZED`]),
@@ -140,16 +139,15 @@
 //! where the compile layer runs the dispatch on no emulated variant, a one-aspect resolve where the
 //! device resolves the aspects independently, both properties no device option withholds,
 //! uncalibrated GPU times where the device calibrates its timestamps, an unlisted sampler state
-//! where the device's and the pipeline's sampler arrays hold its ID, a depth twin where the
-//! device's depth images keep every `float`, an upload into a depth image where the device enabled
-//! `VK_EXT_depth_range_unrestricted` or its driver keeps a value outside `[0, 1]` without it, and a
-//! `Shared` buffer in system memory where the device has unified memory, a heap's depth or stencil
-//! texture where the driver lays no such image apart, and a depth or stencil texture without
-//! GPU-optimized contents where the driver drops the layout, emulated mesh draws where the
-//! device has `VK_EXT_mesh_shader`, a capped anisotropy where the device's samplers take 32
-//! or none, and a vertex simdgroup grouping where the driver groups vertices as Apple's GPUs do or
-//! the vertex stage has no subgroups) is expected absent there, as the
-//! compile layer, the device's description or its driver facts settle it.
+//! where the device's and the pipeline's sampler arrays hold its ID, an upload into a depth image
+//! where the device enabled `VK_EXT_depth_range_unrestricted` or its driver keeps a value outside
+//! `[0, 1]` without it, and a `Shared` buffer in system memory where the device has unified memory,
+//! a heap's depth or stencil texture where the driver lays no such image apart, and a depth or
+//! stencil texture without GPU-optimized contents where the driver drops the layout, emulated mesh
+//! draws where the device has `VK_EXT_mesh_shader`, a capped anisotropy where the device's samplers
+//! take 32 or none, and a vertex simdgroup grouping where the driver groups vertices as Apple's
+//! GPUs do or the vertex stage has no subgroups) is expected absent there, as the compile layer,
+//! the device's description or its driver facts settle it.
 
 use super::absent_reads::ABSENT_READS;
 use super::amplified_draws::AMPLIFICATION;
@@ -212,7 +210,7 @@ use super::sample_copies::DRAWN_DEPTH;
 use super::shader_stencil::SHADOW;
 use super::snorm_tile_store::{SHARED_EXPONENT, SNORM_MINIMUM};
 use super::sparse_textures::SPARSE;
-use super::texture_blits::{MIPMAPS, TWINS, UPLOADS};
+use super::texture_blits::{MIPMAPS, UPLOADS};
 use super::tile_dispatches::TILE_DISPATCHES;
 use super::topology_classes::UNSIZED_POINTS;
 use super::two_plane_copies::TWO_PLANE_COPIES;
@@ -235,8 +233,8 @@ use crate::candidate::engine::variants::compile_compute_for_shape;
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::{AstcDecode, SamplerDescriptor};
 use metal2vulkan::cache::VariantKey;
+use metal2vulkan::device::DecodedTexelsPolicy;
 use metal2vulkan::device::VkExtension;
-use metal2vulkan::device::{DecodedTexelsPolicy, ResolvePolicy};
 use metal2vulkan::device::{DriverFact, DriverWorkaround, OpBits, VkFeature, VkProperty};
 use metal2vulkan::device::{SimdClass, Tier};
 use metal2vulkan::error::{DriverDeviation, Feature};
@@ -291,16 +289,15 @@ const BLITS: [Degradation; 3] = [
 const DISPATCHES: [Degradation; 2] = [Degradation::SplitDispatch, Degradation::EmulatedSimdgroups];
 
 /// The kinds [`passes_degrade_once_per_kind`] takes (the second where the device resolves a
-/// combined format's aspects one at a time; the exact resolve and the device's rounded one where
-/// the driver's average of `RGBA8Unorm` at 4 samples is not measured as Metal's, or where the
-/// device makes a texture of 8 samples; the unmeasured resolve where it makes one).
-const PASSES: [Degradation; 7] = [
+/// combined format's aspects one at a time; the device's rounded resolve where the driver's
+/// average of `RGBA8Unorm` at 4 samples is not measured as Metal's, or where the device makes a
+/// texture of 8 samples; the unmeasured resolve where it makes one).
+const PASSES: [Degradation; 6] = [
     Degradation::SeparateDepthStencil,
     Degradation::OneAspectResolve,
     Degradation::ResolveScratch,
     Degradation::DeviceRoundedResolve,
     Degradation::DontCareStore,
-    Degradation::ShaderResolve,
     Degradation::UnmeasuredResolve,
 ];
 
@@ -496,7 +493,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &HOST_STEPS,
         &INDIRECT_DISPATCHES,
         &INDEX_FETCHES,
-        &TWINS,
         &UPLOADS,
         &MIPMAPS,
         &APART,
@@ -1608,7 +1604,8 @@ fn resolves_stencil_alone(device: &Device) -> Option<bool> {
 /// 4x `Depth32Float_Stencil8` target whose stencil alone resolves. Each kind is announced once and
 /// nothing else, the one-aspect resolve exactly where the device's description resolves that
 /// stencil one aspect at a time (lavapipe, which resolves no aspects independently), and
-/// `device-rounded-resolve` exactly where the 8x half-float target, which no rule covers, is made.
+/// `device-rounded-resolve` exactly where the device's average is not measured to be Metal's at 4
+/// samples or an 8x target is made.
 #[test]
 fn passes_degrade_once_per_kind() {
     let (messages, _cache, lane) = lane();
@@ -1624,13 +1621,14 @@ fn passes_degrade_once_per_kind() {
     let eight_samples = lane.device.new_texture(&eight).ok();
     eight.pixel_format = PixelFormat::RGBA16Float;
     let half_eight = lane.device.new_texture(&eight).ok();
-    let exact = !lane
+    let rounded = !lane
         .device
         .properties()
         .driver_facts
         .contains(&DriverFact::ColorResolveAverageIsMetals);
     eprintln!(
-        "8 samples made: {} (RGBA16Float: {}); exact resolve at 4 samples: {exact}",
+        "8 samples made: {} (RGBA16Float: {}); the device's rounded resolve at 4 samples: \
+         {rounded}",
         eight_samples.is_some(),
         half_eight.is_some()
     );
@@ -1656,8 +1654,8 @@ fn passes_degrade_once_per_kind() {
             );
             lane.run(&descriptor, |_, _, _| {}).unwrap();
         }
-        // A half-float resolve at 4 samples, Metal's closed rule (the exact resolve), and at 8
-        // where the device makes such a texture, which no rule covers: the device's average.
+        // A half-float resolve at 4 samples, and at 8 where the device makes such a texture: the
+        // device's average.
         let half = PixelFormat::RGBA16Float;
         let descriptor = color_pass(
             &lane.msaa(half),
@@ -1713,10 +1711,9 @@ fn passes_degrade_once_per_kind() {
             // Where the device's average is Metal's (MoltenVK's is Metal's own resolve) and it
             // makes no texture of 8 samples (an Apple GPU: Metal makes none past 4), every resolve
             // here is Metal's own and none rounds by the device.
-            Degradation::ShaderResolve => exact || eight_samples.is_some(),
-            // Only a format without a rule at its count rounds by the device: the half-float
-            // resolve of 8 samples.
-            Degradation::DeviceRoundedResolve => half_eight.is_some(),
+            Degradation::DeviceRoundedResolve => {
+                rounded || eight_samples.is_some() || half_eight.is_some()
+            }
             Degradation::UnmeasuredResolve => eight_samples.is_some() || half_eight.is_some(),
             _ => true,
         })
@@ -2109,10 +2106,9 @@ pub(super) fn clamps_depth_uploads(device: &Device) -> bool {
 
 /// Whether `device` keeps a negative or NaN 32-bit float depth a write stores in a render
 /// target's depth image (not [`clamps_depth_uploads`]) and its depth test compares it as it is,
-/// where Metal's compares its magnitude (no `DriverFact::DepthTestComparesMagnitudes`): a
-/// single-sample `Depth32Float` target then renders a pass that loads it over its magnitude
-/// stand-in (`texture/signed_depth.rs`), and a write into a multisampled or combined
-/// depth/stencil one announces `signed-depth-test`.
+/// where Metal's compares its magnitude (no `DriverFact::DepthTestComparesMagnitudes`): a write
+/// that may store such a value in a render target's `Depth32Float` or `Depth32Float_Stencil8`
+/// depth then announces `signed-depth-test`.
 pub(super) fn signs_depth_tests(device: &Device) -> bool {
     let magnitudes = device
         .properties()
@@ -2127,53 +2123,18 @@ pub(super) fn shared_in_system_memory(device: &Device) -> bool {
     !device.properties().has_unified_memory
 }
 
-/// Whether `device` gives a single-sample `Depth32Float` texture of shader-read usage without
-/// render target usage a depth twin (`depth-twin`): its depth images may store a value otherwise
-/// than Metal's ([`clamps_depth_uploads`], or a driver not measured to keep a denormal there,
-/// `DriverFact::DepthImageKeepsDenormals`).
-pub(super) fn twins_depth(device: &Device) -> bool {
-    let keeps = device
-        .properties()
-        .driver_facts
-        .contains(&DriverFact::DepthImageKeepsDenormals);
-    clamps_depth_uploads(device) || !keeps
-}
-
-/// The kind `device` announces for a resolve of a color attachment of `format` at `samples`, a
-/// texture the runtime made: `shader-resolve` under `ResolvePolicy::Exact` where the format has
-/// Metal's rules at that count (`ColorResolveFormat::of` and `resolves`) and the device's
-/// `AVERAGE` is not measured to be Metal's there (`DriverFact::ColorResolveAverageIsMetals`, at
-/// most 4 samples): the runtime gives such a target the input attachment usage the exact resolve
-/// reads it through where that costs the image nothing, which every driver measured answers so
-/// (lavapipe, RADV, ANV and NVIDIA); `device-rounded-resolve` where the device's
-/// `AVERAGE` resolves it (one with rules under `ResolvePolicy::Device`, the default, and one
-/// without rules there under either) and is not measured to resolve as Metal's; none where it is
-/// (the fact holds for every format).
-pub(super) fn resolve_kind(
-    device: &Device,
-    format: PixelFormat,
-    samples: u32,
-) -> Option<Degradation> {
-    // Rules that hold at that count: the float formats' at 2 and 4 samples only.
-    let rules = metal2vulkan::metal::format::direct_format(format)
-        .and_then(metal2vulkan::bind::ColorResolveFormat::of)
-        .is_some_and(|rules| rules.resolves(samples));
+/// The kind `device` announces for a resolve of a color attachment of a format that is not
+/// extended-range, into a texture of its own format, at `samples`, a texture the runtime made:
+/// the device's `AVERAGE` resolves it in the pass, `device-rounded-resolve` where that is not
+/// measured to resolve as Metal's (`DriverFact::ColorResolveAverageIsMetals`, at most 4 samples);
+/// none where it is (the fact holds for every format).
+pub(super) fn resolve_kind(device: &Device, samples: u32) -> Option<Degradation> {
     let metals = samples <= 4
         && device
             .properties()
             .driver_facts
             .contains(&DriverFact::ColorResolveAverageIsMetals);
-    let policy = device.compile_device().policy().resolve;
-    // A format without rules, or any under the device's resolve, resolves by the device's
-    // average, Metal's own where the fact holds.
-    match (
-        metals,
-        rules && samples > 1 && policy == ResolvePolicy::Exact,
-    ) {
-        (true, _) => None,
-        (false, true) => Some(Degradation::ShaderResolve),
-        (false, false) => Some(Degradation::DeviceRoundedResolve),
-    }
+    (!metals).then_some(Degradation::DeviceRoundedResolve)
 }
 
 /// Whether `device` copies bytes into a multisampled 32-bit float depth (from a buffer, or from a

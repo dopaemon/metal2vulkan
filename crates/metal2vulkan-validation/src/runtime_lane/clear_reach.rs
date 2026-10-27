@@ -16,8 +16,8 @@
 //! ([`DONT_CARE_LOADS`]). A pass without a draw call that clears and resolves nothing records
 //! nothing at all, its texels kept ([`a_pass_that_changes_no_texel_records_nothing`]).
 
+use super::degrade_notices::shared_in_system_memory;
 use super::degrade_notices::{assert_made_once, forced, made_render_kinds};
-use super::degrade_notices::{shared_in_system_memory, twins_depth};
 use super::hidden_depth::replayed_but_unrun;
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device, Messages,
@@ -33,9 +33,9 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, CommandQueue, Degradation, Device, Error, Library, LoadAction, Origin,
+    BlitOption, ClearColor, CommandQueue, Degradation, Device, Library, LoadAction, Origin,
     PipelineOptions, Region, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
-    RuntimeGap, ScissorRect, Size, StoreAction, Texture, TextureDescriptor, Viewport,
+    ScissorRect, Size, StoreAction, Texture, TextureDescriptor, Viewport,
 };
 use std::collections::BTreeSet;
 
@@ -1272,7 +1272,6 @@ fn a_dont_care_load_through_a_stand_in_keeps_the_tiles_no_draw_reaches() {
     let depth_only = lane.pipeline(&[], (Some(d32), None), 1);
     let filled = 0.75f32.to_le_bytes();
     let mut kept = Vec::new();
-    let twin = twins_depth(&lane.device);
     for usage in [TextureUsage::RENDER_TARGET, TextureUsage::SHADER_READ] {
         let texture = lane.texture(d32, PLAIN, usage);
         let mut descriptor = RenderPassDescriptor::new();
@@ -1280,23 +1279,6 @@ fn a_dont_care_load_through_a_stand_in_keeps_the_tiles_no_draw_reaches() {
         descriptor.depth_attachment.load_action = LoadAction::Clear;
         descriptor.depth_attachment.clear_depth = 0.75;
         descriptor.depth_attachment.store_action = StoreAction::Store;
-        // A read-only `Depth32Float` texture on a device whose depth images may lose a float has
-        // a depth twin, its texels in an `R32_SFLOAT` image (`depth-twin`), which renders through
-        // no exact stand-in: its passes are refused.
-        if twin && usage == TextureUsage::SHADER_READ {
-            let refused = lane
-                .queue
-                .command_buffer()
-                .unwrap()
-                .render_command_encoder(&descriptor)
-                .err();
-            assert!(
-                matches!(refused, Some(Error::NotImplemented(RuntimeGap::Render))),
-                "a depth twin's pass: {refused:?}"
-            );
-            println!("dl_d32_scissor40_stand_in: a depth twin's pass is refused, {refused:?}");
-            continue;
-        }
         lane.run(&descriptor, Draw::None, None);
         descriptor.depth_attachment.load_action = LoadAction::DontCare;
         lane.run_within(
@@ -1319,12 +1301,10 @@ fn a_dont_care_load_through_a_stand_in_keeps_the_tiles_no_draw_reaches() {
         assert_eq!(stand_in, rendered, "dl_d32_scissor40_stand_in");
     }
     // The textures without `RenderTarget` usage render through stand-ins
-    // (`undeclared-usage-shadow`); the read-only depth texture has a twin where the device's
-    // facts give it one; the pipelines' makings announce kinds of their own on some devices; and
-    // the reads' buffers are `Shared`.
+    // (`undeclared-usage-shadow`); the pipelines' makings announce kinds of their own on some
+    // devices; and the reads' buffers are `Shared`.
     let mut first = forced(&[
         (Degradation::UndeclaredUsageShadow, true),
-        (Degradation::DepthTwin, twin),
         (
             Degradation::SharedInSystemMemory,
             shared_in_system_memory(&lane.device),

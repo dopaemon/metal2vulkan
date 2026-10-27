@@ -447,7 +447,7 @@ impl Device {
             Some(candidate) => self.if_free(plan, candidate, texture_type)?,
             None => plan,
         };
-        let plan = match color_resolve::input_candidate(&plan, self) {
+        let plan = match color_resolve::input_candidate(&plan) {
             Some(candidate) if plan.usage.contains(ImageUsageFlags::TRANSIENT_ATTACHMENT) => {
                 self.if_made(plan, candidate, texture_type)?
             }

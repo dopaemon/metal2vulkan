@@ -97,7 +97,7 @@ pub(crate) enum Owned {
     ImageOwnMemory = 0,
     /// A linear image in a buffer's memory (`Owner::Buffer`).
     ImageInBuffer = 1,
-    /// An image in a heap's memory (`Owner::Heap`, `Owner::HeapTwin`).
+    /// An image in a heap's memory (`Owner::Heap`).
     ImageInHeap = 2,
     /// A heap's shadow or unaliased image, a view's shadow, a sparse image (its own memory).
     ImageOther = 3,

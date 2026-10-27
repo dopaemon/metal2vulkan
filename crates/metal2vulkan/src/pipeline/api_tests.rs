@@ -1156,7 +1156,6 @@ mod bind_serde_round_trips {
                             layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                             components: vk::ComponentMapping::IDENTITY,
                             level: None,
-                            twin: false,
                             shader_swizzle: false,
                         },
                     },

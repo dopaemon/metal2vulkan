@@ -21,8 +21,6 @@ fn every_copy() -> Vec<DepthStencilCopy> {
     copies.push(DepthStencilCopy::Depth);
     copies.push(DepthStencilCopy::DepthBits);
     copies.push(DepthStencilCopy::StencilBits);
-    copies.push(DepthStencilCopy::DepthMagnitude);
-    copies.push(DepthStencilCopy::MagnitudeBits);
     copies.push(DepthStencilCopy::Depth16Code);
     copies.push(DepthStencilCopy::Depth16Bits);
     for form in FORMS {

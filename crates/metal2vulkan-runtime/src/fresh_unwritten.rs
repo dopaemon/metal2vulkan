@@ -54,9 +54,9 @@
 //! depth test compares the stored value's magnitude, which lies above every depth, and a pass with
 //! depth writes stores it without its sign (our probe `fd32`, the M3 Max under macOS 27.0.1). A
 //! command's read observes nothing of it. A pass that loads its depth where its attachment's level
-//! reaches an unwritten texel ([`FreshUnwritten::loads_signed_depth`]) switches the depth on as it
-//! is planned, before it decides its magnitude stand-in, as a write that may store such a value
-//! does (`texture/signed_depth.rs`), and the texture is no longer noted.
+//! reaches an unwritten texel ([`FreshUnwritten::loads_signed_depth`]) announces it as a write that
+//! may store such a value does (`signed-depth-test`, where the device's test is not Metal's), and
+//! the texture is no longer noted.
 
 use super::device::lock;
 use super::error::Error;
@@ -241,7 +241,7 @@ pub(super) enum FreshKind {
     NansConverted,
     /// Metal's pattern itself, copied into a render target's 32-bit float depth: a NaN with the
     /// sign set, which every read gives as Metal's, and which Metal's depth test compares by its
-    /// magnitude. Only a pass that loads it observes it, and switches the depth on
+    /// magnitude. Only a pass that loads it observes it, and announces it
     /// ([`FreshUnwritten::loads_signed_depth`]); nothing is announced for it here.
     SignedDepth,
 }

@@ -99,7 +99,6 @@ fn compatibility_is_type_samples_numeric_type_and_depth() {
         usage: crate::metal::TextureUsage::SHADER_READ,
         mipmap_level_count: 1,
         sparse: false,
-        depth_twin: false,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
     };
     assert!(compatible(
@@ -171,7 +170,6 @@ fn a_ulong_slot_binds_only_rg32uint_textures() {
         usage: crate::metal::TextureUsage::SHADER_READ,
         mipmap_level_count: 1,
         sparse: false,
-        depth_twin: false,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
     };
     let t = slot_iface(TextureType::Type2D, SampledType::Uint64);
@@ -266,7 +264,6 @@ fn a_numeric_slot_binds_either_integer_type() {
                 usage: crate::metal::TextureUsage::SHADER_WRITE,
                 mipmap_level_count: 1,
                 sparse: false,
-                depth_twin: false,
                 swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
             },
         );
@@ -431,7 +428,7 @@ fn a_depth_read_as_colour_replicates_its_depth_as_metal_does() {
     let mut seen = 0;
     for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
         for pf in depths {
-            let Ok(read) = sampled_view(&p, pf, &class(false), false) else {
+            let Ok(read) = sampled_view(&p, pf, &class(false)) else {
                 continue;
             };
             seen += 1;
@@ -440,7 +437,7 @@ fn a_depth_read_as_colour_replicates_its_depth_as_metal_does() {
                 (vk::ImageAspectFlags::DEPTH, DEPTH_AS_COLOR),
                 "{stem} {pf:?}"
             );
-            let compare = sampled_view(&p, pf, &class(true), false).unwrap();
+            let compare = sampled_view(&p, pf, &class(true)).unwrap();
             assert_eq!(
                 compare.components,
                 vk::ComponentMapping::IDENTITY,
@@ -448,7 +445,7 @@ fn a_depth_read_as_colour_replicates_its_depth_as_metal_does() {
             );
         }
         for pf in stencils {
-            let Ok(read) = sampled_view(&p, pf, &uint, false) else {
+            let Ok(read) = sampled_view(&p, pf, &uint) else {
                 continue;
             };
             assert_eq!(
@@ -462,72 +459,6 @@ fn a_depth_read_as_colour_replicates_its_depth_as_metal_does() {
         }
     }
     assert!(seen > 0, "no profile samples a depth format");
-}
-
-/// A `Depth32Float` texture held with a depth twin is read through an `R32_SFLOAT` colour view of
-/// its image and compared through a `D32_SFLOAT` depth view of its twin, on every committed
-/// profile; a texture without one keeps its depth view of its own image, and only a `Depth32Float`
-/// texture takes a twin.
-#[test]
-fn a_depth_twin_is_read_through_its_colour_image_and_compared_through_its_twin() {
-    let t = TextureSlot {
-        depth_compare: true,
-        ..slot_iface(TextureType::Type2D, SampledType::Float)
-    };
-    let class = |compare| {
-        declared(
-            &t,
-            vk::DescriptorType::SAMPLED_IMAGE,
-            false,
-            compare,
-            StorageFormatClass::NotStorage,
-        )
-        .unwrap()
-    };
-    for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
-        let d32 = PixelFormat::Depth32Float;
-        let read = sampled_view(&p, d32, &class(false), true).unwrap();
-        assert_eq!(
-            (read.format, read.aspect, read.twin, read.components),
-            (
-                vk::Format::R32_SFLOAT,
-                vk::ImageAspectFlags::COLOR,
-                false,
-                DEPTH_AS_COLOR
-            ),
-            "{stem}"
-        );
-        let compare = sampled_view(&p, d32, &class(true), true).unwrap();
-        assert_eq!(
-            (
-                compare.format,
-                compare.aspect,
-                compare.twin,
-                compare.components
-            ),
-            (
-                vk::Format::D32_SFLOAT,
-                vk::ImageAspectFlags::DEPTH,
-                true,
-                vk::ComponentMapping::IDENTITY
-            ),
-            "{stem}"
-        );
-        for compare in [false, true] {
-            let Ok(own) = sampled_view(&p, d32, &class(compare), false) else {
-                continue;
-            };
-            assert_eq!(
-                (own.aspect, own.twin),
-                (vk::ImageAspectFlags::DEPTH, false),
-                "{stem}"
-            );
-        }
-        assert!(matches!(
-            sampled_view(&p, PixelFormat::Depth16Unorm, &class(false), true),
-            Err(BindError::Internal(_))
-        ));
-    }
 }
 
 /// A bound runtime sampler's values are checked at plan time from its shape, with exactly the
@@ -701,7 +632,6 @@ fn an_immutable_linear_sampler_needs_a_filterable_view() {
                     usage: crate::metal::TextureUsage::SHADER_READ,
                     mipmap_level_count: 1,
                     sparse: false,
-                    depth_twin: false,
                     swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
                 },
             );
@@ -729,7 +659,7 @@ fn an_immutable_linear_sampler_needs_a_filterable_view() {
                 StorageFormatClass::NotStorage,
             )
             .expect("declared");
-            let format = sampled_view(&p, pf, &class, false).expect("view").format;
+            let format = sampled_view(&p, pf, &class).expect("view").format;
             let filterable = p.supports_format(format, FormatUsage::SampledImageFilterLinear);
             if integer || filterable {
                 assert!(
@@ -803,7 +733,6 @@ fn a_linear_compare_sampler_needs_no_filterable_view() {
                         usage: crate::metal::TextureUsage::SHADER_READ,
                         mipmap_level_count: 1,
                         sparse: false,
-                        depth_twin: false,
                         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
                     },
                 );
@@ -833,7 +762,7 @@ fn a_linear_compare_sampler_needs_no_filterable_view() {
                     StorageFormatClass::NotStorage,
                 )
                 .expect("declared");
-                let format = sampled_view(&p, pf, &class, false).expect("view").format;
+                let format = sampled_view(&p, pf, &class).expect("view").format;
                 let filterable = p.supports_format(format, FormatUsage::SampledImageFilterLinear);
                 if compare || filterable {
                     assert!(
@@ -899,7 +828,6 @@ fn bicubic_texels_follow_the_bound_format() {
                     usage: crate::metal::TextureUsage::SHADER_READ,
                     mipmap_level_count: 1,
                     sparse: false,
-                    depth_twin: false,
                     swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
                 },
             );
@@ -995,7 +923,6 @@ fn an_explicit_cube_gradient_binding_takes_an_anisotropic_sampler_isotropically(
                         usage: crate::metal::TextureUsage::SHADER_READ,
                         mipmap_level_count: 1,
                         sparse: false,
-                        depth_twin: false,
                         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
                     },
                 );
@@ -1205,7 +1132,6 @@ fn texel_format_follows_the_bound_format() {
             usage: crate::metal::TextureUsage::SHADER_READ,
             mipmap_level_count: 1,
             sparse: false,
-            depth_twin: false,
             swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
         })
     };
@@ -1348,7 +1274,7 @@ fn a_separate_pair_takes_the_combined_pairs_checks() {
                 StorageFormatClass::NotStorage,
             )
             .expect("declared");
-            let view = sampled_view(&p, pf, &class, false).expect("view");
+            let view = sampled_view(&p, pf, &class).expect("view");
             let filterable = p.supports_format(view.format, FormatUsage::SampledImageFilterLinear);
             let refusal = Err(BindError::Unsupported(Unsupported::needs(
                 Feature::Format,
@@ -1390,7 +1316,6 @@ fn a_separate_pair_takes_the_combined_pairs_checks() {
                         usage: crate::metal::TextureUsage::SHADER_READ,
                         mipmap_level_count: 1,
                         sparse: false,
-                        depth_twin: false,
                         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
                     },
                 );

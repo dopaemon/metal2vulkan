@@ -1293,8 +1293,7 @@ pub enum RuntimeGap {
     /// the heap's. Memory of its own would lose the heap's aliasing. (A texture whose linear image
     /// needs extended usage is checked format by format, not refused with it.) In a heap over host
     /// pages, also a texture no linear image over the pages serves and no shadow of the heap's
-    /// bytes holds, and one with a depth twin. A multisample texture there is made in memory of
-    /// its own.
+    /// bytes holds. A multisample texture there is made in memory of its own.
     HeapTextureMemory,
     /// A visible-function table of more entries than one buffer of the device's
     /// `max_buffer_length` holds words for, or than its size word holds: the runtime keeps a
@@ -1745,7 +1744,7 @@ pub enum RuntimeGap {
     /// A texture over a no-copy buffer's or heap's bytes (a heap's texture, or a texture over
     /// the buffer or over one of the heap's buffers) that no stand-in of zero bytes presents
     /// exactly while they are detached (a texture of a multi-planar format, a two-plane YCbCr
-    /// texture's converted texels, a texture with a depth twin, a multisample texture):
+    /// texture's converted texels, a multisample texture):
     /// `detach_backing` of the bytes, and its making over them while they are detached. Also made
     /// over detached bytes: a rotated texture, and one over a surface's two planes. And
     /// `detach_backing` while a texture is being made over the bytes, or `rebind_bytes_no_copy` of

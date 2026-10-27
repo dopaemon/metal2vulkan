@@ -202,7 +202,7 @@ impl Device {
         let usage = texture_usage(descriptor.usage, descriptor.swizzle);
         let plan = plan_image(layout, usage, false, &facts)
             .map_err(|refusal| image_error(call, refusal))?;
-        let plan = self.with_undeclared_usage(plan, layout, usage, false, &facts)?;
+        let plan = self.with_undeclared_usage(plan, layout, usage, &facts)?;
         let copies = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
         if !plan.usage.contains(copies) || plan.samples != SampleCountFlags::COUNT_1 {
             return Err(Error::NotImplemented(RuntimeGap::Textures));

@@ -422,11 +422,7 @@ fn a_state_color_draws_into_the_pass_color_at_its_place_in_the_record() {
             ));
         }
         if samples > 1 {
-            first.extend(resolve_kind(
-                &lane.device,
-                PixelFormat::RGBA8Unorm,
-                samples as u32,
-            ));
+            first.extend(resolve_kind(&lane.device, samples as u32));
         }
         let routed = drawn(&lane, &both, &[None, RGBA8], samples);
         let own = drawn(&lane, &alone, &[RGBA8], samples);

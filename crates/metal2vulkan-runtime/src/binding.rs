@@ -1401,7 +1401,7 @@ const KEPT_VIEWS: usize = 256;
 /// weakly, so it keeps none alive:
 ///
 /// - **A view** of a texture slot is a function of the texture (its storage, image, decoded and
-///   depth twins and record are fixed as it is made; its usage shadow is made once and kept), the
+///   twin and record are fixed as it is made; its usage shadow is made once and kept), the
 ///   view's description, whether the binding is a storage one, and its images' views, which an
 ///   image keeps once made until it lets them all go under its views lock (a rebind's or a
 ///   storage form's new `VkImage`, a detach's stand-in, a reattach). Each letting go counts in

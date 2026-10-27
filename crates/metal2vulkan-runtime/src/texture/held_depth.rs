@@ -9,7 +9,7 @@
 //!   (`render_target::depth_layout`); this keeps it there between passes too, until a command
 //!   needs it in `GENERAL`.
 //! - **Which.** A device's own `Private` texture ([`eligible`]): multisampled, of a depth or
-//!   depth/stencil format, not memoryless (`TRANSIENT_ATTACHMENT`), with no depth twin. No host
+//!   depth/stencil format, not memoryless (`TRANSIENT_ATTACHMENT`). No host
 //!   copy reaches it (Metal refuses the CPU a private texture's bytes), and never a heap's, a
 //!   caller's image or a texture over a buffer, whose images other resources reach. Its `VkImage`
 //!   is its own for good. The registry ([`HeldImages`]) knows each by its key from its making to

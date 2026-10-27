@@ -1746,12 +1746,11 @@ fn a_heap_texture_buffer_is_the_heap_s_bytes() {
 
 /// Two `Depth32Float` textures a shader reads, side by side in a placement heap, keep their texels
 /// (a Metal heap probe, an M3 Max and an M4 alike: each read back as uploaded, then a buffer filled
-/// over the first one's answered bytes changed every texel of it and none of the second's). Where
-/// the device holds such a texture with a depth twin (RADV, ANV and unmeasured drivers) the
-/// answered size takes the twin's bytes too, so the second texture, uploaded before the first,
-/// keeps its texels when the first's upload writes its twin; the comparisons of both compare as a
-/// texture's outside a heap does; in a `Shared` and a `Private` heap. `HEAPTEX depth` lines print
-/// the answer and the device's twin notices.
+/// over the first one's answered bytes changed every texel of it and none of the second's). Each
+/// reads back what a texture outside a heap of the same upload reads (the device's depth image may
+/// store a value outside `[0, 1]` clamped or a denormal as zero, announced), and the comparisons
+/// of both compare as a texture's outside a heap does; in a `Shared` and a `Private` heap.
+/// `HEAPTEX depth` lines print the answer and the device's notices.
 ///
 /// Where the device's driver lays depth and stencil images apart from their memory
 /// (`DriverFact::DepthStencilImagesLieApart`: MoltenVK, which makes such an image's Metal texture
@@ -1797,9 +1796,11 @@ fn heap_depth_textures_keep_their_bytes_with_their_twins() {
             descriptor.resource_options = ResourceOptions::private();
             let texture = device.new_texture(&descriptor).unwrap();
             upload(&queue, &[(&texture, bytes)], side);
-            compare(device, (&texture, None), &state, &jobs, 1)
+            let compares = compare(device, (&texture, None), &state, &jobs, 1);
+            (texels(&queue, &texture, side), compares)
         };
-        let (first_compares, second_compares) = (plain(&first), plain(&second));
+        let ((first_kept, first_compares), (second_kept, second_compares)) =
+            (plain(&first), plain(&second));
         for storage in [StorageMode::Shared, StorageMode::Private] {
             let options = tracked(storage);
             let mut descriptor =
@@ -1821,10 +1822,10 @@ fn heap_depth_textures_keep_their_bytes_with_their_twins() {
             let a = placement.new_texture_at_offset(&descriptor, 0).unwrap();
             let b = placement.new_texture_at_offset(&descriptor, next).unwrap();
             made = true;
-            // The second first: the first's upload writes its twin, if it has one, after.
+            // The second first: the first's upload lands after it.
             upload(&queue, &[(&b, &second), (&a, &first)], side);
-            assert_eq!(texels(&queue, &a, side), first, "{what}: the first");
-            assert_eq!(texels(&queue, &b, side), second, "{what}: the second");
+            assert_eq!(texels(&queue, &a, side), first_kept, "{what}: the first");
+            assert_eq!(texels(&queue, &b, side), second_kept, "{what}: the second");
             let compared = compare(device, (&a, None), &state, &jobs, 1);
             assert_eq!(bits(&compared), bits(&first_compares), "{what}: the first");
             let compared = compare(device, (&b, None), &state, &jobs, 1);
@@ -1836,7 +1837,11 @@ fn heap_depth_textures_keep_their_bytes_with_their_twins() {
             // A buffer over the first's bytes, filled: the second keeps its texels.
             let over = placement.new_buffer_at_offset(size, options, 0).unwrap();
             gpu_fill(&queue, &over, 0..size, 0x3e);
-            assert_eq!(texels(&queue, &b, side), second, "{what}: after the fill");
+            assert_eq!(
+                texels(&queue, &b, side),
+                second_kept,
+                "{what}: after the fill"
+            );
             let compared = compare(device, (&b, None), &state, &jobs, 1);
             assert_eq!(
                 bits(&compared),
@@ -1847,7 +1852,7 @@ fn heap_depth_textures_keep_their_bytes_with_their_twins() {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .zip(first.as_chunks::<4>().0.iter())
+                .zip(first_kept.as_chunks::<4>().0.iter())
                 .filter(|(after, before)| after != before)
                 .count();
             eprintln!(
@@ -1873,13 +1878,9 @@ fn heap_depth_textures_keep_their_bytes_with_their_twins() {
     };
     let notices = counts(&messages.take_notices());
     let count = |kind| notices.get(&kind).copied().unwrap_or(0);
-    let twins = count(Degradation::DepthTwin);
     let aparts = count(APART[0]);
     let shadowed = count(Degradation::ShadowedTexture);
-    eprintln!(
-        "HEAPTEX depth: {twins} depth-twin notices, {aparts} heap-depth-stencil-apart, \
-         {shadowed} shadowed-texture"
-    );
+    eprintln!("HEAPTEX depth: {aparts} heap-depth-stencil-apart, {shadowed} shadowed-texture");
     assert_eq!(aparts, 0);
     // A shadow of a `Shared` heap's bytes where its memory takes no optimal depth image: every
     // texel the fill covered changed, as in a shadow where the driver lays the image apart.

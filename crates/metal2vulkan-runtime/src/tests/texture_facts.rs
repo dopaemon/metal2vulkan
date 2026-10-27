@@ -60,13 +60,11 @@ fn a_texture_s_kept_facts_are_the_ones_worked_out_again_and_a_view_s_its_own() {
     kept_as_worked_out(&view, "a view made after its texture's facts were kept");
     kept_as_worked_out(&color, "a texture after a view of it was made");
     assert_eq!(color.facts(), first, "kept once made");
-    // A depth texture's twin is made with its image: its facts say so from the first read.
+    // A depth texture's facts are kept as worked out from the first read.
     let depth = texture(
         &device,
         PixelFormat::Depth32Float,
         TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
     );
-    let facts = depth.facts();
-    assert_eq!(facts.depth_twin, depth.twin_image().is_some());
     kept_as_worked_out(&depth, "a depth texture");
 }

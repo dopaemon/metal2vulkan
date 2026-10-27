@@ -38,33 +38,27 @@
 //! a pass of no draws that loads it, and compares every channel of the resolve texture with the
 //! rule applied to the samples read back: every pair of codes of an 8-bit channel at 2 samples,
 //! every pair as `(a, a, b, b)` and random texels at 4, and random texels with the edge values of
-//! a wider channel. Under the lanes' policy (`DevicePolicy::exact_answers`, so
-//! `ResolvePolicy::Exact`) the runtime resolves every one of these formats by Metal's rules on
-//! every device (its exact resolve, or a driver measured to average as Metal does), so every
-//! channel must match; under the default, `ResolvePolicy::Device`, the device's average resolves
-//! them in the pass, announced, and [`the_device_resolve_rounds_as_announced`] measures it against
-//! the rules. Metal has no texture of more than 4 samples on Apple silicon, so a resolve of 8 is
-//! compared with the same rules and printed as unmeasured, never as Metal's. A device without
-//! `imageViewFormatReinterpretation` (MoltenVK) views no texel as an unsigned format of other
-//! components, so the formats only such a view reads back are printed as unread there. The runs
-//! before the runtime resolved so (at 2b41d71d) measured each driver's own
-//! average, which `DriverFact::ColorResolveAverageIsMetals` records.
+//! a wider channel. The device's average resolves every one of these formats in the pass,
+//! announced where it is not measured to be Metal's, and [`the_device_resolve_rounds_as_announced`]
+//! measures it against the rules. Metal has no texture of more than 4 samples on Apple silicon, so
+//! a resolve of 8 is compared with the same rules and printed as unmeasured, never as Metal's. A
+//! device without `imageViewFormatReinterpretation` (MoltenVK) views no texel as an unsigned format
+//! of other components, so the formats only such a view reads back are printed as unread there. The
+//! runs before the runtime resolved so (at 2b41d71d) measured each driver's own average, which
+//! `DriverFact::ColorResolveAverageIsMetals` records.
 
-use super::presenting::{image_info, made_image, shared_among};
-use super::resolves::{lane, lane_with, quiet, Lane, FULL, WHITE};
-use crate::air_library::AirLibrary;
+use super::resolves::{lane, quiet, Lane};
 use crate::candidate::runtime_samples::{encode_through, library, shape};
 use crate::executor_contract::multisample::{ReadbackView, SampleRead};
 use crate::runtime_lane::buffer_with;
 use metal2vulkan::bind::{SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS};
-use metal2vulkan::device::{DriverFact, ResolvePolicy};
+use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType, TextureType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
-use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
     BlitOption, ClearColor, Degradation, LoadAction, PipelineOptions, RenderPassDescriptor,
-    ResourceOptions, StoreAction, Texture, TextureDescriptor, VkImageLayouts,
+    ResourceOptions, StoreAction, Texture, TextureDescriptor,
 };
 
 /// How a channel's bits encode its value.
@@ -730,17 +724,6 @@ fn case_extent(n: u32) -> [u32; 2] {
 /// Draw a texture of `case` at `n` samples ([`case_extent`]), read its samples back, resolve it,
 /// and compare.
 fn resolve_case(lane: &Lane, case: &Case, n: u32) -> Result<Outcome, String> {
-    resolve_case_through(lane, case, n, None)
-}
-
-/// [`resolve_case`], where `through` names a texture of the case's format, samples and extent:
-/// the drawn samples copied into it after the readback (`copy_texture`), and it resolved instead.
-fn resolve_case_through(
-    lane: &Lane,
-    case: &Case,
-    n: u32,
-    through: Option<&Texture>,
-) -> Result<Outcome, String> {
     let [width, height] = case_extent(n);
     let mut r = SplitMix(0x5250_4c00 ^ (u64::from(n) << 32) ^ case.pf as u64);
     let pixels = (width * height) as usize;
@@ -845,21 +828,9 @@ fn resolve_case_through(
         n,
     )
     .map_err(|e| format!("the readback: {e}"))?;
-    let source = match through {
-        Some(texture) => {
-            let mut blit = command_buffer
-                .blit_command_encoder()
-                .map_err(|e| format!("the copy's encoder: {e}"))?;
-            blit.copy_texture(&msaa, texture)
-                .map_err(|e| format!("the copy into the resolved texture: {e}"))?;
-            blit.end_encoding().map_err(|e| e.to_string())?;
-            texture.clone()
-        }
-        None => msaa.clone(),
-    };
     let mut pass = RenderPassDescriptor::new();
     let target = &mut pass.color_attachments[0];
-    target.texture = Some(source);
+    target.texture = Some(msaa.clone());
     target.load_action = LoadAction::Load;
     target.store_action = StoreAction::MultisampleResolve;
     target.resolve_texture = Some(resolved.clone());
@@ -971,77 +942,8 @@ fn compare_shared(
     }
 }
 
-/// Every closed format at every sample count the device takes, printed against Metal's rules
-/// and held to them (the module docs).
-#[test]
-fn color_resolves_against_metals_rules() {
-    let (messages, _cache, lane) = lane();
-    let name = lane.device.name().to_owned();
-    let description = &lane.device.properties().description;
-    eprintln!(
-        "resolve rounding on {name}: driver {:?}, driverVersion {:#x}, vendor {:#x}",
-        description.driver_id, description.driver_version, description.vendor_id
-    );
-    let mut differ = Vec::new();
-    for n in [2u32, 4, 8] {
-        let supported = lane
-            .device
-            .properties()
-            .supports_texture_sample_count(n.into())
-            .unwrap();
-        if !supported {
-            eprintln!("resolve rounding on {name}: no texture of {n} samples");
-            continue;
-        }
-        for case in CASES {
-            let pf = case.pf;
-            if !case.resolves(n) {
-                eprintln!(
-                    "resolve rounding {pf:?} x{n} on {name}: skipped, Metal's rule of the format \
-                     holds at 2 and 4 samples (the device's average resolves it, announced)"
-                );
-                continue;
-            }
-            match resolve_case(&lane, case, n) {
-                Err(why) => eprintln!("resolve rounding {pf:?} x{n} on {name}: {why}"),
-                Ok(outcome) => {
-                    if outcome.differ != 0 {
-                        differ.push(format!("{pf:?} x{n}: {} channels", outcome.differ));
-                    }
-                    let verdict = match (n, outcome.differ) {
-                        (2 | 4, 0) => "Metal's".to_owned(),
-                        (2 | 4, _) => "not Metal's".to_owned(),
-                        (_, 0) => {
-                            "unmeasured (no Metal answer at this count), Metal's rules".to_owned()
-                        }
-                        _ => "unmeasured (no Metal answer at this count), not Metal's rules"
-                            .to_owned(),
-                    };
-                    eprintln!(
-                        "resolve rounding {pf:?} x{n} on {name}: {verdict}, {} of {} channels \
-                         differ ({} samples stored otherwise than drawn){}",
-                        outcome.differ,
-                        outcome.channels,
-                        outcome.changed,
-                        if outcome.examples.is_empty() {
-                            String::new()
-                        } else {
-                            format!(": {}", outcome.examples.join("; "))
-                        }
-                    );
-                }
-            }
-        }
-    }
-    assert!(
-        differ.is_empty(),
-        "resolves not by Metal's rules on {name}: {differ:#?}"
-    );
-    quiet(lane, &messages);
-}
-
-/// Under `ResolvePolicy::Device`, the default, every closed format at every sample count the
-/// device takes resolves by the device's `AVERAGE` in the pass: nothing announces
+/// Every closed format at every sample count the device takes resolves by the device's
+/// `AVERAGE` in the pass: nothing announces
 /// `shader-resolve`, and `device-rounded-resolve` is announced exactly where the device's average
 /// is not measured to be Metal's (`DriverFact::ColorResolveAverageIsMetals`, at 2 and 4 samples),
 /// where every channel is Metal's. Elsewhere what the device's average gives against Metal's rule
@@ -1051,9 +953,7 @@ fn color_resolves_against_metals_rules() {
 /// counted, not bounded).
 #[test]
 fn the_device_resolve_rounds_as_announced() {
-    let (messages, _cache, lane) = lane_with(|options| {
-        options.policy.resolve = ResolvePolicy::Device;
-    });
+    let (messages, _cache, lane) = lane();
     let name = lane.device.name().to_owned();
     let description = &lane.device.properties().description;
     eprintln!(
@@ -1121,7 +1021,7 @@ fn the_device_resolve_rounds_as_announced() {
     assert_eq!(
         counts.get(&Degradation::ShaderResolve),
         None,
-        "shader-resolve on {name} under the device's resolve"
+        "shader-resolve on {name}"
     );
     // At more than 4 samples no device's average is measured to be Metal's.
     let rounded = !metals || resolved_past_metal;
@@ -1144,179 +1044,7 @@ fn the_device_resolve_rounds_as_announced() {
     quiet(lane, &messages);
 }
 
-/// A caller's multisampled image of `pf`, `n` samples and `extent`, made with `usage` alone
-/// (`new_texture_with_vk_image`, as a `RenderTarget` texture), and its image and memory, which
-/// the caller destroys after the texture and every command buffer that used it.
-fn callers_image(
-    lane: &Lane,
-    pf: PixelFormat,
-    n: u32,
-    [width, height]: [u32; 2],
-    usage: ash::vk::ImageUsageFlags,
-) -> (Texture, ash::vk::Image, ash::vk::DeviceMemory) {
-    let format = metal2vulkan::metal::format::direct_format(pf).expect("a direct format");
-    // SAFETY: used only while the device lives.
-    let raw = unsafe { lane.device.raw() };
-    // SAFETY: a physical device of the instance.
-    let memory = unsafe {
-        raw.instance
-            .get_physical_device_memory_properties(raw.physical_device)
-    };
-    let info = image_info(format.into(), usage)
-        .extent(ash::vk::Extent3D {
-            width,
-            height,
-            depth: 1,
-        })
-        .samples(ash::vk::SampleCountFlags::from_raw(n));
-    let info = shared_among(info, raw.queue_families);
-    // SAFETY: the device is live.
-    let (image, image_memory) = unsafe { made_image(raw.device, &memory, &info) };
-    let mut descriptor = TextureDescriptor::texture_2d(pf, width.into(), height.into(), false);
-    if n > 1 {
-        descriptor.texture_type = TextureType::Type2DMultisample;
-        descriptor.sample_count = n.into();
-    }
-    descriptor.usage = TextureUsage::RENDER_TARGET;
-    descriptor.resource_options = ResourceOptions::private();
-    // SAFETY: the image is the device's, made with `info`, and nothing else uses it.
-    let texture = unsafe {
-        lane.device.new_texture_with_vk_image(
-            &descriptor,
-            image,
-            &info,
-            VkImageLayouts::new(
-                ash::vk::ImageLayout::UNDEFINED.into(),
-                ash::vk::ImageLayout::TRANSFER_DST_OPTIMAL.into(),
-            ),
-        )
-    }
-    .unwrap();
-    (texture, image, image_memory)
-}
-
-/// Destroy a caller's image of [`callers_image`] and free its memory.
-///
-/// # Safety
-///
-/// Nothing uses them: their texture is gone and every command buffer that used it completed.
-unsafe fn destroy_callers(lane: &Lane, image: ash::vk::Image, memory: ash::vk::DeviceMemory) {
-    // SAFETY: the caller's contract; the device is live.
-    unsafe {
-        let raw = lane.device.raw();
-        raw.device.destroy_image(image, None);
-        raw.device.free_memory(memory, None);
-    }
-}
-
-/// The formats [`a_callers_image_without_input_usage_resolves_by_metals_rules`] resolves: 8-bit
-/// unorm, sRGB, 16-bit snorm and 32-bit float channels.
-const COPIED: [PixelFormat; 4] = [
-    PixelFormat::RGBA8Unorm,
-    PixelFormat::RGBA8UnormSRGB,
-    PixelFormat::RGBA16Snorm,
-    PixelFormat::R32Float,
-];
-
-/// A caller's multisampled image made with color attachment and transfer usage alone, so without
-/// the input attachment usage the exact resolve reads an attachment through: where the device
-/// resolves its format by the exact resolve, the runtime copies its samples into a scratch image
-/// that has the usage and resolves that (`color_resolve.rs`). For each of [`COPIED`] at 2 and 4
-/// samples, those the device takes (the others printed as skipped), the drawn samples (read back
-/// from the runtime's own texture, [`resolve_case`]) are copied into such an image, which a pass of
-/// no draws loads and resolves: every channel of the resolve must be Metal's rule over the
-/// samples, and no pass announces `device-rounded-resolve`.
-/// Where the device resolves so (`degrade_notices::resolve_kind`), `shader-resolve`'s reason, the
-/// first pass's, names the copy: the path ran.
-#[test]
-fn a_callers_image_without_input_usage_resolves_by_metals_rules() {
-    let (messages, _cache, lane) = lane();
-    let name = lane.device.name().to_owned();
-    messages.take_notices();
-    let usage = ash::vk::ImageUsageFlags::COLOR_ATTACHMENT
-        | ash::vk::ImageUsageFlags::TRANSFER_SRC
-        | ash::vk::ImageUsageFlags::TRANSFER_DST;
-    let mut exact = false;
-    let mut differ = Vec::new();
-    for n in [2u32, 4] {
-        let supported = lane
-            .device
-            .properties()
-            .supports_texture_sample_count(n.into())
-            .unwrap();
-        if !supported {
-            eprintln!(
-                "resolve rounding through a caller's image on {name}: no texture of {n} samples"
-            );
-            continue;
-        }
-        for pf in COPIED {
-            let case = CASES.iter().find(|c| c.pf == pf).expect("a closed format");
-            let kind = super::degrade_notices::resolve_kind(&lane.device, pf, n);
-            exact |= kind == Some(Degradation::ShaderResolve);
-            let (callers, image, memory) = callers_image(&lane, pf, n, case_extent(n), usage);
-            let what = format!("{pf:?} x{n} through a caller's image on {name}");
-            let outcome = match resolve_case_through(&lane, case, n, Some(&callers)) {
-                Ok(outcome) => outcome,
-                // Refused before the command buffer was committed: nothing used the image.
-                Err(why) if why.starts_with("unread") => {
-                    eprintln!("resolve rounding {what}: {why}");
-                    drop(callers);
-                    // SAFETY: the texture is gone and no command buffer that used it was
-                    // committed.
-                    unsafe { destroy_callers(&lane, image, memory) };
-                    continue;
-                }
-                Err(why) => panic!("{what}: {why}"),
-            };
-            drop(callers);
-            // SAFETY: the texture is gone and its command buffer completed.
-            unsafe { destroy_callers(&lane, image, memory) };
-            eprintln!(
-                "resolve rounding {what}: {} of {} channels differ from Metal's rule ({} samples \
-                 stored otherwise than drawn){}",
-                outcome.differ,
-                outcome.channels,
-                outcome.changed,
-                if outcome.examples.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", outcome.examples.join("; "))
-                }
-            );
-            if outcome.differ != 0 {
-                differ.push(format!("{pf:?} x{n}: {} channels", outcome.differ));
-            }
-        }
-    }
-    let notices = messages.take_notices();
-    let counts = super::degrade_notices::counts(&notices);
-    eprintln!("resolve rounding through a caller's image on {name}: announced {counts:?}");
-    assert!(
-        differ.is_empty(),
-        "resolves through a caller's image not by Metal's rules on {name}: {differ:#?}"
-    );
-    assert_eq!(
-        counts.get(&Degradation::DeviceRoundedResolve),
-        None,
-        "device-rounded-resolve on {name}"
-    );
-    if exact {
-        let reason = notices
-            .iter()
-            .filter_map(|message| message.degradation.as_ref())
-            .find(|notice| notice.degradation == Degradation::ShaderResolve)
-            .map(|notice| notice.reason.clone())
-            .unwrap_or_default();
-        assert!(
-            reason.contains("copied into a scratch image"),
-            "shader-resolve's reason on {name} names no copy: {reason:?}"
-        );
-    }
-    quiet(lane, &messages);
-}
-
-/// The side of [`a_maps_form_pass_resolves_bgra8_by_metals_rule`]'s targets.
+/// The side of [`a_maps_form_pass_resolves_bgra8_as_announced`]'s targets.
 const MAPS_SIDE: u32 = 64;
 
 /// One pass of `pf` at 4 samples beside Maps' depth form (a 4x `Depth32Float_Stencil8` of
@@ -1496,15 +1224,21 @@ fn maps_form_pass(
 }
 
 /// Maps' color formats at 4 samples (`BGRA8Unorm_sRGB`, `BGRA8Unorm`), each in a pass beside its
-/// depth form, resolved in the pass: on a cleared and on a randomly filled target, three runs
-/// each, every channel of the resolve is the rule over the samples read back (half-covered diagonal
-/// pixels and per-sample colors among them), and no pass announces `device-rounded-resolve`. The
-/// coordinator's ask of 2026-10-09 for the consumer, who relays that kind only for the half-float
-/// formats measured on the M3.
+/// depth form, resolved in the pass by the device's average: on a cleared and on a randomly filled
+/// target, three runs each, the channels of the resolve that differ from the rule over the samples
+/// read back (half-covered diagonal pixels and per-sample colors among them) are printed. Where
+/// the device's average is measured to be Metal's (`DriverFact::ColorResolveAverageIsMetals`)
+/// every channel is the rule and no pass announces `device-rounded-resolve`; elsewhere a pass
+/// announces it.
 #[test]
-fn a_maps_form_pass_resolves_bgra8_by_metals_rule() {
+fn a_maps_form_pass_resolves_bgra8_as_announced() {
     let (messages, _cache, lane) = lane();
     let name = lane.device.name().to_owned();
+    let metals = lane
+        .device
+        .properties()
+        .driver_facts
+        .contains(&DriverFact::ColorResolveAverageIsMetals);
     messages.take_notices();
     for pf in [PixelFormat::BGRA8UnormSRGB, PixelFormat::BGRA8Unorm] {
         let case = CASES.iter().find(|c| c.pf == pf).expect("a closed format");
@@ -1524,7 +1258,9 @@ fn a_maps_form_pass_resolves_bgra8_by_metals_rule() {
                             "Maps' form resolve {what}: {differ} channels differ from Metal's \
                              rule ({mixed} channels over samples that differ)"
                         );
-                        assert_eq!(differ, 0, "{what}");
+                        if metals {
+                            assert_eq!(differ, 0, "{what}");
+                        }
                         assert!(mixed > 0, "{what}: no pixel's samples differ");
                     }
                 }
@@ -1534,8 +1270,8 @@ fn a_maps_form_pass_resolves_bgra8_by_metals_rule() {
     let notices = super::degrade_notices::counts(&messages.take_notices());
     eprintln!("Maps' form resolve on {name}: announced {notices:?}");
     assert_eq!(
-        notices.get(&Degradation::DeviceRoundedResolve),
-        None,
+        notices.contains_key(&Degradation::DeviceRoundedResolve),
+        !metals,
         "device-rounded-resolve on {name}"
     );
     quiet(lane, &messages);
@@ -1543,9 +1279,8 @@ fn a_maps_form_pass_resolves_bgra8_by_metals_rule() {
 
 /// A 4x sRGB texture of `RenderTarget` usage alone, cleared in a pass of no draws that resolves
 /// it, resolves to the clear's codes, the bytes Metal stores for that clear (`renders.rs`'
-/// `COLOR_CLEARS`): every sample holds the clear, which Metal's rule gives back. The exact resolve
-/// reads such an attachment through its UNORM twin's view (`color_resolve.rs`), whatever form the
-/// device keeps the clear in.
+/// `COLOR_CLEARS`): every sample holds the clear, which Metal's rule and the device's average
+/// give back, whatever form the device keeps the clear in.
 #[test]
 fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
     let (messages, _cache, lane) = lane();
@@ -1593,207 +1328,6 @@ fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
         let wrong = read.chunks(4).filter(|texel| *texel != bytes).count();
         eprintln!("cleared resolve {pf:?} x4 on {name}: {wrong} texels other than the clear's");
         assert_eq!(wrong, 0, "{pf:?} on {name}: {:02x?}", &read[..4]);
-    }
-    quiet(lane, &messages);
-}
-
-/// The width and height of the cost test's target: a 1080p frame.
-const FRAME: [u32; 2] = [1920, 1080];
-
-/// Command buffers per variant of the cost test, of which the median GPU time is printed.
-const TIMED: usize = 15;
-
-/// The formats [`the_exact_resolve_costs_against_a_plain_store`] times: one of the 8-bit unorm rule,
-/// one of the sRGB rule (Maps' `BGRA8Unorm_sRGB`), one of the `half` rule, one of the packed 16-bit
-/// unorm rule, and `RG32Float`, whose 8 bytes a sample are `RGBA16Float`'s under the 32-bit float
-/// rule, so that the two's difference is the `half` rule's arithmetic.
-const TIMED_FORMATS: [PixelFormat; 5] = [
-    PixelFormat::RGBA8Unorm,
-    PixelFormat::BGRA8UnormSRGB,
-    PixelFormat::RGBA16Float,
-    PixelFormat::B5G6R5Unorm,
-    PixelFormat::RG32Float,
-];
-
-/// The side of the cost test's edge-dense draw's squares, in pixels: each square holds the
-/// triangle of its lower-left half, whose diagonal splits one pixel in `CELL` of the frame between
-/// the triangle and the clear color (6.25%), every other pixel's samples alike.
-const CELL: u32 = 16;
-
-/// The clip-space corners (`float4`s) of the cost test's edge-dense draw: over `FRAME` in squares
-/// of [`CELL`], each square's lower-left triangle.
-fn cells() -> Vec<u8> {
-    let [width, height] = FRAME;
-    let clip = |x: u32, y: u32| {
-        [
-            x as f32 / width as f32 * 2.0 - 1.0,
-            y as f32 / height as f32 * 2.0 - 1.0,
-            0.5,
-            1.0,
-        ]
-    };
-    let mut corners = Vec::new();
-    for y in (0..height).step_by(CELL as usize) {
-        for x in (0..width).step_by(CELL as usize) {
-            for corner in [clip(x, y), clip(x + CELL, y), clip(x, y + CELL)] {
-                corners.extend(corner.iter().flat_map(|v| v.to_le_bytes()));
-            }
-        }
-    }
-    corners
-}
-
-/// What a timed pass of the cost test draws.
-#[derive(Clone, Copy)]
-enum Geometry {
-    /// The fullscreen triangle: no pixel holds unlike samples.
-    Full,
-    /// The triangles of [`cells`].
-    Cells,
-}
-
-/// The resolve's cost against a plain store: for each of [`TIMED_FORMATS`], a 1920x1080 target of
-/// 4 samples, cleared and drawn once white, then resolved into a single-sampled texture as the
-/// runtime resolves the runtime's own texture of it on the device (printed: `shader-resolve`, the
-/// exact resolve after the pass; `device-rounded-resolve`, the device's average in the pass; none,
-/// the device's average, measured to be Metal's), resolved the same way from a caller's image
-/// without input attachment usage (the exact resolve reads a copy of its samples,
-/// `color_resolve.rs`), or stored without a resolve; and the runtime's own texture drawn instead
-/// with the edge-dense triangles of [`cells`] (the owned fixture `cfb_sample_depth`'s placed
-/// vertices and white), resolved and stored, as a frame whose edge pixels take the exact rule's
-/// average where the fullscreen triangle's take none. Each the median GPU time of its command
-/// buffers, printed (skipped, and so printed, where the device takes no texture of 4 samples or
-/// none of the format). Nothing about the times is asserted. No texture of these formats reaches
-/// the device's own resolve where the exact resolve applies: a caller's image has the transfer
-/// usage the runtime's texture has (`Device::new_texture_with_vk_image`), so it resolves from a
-/// copy.
-#[test]
-fn the_exact_resolve_costs_against_a_plain_store() {
-    let (messages, _cache, lane) = lane();
-    let name = lane.device.name().to_owned();
-    let supported = lane
-        .device
-        .properties()
-        .supports_texture_sample_count(4u32.into())
-        .unwrap();
-    if !supported {
-        eprintln!("resolve cost on {name}: skipped, no texture of 4 samples");
-        quiet(lane, &messages);
-        return;
-    }
-    let [width, height] = FRAME;
-    let placed = {
-        let bitcode = llvm_assemble(&engine_dir().join("cfb_sample_depth.ll")).unwrap();
-        lane.device.new_library_with_air(&bitcode).unwrap()
-    };
-    let corners = cells();
-    let vertices = (corners.len() / 16) as u32;
-    let corners = buffer_with(&lane.device, &corners).unwrap();
-    for pf in TIMED_FORMATS {
-        let descriptor = |samples: u64| {
-            let mut d = TextureDescriptor::texture_2d(pf, width.into(), height.into(), false);
-            if samples > 1 {
-                d.texture_type = TextureType::Type2DMultisample;
-                d.sample_count = samples;
-            }
-            d.usage = TextureUsage::RENDER_TARGET;
-            d.resource_options = ResourceOptions::private();
-            d
-        };
-        let (own, resolved) = match (
-            lane.device.new_texture(&descriptor(4)),
-            lane.device.new_texture(&descriptor(1)),
-        ) {
-            (Ok(own), Ok(resolved)) => (own, resolved),
-            (Err(e), _) | (_, Err(e)) => {
-                eprintln!("resolve cost {pf:?} on {name}: skipped, {e}");
-                continue;
-            }
-        };
-        let (copied, copied_image, copied_memory) = callers_image(
-            &lane,
-            pf,
-            4,
-            FRAME,
-            ash::vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | ash::vk::ImageUsageFlags::TRANSFER_SRC
-                | ash::vk::ImageUsageFlags::TRANSFER_DST,
-        );
-        let pipeline = lane.pipeline((FULL, WHITE), &[pf], (None, None), 4);
-        let cells_pipeline = {
-            let function = |name| {
-                StageSource::Function(
-                    placed
-                        .new_function_with_name(name)
-                        .unwrap()
-                        .function_descriptor(),
-                )
-            };
-            let mut descriptor = RenderPipelineDescriptor::new(function("cfb_depth_vertex"));
-            descriptor.fragment = Some(function("cfb_depth_white"));
-            descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(pf));
-            descriptor.raster_sample_count = 4;
-            lane.device
-                .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-                .unwrap()
-        };
-        let time = |msaa: &Texture, resolve: bool, geometry: Geometry| {
-            let mut times = Vec::with_capacity(TIMED);
-            for _ in 0..TIMED {
-                let mut pass = RenderPassDescriptor::new();
-                let target = &mut pass.color_attachments[0];
-                target.texture = Some(msaa.clone());
-                target.load_action = LoadAction::Clear;
-                if resolve {
-                    target.store_action = StoreAction::MultisampleResolve;
-                    target.resolve_texture = Some(resolved.clone());
-                } else {
-                    target.store_action = StoreAction::Store;
-                }
-                let command_buffer = lane.queue.command_buffer().unwrap();
-                let mut encoder = command_buffer.render_command_encoder(&pass).unwrap();
-                let mut held = Vec::new();
-                match geometry {
-                    Geometry::Full => lane.draw(&mut encoder, &mut held, &pipeline, 0.5),
-                    Geometry::Cells => {
-                        encoder.set_render_pipeline_state(&cells_pipeline).unwrap();
-                        encoder.set_vertex_buffer(Some(&corners), 0, 0).unwrap();
-                        encoder
-                            .draw_primitives(PrimitiveType::Triangle, 0, vertices, 1, 0)
-                            .unwrap();
-                    }
-                }
-                encoder.end_encoding().unwrap();
-                command_buffer.commit().unwrap();
-                command_buffer
-                    .wait_until_completed_for(super::WAIT)
-                    .unwrap();
-                let (start, end) = (
-                    command_buffer.gpu_start_time().unwrap(),
-                    command_buffer.gpu_end_time().unwrap(),
-                );
-                times.push((end - start) * 1e6);
-            }
-            times.sort_by(f64::total_cmp);
-            times[TIMED / 2]
-        };
-        let own_resolve = time(&own, true, Geometry::Full);
-        let through_copy = time(&copied, true, Geometry::Full);
-        let stored = time(&own, false, Geometry::Full);
-        let cells_resolve = time(&own, true, Geometry::Cells);
-        let cells_stored = time(&own, false, Geometry::Cells);
-        let kind = super::degrade_notices::resolve_kind(&lane.device, pf, 4)
-            .map_or("none", Degradation::code);
-        eprintln!(
-            "resolve cost on {name}: {width}x{height} {pf:?} x4 (announced kind {kind}), median \
-             GPU time of {TIMED}: the runtime's own texture's resolve {own_resolve:.0} us, a \
-             caller's image's resolve {through_copy:.0} us, stored without a resolve {stored:.0} us; \
-             edge-dense ({CELL}-pixel triangles): resolve {cells_resolve:.0} us, stored \
-             {cells_stored:.0} us"
-        );
-        drop(copied);
-        // SAFETY: nothing uses them: the texture is gone and every command buffer completed.
-        unsafe { destroy_callers(&lane, copied_image, copied_memory) };
     }
     quiet(lane, &messages);
 }

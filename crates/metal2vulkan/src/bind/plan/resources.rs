@@ -489,45 +489,13 @@ fn sampled_components(
 
 /// The view of a sampled image of `pf` declared as `class` on `profile`: `vk_format` for
 /// `SampledImage` with the emulation's component mapping, the depth (or stencil-only) aspect, in
-/// `SHADER_READ_ONLY_OPTIMAL`. A texture held with a depth twin (`twin`) is read through an
-/// `R32_SFLOAT` view of its image, and a comparison reads a `D32_SFLOAT` view of its twin. A depth
-/// that no comparison reads, its twin's included, reads as Metal's `(d, d, d, 1)`
+/// `SHADER_READ_ONLY_OPTIMAL`. A depth that no comparison reads reads as Metal's `(d, d, d, 1)`
 /// ([`DEPTH_AS_COLOR`]).
 pub(crate) fn sampled_view(
     profile: &DeviceProfile,
     pf: PixelFormat,
     class: &ImageHandleClass,
-    twin: bool,
 ) -> Result<ImageViewDesc, BindError> {
-    if twin {
-        if pf != PixelFormat::Depth32Float {
-            return Err(internal(format!(
-                "a depth twin of a {pf:?} texture: only a Depth32Float texture has one"
-            )));
-        }
-        let (format, aspect, components) = match class.depth_compare {
-            true => (
-                vk::Format::D32_SFLOAT,
-                vk::ImageAspectFlags::DEPTH,
-                vk::ComponentMapping::IDENTITY,
-            ),
-            false => (
-                vk::Format::R32_SFLOAT,
-                vk::ImageAspectFlags::COLOR,
-                DEPTH_AS_COLOR,
-            ),
-        };
-        return Ok(ImageViewDesc {
-            view_type: view_type(class)?,
-            format,
-            aspect,
-            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            components,
-            level: None,
-            twin: class.depth_compare,
-            shader_swizzle: false,
-        });
-    }
     let usages = [FormatUsage::SampledImage].into();
     let m = vk_format(pf, &usages, profile).map_err(bind_error)?;
     let aspect = view_aspect(pf);
@@ -538,7 +506,6 @@ pub(crate) fn sampled_view(
         layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         components: sampled_components(aspect, m.components, class.depth_compare),
         level: None,
-        twin: false,
         shader_swizzle: false,
     })
 }
@@ -1216,7 +1183,6 @@ impl ResourcePlanner<'_> {
             }
             TextureShape::Texture {
                 pixel_format,
-                depth_twin,
                 swizzle,
                 ..
             } => {
@@ -1279,11 +1245,10 @@ impl ResourcePlanner<'_> {
                         layout: vk::ImageLayout::GENERAL,
                         components: vk::ComponentMapping::IDENTITY,
                         level: None,
-                        twin: false,
                         shader_swizzle,
                     }
                 } else {
-                    match self.texel_view(pixel_format, &class, depth_twin, raw)? {
+                    match self.texel_view(pixel_format, &class, raw)? {
                         Some((view, _)) => ImageViewDesc {
                             shader_swizzle,
                             ..view
@@ -1296,19 +1261,17 @@ impl ResourcePlanner<'_> {
         }
     }
 
-    /// The view of a sampled image of `pf` declared as `class`, of a texture held with a depth
-    /// twin when `twin`.
+    /// The view of a sampled image of `pf` declared as `class`.
     fn sampled_view(
         &self,
         pf: PixelFormat,
         class: &ImageHandleClass,
-        twin: bool,
     ) -> Result<ImageViewDesc, BindError> {
-        sampled_view(self.profile, pf, class, twin)
+        sampled_view(self.profile, pf, class)
     }
 
-    /// The view a binding of a texture slot reads a texture of `pf` through (declared `class`,
-    /// `twin` for a depth twin's): its sampled view, or for a binding of the raw view (`raw`) that
+    /// The view a binding of a texture slot reads a texture of `pf` through (declared `class`):
+    /// its sampled view, or for a binding of the raw view (`raw`) that
     /// view, `None` for a format without one. Where the device cannot sample an 8-bit sRGB format,
     /// whose sampled texture it holds as the format's UNORM twin (`metal::format::srgb_raw_twin`),
     /// the twin's sampled view serves both bindings: the raw codes are the twin's texels, and the
@@ -1320,17 +1283,16 @@ impl ResourcePlanner<'_> {
         &self,
         pf: PixelFormat,
         class: &ImageHandleClass,
-        twin: bool,
         raw: bool,
     ) -> Result<Option<(ImageViewDesc, PixelFormat)>, BindError> {
-        let missing = match self.sampled_view(pf, class, twin) {
+        let missing = match self.sampled_view(pf, class) {
             Ok(own) if raw => return Ok(raw_view(own).map(|view| (view, pf))),
             Ok(own) => return Ok(Some((own, pf))),
             Err(missing) => missing,
         };
         match srgb_raw_twin(pf) {
             Some(linear) => self
-                .sampled_view(linear, class, false)
+                .sampled_view(linear, class)
                 .map(|view| Some((view, linear)))
                 .map_err(|_| missing),
             None => Err(missing),
@@ -1733,10 +1695,9 @@ impl ResourcePlanner<'_> {
             }
             Some(TextureShape::Texture {
                 pixel_format,
-                depth_twin,
                 swizzle,
                 ..
-            }) => match self.texel_view(pixel_format, &class, depth_twin, sampler.raw)? {
+            }) => match self.texel_view(pixel_format, &class, sampler.raw)? {
                 Some((view, viewed)) => {
                     self.texture_use(texture, &t, false);
                     // A swizzled packed normalized texture's sampled view takes no swizzle where

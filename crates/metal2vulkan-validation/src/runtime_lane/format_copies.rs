@@ -182,8 +182,7 @@ fn copy(
 }
 
 /// Probes 8 and 8b: depth and stencil formats copy their bytes to and from colour formats of
-/// their unit, in a depth image or (for a read-only `Depth32Float` on a device whose depth images
-/// may not keep a `float`) a depth twin.
+/// their unit, in a depth image.
 #[test]
 fn depth_and_stencil_copy_their_bytes_with_colour_formats_of_their_unit() {
     let messages = Messages::default();

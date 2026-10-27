@@ -844,8 +844,8 @@ pub enum PrecisionNote {
     /// shader does not make itself) on a device without `VK_EXT_depth_range_unrestricted` enabled
     /// whose driver is not measured to keep depth values outside `[0, 1]` without it (narrowed to
     /// comparisons, and to the device's). Metal's `Depth32Float` texels hold any
-    /// `float`, and the device's comparison reads them from a depth image: the texture's own, or
-    /// the depth twin of a texture the consumer holds in an `R32_SFLOAT` image. Vulkan leaves a
+    /// `float`, and the device's comparison reads them from the texture's depth image. Vulkan
+    /// leaves a
     /// value outside `[0, 1]` uploaded there undefined without the extension
     /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), and a device may store it clamped (RADV on a
     /// Radeon 780M and ANV read 1000.0 back as 1.0, measured) or keep it (MoltenVK and lavapipe
@@ -1159,9 +1159,8 @@ pub enum PrecisionNote {
     /// - a heap texture;
     /// - a runtime or argument buffer's sampler.
     ///
-    /// Not this note's: a depth image (a `Depth32Float` texture's own, or its twin) that a device's
-    /// comparison reads, which RADV holds a denormal in as zero
-    /// ([`PrecisionNote::DeviceDepthComparison`]).
+    /// Not this note's: a `Depth32Float` texture's depth image that a device's comparison reads,
+    /// which RADV holds a denormal in as zero ([`PrecisionNote::DeviceDepthComparison`]).
     ///
     /// Validation derives no tolerance and no explanation from it, as for `DeviceDenormals`.
     DeviceTexelDenormals,

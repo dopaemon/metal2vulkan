@@ -1590,7 +1590,7 @@ fn written_depths_store_metals_bits_in_every_sample() {
         .properties()
         .driver_facts
         .contains(&DriverFact::DontCareStoreIsMetals);
-    first.extend(resolve_kind(&probe.device, PixelFormat::RGBA32Float, 4));
+    first.extend(resolve_kind(&probe.device, 4));
     first.extend(forced(&[(Degradation::DontCareStore, !dont_care_metals)]));
     let read = read_function(&probe.device, PixelFormat::Depth32Float, SampleRead::Depth).unwrap();
     first.extend(made_compute_kinds(&probe.device, read));

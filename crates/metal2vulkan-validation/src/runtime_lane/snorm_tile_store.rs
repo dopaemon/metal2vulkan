@@ -9,17 +9,15 @@
 //! under an exponent above 0 is stored normalized (its mantissas shifted up as its exponent steps
 //! down; measured there too).
 //!
-//! Under `TileStorePolicy::Device`, the default, the runtime keeps the device's load and store
-//! (docs/FAST-PATHS.md), so the texels keep their codes and words, and a draw in such a pass
-//! announces `snorm-minimum-kept` or `shared-exponent-kept`, naming the attachment. Under
-//! `TileStorePolicy::Exact` the load pass (`render/unused_bits_load.rs`) rewrites them as Metal's
-//! store leaves them before the pass, and nothing is announced. On a driver whose pass stores them
-//! as Metal's (`DriverFact::TileStoreIsMetals`: MoltenVK, whose pass is a Metal pass) the texels
-//! take Metal's codes and words under either value, with no load pass and nothing announced.
+//! The runtime keeps the device's load and store, so the texels keep their codes and words, and
+//! a draw in such a pass announces `snorm-minimum-kept` or `shared-exponent-kept`, naming the
+//! attachment, with no load pass. On a driver whose pass stores them as Metal's
+//! (`DriverFact::TileStoreIsMetals`: MoltenVK, whose pass is a Metal pass) the texels take Metal's
+//! codes and words, and nothing is announced.
 
 use super::degrade_notices::counts;
 use super::resolves::{lane_with, quiet, Lane, Shape, FULL, SIZE, WHITE};
-use metal2vulkan::device::{DriverFact, TileStorePolicy};
+use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::{ColorWriteMask, PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
@@ -107,15 +105,12 @@ fn pass(t: &Texture, load: LoadAction) -> RenderPassDescriptor {
     descriptor
 }
 
-/// What a drawing pass of the lane's device leaves under `tile_store`: whether the device's store
-/// is Metal's (`DriverFact::TileStoreIsMetals`), and whether the load pass rewrites the texels.
-fn expected(lane: &Lane, tile_store: TileStorePolicy) -> (bool, bool) {
-    let metals = lane
-        .device
+/// Whether the lane's device's store is Metal's (`DriverFact::TileStoreIsMetals`).
+fn metals_store(lane: &Lane) -> bool {
+    lane.device
         .properties()
         .driver_facts
-        .contains(&DriverFact::TileStoreIsMetals);
-    (metals, tile_store == TileStorePolicy::Exact && !metals)
+        .contains(&DriverFact::TileStoreIsMetals)
 }
 
 /// The load passes the lane's device recorded so far.
@@ -124,19 +119,19 @@ fn load_passes(lane: &Lane) -> u64 {
 }
 
 /// A pass that loads a 4² target of each signed normalized format holding the minimum code in
-/// every channel and draws under a write mask of none of its channels, under `tile_store`: where
-/// the device's store is Metal's or the load pass rewrites the codes (one load pass), every
-/// texel takes the code above and nothing is announced; else every code stays and
-/// `snorm-minimum-kept` is announced once (the device asks for it at each occurrence), naming
-/// color 0 and its format. A pass that loads the minimum codes again and draws nothing keeps
-/// every one, records no load pass and announces nothing, as Metal's keeps every texel.
-fn snorm_minimum_codes(tile_store: TileStorePolicy) {
+/// every channel and draws under a write mask of none of its channels, recording no load pass:
+/// where the device's store is Metal's, every texel takes the code above and nothing is
+/// announced; else every code stays and `snorm-minimum-kept` is announced once (the device asks
+/// for it at each occurrence), naming color 0 and its format. A pass that loads the minimum codes
+/// again and draws nothing keeps every one, records no load pass and announces nothing, as
+/// Metal's keeps every texel.
+#[test]
+fn a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so() {
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = SNORM_MINIMUM.into_iter().collect();
-        options.policy.tile_store = tile_store;
     });
-    let (metals, rewritten) = expected(&lane, tile_store);
-    eprintln!("{tile_store:?}: Metal's store {metals}, rewritten {rewritten}");
+    let metals = metals_store(&lane);
+    eprintln!("Metal's store {metals}");
     for (pf, texel, code, above) in FORMATS {
         let pipeline = lane
             .device
@@ -151,20 +146,13 @@ fn snorm_minimum_codes(tile_store: TileStorePolicy) {
         let loads = load_passes(&lane) - before;
         let got = lane.read(&t, (0, 0), texel, BlitOption::None);
         let notices = messages.take_notices();
-        assert_eq!(
-            loads,
-            u64::from(rewritten),
-            "{pf:?} {tile_store:?}: load passes"
-        );
-        if metals || rewritten {
+        assert_eq!(loads, 0, "{pf:?}: load passes");
+        if metals {
             let raised = filled(texel, above);
-            assert!(
-                got == raised,
-                "{pf:?} {tile_store:?}: not Metal's codes: {got:02x?}"
-            );
+            assert!(got == raised, "{pf:?}: not Metal's codes: {got:02x?}");
             assert!(
                 !counts(&notices).contains_key(&SNORM_MINIMUM[0]),
-                "{pf:?} {tile_store:?}: announced where the codes are Metal's"
+                "{pf:?}: announced where the codes are Metal's"
             );
         } else {
             assert!(got == bytes, "{pf:?}: the codes moved: {got:02x?}");
@@ -199,34 +187,22 @@ fn snorm_minimum_codes(tile_store: TileStorePolicy) {
     quiet(lane, &messages);
 }
 
-/// [`snorm_minimum_codes`] under the default, the device's load and store.
-#[test]
-fn a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so() {
-    snorm_minimum_codes(TileStorePolicy::Device);
-}
-
-/// [`snorm_minimum_codes`] under the exact tile store, the load pass's rewrite.
-#[test]
-fn the_exact_tile_store_raises_a_snorm_minimum_code() {
-    snorm_minimum_codes(TileStorePolicy::Exact);
-}
-
 /// A pass that loads a 4² `RGB9E5Float` target whose every word is unnormalized (mantissas 1, 2
 /// and 3 under the exponent 20: its largest mantissa below 256) and draws under a write mask of
-/// none of its channels, under `tile_store`: where the device's store is Metal's or the load pass
-/// rewrites the words (one load pass), every word takes Metal's (mantissas 128, 256 and 384 under
-/// the exponent 13) and nothing is announced; else every word stays and `shared-exponent-kept` is
-/// announced once (the device asks for it at each occurrence), naming color 0 and its format. A
-/// pass that loads it and draws nothing announces nothing. A device that renders no
-/// `RGB9E5Float` (refusing its texture or pipeline state) takes neither, and says so.
-fn shared_exponent_words(tile_store: TileStorePolicy) {
+/// none of its channels, recording no load pass: where the device's store is Metal's, every word
+/// takes Metal's (mantissas 128, 256 and 384 under the exponent 13) and nothing is announced;
+/// else every word stays and `shared-exponent-kept` is announced once (the device asks for it at
+/// each occurrence), naming color 0 and its format. A pass that loads it and draws nothing
+/// announces nothing. A device that renders no `RGB9E5Float` (refusing its texture or pipeline
+/// state) takes neither, and says so.
+#[test]
+fn a_drawing_pass_keeps_an_unnormalized_shared_exponent_word_and_says_so() {
     let pf = PixelFormat::RGB9E5Float;
     let (messages, _cache, lane) = lane_with(|options| {
         options.announce_each = SHARED_EXPONENT.into_iter().collect();
-        options.policy.tile_store = tile_store;
     });
     let name = lane.device.name();
-    let (metals, rewritten) = expected(&lane, tile_store);
+    let metals = metals_store(&lane);
     let mut descriptor = TextureDescriptor::texture_2d(pf, SIZE, SIZE, false);
     descriptor.usage = TextureUsage::RENDER_TARGET;
     descriptor.resource_options = ResourceOptions::shared();
@@ -264,20 +240,16 @@ fn shared_exponent_words(tile_store: TileStorePolicy) {
     let loads = load_passes(&lane) - before;
     let got = lane.read(&t, (0, 0), 4, BlitOption::None);
     let notices = messages.take_notices();
-    assert_eq!(
-        loads,
-        u64::from(rewritten),
-        "{pf:?} {tile_store:?} on {name}: load passes"
-    );
-    if metals || rewritten {
+    assert_eq!(loads, 0, "{pf:?} on {name}: load passes");
+    if metals {
         let normalized = metal.to_le_bytes().repeat((SIZE * SIZE) as usize);
         assert!(
             got == normalized,
-            "{pf:?} {tile_store:?} on {name}: not Metal's words: {got:02x?}"
+            "{pf:?} on {name}: not Metal's words: {got:02x?}"
         );
         assert!(
             !counts(&notices).contains_key(&SHARED_EXPONENT[0]),
-            "{pf:?} {tile_store:?} on {name}: announced where the words are Metal's"
+            "{pf:?} on {name}: announced where the words are Metal's"
         );
     } else {
         assert!(
@@ -304,16 +276,4 @@ fn shared_exponent_words(tile_store: TileStorePolicy) {
         "{pf:?} on {name}: a pass of no draw"
     );
     quiet(lane, &messages);
-}
-
-/// [`shared_exponent_words`] under the default, the device's load and store.
-#[test]
-fn a_drawing_pass_keeps_an_unnormalized_shared_exponent_word_and_says_so() {
-    shared_exponent_words(TileStorePolicy::Device);
-}
-
-/// [`shared_exponent_words`] under the exact tile store, the load pass's rewrite.
-#[test]
-fn the_exact_tile_store_normalizes_a_shared_exponent_word() {
-    shared_exponent_words(TileStorePolicy::Exact);
 }

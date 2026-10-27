@@ -83,10 +83,6 @@ pub(super) enum OwnedModule {
     /// `bind::shadow_merge_module`: a shadowed texture's writes merged into its buffer's bytes
     /// after a command that also wrote them another way (`shadow_merge.rs`).
     ShadowMerge,
-    /// `bind::depth_magnitude_module`: a 32-bit float depth's magnitude stand-in, written before a
-    /// pass that renders over it, and the pass's words merged back into the depth after it
-    /// (`signed_depth.rs`).
-    DepthMagnitude,
     /// `bind::shadow_copy_back_module` of one view of a texel (`ShadowTexelView`): a shadowed
     /// texture's texels stored back into its buffer's rows by a dispatch, where the device copies
     /// back faster so (`shadow_copy_back.rs`). Its shadow's unsigned-integer view is its sampled
@@ -162,8 +158,7 @@ pub(super) enum OwnedModule {
     /// surface's two planes (`ycbcr.rs`), its write shadow bound as a storage image.
     YCbCrWrite,
     /// `bind::unused_bits_module` of one format held as one kind of words: an extended-range,
-    /// padded 10-bit or bfloat texture's words (or, under `TileStorePolicy::Exact`, a signed
-    /// normalized or `RGB9E5Float` one's) in the tiles a mask names rewritten as Metal's tile
+    /// padded 10-bit or bfloat texture's words in the tiles a mask names rewritten as Metal's tile
     /// store leaves them, before a pass that loads it and draws (`render/unused_bits_load.rs`).
     UnusedBits(PixelFormat, TexelWords),
     /// `bind::tiled_texels_module`: a heap texture's elements moved between its image's tight
@@ -324,12 +319,6 @@ impl OwnedModule {
                     .map_err(Error::Compile)?;
                 let push_bytes = metal2vulkan::bind::ShadowMergeModule::PUSH_BYTES;
                 Ok((module.spirv.to_vec(), 3, push_bytes))
-            }
-            OwnedModule::DepthMagnitude => {
-                let module = metal2vulkan::bind::depth_magnitude_module(device.compile_device())
-                    .map_err(Error::Compile)?;
-                let push_bytes = metal2vulkan::bind::DepthMagnitudeModule::PUSH_BYTES;
-                Ok((module.spirv.to_vec(), 2, push_bytes))
             }
             OwnedModule::ShadowCopyBack(view) => {
                 let module =
@@ -561,7 +550,6 @@ pub(super) struct OwnedKernels {
     draw_merge_starts: Option<OwnedKernel>,
     flat_dispatch: Option<OwnedKernel>,
     shadow_merge: Option<OwnedKernel>,
-    depth_magnitude: Option<OwnedKernel>,
     shadow_copy_backs: HashMap<ShadowTexelView, OwnedKernel>,
     shadow_merge_images: HashMap<ShadowMergeRead, OwnedKernel>,
     shadow_merge_kept_images: HashMap<ShadowTexelView, OwnedKernel>,
@@ -613,7 +601,6 @@ impl OwnedKernels {
             self.draw_merge_starts,
             self.flat_dispatch,
             self.shadow_merge,
-            self.depth_magnitude,
             self.mesh_scan,
             self.mesh_object_arguments,
             self.mesh_arguments_mesh,
@@ -755,7 +742,6 @@ impl OwnedKernels {
             }
             OwnedModule::FlatDispatch => &mut self.flat_dispatch,
             OwnedModule::ShadowMerge => &mut self.shadow_merge,
-            OwnedModule::DepthMagnitude => &mut self.depth_magnitude,
             OwnedModule::ShadowCopyBack(_)
             | OwnedModule::ShadowMergeImage(_)
             | OwnedModule::ShadowMergeKeptImage(_)

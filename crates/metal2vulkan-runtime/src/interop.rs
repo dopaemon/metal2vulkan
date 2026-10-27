@@ -101,9 +101,7 @@ impl Texture {
     /// where the texels are a buffer's bytes the runtime copies into and out of an image of its
     /// own (a texture buffer, a texture over a no-copy buffer's host pages, or a texture over
     /// another buffer that does not alias it), or another image's texels it so copies (a view of
-    /// another component layout on a device whose views reinterpret none). A texture with a depth
-    /// twin gives its `R32_SFLOAT` image, which holds its texels; its comparisons read the twin,
-    /// which a write into the image does not reach.
+    /// another component layout on a device whose views reinterpret none).
     ///
     /// A texture over a buffer's bytes whose image aliases them gives a linear image of
     /// `VK_IMAGE_TILING_LINEAR`, bound to the buffer's memory, the runtime's own: such a texture's

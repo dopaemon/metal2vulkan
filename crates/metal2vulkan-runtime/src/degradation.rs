@@ -76,7 +76,7 @@ use super::values::ResourceOptions;
 use crate::error::EncoderCall;
 use metal2vulkan::bind::PlanDiagnostic;
 use metal2vulkan::cache::SpecializationKey;
-use metal2vulkan::device::{DriverFact, FunctionStorage, ResolvePolicy, VkProperty};
+use metal2vulkan::device::{DriverFact, FunctionStorage, VkProperty};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     ComputePipeline, PrecisionNote, Reconvergence, RenderPipeline, SlotRef, SpecKey, StageModule,
@@ -255,26 +255,25 @@ degradations! {
         /// dma-bufs where the device makes no image over a dma-buf of the texture's own pages (the
         /// notice names why). A heap's texture is a shadow of the heap's bytes in its range in
         /// three more shapes, each announced with its own reason (`texture/heap.rs`). A
-        /// single-sample depth or stencil texture held with no depth twin, whose texels fit the
-        /// bytes its image takes, on a device whose driver lays such images apart from the memory
-        /// they are bound to
+        /// single-sample depth or stencil texture whose texels fit the bytes its image takes, on a
+        /// device whose driver lays such images apart from the memory they are bound to
         /// ([`metal2vulkan::device::DriverFact::DepthStencilImagesLieApart`]): one no such shadow
-        /// serves, a multisampled one or a depth twin among them, lies apart from those bytes
-        /// instead (`heap-depth-stencil-apart`). A texture the device binds no image of to the
-        /// heap's memory where the heap places it: its optimal image takes no memory type of the
-        /// heap's and no linear image of the device serves (a `Shared` heap's depth texture on
-        /// MoltenVK), or the heap lies over host pages that no linear image over them serves, or
-        /// its images ask more than Metal's answer for the texture (every 4:2:2 texture among
-        /// them) and a shadow of its rows serves. And a heap's `RGB10A8_2P_XR10` texture, or its
-        /// sRGB twin, of a 1D, 2D, 1D array, 2D array or 3D type, of any level count, of one
-        /// sample, whose moves fit the device: its image holds each texel's colour word and alpha
-        /// byte side by side where Metal keeps two planes in the heap's bytes, so the image is a
-        /// shadow of those planes (a mipmapped one's levels past the first, and a 1D array's
-        /// texels, lie in the image alone: `heap-two-plane-layout`). Where Metal's layout of the
-        /// texture in the heap's bytes is measured and the moves fit the device, the first two
-        /// shadow Metal's tiles there (the texture's elements, a multisample texture's samples)
-        /// rather than its rows, and so do two textures that would otherwise need no shadow: one
-        /// whose image the driver keeps GPU-optimized where Metal's texture is not
+        /// serves, a multisampled one among them, lies apart from those bytes instead
+        /// (`heap-depth-stencil-apart`). A texture the device binds no image of to the heap's
+        /// memory where the heap places it: its optimal image takes no memory type of the heap's
+        /// and no linear image of the device serves (a `Shared` heap's depth texture on MoltenVK),
+        /// or the heap lies over host pages that no linear image over them serves, or its images
+        /// ask more than Metal's answer for the texture (every 4:2:2 texture among them) and a
+        /// shadow of its rows serves. And a heap's `RGB10A8_2P_XR10` texture, or its sRGB twin, of
+        /// a 1D, 2D, 1D array, 2D array or 3D type, of any level count, of one sample, whose moves
+        /// fit the device: its image holds each texel's colour word and alpha byte side by side
+        /// where Metal keeps two planes in the heap's bytes, so the image is a shadow of those
+        /// planes (a mipmapped one's levels past the first, and a 1D array's texels, lie in the
+        /// image alone: `heap-two-plane-layout`). Where Metal's layout of the texture in the heap's
+        /// bytes is measured and the moves fit the device, the first two shadow Metal's tiles there
+        /// (the texture's elements, a multisample texture's samples) rather than its rows, and so
+        /// do two textures that would otherwise need no shadow: one whose image the driver keeps
+        /// GPU-optimized where Metal's texture is not
         /// ([`metal2vulkan::device::DriverFact::DepthStencilImagesStayGpuOptimized`]), and a
         /// multisample texture whose image lies in memory of its own.
         ShadowedTexture = "shadowed-texture", Performance,
@@ -532,10 +531,10 @@ degradations! {
         ResolveScratch = "resolve-scratch", Performance,
             "the pass resolves into a scratch image, whose render area is copied into the \
              texture after the pass";
-        /// A multisample color resolve drawn after the pass by Metal's exact rules, where the
-        /// device's `AVERAGE` resolve is not measured to be Metal's, under
-        /// [`metal2vulkan::device::ResolvePolicy::Exact`] or from a fetching pass's sample planes
-        /// (`color_resolve.rs`); or a
+        /// A multisample color resolve drawn after the pass by the crate-owned resolve: of an
+        /// extended-range attachment, whose codes no device's resolve averages, into the
+        /// attachment's format's sRGB twin, whose encoding no device's resolve writes, or from a
+        /// fetching pass's sample planes (`color_resolve.rs`); or a
         /// stencil resolved by `DepthResolvedSample` after `Min` or `Max`, which no Vulkan
         /// resolve mode states, or a `Min` or `Max` depth on a device without the mode, drawn
         /// after the pass (`depth_stencil_resolve.rs`).
@@ -744,15 +743,11 @@ degradations! {
              and end";
         /// A multisample color resolve averages through Vulkan's `AVERAGE` mode, which leaves
         /// the rounding of the average (and the sRGB encoding) to the device, on a device not
-        /// measured to round as Metal does: under [`metal2vulkan::device::ResolvePolicy::Device`],
-        /// the default, any color attachment but one a fetching pass's sample planes hold as it
-        /// ends (resolved from them by Metal's rule); under
-        /// [`metal2vulkan::device::ResolvePolicy::Exact`] a format without Metal's closed rule at
-        /// its count (the 16-bit float, `RG11B10Float` and `RGB9E5Float` formats past 4 samples,
-        /// and a format no rule covers), or an attachment whose image the exact resolve can
-        /// neither read nor copy: an image without input attachment usage of a format the device
-        /// does not copy (`color_resolve.rs`). Not where `DriverFact::ColorResolveAverageIsMetals`
-        /// holds, for any format: MoltenVK's resolve is Metal's own.
+        /// measured to round as Metal does: any color attachment but an extended-range one, one
+        /// resolving into its format's sRGB twin, and one a fetching pass's sample planes hold as
+        /// it ends (each resolved after the pass, `color_resolve.rs`). Not where
+        /// `DriverFact::ColorResolveAverageIsMetals` holds, for any format: MoltenVK's resolve is
+        /// Metal's own.
         /// Measured against Metal's rules at 2 and 4 samples
         /// (`runtime_lane::resolve_rounding::the_device_resolve_rounds_as_announced`, which holds
         /// the bound) on RADV (Mesa 26.0.8, the Radeon 780M and the RX 7900 XTX), ANV (Mesa
@@ -779,9 +774,8 @@ degradations! {
         /// resolved by `DepthResolvedSample` after `Min` or `Max` (`depth_stencil_resolve.rs`),
         /// whose pick among equal depths is measured at 2 and 4 samples.
         UnmeasuredResolve = "unmeasured-resolve", Precision,
-            "the resolve applies the rules Metal's resolve follows at 2 and 4 samples (or the \
-             device's average, for a format without them), which no Metal answer confirms at \
-             this count";
+            "the resolve is the device's average, or after the pass the rules Metal's resolve \
+             follows at 2 and 4 samples, which no Metal answer confirms at this count";
         /// A multisample resolve of an extended-range color attachment whose resolve Metal
         /// averages from values finer than the codes the attachment holds (`BGRA10_XR`'s alpha,
         /// an `_sRGB` twin's color, `RGB10A2Unorm_sRGB`'s channels;
@@ -859,20 +853,12 @@ degradations! {
         UnlistedArgumentSampler = "unlisted-argument-sampler", Precision,
             "a function reading the state through its ID in an argument buffer reads the \
              neutral sampler, where Metal's reads the state";
-        /// A `Depth32Float` texture the program only reads or samples, on a device whose driver
-        /// is not measured to keep every `float` in a depth image (`device/driver_facts.rs`: a
-        /// denormal, and without `VK_EXT_depth_range_unrestricted` a value outside `[0, 1]`), is
-        /// held in an `R32_SFLOAT` image with a `D32_SFLOAT` twin for the comparisons the device
-        /// makes (`image_plan.rs`).
-        DepthTwin = "depth-twin", Performance,
-            "a second image of its size, which every copy into it writes too; a copy into it \
-             from a depth texture without a twin goes through a scratch buffer";
         /// An upload (`replace_region`, a blit from a buffer) into the 32-bit float depth of a
         /// texture's depth image, on a device without `VK_EXT_depth_range_unrestricted` enabled,
         /// where Vulkan leaves a value outside `[0, 1]` undefined, whose driver is not measured to
-        /// keep one (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`): a texture without a
-        /// twin. And a render pass's NaN clear depth on such a device, which Metal stores as
-        /// `0x7fc00000`, cleared to 1.0 (`nan_clear.rs`).
+        /// keep one (`DriverFact::DepthImageKeepsValuesOutsideUnitRange`). And a render pass's NaN
+        /// clear depth on such a device, which Metal stores as `0x7fc00000`, cleared to 1.0
+        /// (`nan_clear.rs`).
         RestrictedDepthUpload = "restricted-depth-upload", Precision,
             "a value outside [0, 1] may be stored clamped to [0, 1], where Metal's keeps it, so \
              reads, samples, comparisons and depth tests of it can differ";
@@ -930,7 +916,7 @@ degradations! {
         /// stencil images apart from the memory they are bound to
         /// ([`metal2vulkan::device::DriverFact::DepthStencilImagesLieApart`]) that no shadow of the
         /// heap's bytes serves: a multisampled texture, which Vulkan copies to and from no buffer,
-        /// one whose texels do not fit its bytes, or one with a depth twin. The texture aliases
+        /// or one whose texels do not fit its bytes. The texture aliases
         /// none of the heap's other resources, where Metal's lies in the heap's bytes.
         HeapDepthStencilApart = "heap-depth-stencil-apart", Precision,
             "the texture's texels lie apart from the heap's bytes: a write through a buffer or \
@@ -1043,8 +1029,8 @@ degradations! {
         /// (never a device's own texture, whose layout nothing shows), on a device whose driver
         /// keeps depth and stencil images GPU-optimized whatever their create info
         /// ([`metal2vulkan::device::DriverFact::DepthStencilImagesStayGpuOptimized`]), that no
-        /// shadow of Metal's tiles in the heap's bytes serves (a multisample texture, a depth twin,
-        /// a format whose layout is not measured; `texture/heap.rs`): Metal lays the texture out
+        /// shadow of Metal's tiles in the heap's bytes serves (a multisample texture, a format
+        /// whose layout is not measured; `texture/heap.rs`): Metal lays the texture out
         /// without its compression metadata, and the runtime's image keeps it.
         OptimizedDepthStencilTexture = "optimized-depth-stencil-texture", Precision,
             "the texture's image keeps the GPU-optimized layout Metal drops with the property \
@@ -1054,8 +1040,7 @@ degradations! {
              answers Metal's own size and alignment for the descriptor wherever the runtime \
              models them, and the larger of the images' and Metal's for a texture whose images \
              need more bytes or a coarser alignment that no shadow of the heap's bytes holds it \
-             to (a depth twin among them), where a heap sized by Metal's answers holds fewer \
-             such textures";
+             to, where a heap sized by Metal's answers holds fewer such textures";
         /// A texture of an IOSurface plane of more than one row under 16 bytes a row
         /// (`Buffer::new_texture_with_iosurface_plane`, `linear_plan.rs`): Metal's GPU writes its
         /// rows 16 bytes apart and reads every row past the first as memory-dependent bytes
@@ -1293,9 +1278,7 @@ degradations! {
         /// blit), where the device's pass keeps the bytes its draws do not write. Announced at
         /// every draw, an indirect command buffer's executed commands' too, naming every such
         /// attachment of the pass. Not where `DriverFact::TileStoreIsMetals` holds (MoltenVK's
-        /// pass is a Metal pass, whose tile store rewrites the codes as Metal's does), nor under
-        /// [`metal2vulkan::device::TileStorePolicy::Exact`] for an attachment the load pass
-        /// (`render/unused_bits_load.rs`) rewrites.
+        /// pass is a Metal pass, whose tile store rewrites the codes as Metal's does).
         SnormMinimumKept = "snorm-minimum-kept", Precision,
             "the texels the pass's draws do not write keep their bytes; Metal's pass rewrites a \
              channel's minimum code (-128, or -32768 for 16 bits) as the code above it (-127, \
@@ -1311,9 +1294,7 @@ degradations! {
         /// normalized, none other changed), where the device's pass keeps the bytes its draws do
         /// not write. Announced at every draw, an indirect command buffer's executed commands'
         /// too, naming every such attachment of the pass. Not where `DriverFact::TileStoreIsMetals`
-        /// holds (MoltenVK's pass is a Metal pass), nor under
-        /// [`metal2vulkan::device::TileStorePolicy::Exact`] for an attachment the load pass
-        /// (`render/unused_bits_load.rs`) rewrites.
+        /// holds (MoltenVK's pass is a Metal pass).
         SharedExponentKept = "shared-exponent-kept", Precision,
             "the texels the pass's draws do not write keep their words; Metal's pass normalizes \
              a word whose largest mantissa is below 256 (its exponent above 0) in each tile a \
@@ -1489,9 +1470,7 @@ degradations! {
         /// A render pass that loads a color attachment of an extended-range, padded 10-bit or
         /// bfloat format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`,
         /// `RG10Unorm_X12` and their sRGB twins, `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat`
-        /// and `RGBA16Bfloat`), or under
-        /// [`metal2vulkan::device::TileStorePolicy::Exact`] of a
-        /// signed normalized format or `RGB9E5Float`, stores it and draws, whose load pass
+        /// and `RGBA16Bfloat`), stores it and draws, whose load pass
         /// (`render/unused_bits_load.rs`) rewrites every 32 x 32 tile of its render area: Metal's
         /// pass rewrites only the tiles a draw's primitives reach (on
         /// an Apple M4 and an Apple M3 Max, alike), and every tile only where a color
@@ -1505,8 +1484,7 @@ degradations! {
              clamped to [384, 894], so an out-of-range raw alpha reads back changed, a padded \
              word's low six bits zeroed (an sRGB twin's code moved through Metal's table), a \
              bfloat code moved through half (out of half's range to an infinity or zero, a NaN \
-             to 0x7fc0) and, under the exact tile store, a signed normalized minimum code raised \
-             and an RGB9E5Float word normalized; the tiles a draw reaches are Metal's";
+             to 0x7fc0); the tiles a draw reaches are Metal's";
         /// A draw in a render pass over a rasterization-rate map of no layers that was made after
         /// the device released a map of one or more layers, or reset from one of layers
         /// (`rate_mapped_pass.rs`). The draw
@@ -1802,7 +1780,7 @@ degradations! {
         /// which the runtime models (`texture/heap_tiled.rs`), and which no shadow of the
         /// texture's bytes holds it to (`texture/heap::held_to_metal`): not a multisample texture,
         /// whose image lies in memory of its own, nor one whose planes or Metal's tiles fit its
-        /// bytes, and not one held with a depth twin. The answer is then the larger of the two,
+        /// bytes. The answer is then the larger of the two,
         /// since no image binds at Metal's offsets. Every other such texture answers Metal's
         /// numbers and announces nothing here. Not where `optimized-depth-stencil-texture` says
         /// why.
@@ -1924,18 +1902,12 @@ degradations! {
         /// ANV; a host copy keeps it) or whose depth test compares one otherwise than Metal's (no
         /// `DriverFact::DepthTestKeepsDenormals`: every driver measured but MoltenVK on an Apple
         /// M4). Metal's texel keeps it, and its depth test compares a positive one above zero and
-        /// a negative one not below zero. Where the driver stores it and only its depth test
-        /// differs, a single-sample `Depth32Float` render target's passes test the smallest normal
-        /// in its place (`texture/signed_depth.rs`): Metal's answer but for a fragment at exactly
-        /// 2^-126, which passes `Equal` and fails `Greater` against it, where Metal's fails and
-        /// passes; the payload says so. A draw at a denormal depth stores zero on Metal too, and
+        /// a negative one not below zero. A draw at a denormal depth stores zero on Metal too, and
         /// announces nothing.
         DepthDenormals = "depth-denormals", Precision,
             "a denormal depth may read, sample and copy out as a zero, or the depth test may \
              compare it as zero (a positive one) or below zero (a negative one), where Metal \
-             keeps it and compares a positive one above zero and a negative one not below it; a \
-             render target whose passes test the smallest normal in its place differs only for a \
-             fragment at exactly 2^-126";
+             keeps it and compares a positive one above zero and a negative one not below it";
         /// A depth test that may compare a negative value or a NaN stored in the 32-bit float depth
         /// of a render target as it is, or a pass with depth writes that may store such a value
         /// with its sign. Metal's depth test compares the fragment's depth with the stored value's
@@ -1943,29 +1915,18 @@ degradations! {
         /// fragment at 0.5, and a stored NaN orders above +inf (probe `depthkeep`, the M3 Max under
         /// macOS 27.0.1: 270 of 270 outcomes); and a pass that sets a depth/stencil state with
         /// depth writes stores each texel no fragment wrote without its sign (probe `depthstore`).
-        /// Vulkan's compares the stored value as it is, and its pass keeps it. A single-sample
-        /// `Depth32Float` render target that a write may give such a value, or whose new texture's
-        /// pattern (a NaN with the sign set) a pass loads before a write covered it
-        /// (`fresh_unwritten.rs`), renders the passes that load its depth over its magnitude
-        /// stand-in (`texture/signed_depth.rs`), whose tests and stores are Metal's, and announces
-        /// only the corners: a pass that writes its depth over the stand-in, whose merge keeps a
-        /// stored NaN where a draw wrote exactly +inf, its stand-in, over it; a pass that loads it
-        /// through another image (separate depth and stencil textures' scratch image, a stand-in
-        /// for custom sample positions); and a write that switches it on while another command
-        /// buffer is uncommitted, whose passes encoded before it test and store the value as it is.
-        /// A multisampled or `Depth32Float_Stencil8` target takes no stand-in: its words are
-        /// stripped of their signs after a pass with depth writes, Metal's stores, and its test,
-        /// which compares the value as it is, is announced at the write (a blit's copy into its
-        /// depth, or the pass that loads its new pattern), on a device that keeps such a value
-        /// there (`VK_EXT_depth_range_unrestricted` enabled, or
+        /// Vulkan's compares the stored value as it is, and its pass keeps it. Announced at a write
+        /// that may give a render target's depth such a value (a `replace_region` whose bytes hold
+        /// one, a blit into its depth, a pass's written NaN clear), or at the pass that loads a new
+        /// texture's pattern (a NaN with the sign set) before a write covered it
+        /// (`fresh_unwritten.rs`), on a device that keeps such a value there
+        /// (`VK_EXT_depth_range_unrestricted` enabled, or
         /// `DriverFact::DepthImageKeepsValuesOutsideUnitRange`; elsewhere `restricted-depth-upload`
-        /// is announced), as is a strip the device does not make. A denormal tested over the
-        /// smallest normal is `depth-denormals`'. A device whose depth test compares magnitudes as
-        /// Metal's (`DriverFact::DepthTestComparesMagnitudes`: MoltenVK, whose test and store are
-        /// the GPU's own Metal ones) renders every target's depth in place, strips a switched-on
-        /// depth's signs after a pass that sets a state with depth writes but draws under none,
-        /// which its pass leaves signed, and announces it only for a switch while another command
-        /// buffer is uncommitted. A render pass's NaN clear depth, which Metal stores as
+        /// is announced). A device whose depth test compares magnitudes as Metal's
+        /// (`DriverFact::DepthTestComparesMagnitudes`: MoltenVK, whose test and store are the GPU's
+        /// own Metal ones) announces it instead at a pass that loads and stores the depth and sets
+        /// a state with depth writes but draws under none, which its pass leaves signed. A render
+        /// pass's NaN clear depth, which Metal stores as
         /// `0x7fc00000` and tests above every value, is written into the depth before the pass and
         /// loaded (`nan_clear.rs`); where the device writes no such word (a memoryless depth, a
         /// multisampled one without maintenance8's colour copies or an exact `FragDepth`, a pass
@@ -1974,10 +1935,9 @@ degradations! {
         SignedDepthTest = "signed-depth-test", Precision,
             "a depth test against the stored value, or the value a pass with depth writes stores, \
              can differ from Metal's in the pass or target named: the device compares a negative \
-             value below zero and a NaN by its own rule and keeps the value's sign, or a pass's \
-             merge keeps a stored NaN where a draw wrote +inf over it, where Metal compares the \
-             value's magnitude, orders a NaN above every value, stores the value without its sign \
-             and stores the draw's; or a NaN clear depth is stored and tested as 1.0, where Metal \
+             value below zero and a NaN by its own rule and keeps the value's sign, where Metal \
+             compares the value's magnitude, orders a NaN above every value and stores the value \
+             without its sign; or a NaN clear depth is stored and tested as 1.0, where Metal \
              stores 0x7fc00000";
         /// The device's first sparse texture made (`Heap::new_texture` in a sparse heap) on a
         /// device whose driver's first sparse resource waits for the work submitted before it on
@@ -3990,11 +3950,15 @@ impl Device {
                                 "no device's resolve averages the codes {:?} holds",
                                 color.target.format
                             ),
-                            None => format!(
-                                "the device's `AVERAGE` resolve of {:?} at {} samples is not \
-                                 measured to be Metal's",
-                                color.target.format, color.target.samples
-                            ),
+                            None if color.resolve.as_ref().is_some_and(|r| r.twin) => {
+                                "no device's resolve writes a resolve texture in another \
+                                 format's encoding"
+                                    .to_owned()
+                            }
+                            None => "a fetching pass's sample planes hold its samples as it \
+                                 ends, which the resolve reads where the device's would read \
+                                 them merged back"
+                                .to_owned(),
                         },
                         match copied {
                             true => {
@@ -4108,10 +4072,6 @@ impl Device {
                 && !color_resolve::average_is_metals(self, color.target.samples)
         });
         if let Some(color) = rounded {
-            // Under the device's resolve, a format of Metal's rule at its count resolves by that
-            // rule under the exact one.
-            let switch = self.compile_device().policy().resolve == ResolvePolicy::Device
-                && color_resolve::from_planes(color.target.format, color.target.samples);
             self.degrade(Degradation::DeviceRoundedResolve, || {
                 (
                     format!(
@@ -4121,15 +4081,8 @@ impl Device {
                     ),
                     format!(
                         "Vulkan's `AVERAGE` resolve of {:?} leaves the average's rounding, and \
-                         what a NaN or infinite sample makes of it, to the device{}",
+                         what a NaN or infinite sample makes of it, to the device",
                         color.target.format,
-                        match switch {
-                            true => {
-                                "; `ResolvePolicy::Exact` resolves it by Metal's rule after the \
-                                 pass"
-                            }
-                            false => "",
-                        }
                     ),
                 )
             });
@@ -4646,13 +4599,11 @@ impl Device {
                 });
             } else if matches!(
                 stand_in.cause,
-                Cause::Linear | Cause::KeptBytes | Cause::Magnitude | Cause::KeptSamples
+                Cause::Linear | Cause::KeptBytes | Cause::KeptSamples
             ) {
-                // Announced where `linear_attachment.rs` or `kept_bytes.rs` chose the kept image; a
-                // magnitude stand-in's pass tests and keeps the depth as Metal's
-                // (`texture/signed_depth.rs`, which announces what it does not). An image that
-                // keeps an attachment's samples for a resolve after the pass makes the pass
-                // Metal's, which no notice names (`resolve::keep_samples`).
+                // Announced where `linear_attachment.rs` or `kept_bytes.rs` chose the kept image.
+                // An image that keeps an attachment's samples for a resolve after the pass makes
+                // the pass Metal's, which no notice names (`resolve::keep_samples`).
             } else if memoryless
                 && (index.is_some_and(fetched) || (index.is_none() && shadow) || !chosen)
             {

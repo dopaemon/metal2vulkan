@@ -1645,7 +1645,7 @@ fn passes_and_draws_are_refused_as_metal_refuses_them() {
     // A NaN clear depth of a format whose store of one is not measured, where the device makes
     // it (a value outside [0, 1] clears to the nearer end:
     // `clears_store_the_bytes_metal_stores`; a NaN of a measured format clears as Metal's:
-    // `depth_denormals::a_nan_clear_depth_stores_and_tests_as_metal_s`).
+    // `depth_denormals::a_nan_clear_depth_stores_as_metal_s`).
     match attachment(
         &device,
         PixelFormat::Depth24UnormStencil8,

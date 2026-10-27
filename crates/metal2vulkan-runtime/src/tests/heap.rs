@@ -420,14 +420,11 @@ fn a_heap_s_texture_buffer_takes_its_row_at_16_bytes_as_metal_s_does() {
     }
 }
 
-/// A texture with a depth twin takes the twin's bytes of a heap past its image's, at the twin's
-/// alignment, inside the answered size, so a texture at any multiple of the answered alignment has
-/// each image at a multiple of its own and the next texture's bytes after both; a texture without
-/// one takes its image's, in whole granularity pages; on a device whose driver answers a compressed
-/// image's size short of its compression data (ANV on Xe-LP GPUs), each image and the texture also
-/// take whole 256-byte chunks.
+/// A heap texture takes its image's bytes of a heap, in whole granularity pages, at the image's
+/// alignment or the granularity's; on a device whose driver answers a compressed image's size short
+/// of its compression data (ANV on Xe-LP GPUs), the image also takes whole 256-byte chunks.
 #[test]
-fn a_depth_twin_lies_past_its_image_inside_the_heap_texture_s_bytes() {
+fn a_heap_texture_takes_its_image_s_bytes_in_whole_pages() {
     use crate::texture::heap::heap_extent;
     use crate::texture::ImagePlacement;
     use crate::SizeAndAlign;
@@ -445,37 +442,19 @@ fn a_depth_twin_lies_past_its_image_inside_the_heap_texture_s_bytes() {
         ImagePlacement::new(granularity, &BTreeSet::from([short]))
     };
     let answer = |size, align| SizeAndAlign { size, align };
-    // RADV's shape on the Radeon 780M: 64 KiB alignment for the larger images, 4 KiB for the small.
-    let image = requirements(16512, 4096);
-    let twin = requirements(16384, 65536);
-    let (got, offset) = heap_extent(&image, Some(&twin), pages(1024));
-    assert_eq!(offset, Some(65536));
-    assert_eq!(got, answer(65536 + 16384, 65536));
-    // The twin's start meets its alignment wherever the texture lies.
-    for at in [0, 1, 7].map(|n| n * got.align) {
-        assert!((at + offset.unwrap()).is_multiple_of(twin.alignment));
-    }
-    // A granularity coarser than both alignments rounds the twin's offset and the size.
-    let (small, twin_small) = (requirements(1000, 256), requirements(900, 256));
+    // A granularity coarser than the image's alignment rounds its alignment and size.
+    let small = requirements(1000, 256);
     for placement in [pages(4096), chunks(4096)] {
-        let (got, offset) = heap_extent(&small, Some(&twin_small), placement);
-        assert_eq!((got, offset), (answer(8192, 4096), Some(4096)));
+        assert_eq!(heap_extent(&small, placement), answer(4096, 4096));
     }
-    // Without a twin: the image alone, in whole pages.
+    // The image alone, in whole pages.
     let lone = requirements(16512, 128);
-    let (got, offset) = heap_extent(&lone, None, pages(1024));
-    assert_eq!((got, offset), (answer(17408, 1024), None));
+    assert_eq!(heap_extent(&lone, pages(1024)), answer(17408, 1024));
     // ANV's compressed 4x4 `RGBA8Unorm` image on an Xe-LP GPU: 4112 bytes at 64 KiB, in whole
-    // chunks there, and with a twin past it.
+    // chunks there.
     let compressed = requirements(4112, 65536);
-    let (got, offset) = heap_extent(&compressed, None, chunks(1));
-    assert_eq!((got, offset), (answer(4352, 65536), None));
-    let (got, offset) = heap_extent(&compressed, Some(&requirements(4112, 65536)), chunks(1));
-    assert_eq!((got, offset), (answer(65536 + 4352, 65536), Some(65536)));
-    assert_eq!(
-        heap_extent(&compressed, None, pages(1)).0,
-        answer(4112, 65536)
-    );
+    assert_eq!(heap_extent(&compressed, chunks(1)), answer(4352, 65536));
+    assert_eq!(heap_extent(&compressed, pages(1)), answer(4112, 65536));
 }
 
 /// A heap texture's footprint is Metal's answer, not the running driver's granularity. A heap's
@@ -510,48 +489,35 @@ fn a_heap_texture_s_footprint_takes_no_granularity_padding() {
     // asks exactly: the answer is Metal's, where the padded placement answers a 1024 alignment.
     let metal = answer(16384, 128);
     let image = requirements(16384, 128);
-    assert_eq!(heap_extent(&image, None, nvidia).0, answer(16384, 1024));
-    assert_eq!(heap_extent(&image, None, nvidia.in_heap()).0, metal);
-    assert!(images_fit(
-        heap_extent(&image, None, nvidia.in_heap()).0,
-        metal
-    ));
+    assert_eq!(heap_extent(&image, nvidia), answer(16384, 1024));
+    assert_eq!(heap_extent(&image, nvidia.in_heap()), metal);
+    assert!(images_fit(heap_extent(&image, nvidia.in_heap()), metal));
     // The 64x64 `RGBA8Unorm` 7-level texture the replay found at 23552 bytes where Metal answers
     // 22528: its image asks 22784 (llvmpipe answered that one for the same descriptor), which the
     // padding carries to a whole page. Without the padding the footprint is the image's own, 256
     // bytes past Metal's answer, which does not fit it: a shadow of the texture's bytes holds it.
     let seven = requirements(22784, 128);
     let metal_seven = answer(22528, 128);
-    assert_eq!(heap_extent(&seven, None, nvidia).0, answer(23552, 1024));
-    assert_eq!(
-        heap_extent(&seven, None, nvidia.in_heap()).0,
-        answer(22784, 128)
-    );
+    assert_eq!(heap_extent(&seven, nvidia), answer(23552, 1024));
+    assert_eq!(heap_extent(&seven, nvidia.in_heap()), answer(22784, 128));
     assert!(!images_fit(
-        heap_extent(&seven, None, nvidia.in_heap()).0,
+        heap_extent(&seven, nvidia.in_heap()),
         metal_seven
     ));
     // An image whose own alignment is coarser than Metal's, and one that asks more bytes (the
     // 5000-texel `Type1D` the replay found at 160768 bytes where Metal answers 32768), do not fit
     // Metal's answer: a shadow of the texture's bytes holds those to it.
-    let coarse = heap_extent(&requirements(16384, 1024), None, nvidia.in_heap()).0;
+    let coarse = heap_extent(&requirements(16384, 1024), nvidia.in_heap());
     assert_eq!(coarse, answer(16384, 1024));
     assert!(!images_fit(coarse, metal));
-    let wide = heap_extent(&requirements(160768, 128), None, nvidia.in_heap()).0;
+    let wide = heap_extent(&requirements(160768, 128), nvidia.in_heap());
     assert!(!images_fit(wide, answer(32768, 128)));
-    // A depth twin still lies past the image inside the texture's bytes, at its own alignment,
-    // with no page of the granularity's between them.
-    let (got, offset) = heap_extent(&image, Some(&requirements(16384, 256)), nvidia.in_heap());
-    assert_eq!((got, offset), (answer(32768, 256), Some(16384)));
     // The aux map's chunks survive: ANV's compressed 4x4 `RGBA8Unorm` image on an Xe-LP GPU asks
     // 4112 bytes and writes compression data to the end of the chunk it falls in.
     let short = RuntimeDriverDefect::ImageSizeShortOfCompressionData;
     let anv = ImagePlacement::new(64, &BTreeSet::from([short]));
     let compressed = requirements(4112, 65536);
-    assert_eq!(
-        heap_extent(&compressed, None, anv.in_heap()).0,
-        answer(4352, 65536)
-    );
+    assert_eq!(heap_extent(&compressed, anv.in_heap()), answer(4352, 65536));
 }
 
 /// A heap texture takes Metal's answer, which is the number a program sizes a heap and places its
@@ -563,8 +529,7 @@ fn a_heap_texture_s_footprint_takes_no_granularity_padding() {
 /// The whole decision over the plan's own numbers, every shape the plan can hand it. An image
 /// already in memory of its own takes none of the heap's bytes, so it is held whatever it needs; a
 /// 4:2:2 texture is never held by its image, because its bytes lie where Metal's linear rows do
-/// and not where its image lays them; a texture held with a depth twin is held by neither, since
-/// no shadow of the texture's bytes moves the twin's; a multisample texture is held by a shadow
+/// and not where its image lays them; a multisample texture is held by a shadow
 /// whether or not a shadow of rows fits it, because its image lies in memory of its own either
 /// way.
 #[test]
@@ -577,7 +542,6 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
     let plain = HeapTextureShape {
         apart: false,
         four_two_two: false,
-        twin: false,
         multisample: false,
         shadowable: true,
     };
@@ -612,20 +576,7 @@ fn a_heap_texture_is_held_to_metal_s_answer_by_its_image_or_by_a_shadow() {
         assert_eq!(held_to_metal(past, metal, shape), HeldToMetal::Shadow);
         assert_eq!(held_to_metal(metal, metal, shape), HeldToMetal::Images);
     }
-    // A depth twin's bytes lie past the image's inside the texture's and no shadow moves them: a
-    // texture whose images do not fit is held by neither, whatever else its shape says.
-    for (multisample, shadowable) in [(false, false), (false, true), (true, false), (true, true)] {
-        let shape = HeapTextureShape {
-            twin: true,
-            multisample,
-            shadowable,
-            ..plain
-        };
-        assert_eq!(held_to_metal(past, metal, shape), HeldToMetal::Nothing);
-        assert_eq!(held_to_metal(metal, metal, shape), HeldToMetal::Images);
-    }
-    // An image in memory of its own takes none of the heap's bytes: held whatever it needs, and a
-    // depth twin never goes with one.
+    // An image in memory of its own takes none of the heap's bytes: held whatever it needs.
     let apart = HeapTextureShape {
         apart: true,
         ..plain
@@ -676,17 +627,17 @@ fn every_image_alignment_measured_fits_a_heap_s_base() {
             alignment,
             memory_type_bits: 1,
         };
-        let (answer, _) = heap_extent(&image, None, pages);
+        let answer = heap_extent(&image, pages);
         assert_eq!(answer.align, alignment);
         assert_eq!(
-            check_heap_base(bound, None, answer.align),
+            check_heap_base(bound, answer.align),
             Ok(()),
             "{alignment:#x}"
         );
     }
     let past = 2 * HEAP_BASE_ALIGNMENT;
     assert_eq!(
-        check_heap_base(bound, None, past),
+        check_heap_base(bound, past),
         Err(Error::NotImplemented(RuntimeGap::HeapTextureAlignment {
             alignment: past
         }))
@@ -707,16 +658,10 @@ fn every_image_alignment_measured_fits_a_heap_s_base() {
 /// past Metal's (`heap-texture-larger-than-metal`) for a texture no shadow holds, and a
 /// multisample depth image already asks 256 KiB on RADV.
 ///
-/// A depth twin's image always binds to the heap's memory (`heap_image` of `Mine::Twin` reaches
-/// neither shadow route), so a texture held with one is held to the base whatever its own route
-/// says.
-///
 /// `AliasRoute::Shadow` binds nothing there either: `heap_texture_at` sends it and
 /// `AliasRoute::MemoryShadow` to the one arm (`heap_shadow_image`, whose `new_heap_shadow` places
 /// an image of its own and makes the heap's bytes its copies' source alone), and nothing at that
-/// dispatch tells the two apart. It is never held with a depth twin, whose image would bind: a
-/// twinned texture's own image is a colour one (`plan_images` plans it so), which the route's
-/// `!colour(&optimal)` test leaves out. The route is reached only on a driver that lays depth and
+/// dispatch tells the two apart. The route is reached only on a driver that lays depth and
 /// stencil images apart from their memory (MoltenVK, measured), whose image alignments are
 /// Metal's and well inside the base, so no texture of it meets this bound: what the rule decides
 /// for it is the placement offset `placement_align`'s own test covers, held to Metal's alignment
@@ -731,7 +676,7 @@ fn the_heap_s_base_holds_only_a_texture_whose_image_binds_to_its_memory() {
     let refused = Err(Error::NotImplemented(RuntimeGap::HeapTextureAlignment {
         alignment: past,
     }));
-    let holds_base = |route, twin| check_heap_base(route, twin, past) == refused;
+    let holds_base = |route| check_heap_base(route, past) == refused;
     let own = [
         AliasRoute::Tiled,
         AliasRoute::Lossless,
@@ -749,24 +694,20 @@ fn the_heap_s_base_holds_only_a_texture_whose_image_binds_to_its_memory() {
         AliasRoute::Apart,
     ];
     for route in own {
-        assert_eq!(check_heap_base(route, None, past), Ok(()), "{route:?}");
+        assert_eq!(check_heap_base(route, past), Ok(()), "{route:?}");
         assert!(route.in_own_memory(), "{route:?}");
-        // A depth twin of such a texture binds to the heap's memory, so the base holds it.
-        assert!(holds_base(route, Some(AliasRoute::Direct)), "{route:?}");
-        assert!(holds_base(route, Some(AliasRoute::Apart)), "{route:?}");
         // An alignment the base meets is no refusal either way.
         assert_eq!(
-            check_heap_base(route, None, HEAP_BASE_ALIGNMENT),
+            check_heap_base(route, HEAP_BASE_ALIGNMENT),
             Ok(()),
             "{route:?}"
         );
     }
     for route in bound {
-        assert!(holds_base(route, None), "{route:?}");
+        assert!(holds_base(route), "{route:?}");
         assert!(!route.in_own_memory(), "{route:?}");
-        assert!(holds_base(route, Some(AliasRoute::Direct)), "{route:?}");
         assert_eq!(
-            check_heap_base(route, None, HEAP_BASE_ALIGNMENT),
+            check_heap_base(route, HEAP_BASE_ALIGNMENT),
             Ok(()),
             "{route:?}"
         );

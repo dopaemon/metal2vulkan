@@ -232,12 +232,9 @@ surface! {
         enum VertexNormalizedPolicy N;
         enum NanMinMaxPolicy N;
         enum RoundingOrderPolicy N;
-        enum MultisampleDepthTwinPolicy N;
         enum DecodedTexelsPolicy N;
         enum HeapCompressionPolicy N;
         enum CompletionPolicy N;
-        enum TileStorePolicy N;
-        enum ResolvePolicy N;
         enum BatchOrderPolicy N;
         enum RenderLoweringPolicy N;
         enum HostPageTexturePolicy N;
@@ -659,8 +656,6 @@ surface! {
         fn shadow_merge_kept_image_module;
         struct ShadowMergeImageModule N;
         enum ShadowMergeRead E;
-        fn depth_magnitude_module;
-        struct DepthMagnitudeModule N;
         fn unused_bits_module;
         struct UnusedBitsModule N;
         fn extended_shadow_module;

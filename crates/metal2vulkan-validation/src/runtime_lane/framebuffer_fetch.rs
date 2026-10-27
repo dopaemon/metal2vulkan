@@ -257,11 +257,12 @@ fn scratched(messages: &Messages) -> bool {
 }
 
 /// The kind a resolve of a 4x attachment of `pf` that a pass fetched announces on `lane`'s
-/// device: where it reads sample planes, the exact resolve reads them for a format of Metal's
-/// rules and the device's average resolves any other; else as `degrade_notices::resolve_kind`.
+/// device: where it reads sample planes, the crate-owned resolve reads them for a format of
+/// Metal's rules and the device's average resolves any other; else as
+/// `degrade_notices::resolve_kind`.
 fn fetched_resolve(lane: &Lane, pf: PixelFormat) -> Option<Degradation> {
     if !reads_planes(lane) {
-        return resolve_kind(&lane.device, pf, 4);
+        return resolve_kind(&lane.device, 4);
     }
     let rules = metal2vulkan::metal::format::direct_format(pf)
         .and_then(metal2vulkan::bind::ColorResolveFormat::of)
@@ -270,7 +271,7 @@ fn fetched_resolve(lane: &Lane, pf: PixelFormat) -> Option<Degradation> {
     // `resolve_kind` says.
     match rules {
         true => Some(Degradation::ShaderResolve),
-        false => resolve_kind(&lane.device, pf, 4),
+        false => resolve_kind(&lane.device, 4),
     }
 }
 
@@ -1642,12 +1643,10 @@ fn a_plain_draw_before_a_fetch_takes_the_devices_faster_form() {
 /// that clears it to 0.75 and stores it renders into it. A pass that loads it, halves it by a
 /// fetch, stores it and resolves it renders into a 4x scratch image that has the usage, copied in
 /// before the pass and back after it: the resolve holds 0.375. A pass that loads it and only
-/// resolves it then resolves what the scratch copied back, 0.375 again (by the exact resolve,
-/// from a copy of its samples, where the device resolves `R32Float` so). Each holds Metal's
-/// texels on every venue, and the scratch is announced once, naming the missing usage and the
-/// caller. Through the attachment's multisampled storage image the fetching pass splits for the
-/// device's resolve, announced as the interlock's splits are, where the exact resolve does not
-/// resolve it.
+/// resolves it then resolves what the scratch copied back, 0.375 again, by the device's average.
+/// Each holds Metal's texels on every venue, and the scratch is announced once, naming the
+/// missing usage and the caller. Through the attachment's multisampled storage image the fetching
+/// pass splits for the device's resolve, announced as the interlock's splits are.
 #[test]
 fn a_callers_multisampled_image_without_the_fetch_usage_fetches_through_a_scratch() {
     let (messages, cache, lane) = lane();
@@ -1720,13 +1719,11 @@ fn a_callers_multisampled_image_without_the_fetch_usage_fetches_through_a_scratc
     );
     let notices = messages.take_notices();
     messages.restore_notices(notices.clone());
-    // The caller's image rests out of `GENERAL`; it takes no input attachment usage but transfer
-    // reads, so where the device's average is not measured to be Metal's the exact resolve reads
-    // the fetch's scratch, which has the usage, and in the pass that only resolves a copy of the
-    // image's samples (`shader-resolve`); and where the device reads sample planes, the fetch's
-    // pass reads them and resolves from them by the exact resolve.
+    // The caller's image rests out of `GENERAL`. The device's average resolves it, announced
+    // where it is not measured to be Metal's; where the device reads sample planes, the fetch's
+    // pass reads them and resolves from them by the crate-owned resolve (`shader-resolve`).
     let planes = reads_planes(&lane);
-    let exact = resolve_kind(&lane.device, pf, 4).is_some();
+    let rounded = resolve_kind(&lane.device, 4).is_some();
     let mut first = made(
         &lane,
         &[pipeline_descriptor(
@@ -1739,13 +1736,14 @@ fn a_callers_multisampled_image_without_the_fetch_usage_fetches_through_a_scratc
     // Through the attachment's own multisampled storage image the fetching draw's instance
     // leaves the attachment out of its subpass, and the device's resolve needs it in one: the
     // pass splits there (the RTX 3080's two instances), announced where the
-    // device announces the interlock's splits; the exact resolve, drawn after the pass, needs
-    // none, and through sample planes it reads them: one instance either way.
-    let split = !planes && !exact && announces_interlock_splits(&lane);
+    // device announces the interlock's splits; through sample planes the resolve reads them: one
+    // instance.
+    let split = !planes && announces_interlock_splits(&lane);
     first.extend(forced(&[
         (Degradation::WrappedImageLayoutTransitions, true),
         (Degradation::SamplePlanes, planes),
-        (Degradation::ShaderResolve, exact || planes),
+        (Degradation::ShaderResolve, planes),
+        (Degradation::DeviceRoundedResolve, rounded),
         (Degradation::RenderPassSplit, split),
     ]));
     let counts = assert_made_once(&messages, &[Degradation::FetchThroughScratch], &first);

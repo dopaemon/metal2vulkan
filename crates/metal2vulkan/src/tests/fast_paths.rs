@@ -8,10 +8,9 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DecodedTexelsPolicy, DevicePolicy, FloatMathsPolicy,
-    HeapCompressionPolicy, HostPageTexturePolicy, MultisampleDepthTwinPolicy, NanMinMaxPolicy,
-    RenderLoweringPolicy, ResolvePolicy, RoundingOrderPolicy, SamplingPolicy,
-    TexelConversionPolicy, TileStorePolicy, Unorm8LinearFilterPolicy, VertexNormalizedPolicy,
-    YCbCrFilterPolicy,
+    HeapCompressionPolicy, HostPageTexturePolicy, NanMinMaxPolicy, RenderLoweringPolicy,
+    RoundingOrderPolicy, SamplingPolicy, TexelConversionPolicy, Unorm8LinearFilterPolicy,
+    VertexNormalizedPolicy, YCbCrFilterPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -69,18 +68,13 @@ fn choices() -> Vec<Choice> {
         vertex_normalized: _,
         nan_and_min_max: _,
         rounding_order: _,
-        // The runtime's: where a multisampled `Depth32Float` texture's texels are held, the
-        // texels of a carried texture's decoded twin, a heap's compressed
-        // texture's image, when the host sees a command buffer complete, a loaded attachment's
-        // tile store, a multisampled color attachment's resolve, how a batch begins after the
-        // earlier ones of its queue, where a render encoder's calls are lowered, and what holds a
-        // sampled texture over host pages.
-        multisample_depth_twin: _,
+        // The runtime's: the texels of a carried texture's decoded twin, a heap's compressed
+        // texture's image, when the host sees a command buffer complete, how a batch begins after
+        // the earlier ones of its queue, where a render encoder's calls are lowered, and what holds
+        // a sampled texture over host pages.
         decoded_texels: _,
         heap_compression: _,
         completion: _,
-        tile_store: _,
-        resolve: _,
         batch_order: _,
         render_lowering: _,
         host_page_textures: _,
@@ -94,12 +88,9 @@ fn choices() -> Vec<Choice> {
         choice!(p.vertex_normalized: VertexNormalizedPolicy { Device, Exact }),
         choice!(p.nan_and_min_max: NanMinMaxPolicy { Native, Exact }),
         choice!(p.rounding_order: RoundingOrderPolicy { Native, Exact }),
-        choice!(p.multisample_depth_twin: MultisampleDepthTwinPolicy { Device, Exact }),
         choice!(p.decoded_texels: DecodedTexelsPolicy { Compact, Exact }),
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
         choice!(p.completion: CompletionPolicy { Grouped, Exact }),
-        choice!(p.tile_store: TileStorePolicy { Device, Exact }),
-        choice!(p.resolve: ResolvePolicy { Device, Exact }),
         choice!(p.batch_order: BatchOrderPolicy { Ends, Exact }),
         choice!(p.render_lowering: RenderLoweringPolicy { AtCall, Worker }),
         choice!(p.host_page_textures: HostPageTexturePolicy { InPlace, Shadow }),
@@ -436,42 +427,6 @@ fn the_runtime_s_completion_choice_keys_no_profile() {
     }
 }
 
-/// The runtime's choice of a loaded attachment's tile store (`tile_store`) moves no committed
-/// profile's fingerprint: no profile carries it, so no translation follows it.
-#[test]
-fn the_runtime_s_tile_store_choice_keys_no_profile() {
-    use crate::spirv::testing::committed_profiles_with;
-    let device = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
-    let exact = committed_profiles_with(DevicePolicy {
-        tile_store: TileStorePolicy::Exact,
-        ..DevicePolicy::UNTRUSTED
-    })
-    .expect("profiles");
-    assert_eq!(device.len(), exact.len());
-    for ((stem, d), (other, e)) in device.iter().zip(&exact) {
-        assert_eq!(stem, other);
-        assert_eq!(d.fingerprint(), e.fingerprint(), "{stem}");
-    }
-}
-
-/// The runtime's choice of a multisampled color attachment's resolve (`resolve`) moves no
-/// committed profile's fingerprint: no profile carries it, so no translation follows it.
-#[test]
-fn the_runtime_s_resolve_choice_keys_no_profile() {
-    use crate::spirv::testing::committed_profiles_with;
-    let device = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
-    let exact = committed_profiles_with(DevicePolicy {
-        resolve: ResolvePolicy::Exact,
-        ..DevicePolicy::UNTRUSTED
-    })
-    .expect("profiles");
-    assert_eq!(device.len(), exact.len());
-    for ((stem, d), (other, e)) in device.iter().zip(&exact) {
-        assert_eq!(stem, other);
-        assert_eq!(d.fingerprint(), e.fingerprint(), "{stem}");
-    }
-}
-
 /// The runtime's choice of how a batch begins after the earlier ones of its queue
 /// (`batch_order`) moves no committed profile's fingerprint: no profile carries it, so no
 /// translation follows it.
@@ -506,25 +461,6 @@ fn the_runtime_s_render_lowering_choice_keys_no_profile() {
     for ((stem, w), (other, a)) in worker.iter().zip(&at_call) {
         assert_eq!(stem, other);
         assert_eq!(w.fingerprint(), a.fingerprint(), "{stem}");
-    }
-}
-
-/// The runtime's choice of where a multisampled `Depth32Float` texture's texels are held
-/// (`multisample_depth_twin`) moves no committed profile's fingerprint: no profile carries it, so
-/// no translation follows it.
-#[test]
-fn the_runtime_s_multisample_depth_twin_choice_keys_no_profile() {
-    use crate::spirv::testing::committed_profiles_with;
-    let device = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
-    let exact = committed_profiles_with(DevicePolicy {
-        multisample_depth_twin: MultisampleDepthTwinPolicy::Exact,
-        ..DevicePolicy::UNTRUSTED
-    })
-    .expect("profiles");
-    assert_eq!(device.len(), exact.len());
-    for ((stem, d), (other, e)) in device.iter().zip(&exact) {
-        assert_eq!(stem, other);
-        assert_eq!(d.fingerprint(), e.fingerprint(), "{stem}");
     }
 }
 

@@ -166,11 +166,9 @@ fn made(
     for &(colors, attachments, samples) in pipelines {
         first.extend(lane.made(colors, attachments, samples));
     }
-    first.extend(
-        resolves
-            .iter()
-            .filter_map(|&pf| resolve_kind(&lane.device, pf, MSAA.samples as u32)),
-    );
+    if !resolves.is_empty() {
+        first.extend(resolve_kind(&lane.device, MSAA.samples as u32));
+    }
     first
 }
 
@@ -596,7 +594,7 @@ fn a_clear_resolved_into_the_srgb_twin_without_a_draw_keeps_the_samples() {
         lane.run(&descriptor, Draw::None, None);
         // The pass resolves the 4x attachment: no draw, no buffer. The resolve is into the
         // attachment's format's sRGB twin, which the crate-owned resolve draws on every device
-        // and under either policy (`color_resolve.rs`), announced `shader-resolve`.
+        // (`color_resolve.rs`), announced `shader-resolve`.
         let mut first = made(&lane, &[], &[], false);
         first.insert(Degradation::ShaderResolve);
         announces(&messages, &case, false, &first);

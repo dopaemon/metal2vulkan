@@ -299,7 +299,7 @@ fn is_storage(ty: vk::DescriptorType) -> bool {
 
 impl<'a> PlanResources<'a> {
     /// Whether the run uploads a texture's 32-bit float depth into a depth image: the executor
-    /// holds every texture in its own format, with no depth twin.
+    /// holds every texture in its own format.
     pub(super) fn uploads_float_depth(&self) -> bool {
         self.images.values().any(|image| image.float_depth)
     }

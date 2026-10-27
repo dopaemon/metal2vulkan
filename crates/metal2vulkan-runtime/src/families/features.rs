@@ -1455,8 +1455,8 @@ impl FeatureRow {
             F::ResourceHeaps | F::PlacementHeap => RowState::Exact,
             // Sparse textures: a sparse texture of the row's format as `Heap::new_texture` makes it
             // (the format's Sparse answer, the device's support), then what every sparse texture
-            // still lacks (a view of a format whose tile is not its texture's, a depth twin, a cube
-            // or multisampled texture's tile map), then access counters, which are not scheduled.
+            // still lacks (a view of a format whose tile is not its texture's, a cube or
+            // multisampled texture's tile map), then access counters, which are not scheduled.
             F::SparseTextures => first([
                 formats(f, &[FormatRow::RGBA8Unorm], FormatCapability::Sparse),
                 gap(G::SparseHeaps),

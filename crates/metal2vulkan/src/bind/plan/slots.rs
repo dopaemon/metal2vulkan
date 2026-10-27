@@ -351,8 +351,8 @@ pub(crate) fn srgb_twin_variant(
 /// `SnapshotForm::of`): by the view the snapshot's copy fetches through, the bound texture's
 /// sampled view or, at a slot whose raw codes the variant reads (`srgb`, `slots::srgb_variant`),
 /// its raw view (`metal::texel_format::srgb_raw_view`), and the slot's declared sampled type.
-/// [`SnapshotForm::Bits`] at a slot the variant reads in another class (`cross`), a depth twin's,
-/// or one whose sampled view the device has no format for. The variant's compile reads the same
+/// [`SnapshotForm::Bits`] at a slot the variant reads in another class (`cross`), or one whose
+/// sampled view the device has no format for. The variant's compile reads the same
 /// key, so its plan for the same shape states the same forms.
 pub(crate) fn snapshot_forms(
     profile: &DeviceProfile,
@@ -368,12 +368,7 @@ pub(crate) fn snapshot_forms(
         let Some(SlotInterface::Texture(t)) = interface.get(&slot) else {
             return SnapshotForm::Bits;
         };
-        let Some(TextureShape::Texture {
-            pixel_format,
-            depth_twin: false,
-            ..
-        }) = bound_texture(shape, slot)
-        else {
+        let Some(TextureShape::Texture { pixel_format, .. }) = bound_texture(shape, slot) else {
             return SnapshotForm::Bits;
         };
         if cross.contains_key(&slot) {

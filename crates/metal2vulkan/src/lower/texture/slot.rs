@@ -372,10 +372,9 @@ pub struct HeapPlan {
     pub compares_plain: bool,
     /// The float class of its shape and its declaration, for a compared group whose comparisons
     /// the shader makes ([`HeapPlan::compares_plain`]); set by [`finish`]. Its samples without
-    /// comparison read the members there: the binder holds a `Depth32Float` member with a depth
-    /// twin through its colour image in that class, and through the twin in the depth-comparison
-    /// class, whose depth view ANV clamps into `[0, 1]` and RADV holds a denormal in as zero
-    /// (runtime lane `depth_compares` through argument buffers).
+    /// comparison read the members there, and its comparisons the depth-comparison class, whose
+    /// depth view ANV clamps into `[0, 1]` and RADV holds a denormal in as zero (runtime lane
+    /// `depth_compares` through argument buffers).
     pub plain: Option<(ImageHandleClass, ImageDecl)>,
     /// Its float reads decode a member of a form a heap reads (`ExtendedRange::HEAP_READ`) where
     /// the handle's class index names one; set by `select_read`.
@@ -1228,13 +1227,12 @@ fn tiled_shape(shape: ImageShape) -> bool {
 /// outside `[0, 1]` where the consumer enabled `VK_EXT_depth_range_unrestricted`, or where its
 /// driver is measured to keep them without it
 /// (`VkProperty::DepthImageKeepsValuesOutsideUnitRange`, MoltenVK's), which the module then
-/// requires; the device's comparison reads a depth image (the texture's own, or its depth twin):
-/// on a device with neither the function records `PrecisionNote::RestrictedDepthRange`. Its reads,
-/// samples and gathers, and the comparisons the shader makes of them, read the texels the consumer
-/// holds them in, which a colour image keeps, so they record nothing: the interface's
-/// `TextureSlot::access` states them, and the consumer announces an upload its own depth image may
-/// clamp (`restricted-depth-upload`). No module requires the extension, since every value within
-/// `[0, 1]` is exact without it.
+/// requires; the device's comparison reads the texture's depth image: on a device with neither the
+/// function records `PrecisionNote::RestrictedDepthRange`. Its reads, samples and gathers, and the
+/// comparisons the shader makes of them, record nothing: the interface's `TextureSlot::access`
+/// states them, and the consumer announces an upload its depth image may clamp
+/// (`restricted-depth-upload`), which every read of it then reads. No module requires the
+/// extension, since every value within `[0, 1]` is exact without it.
 pub(crate) fn depth_comparison(cx: &mut SelectCx<'_>) {
     let enabled = &cx.profile.fields().enabled;
     if enabled

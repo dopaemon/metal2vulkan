@@ -44,17 +44,6 @@
 //!   and decodes them as Metal does (the variant; [`holds_srgb_twin`]).
 //! - **Exactness.** A texture is held only in an exact representation: 24-bit depth held as
 //!   32-bit float depth (`FormatEmulation::DepthWidened`) is refused, naming the format it needs.
-//! - **Depth twins**. On a device whose depth images its driver is not measured to keep every
-//!   `float` in ([`DepthImageFacts`]: without `VK_EXT_depth_range_unrestricted` and the driver's
-//!   fact that its depth images keep values outside `[0, 1]`, or without its fact that they keep
-//!   denormals), a `Depth32Float` texture the program only reads or samples (shader-read usage, no
-//!   render target, not memoryless) is held in an `R32_SFLOAT` image, which keeps any `float` a
-//!   copy writes, where a depth image may store a value outside `[0, 1]` clamped or a denormal as
-//!   zero (ANV and RADV do); its depth twin ([`plan_depth_twin`]), a `D32_SFLOAT` image of the same
-//!   shape, holds the same texels for the comparisons the device makes (the shader makes the
-//!   others; [`plan_images`]). Where the device lacks either format's sampling or copies
-//!   the texture keeps its depth image; a texture over a buffer, a shared texture and a texture
-//!   over the caller's image ([`plan_image`]) have no twin.
 //!
 //! The device's image limits for the result (`vkGetPhysicalDeviceImageFormatProperties2`) are
 //! checked by [`check_image_limits`].
@@ -103,14 +92,11 @@ pub(super) struct ImageFacts<'a> {
     /// image of a format whose linear tiling has `LINEAR_COLOR_ATTACHMENT_NV` renders, where
     /// every color attachment of the render pass instance is linear (`linear_attachment.rs`).
     pub(super) linear_attachments: bool,
-    /// `MultisampleDepthTwinPolicy::Exact`: a multisampled `Depth32Float` texture the program
-    /// only reads is held in a colour image ([`holds_multisample_depth_in_colour`]).
-    pub(super) multisample_depth_twin: bool,
 }
 
 /// What a device's driver is measured to keep in a `D32_SFLOAT` image, of the `float`s Metal's
-/// `Depth32Float` texel holds (`device/driver_facts.rs`): an unmeasured driver keeps neither, so
-/// its read-only textures take the exact path, a colour image.
+/// `Depth32Float` texel holds (`device/driver_facts.rs`): an unmeasured driver keeps neither, and
+/// a write that may store such a value announces it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct DepthImageFacts {
     /// `DriverFact::DepthImageKeepsDenormals`.
@@ -121,8 +107,7 @@ pub(super) struct DepthImageFacts {
     /// `DriverFact::DepthTestKeepsDenormals`.
     pub(super) test_denormals: bool,
     /// `DriverFact::DepthTestComparesMagnitudes`: the depth test is Metal's for every value a
-    /// `D32_SFLOAT` image holds, so no target renders over a magnitude stand-in
-    /// (`texture/signed_depth.rs`).
+    /// `D32_SFLOAT` image holds (`Texture::degrade_signed_depth`).
     pub(super) test_magnitudes: bool,
 }
 
@@ -139,28 +124,6 @@ impl DepthImageFacts {
 }
 
 impl ImageFacts<'_> {
-    /// Why a `D32_SFLOAT` image may not hold a `Depth32Float` texel as Metal does: the device lacks
-    /// `VK_EXT_depth_range_unrestricted` and its driver is not measured to keep a value outside
-    /// `[0, 1]`, so it may store one clamped, or its driver is not measured to keep a denormal,
-    /// or both; `None` where it keeps every one.
-    pub(super) fn depth_loss(&self) -> Option<&'static str> {
-        match (self.depth_clamps(), self.depth_images.denormals) {
-            (false, true) => None,
-            (true, true) => Some(
-                "the device lacks VK_EXT_depth_range_unrestricted, so a depth image may store a \
-                 value outside [0, 1] clamped",
-            ),
-            (false, false) => {
-                Some("the device's driver is not measured to keep a denormal in a depth image")
-            }
-            (true, false) => Some(
-                "the device lacks VK_EXT_depth_range_unrestricted, so a depth image may store a \
-                 value outside [0, 1] clamped, and its driver is not measured to keep a denormal \
-                 there",
-            ),
-        }
-    }
-
     /// Why a denormal a write stores in a `D32_SFLOAT` image (`on_host`: a host copy, which keeps
     /// it on every driver measured) may answer otherwise than Metal's: the driver stores one a
     /// write on the GPU gives it as a zero (no `DriverFact::DepthImageKeepsDenormals`), or its
@@ -515,68 +478,7 @@ pub(super) fn plan_image(
     memoryless: bool,
     facts: &ImageFacts<'_>,
 ) -> Result<ImagePlan, ImageRefusal> {
-    plan_held(layout, usage, memoryless, facts, false).map_err(|r| r.naming(layout.pixel_format))
-}
-
-/// The images of a texture of `layout` with Metal `usage` on a device with `facts`, whatever
-/// memory holds it (`memoryless` for `MTLStorageModeMemoryless`): [`plan_image`]'s image, and no
-/// twin, except for a texture with a depth twin ([`plan_depth_twin`]), whose image holds its texels
-/// in `R32_SFLOAT` beside the twin.
-pub(super) fn plan_images(
-    layout: &TextureLayout,
-    usage: TextureUsage,
-    memoryless: bool,
-    facts: &ImageFacts<'_>,
-) -> Result<(ImagePlan, Option<ImagePlan>), ImageRefusal> {
-    let twin = plan_depth_twin(layout, usage, memoryless, facts);
-    let colour =
-        twin.is_some() || holds_multisample_depth_in_colour(layout, usage, memoryless, facts);
-    let plan = plan_held(layout, usage, memoryless, facts, colour)
-        .map_err(|r| r.naming(layout.pixel_format))?;
-    Ok((plan, twin))
-}
-
-/// Whether a multisampled `Depth32Float` texture of `layout` with Metal `usage` (`memoryless` for
-/// `MTLStorageModeMemoryless`) holds its texels in an `R32_SFLOAT` image on a device with `facts`
-/// (`MultisampleDepthTwinPolicy::Exact`), as a single-sampled one of it does
-/// ([`plan_depth_twin`]): the program only reads or samples it (shader-read usage and no render
-/// target, so no pass writes it and no comparison reads it, Metal having none of a multisampled
-/// depth texture), the device's depth images may not keep its texels
-/// ([`ImageFacts::depth_loss`]), and the device holds a multisampled `R32_SFLOAT` image it
-/// samples and copies. `false` under the default, and for every other texture.
-///
-/// `plan_depth_twin` leaves a multisampled texture out on the reading that one without a render
-/// target usage has no writer; `BlitCommandEncoder::fill_texture` is one, and Metal's fill stores
-/// the pattern's bytes as given. The texture takes no depth twin beside the colour image: nothing
-/// compares it, and no copy writes a multisampled depth image from a colour one.
-fn holds_multisample_depth_in_colour(
-    layout: &TextureLayout,
-    usage: TextureUsage,
-    memoryless: bool,
-    facts: &ImageFacts<'_>,
-) -> bool {
-    let usage = effective_usage(usage);
-    facts.multisample_depth_twin
-        && layout.pixel_format == PixelFormat::Depth32Float
-        && layout.samples > 1
-        && !memoryless
-        && usage.contains(TextureUsage::SHADER_READ)
-        && !usage.contains(TextureUsage::RENDER_TARGET)
-        && facts.depth_loss().is_some()
-        && facts.optimal(Format::R32_SFLOAT).contains(
-            FormatFeatureFlags2::SAMPLED_IMAGE
-                | FormatFeatureFlags2::TRANSFER_SRC
-                | FormatFeatureFlags2::TRANSFER_DST,
-        )
-}
-
-/// Whether `plan`'s texels are in a colour image although its pixel format is a depth format: a
-/// `Depth32Float` texture held in `R32_SFLOAT`, which keeps every `float` a copy writes where the
-/// device's depth images may not ([`plan_depth_twin`] for a single-sampled one, with the
-/// `D32_SFLOAT` twin beside it; [`holds_multisample_depth_in_colour`] for a multisampled one, with
-/// no twin). `false` for every other plan, a depth plan among them.
-pub(super) fn holds_depth_in_colour(plan: &ImagePlan) -> bool {
-    plan.pixel_format == PixelFormat::Depth32Float && plan.format == Format::R32_SFLOAT
+    plan_held(layout, usage, memoryless, facts).map_err(|r| r.naming(layout.pixel_format))
 }
 
 /// The flags a 3D image rendered into needs: 2D-array compatible, for the 2D view of its depth
@@ -594,14 +496,12 @@ fn render_3d_flags(profile: &DeviceProfile) -> ImageCreateFlags {
     }
 }
 
-/// [`plan_image`]'s plan, with `colour_depth` for a texture with a depth twin, sampled as
-/// `R32Float` is.
+/// [`plan_image`]'s plan.
 fn plan_held(
     layout: &TextureLayout,
     usage: TextureUsage,
     memoryless: bool,
     facts: &ImageFacts<'_>,
-    colour_depth: bool,
 ) -> Result<ImagePlan, ImageRefusal> {
     let pf = layout.pixel_format;
     let profile = facts.profile;
@@ -717,17 +617,12 @@ fn plan_held(
     }
 
     let wants = |bit: TextureUsage| usage.contains(bit);
-    // A texture with a depth twin holds its texels as `R32Float` would.
-    let held = match colour_depth {
-        true => PixelFormat::R32Float,
-        false => pf,
-    };
     // An 8-bit sRGB format the device cannot sample is sampled through its UNORM twin's view,
     // whose raw codes the shader decodes as Metal does ([`holds_srgb_twin`]).
-    let sampled = vk_format(held, &[FormatUsage::SampledImage].into(), profile)
+    let sampled = vk_format(pf, &[FormatUsage::SampledImage].into(), profile)
         .ok()
         .or_else(|| {
-            srgb_raw_twin(held)
+            srgb_raw_twin(pf)
                 .and_then(|twin| vk_format(twin, &[FormatUsage::SampledImage].into(), profile).ok())
         });
     // Apple's private `BlockWritesOnly` (0x10000) is a usage Metal writes through as through
@@ -1003,70 +898,6 @@ fn plan_held(
         view_formats,
         mapping,
         unavailable,
-    })
-}
-
-/// The depth twin of a texture of `layout` with Metal `usage` (`memoryless` for
-/// `MTLStorageModeMemoryless`) on a device with `facts`: a `D32_SFLOAT` image of the texture's
-/// shape that comparisons sample and copies write, beside the `R32_SFLOAT` image the texture holds
-/// its texels in. A single-sample `Depth32Float` texture with shader-read usage and no render
-/// target, not memoryless, on a device whose depth image may not hold its texels
-/// ([`ImageFacts::depth_loss`]: without `VK_EXT_depth_range_unrestricted` enabled or a driver
-/// measured to keep a value outside `[0, 1]`, or without a driver measured to keep a denormal),
-/// whose `R32_SFLOAT` is sampled and copied and whose
-/// `D32_SFLOAT` is sampled and copied into, has one; `None` for every other. A multisampled
-/// texture takes no twin: nothing compares it, and no copy writes a multisampled depth image from
-/// a colour one ([`holds_multisample_depth_in_colour`] holds its texels in colour alone).
-fn plan_depth_twin(
-    layout: &TextureLayout,
-    usage: TextureUsage,
-    memoryless: bool,
-    facts: &ImageFacts<'_>,
-) -> Option<ImagePlan> {
-    let pf = layout.pixel_format;
-    let usage = effective_usage(usage);
-    let copies = FormatFeatureFlags2::TRANSFER_SRC | FormatFeatureFlags2::TRANSFER_DST;
-    let holds = pf == PixelFormat::Depth32Float
-        && layout.samples == 1
-        && !memoryless
-        && usage.contains(TextureUsage::SHADER_READ)
-        && !usage.contains(TextureUsage::RENDER_TARGET)
-        && facts.depth_loss().is_some()
-        && facts
-            .optimal(Format::R32_SFLOAT)
-            .contains(FormatFeatureFlags2::SAMPLED_IMAGE | copies)
-        && facts
-            .optimal(Format::D32_SFLOAT)
-            .contains(FormatFeatureFlags2::SAMPLED_IMAGE | FormatFeatureFlags2::TRANSFER_DST);
-    if !holds {
-        return None;
-    }
-    let mapping = vk_format(pf, &[FormatUsage::SampledImage].into(), facts.profile).ok()?;
-    let samples = sample_count(layout.samples)?;
-    let (image_type, mut flags) = image_type(layout.texture_type)?;
-    if cube_compatible(layout) {
-        flags |= ImageCreateFlags::CUBE_COMPATIBLE;
-    }
-    let mut usage_flags = ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST;
-    if facts
-        .optimal(mapping.format)
-        .contains(FormatFeatureFlags2::TRANSFER_SRC)
-    {
-        usage_flags |= ImageUsageFlags::TRANSFER_SRC;
-    }
-    (mapping.format == Format::D32_SFLOAT).then(|| ImagePlan {
-        pixel_format: pf,
-        flags,
-        image_type,
-        format: mapping.format,
-        extent: layout.extent,
-        levels: layout.levels,
-        layers: layout.layers,
-        samples,
-        usage: usage_flags,
-        view_formats: Vec::new(),
-        mapping,
-        unavailable: TextureUsage::empty(),
     })
 }
 

@@ -76,11 +76,11 @@
 //! filled with it and copied in, a multisampled one by an `R32_UINT` image cleared to it (an
 //! integer clear converts nothing) and copied in by maintenance8's depth/colour copy, or, where
 //! those copies are missing or run wrong, drawn in by the `FragDepth` draw where the driver's
-//! fragment depth stores every value unchanged (`depth_copy::drawn`). The write switches the
-//! texture on (`texture/signed_depth.rs`): the pass's depth test then compares the NaN as Metal's
-//! does, over its magnitude stand-in or by a device whose test is Metal's own, and announces it
-//! otherwise (`signed-depth-test`). Written before anything the pass copies its depth out with
-//! (separate depth and stencil textures' scratch, a stand-in), which loads the word with the rest.
+//! fragment depth stores every value unchanged (`depth_copy::drawn`). The pass's depth test then
+//! compares the NaN as the device's does: Metal's where its test is Metal's own, and elsewhere as
+//! it is, announced (`signed-depth-test`). Written before anything the pass copies its depth out
+//! with (separate depth and stencil textures' scratch, a stand-in), which loads the word with the
+//! rest.
 //! Where it cannot be written, the pass clears to 1.0, the value Metal's test orders a NaN
 //! nearest, announced (`signed-depth-test`; on a device that may clamp a depth outside `[0, 1]`,
 //! `restricted-depth-upload`): a memoryless depth; a pass that does not store it on a device that

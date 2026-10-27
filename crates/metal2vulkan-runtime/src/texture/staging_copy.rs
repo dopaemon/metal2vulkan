@@ -6,7 +6,7 @@
 //!
 //! - **Which images** ([`Device::stages`]). A new `Shared` or `Managed` texture's image in memory
 //!   of its own, of a color format (a queue of transfers alone copies no depth or stencil aspect,
-//!   so a depth texture and its depth twin, keep the host's or the submission's copies), made for
+//!   so a depth texture keeps the host's or the submission's copies), made for
 //!   copies both ways, of one sample (Vulkan copies nothing into a multisampled image; a clear
 //!   writes its zeros). It is made concurrent among the device's families and the staging queue's,
 //!   so its uses change no owner: measured on the RTX 3090, 50 clears and 50 copies of a 1080p
@@ -54,10 +54,10 @@ impl Device {
 }
 
 impl Image {
-    /// Whether its CPU copies may run on the staging queue: it was made so, and it has no depth
-    /// twin (a decoded twin's decode is staged, the module docs).
+    /// Whether its CPU copies may run on the staging queue: it was made so (a decoded twin's
+    /// decode is staged, the module docs).
     pub(super) fn takes_staging_copies(&self) -> bool {
-        self.staging_copies && self.twin.is_none()
+        self.staging_copies
     }
 
     /// Whether nothing of a host call's copy into it waits for a batch: no copy staged while it

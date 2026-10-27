@@ -20,8 +20,8 @@
 //!   texture names its own image. A command that writes the texture through the shadow and
 //!   another way is refused as `shadow.rs` refuses it for an image's shadow.
 //! - **Not served.** A texture made resident for a function reading handles (the device's heap
-//!   sets bind its own image), a sparse texture, a heap's, a texture with a depth twin, and a
-//!   pair the copies cannot serve stay `NotImplemented(UndeclaredTextureUsage)`.
+//!   sets bind its own image), a sparse texture, a heap's, and a pair the copies cannot serve stay
+//!   `NotImplemented(UndeclaredTextureUsage)`.
 //! - **Announced** once per device as `undeclared-usage-shadow` (performance), at a shadow's first
 //!   binding beyond the texture's usage.
 //! - **Attachment reads.** A draw's sampled slot binding of a texture that presents a color
@@ -118,9 +118,6 @@ impl Texture {
             let view = binding_view(shadow.image.plan(), &record, desc, storage)
                 .map_err(|refusal| view_error(call, refusal))?;
             return shadow.image.view(&view);
-        }
-        if desc.twin {
-            return self.bound_view(call, desc, storage);
         }
         let Some(shadow) = self.slot_shadow(call, storage, attached)? else {
             return self.bound_view(call, desc, storage);
@@ -239,16 +236,12 @@ impl Texture {
         }
         let (image, copies, truth) = match &self.0.storage {
             Storage::Image(image) => {
-                if image.twin.is_some() {
-                    return Err(refused());
-                }
                 let base = match &image.owner {
                     Owner::ViewShadow(shadow) => &shadow.base,
                     Owner::Runtime { .. } | Owner::Caller(_) | Owner::HeapUnaliased(_) => image,
                     Owner::Buffer { .. }
                     | Owner::Sparse(_)
                     | Owner::Heap(_)
-                    | Owner::HeapTwin
                     | Owner::HeapShadow(_) => return Err(refused()),
                 };
                 let image =

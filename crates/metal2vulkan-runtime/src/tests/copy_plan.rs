@@ -200,34 +200,30 @@ fn copy_units_are_metals_pixels_blocks_and_aspects() {
     }
 }
 
-/// A texture with a depth twin holds `Depth32Float` in an `R32_SFLOAT` image: Metal's 4 bytes a
-/// texel in its colour aspect, with any option (plain Metal copies `Depth32Float`'s depth with
-/// `StencilFromDepthStencil`); no other format held in colour as depth.
+/// A depth format's texels lie in its depth and stencil aspects: a colour image of one is no
+/// layout a copy names, refused `NotImplemented(Format)` with any option.
 #[test]
-fn depth_held_in_colour_copies_metals_four_bytes() {
+fn depth_held_in_colour_is_refused() {
     let (_, device) = lavapipe();
     let sampled = [FormatUsage::SampledImage].into();
     let colour: FormatMapping =
         vk_format(PixelFormat::R32Float, &sampled, device.profile()).unwrap();
     assert_eq!(colour.aspects, ImageAspectFlags::COLOR);
-    for option in [
-        BlitOption::None,
-        BlitOption::DepthFromDepthStencil,
-        BlitOption::StencilFromDepthStencil,
-    ] {
-        let unit = copy_unit(PixelFormat::Depth32Float, &colour, option).unwrap();
-        assert_eq!(
-            (unit.bytes, unit.extent, unit.aspect),
-            (4, [1, 1], ImageAspectFlags::COLOR),
-            "{option:?}"
-        );
-    }
-    match copy_unit(PixelFormat::Depth16Unorm, &colour, BlitOption::None) {
-        Err(CopyRefusal::Unsupported(u)) => assert_eq!(
-            (u.feature, u.needs),
-            (Feature::Format, Needs::NotImplemented)
-        ),
-        other => panic!("{other:?}"),
+    for pf in [PixelFormat::Depth32Float, PixelFormat::Depth16Unorm] {
+        for option in [
+            BlitOption::None,
+            BlitOption::DepthFromDepthStencil,
+            BlitOption::StencilFromDepthStencil,
+        ] {
+            match copy_unit(pf, &colour, option) {
+                Err(CopyRefusal::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::Format, Needs::NotImplemented),
+                    "{pf:?} {option:?}"
+                ),
+                other => panic!("{pf:?} {option:?}: {other:?}"),
+            }
+        }
     }
 }
 

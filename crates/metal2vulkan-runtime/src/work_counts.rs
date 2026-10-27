@@ -242,10 +242,6 @@ pub(crate) struct Counters {
     linear_passes_in_place: AtomicU64,
     linear_passes_through_copies: AtomicU64,
     kept_bytes_passes: AtomicU64,
-    signed_depth_switch_ons: AtomicU64,
-    magnitude_stand_in_passes: AtomicU64,
-    magnitude_write_backs: AtomicU64,
-    sign_strips: AtomicU64,
     color_group_passes: AtomicU64,
     color_group_twins: AtomicU64,
     color_group_draws_skipped: AtomicU64,
@@ -1679,29 +1675,6 @@ impl Counters {
         self.kept_bytes_passes.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A render target's 32-bit float depth was switched on to render over its magnitude
-    /// stand-in, or to have its words stripped of their signs (`texture/signed_depth.rs`): once
-    /// per texture image.
-    pub(crate) fn signed_depth_switch_on(&self) {
-        self.signed_depth_switch_ons.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A pass rendered a depth over its magnitude stand-in (`texture/signed_depth.rs`), and
-    /// wrote what it changed back into the depth where `written_back`.
-    pub(crate) fn magnitude_stand_in_pass(&self, written_back: bool) {
-        self.magnitude_stand_in_passes
-            .fetch_add(1, Ordering::Relaxed);
-        if written_back {
-            self.magnitude_write_backs.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// A depth's words were stored without their signs after a pass with depth writes whose
-    /// stores the device's pass left signed (`texture/signed_depth.rs`, `SignStrip`).
-    pub(crate) fn sign_strip(&self) {
-        self.sign_strips.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// A render encoder drew one of its pass's later color groups (`render/color_groups.rs`).
     pub(crate) fn color_group_pass(&self) {
         self.color_group_passes.fetch_add(1, Ordering::Relaxed);
@@ -3127,9 +3100,8 @@ pub struct WorkCounts {
     /// backings included.
     pub ahead_nanos: u64,
     /// Load passes render encoders recorded: one per extended-range, padded 10-bit or bfloat
-    /// color attachment (and under `TileStorePolicy::Exact` signed normalized or `RGB9E5Float`
-    /// one) that a pass which draws loads and stores, whose words a dispatch rewrote in the tiles
-    /// the pass's draws reach before the pass, as Metal's tile store leaves them
+    /// color attachment that a pass which draws loads and stores, whose words a dispatch rewrote in
+    /// the tiles the pass's draws reach before the pass, as Metal's tile store leaves them
     /// (`render/unused_bits_load.rs`).
     pub unused_bits_load_passes: u64,
     /// The texels of those passes' regions (the render area rounded up to 32 texels a side,
@@ -3960,29 +3932,6 @@ pub struct WorkCounts {
     /// (`DontCare`, `MultisampleResolve`), through the image its texture keeps, so that the buffer
     /// keeps its bytes (`kept_bytes.rs`).
     pub kept_bytes_passes: u64,
-    /// Render targets' 32-bit float depths switched on to render over their magnitude stand-in,
-    /// or to have their words stripped of their signs after a pass with depth writes whose stores
-    /// the device's pass leaves signed: a write that may store a negative value, a NaN, or a
-    /// denormal the device's depth test compares as zero, once per texture image
-    /// (`texture/signed_depth.rs`). None where no such write was made: every other pass renders
-    /// its depth in place.
-    pub signed_depth_switch_ons: u64,
-    /// Passes that loaded such a depth and rendered over its magnitude stand-in: its words copied
-    /// out, their stand-ins written by a dispatch and copied into the stand-in before the pass.
-    pub magnitude_stand_in_passes: u64,
-    /// Those written back into the depth, a pass that stores it and may have written it (a
-    /// depth/stencil state with depth writes, or an indirect command buffer's own states):
-    /// the stand-in copied out after the pass, merged into the depth's words by a dispatch, and
-    /// copied back.
-    pub magnitude_write_backs: u64,
-    /// Passes after which such a depth, rendered in place or through another image copied back
-    /// into it, not over its magnitude stand-in, was stored without its signs, as Metal stores
-    /// it: the pass set a depth/stencil state with depth writes, and the device's pass left the
-    /// words signed (every such pass, or, on a device whose depth test and stores are Metal's
-    /// own, one that drew under none). A single-sample depth's words copied out, stripped by a
-    /// dispatch and copied back; a multisampled one's samples copied out, stripped by a
-    /// sample-rate draw of each layer and copied back, or copied out and drawn back stripped.
-    pub sign_strips: u64,
     /// Passes a render encoder drew past its first for a pass of more color attachments than the
     /// device draws at once, one per later color group, each of that group's colors over a twin
     /// of the depth and stencil (`render/color_groups.rs`).
@@ -5131,10 +5080,6 @@ impl Device {
                 .linear_passes_through_copies
                 .load(Ordering::Relaxed),
             kept_bytes_passes: counters.kept_bytes_passes.load(Ordering::Relaxed),
-            signed_depth_switch_ons: counters.signed_depth_switch_ons.load(Ordering::Relaxed),
-            magnitude_stand_in_passes: counters.magnitude_stand_in_passes.load(Ordering::Relaxed),
-            magnitude_write_backs: counters.magnitude_write_backs.load(Ordering::Relaxed),
-            sign_strips: counters.sign_strips.load(Ordering::Relaxed),
             color_group_passes: counters.color_group_passes.load(Ordering::Relaxed),
             color_group_twins: counters.color_group_twins.load(Ordering::Relaxed),
             color_group_draws_skipped: counters.color_group_draws_skipped.load(Ordering::Relaxed),

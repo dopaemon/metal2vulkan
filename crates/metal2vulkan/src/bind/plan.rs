@@ -889,12 +889,6 @@ pub struct ImageViewDesc {
     /// first level is its parent's level `b` is the parent's level `b + i`. Every layer either way.
     #[cfg_attr(feature = "serde", serde(default))]
     pub level: Option<u32>,
-    /// The view is of the texture's depth twin: the `D32_SFLOAT` image a texture held in
-    /// `R32_SFLOAT` ([`TextureFacts::depth_twin`](crate::bind::TextureFacts)) keeps for the
-    /// comparisons the device makes of it (the shader makes the others). `false` for every other
-    /// view, which is of the texture's own image.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub twin: bool,
     /// The function applies the bound texture's swizzle (`MTLTexture.swizzle`) to the texels it
     /// reads and writes through the view, so the view takes none: its component mapping is
     /// `components` alone. Set for a storage view of a swizzled texture at a slot of
@@ -926,7 +920,6 @@ impl ImageViewDesc {
             layout,
             components,
             level: None,
-            twin: false,
             shader_swizzle: false,
         }
     }

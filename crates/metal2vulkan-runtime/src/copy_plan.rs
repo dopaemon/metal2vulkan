@@ -289,21 +289,11 @@ pub(super) fn copy_unit(
     if !is_depth_stencil(pf) {
         return colour_unit(pf);
     }
-    // A texture holding a depth format's texels in a colour image
-    // (`image_plan::holds_depth_in_colour`: one with a depth twin, and a multisampled
-    // `Depth32Float` one under `MultisampleDepthTwinPolicy::Exact`) holds them in an `R32_SFLOAT`
-    // image, Metal's 4 bytes a texel in its colour aspect; `Depth32Float` has no stencil to name.
+    // A depth format's texels lie in its depth and stencil aspects, never in colour.
     if mapping.aspects == ImageAspectFlags::COLOR {
-        if pf != PixelFormat::Depth32Float || mapping.format != Format::R32_SFLOAT {
-            return Err(CopyRefusal::Unsupported(
-                Unsupported::not_implemented(Feature::Format).naming_format(pf),
-            ));
-        }
-        return Ok(CopyUnit {
-            bytes: 4,
-            extent: [1, 1],
-            aspect: ImageAspectFlags::COLOR,
-        });
+        return Err(CopyRefusal::Unsupported(
+            Unsupported::not_implemented(Feature::Format).naming_format(pf),
+        ));
     }
     // The stencil view of a combined depth/stencil texture (`X32Stencil8` of
     // `Depth32FloatStencil8`) copies the stencil of the image it shares, a byte a texel, whatever
@@ -541,20 +531,6 @@ impl HostLayout {
                 let exponent = bits & 0x7f80_0000;
                 let nan = exponent == 0x7f80_0000 && bits & 0x007f_ffff != 0;
                 nan || (bits & 0x8000_0000 != 0 && exponent != 0)
-            })
-        })
-    }
-
-    /// Whether the host bytes `host` of 32-bit float texels (a depth's) hold, in a row, a word
-    /// whose magnitude stand-in (`bind::DepthMagnitudeModule::stand_in`, a denormal's the smallest
-    /// normal where `flush`) is not itself: a negative value, -0 included, a NaN, or where `flush`
-    /// a denormal; a depth test of the device's compares such a value otherwise than Metal's.
-    pub(super) fn holds_unlike_its_stand_in(&self, host: &[u8], flush: bool) -> bool {
-        let n = self.row_bytes as usize;
-        self.rows().any(|(h, _)| {
-            host[h..h + n].as_chunks::<4>().0.iter().any(|word| {
-                let bits = u32::from_le_bytes(*word);
-                metal2vulkan::bind::DepthMagnitudeModule::stand_in(bits, flush) != bits
             })
         })
     }

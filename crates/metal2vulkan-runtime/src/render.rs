@@ -94,8 +94,9 @@
 //!   Metal's 1 or 0 for `Boolean` ones.
 //! - **Resolves** (`resolve.rs`) happen at the end of the pass's subpass; a late store action
 //!   must resolve exactly where the attachment has a resolve texture (measured). A color resolve
-//!   whose device's average is not Metal's is drawn after the pass instead, by the exact resolve
-//!   (`color_resolve.rs`). A resolve into
+//!   no device's average writes (an extended-range attachment's, one into its format's sRGB
+//!   twin) is drawn after the pass instead, by the crate-owned resolve (`color_resolve.rs`). A
+//!   resolve into
 //!   a texture whose image is no attachment goes through a scratch image, copied after the pass.
 //!   The encoder may replace an attachment's resolve target until the pass ends
 //!   (`render/late_resolve.rs`).
@@ -335,7 +336,6 @@ use super::shadow_stencil::ShadowStencil;
 use super::sparse::emulated::Scrub;
 use super::tessellation::{FactorBuffer, Factors};
 use super::texture::held_depth;
-use super::texture::signed_depth::{self, MagnitudeCopies, SignStrip};
 use super::texture::Texture;
 use super::tracker::{self, Access, Barrier, GeometryWrites, IndirectReads, UnorderedWrites, Use};
 use super::used_resources::EncoderKind;
@@ -1496,14 +1496,13 @@ pub(crate) struct RenderLowering {
     /// commands or a tile dispatch: a `Clear` load clears over whole tiles (`clear_reach.rs`).
     called: bool,
     /// A depth/stencil state with depth writes was set in the pass, or an indirect command
-    /// buffer's commands that set their own ran in it: a depth it renders over its
-    /// magnitude stand-in is merged back after it (`texture/signed_depth.rs`).
+    /// buffer's commands that set their own ran in it.
     depth_writes: bool,
     /// A draw that records a command (not one of no vertices, indices or instances; an indirect
     /// one whatever its arguments), or such an execution, ran in the pass under a state with
     /// depth writes, which hands the device's pass that state: where it did not though
-    /// `depth_writes` holds, a depth whose device's pass is Metal's own is stripped of its signs
-    /// after it (`texture/signed_depth.rs`, `SignStrip`).
+    /// `depth_writes` holds, a depth whose device's pass is Metal's own keeps its signs, where
+    /// Metal's pass stores its words without them (`Texture::degrade_kept_signs`).
     drew_depth_writes: bool,
     /// The pass draws: a draw call drew vertices, indices, patches or meshes through a pipeline
     /// that rasterizes, an execution of render commands or a tile dispatch ran: its draws reach
@@ -3084,7 +3083,7 @@ impl RenderLowering {
             self.core
                 .check_device("set_depth_stencil_state", state.device())?;
         }
-        // One boolean: a depth over its magnitude stand-in is merged back where it is set.
+        // One boolean: a pass that sets one but draws under none keeps a depth's signs.
         self.depth_writes |= state.is_some_and(|s| s.descriptor().depth_write_enabled);
         self.state.set_depth_stencil(state);
         Ok(())
@@ -4097,9 +4096,15 @@ impl RenderLowering {
         // A pass that changes no texel records nothing, but holds its attachments until its
         // command buffer completes (`render/untouched.rs`); not the first group of a pass of
         // several color groups, whose later groups' colors its layout leaves out.
-        if grouped.is_none()
-            && untouched::changes_nothing(&layout, (called, depth_writes), &instances)
-        {
+        // A pass that loads and stores its depth and set a state with depth writes, drawing
+        // under none, keeps its words' signs on a device whose pass is Metal's own, where Metal
+        // stores them without.
+        if depth_writes && !drew_depth_writes {
+            if let Some(own) = kept_signs(&layout) {
+                own.texture.degrade_kept_signs();
+            }
+        }
+        if grouped.is_none() && untouched::changes_nothing(&layout, called, &instances) {
             core.device().shared().counts.untouched_pass_skipped();
             let targets: Vec<Texture> = (layout.colors.iter().flatten())
                 .map(|color| color.target.texture.clone())
@@ -4550,9 +4555,7 @@ impl RenderLowering {
         // And copied in where its `DontCare` load is bounded to the draws' tiles, as a color's.
         let depth_stencil_copies = |back: bool| {
             let ds = layout.depth_stencil.as_ref()?;
-            // A magnitude stand-in's copies are its own (`texture/signed_depth.rs`).
-            let own =
-                (ds.stand_in.as_ref()).filter(|s| s.copies() && s.cause != Cause::Magnitude)?;
+            let own = (ds.stand_in.as_ref()).filter(|s| s.copies())?;
             let stores = |store: StoreAction| {
                 matches!(
                     store,
@@ -4679,75 +4682,6 @@ impl RenderLowering {
             scratch(&|index, c| stored(c) && !merged.iter().any(|&(at, _)| at == index));
         copied_back.extend(depth_stencil_copies(true));
         let stand_ins_out = StandInCopies::plan_aspects(&copied_back, false)?;
-        // A depth rendered over its magnitude stand-in: the stand-in written from it before the
-        // pass, and the pass's words merged back after it where the pass stores the depth and a
-        // state with depth writes was set in it or commands that set their own ran
-        // (`depth_writes`, `texture/signed_depth.rs`).
-        let magnitude = match layout.depth_stencil.as_ref() {
-            Some(DepthStencilTarget {
-                target,
-                depth: Some(depth),
-                stand_in: Some(own),
-                ..
-            }) if own.cause == Cause::Magnitude => {
-                let stored = matches!(
-                    depth.store,
-                    StoreAction::Store | StoreAction::CustomSampleDepthStore
-                );
-                let back = stored && depth_writes;
-                let copies = MagnitudeCopies::plan(&device, target, &own.own, layout.extent, back)?;
-                device.shared().counts.magnitude_stand_in_pass(back);
-                if back {
-                    signed_depth::degrade_write_back(&device, &own.own);
-                }
-                Some(copies)
-            }
-            _ => None,
-        };
-        // A switched-on depth rendered in place, or through another image copied back into it
-        // (separate depth and stencil textures' scratch, an attachment stand-in), not over its
-        // magnitude stand-in: where the pass loads and stores it and a state with depth writes
-        // was set in it, the device's pass leaves the words it did not write signed (on a device
-        // whose pass is Metal's own, where no draw ran under one), which Metal stores without
-        // their signs; they are stripped after the pass and its copies back
-        // (`texture/signed_depth.rs`). A strip the device does not make is announced.
-        let strip = match layout.depth_stencil.as_ref() {
-            Some(
-                ds @ DepthStencilTarget {
-                    depth: Some(depth), ..
-                },
-            ) if depth_writes
-                && depth.load == LoadAction::Load
-                && matches!(
-                    depth.store,
-                    StoreAction::Store
-                        | StoreAction::StoreAndMultisampleResolve
-                        | StoreAction::CustomSampleDepthStore
-                ) =>
-            {
-                let own = match (&ds.separate, &ds.stand_in) {
-                    (Some(separate), _) => separate.depth.as_ref(),
-                    (None, Some(stand_in)) => (stand_in.cause != Cause::Magnitude
-                        && stand_in.copies())
-                    .then_some(&stand_in.own),
-                    (None, None) => Some(&ds.target),
-                };
-                match own.filter(|own| own.texture.strips_signs(drew_depth_writes)) {
-                    Some(own) => match SignStrip::plan(core.command_buffer(), own, layout.extent) {
-                        Ok(strip) => {
-                            device.shared().counts.sign_strip();
-                            Some(strip)
-                        }
-                        Err(error) => {
-                            signed_depth::degrade_strip(&device, own, &error);
-                            None
-                        }
-                    },
-                    None => None,
-                }
-            }
-            _ => None,
-        };
         // A clear holding a `half` or small-float NaN: written before the pass as Metal writes
         // it, through a scratch image of an integer format, and loaded in the pass
         // (`nan_clear.rs`). After the stand-ins' copies, which keep the attachment's own load.
@@ -5126,9 +5060,6 @@ impl RenderLowering {
         if let Some(copies) = stand_ins_in {
             copies.record(&mut core);
         }
-        if let Some(copies) = &magnitude {
-            copies.record_in(&mut core);
-        }
         // What the merged colors hold once copied in, before any step writes them.
         for (_, merge) in &merged {
             merge.record_keep(&mut core);
@@ -5167,7 +5098,7 @@ impl RenderLowering {
         // encoder named it so far (its draws' bindings, the steps recorded ahead of the pass), no
         // step of the pass uses it but as the attachment, and no step after the instances reads or
         // writes it: no depth resolve drawn after them, in a pass of its own or in a resolving
-        // instance, no sign strip, no shader-side depth or stencil test, and no execution of
+        // instance, no shader-side depth or stencil test, and no execution of
         // render commands or draw whose pipeline is being made, whose pass records later.
         // The tile dispatches' pipelines, where every making finished made: a pass of one still
         // being made, or failed, records later too (`render/pending_tile.rs`).
@@ -5186,7 +5117,6 @@ impl RenderLowering {
                     && !resolve_after
                     && later_resolves.is_empty()
                     && picked_resolve.is_none()
-                    && strip.is_none()
                     && depth_stand_in.is_none()
                     && shadow.is_none()
                     && !core.named_keys().contains(&key)
@@ -5553,14 +5483,6 @@ impl RenderLowering {
         }
         if let Some(copies) = stand_ins_out {
             copies.record(&mut core);
-        }
-        if let Some(copies) = magnitude {
-            copies.record_back(&mut core);
-            core.retain(copies);
-        }
-        if let Some(strip) = strip {
-            strip.record(&mut core);
-            core.retain(strip);
         }
         for (_, merge) in &merged {
             merge.record_merge(&mut core);
@@ -6843,7 +6765,7 @@ impl RenderLowering {
     /// draw reaches back through the channels' values, so a minimum code (-128, or -32768) the
     /// draws do not write is stored as the code above it, where such an attachment keeps it. Not
     /// on a driver whose pass stores it so too (`DriverFact::TileStoreIsMetals`: MoltenVK's pass
-    /// is a Metal pass), nor for an attachment the load pass rewrites (`TileStorePolicy::Exact`).
+    /// is a Metal pass).
     fn degrade_snorm_minimum(device: &Device, kept: &[String]) {
         if kept.is_empty() {
             return;
@@ -6865,8 +6787,7 @@ impl RenderLowering {
     /// Metal's pass, once it draws, writes each tile a draw reaches back through its texels'
     /// values, so a word the draws do not write whose largest mantissa is below 256 under an
     /// exponent above 0 is stored normalized, where such an attachment keeps it. Not on a driver
-    /// whose pass stores it so too (`DriverFact::TileStoreIsMetals`), nor for an attachment the
-    /// load pass rewrites (`TileStorePolicy::Exact`).
+    /// whose pass stores it so too (`DriverFact::TileStoreIsMetals`).
     fn degrade_shared_exponent(device: &Device, kept: &[String]) {
         if kept.is_empty() {
             return;
@@ -11891,6 +11812,28 @@ pub(super) fn reads_handles(plan: &metal2vulkan::bind::BindingPlan) -> bool {
 }
 
 /// An `Invalid` draw problem of `call`.
+/// The texture a pass of `layout` loads and stores its depth into, where it does: the separate
+/// depth texture, the texture of a stand-in its copies serve, or the attachment's own; `None` for
+/// a pass that does not load and store a depth (`Texture::degrade_kept_signs`).
+fn kept_signs(layout: &PassLayout) -> Option<&Target> {
+    let ds = layout.depth_stencil.as_ref()?;
+    let depth = ds.depth.as_ref()?;
+    let stores = matches!(
+        depth.store,
+        StoreAction::Store
+            | StoreAction::StoreAndMultisampleResolve
+            | StoreAction::CustomSampleDepthStore
+    );
+    if depth.load != LoadAction::Load || !stores {
+        return None;
+    }
+    match (&ds.separate, &ds.stand_in) {
+        (Some(separate), _) => separate.depth.as_ref(),
+        (None, Some(stand_in)) => stand_in.copies().then_some(&stand_in.own),
+        (None, None) => Some(&ds.target),
+    }
+}
+
 fn draw_problem(call: &'static str, problem: DrawProblem) -> Error {
     invalid(call, Problem::Draw(problem))
 }

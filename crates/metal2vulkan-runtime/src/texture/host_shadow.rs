@@ -20,7 +20,7 @@
 //!   (`host_copy::reaches_format`), so the defect alone is what moved it, and it copies on no
 //!   staging queue either. It must be an image of the runtime's own in memory of its own, not
 //!   shareable (a shared texture's bytes another process may write), of one sample and one colour
-//!   aspect, without a depth twin, not a two-plane texture, and not a carrier holding another
+//!   aspect, not a two-plane texture, and not a carrier holding another
 //!   format's blocks or a 4:2:2 texture's texels (`pvrtc.rs`, `astc.rs`, `chroma_pairs.rs`), whose
 //!   CPU copies name regions in the carrier's units and not the texture's. A heap's texture, a
 //!   texture over a buffer, a sparse one, the caller's and a shared one are left out: another
@@ -294,7 +294,7 @@ impl Image {
             } => {}
             _ => return None,
         }
-        if self.twin.is_some() || self.plan().samples != SampleCountFlags::COUNT_1 {
+        if self.plan().samples != SampleCountFlags::COUNT_1 {
             return None;
         }
         if image_aspects(self.plan().format) != ImageAspectFlags::COLOR

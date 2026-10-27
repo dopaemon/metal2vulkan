@@ -1511,8 +1511,6 @@ impl Device {
             &properties.description,
             limits.buffer_image_granularity,
             linear_color_attachment,
-            compile.policy().multisample_depth_twin
-                == metal2vulkan::device::MultisampleDepthTwinPolicy::Exact,
         );
         // SAFETY: as above; the device is live, made with `enabled` enabled, and `loader_word`
         // is its loader word.

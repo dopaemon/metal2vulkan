@@ -1,14 +1,14 @@
 //! A render pass that changes no texel records nothing.
 //!
-//! - **Metal** keeps every attachment's texels in a pass without a draw call that clears nothing
-//!   and sets no depth/stencil state with depth writes: a `Load` keeps them, a `DontCare` load of
+//! - **Metal** keeps every attachment's texels in a pass without a draw call that clears nothing:
+//!   a `Load` keeps them, a `DontCare` load of
 //!   an attachment the pass stores keeps them in a pass without a draw (`clear_reach.rs`, on the M3
 //!   Max and an M4), and a store writes back only what the pass's tiles hold, which no draw
 //!   touched. A `DontCare` store stores nothing, and resolves are the
-//!   only other writes a pass makes. A pass that loads and stores a depth and sets a state with
-//!   depth writes stores its words without their signs, draw or none (probe `depthstore`,
-//!   `texture/signed_depth.rs`), and a `Clear` load of a NaN depth stores Metal's NaN word
-//!   (`nan_clear.rs`).
+//!   only other writes a pass makes. A `Clear` load of a NaN depth stores Metal's NaN word
+//!   (`nan_clear.rs`). (A pass that loads and stores a depth and sets a state with depth writes
+//!   stores Metal's words without their signs, draw or none, probe `depthstore`; the device's
+//!   pass keeps them, announced `signed-depth-test` where the depth may hold a sign.)
 //! - **The runtime** ends such a pass without recording it ([`changes_nothing`]): no render pass
 //!   instance, load or store, no copy of a shadow or a stand-in, and none of the tracker's uses of
 //!   its attachments, so nothing waits on it. A render pass instance would load and store every
@@ -22,9 +22,8 @@
 //!   recorded into, and every attachment (but the runtime's hidden depth) loads with `Load` or
 //!   `DontCare` and stores with `Store` or `DontCare` (an unknown store action stores nothing, as
 //!   Metal's `DontCare`), resolving into nothing. A `Clear` load clears in a pass without a draw
-//!   call, and a resolve writes its texture: such a pass records as before. So does one that set
-//!   a depth/stencil state with depth writes (`depth_writes`: its depth's signs stripped after it,
-//!   or its magnitude stand-in merged back), one whose depth's `Clear` held a NaN (loaded in the
+//!   call, and a resolve writes its texture: such a pass records as before. So does one whose
+//!   depth's `Clear` held a NaN (loaded in the
 //!   pass, Metal's word written before it, `AspectTarget::written_nan`), and one that
 //!   loads separate depth and stencil textures with `DontCare` (`depth_stencil_scratch.rs`),
 //!   whose answer in a pass without a draw is not measured (`clear_reach.rs` gives none).
@@ -36,15 +35,10 @@ use crate::render_pass::PassLayout;
 use crate::render_values::{LoadAction, StoreAction};
 
 /// Whether a pass of `layout` changes no texel, nor anything else a later command sees (the
-/// module docs): `called` false (no draw call), `depth_writes` false (no depth/stencil state with
-/// depth writes set in it), `instances` one that nothing recorded into, and its attachments' load
-/// and store actions as settled (an unknown store made `DontCare`) keeping every texel, no depth
-/// written with a NaN before it.
-pub(super) fn changes_nothing(
-    layout: &PassLayout,
-    (called, depth_writes): (bool, bool),
-    instances: &[Instance],
-) -> bool {
+/// module docs): `called` false (no draw call), `instances` one that nothing recorded into, and its
+/// attachments' load and store actions as settled (an unknown store made `DontCare`) keeping every
+/// texel, no depth written with a NaN before it.
+pub(super) fn changes_nothing(layout: &PassLayout, called: bool, instances: &[Instance]) -> bool {
     let keeps = |load: LoadAction, store: StoreAction| {
         matches!(load, LoadAction::Load | LoadAction::DontCare)
             && matches!(store, StoreAction::Store | StoreAction::DontCare)
@@ -72,5 +66,5 @@ pub(super) fn changes_nothing(
                     keeps(aspect.load, aspect.store) && measured(aspect.load) && !aspect.written_nan
                 })
         });
-    !called && !depth_writes && unrecorded && layout.visibility.is_none() && colors && depth_stencil
+    !called && unrecorded && layout.visibility.is_none() && colors && depth_stencil
 }

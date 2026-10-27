@@ -453,20 +453,18 @@ impl Case for SampleFills {
             ));
         }
         // What a multisample fill and its read-back announce on a device that needs them: the
-        // drawn depth copy, a depth texture's twin and its denormals, and shared storage in
+        // drawn depth copy, a depth texture's denormals, and shared storage in
         // system memory. Metal announces none of them, so the notices site differs on such a
         // device, and the difference is justified where one of these fired.
         use metal2vulkan_runtime::Degradation as D;
         for kind in [
             D::DrawnDepthCopy,
-            D::DepthTwin,
             D::DepthDenormals,
             D::SharedInSystemMemory,
             D::ShadowedTextureView,
             // A `Depth32Float` target a write may give a negative value or a NaN, whose test and
-            // store the device does not take as Metal's: the runtime renders it over a magnitude
-            // stand-in and announces the corners. Announced on lavapipe for the four-sample d32
-            // rows. Declared only; every depth word still compares exactly.
+            // store the device does not take as Metal's. Announced on lavapipe for the
+            // four-sample d32 rows. Declared only; every depth word still compares exactly.
             D::SignedDepthTest,
         ] {
             allowances.push(notice_allowance(kind.code()));

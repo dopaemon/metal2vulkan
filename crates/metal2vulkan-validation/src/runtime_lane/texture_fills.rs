@@ -15,12 +15,12 @@
 //! or `two-plane-heap-fills` for a heap's two-plane texture of more than one level or slice, whose
 //! fill writes the heap's bytes at level 0's rows, as Metal's does, which `two_plane_heap_fills.rs`
 //! checks byte for byte against the M3 Max's. A format the device holds no texture of is
-//! skipped, with an `XR-TEXTURE-FILLS-SKIPPED` line, and so is `Depth32Float_Stencil8` where its
-//! uploads announce that the device may store depth outside `[0, 1]` clamped
-//! (`restricted-depth-upload`, checked to fire exactly where the runtime plans a depth image that
-//! may clamp); a differing format prints its cases on one `XR-TEXTURE-FILLS-DIFFERS` line. The
-//! two-plane formats in private textures of their own memory replay `tfl4.swift` the same way, 8
-//! texels wide (`OWN_TWO_PLANES`).
+//! skipped, with an `XR-TEXTURE-FILLS-SKIPPED` line, and so are `Depth32Float` and
+//! `Depth32Float_Stencil8` where their uploads announce that the device may store depth outside
+//! `[0, 1]` clamped (`restricted-depth-upload`, checked to fire once, at the first of them, where a
+//! depth image may clamp); a differing format prints its cases on one `XR-TEXTURE-FILLS-DIFFERS`
+//! line. The two-plane formats in private textures of their own memory replay `tfl4.swift` the same
+//! way, 8 texels wide (`OWN_TWO_PLANES`).
 //!
 //! A heap case's digest holds each changed run's first 64 bytes and its length, which is what the
 //! probes printed. Exactly two cases of the whole table have a longer run -- `b5` of 550 and of
@@ -29,11 +29,11 @@
 //! (`WHOLE_RUNS`); a longer run the table does not hold fails rather than passing on its first 64
 //! bytes.
 
+use super::degrade_notices::UNPACKED_FILL;
 use super::degrade_notices::{assert_made_once, forced, loses_depth_denormals, on_device};
 use super::degrade_notices::{
     decodes_blocks_its_way, shared_in_system_memory, twins_blocks, twins_carried,
 };
-use super::degrade_notices::{twins_depth, UNPACKED_FILL};
 use super::extended_range_two_planes::{get, put};
 use super::texture_blits::depth_images;
 use super::{buffer_with, read_buffer};
@@ -640,23 +640,22 @@ fn texture_fills_write_metal_s_bytes() {
                     None => continue 'formats,
                 }
             }
-            // `Depth32Float_Stencil8`'s patterns are depth outside [0, 1]: where its uploads
-            // announce that the device may store such a value clamped (`restricted-depth-upload`),
-            // exactly where the runtime plans a depth image that may clamp (`texture_blits.rs`),
-            // the format's bytes are not Metal's to match.
+            // A 32-bit float depth's patterns may be depth outside [0, 1]: where its uploads
+            // announce that the device may store such a value clamped (`restricted-depth-upload`,
+            // where a depth image may clamp, `texture_blits.rs`), the format's bytes are not
+            // Metal's to match.
             let first_unpacked = unpacked_here && !unpacked_announced;
             unpacked_announced |= first_unpacked;
             let kinds: &[Degradation] = if first_unpacked { &UNPACKED_FILL } else { &[] };
-            // A read-only `Depth32Float` texture's depth twin and a BC texture's decoded twin; the
-            // uploads into a depth image (the twin's texture holds its texels in colour), what
-            // a float depth's may store, and the combined format's clamp; the `Shared` buffers.
+            // A BC texture's decoded twin; the uploads into a 32-bit float depth image, what such
+            // a depth may store and where it may clamp; the `Shared` buffers.
             let pf = format(raw);
             let mipmapped = CASES.iter().any(|name| case(raw, name, false).levels > 1);
-            let twin = pf == PixelFormat::Depth32Float && twins_depth(device);
-            let combined = pf == PixelFormat::Depth32FloatStencil8;
-            let depth_image = combined || (pf == PixelFormat::Depth32Float && !twin);
+            let depth_image = matches!(
+                pf,
+                PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
+            );
             let first = forced(&[
-                (Degradation::DepthTwin, twin),
                 (Degradation::DecodedBlockTwin, twins_blocks(device, pf)),
                 (
                     Degradation::CarriedDecodedTwin,
@@ -676,7 +675,7 @@ fn texture_fills_write_metal_s_bytes() {
                 ),
                 (
                     Degradation::RestrictedDepthUpload,
-                    combined && depth_images(device).1,
+                    depth_image && depth_images(device).1,
                 ),
                 (
                     Degradation::SharedInSystemMemory,
@@ -687,18 +686,10 @@ fn texture_fills_write_metal_s_bytes() {
                 (Degradation::ShadowedTexture, heap > 0),
                 (Degradation::HeapTwoPlaneLayout, heap > 0 && mipmapped),
             ]);
-            let announced = assert_made_once(messages, kinds, &first);
-            let clamped = announced.contains_key(&Degradation::RestrictedDepthUpload);
-            if raw == 260 {
-                assert_eq!(
-                    clamped,
-                    depth_images(device).1,
-                    "restricted-depth-upload announced exactly where a depth image may clamp"
-                );
-                if clamped {
-                    println!("XR-TEXTURE-FILLS-SKIPPED 260: restricted-depth-upload announced");
-                    continue;
-                }
+            assert_made_once(messages, kinds, &first);
+            if depth_image && depth_images(device).1 {
+                println!("XR-TEXTURE-FILLS-SKIPPED {raw}: restricted-depth-upload announced");
+                continue;
             }
             let ours = digest(&answers.join("\n"));
             if ours != metal {

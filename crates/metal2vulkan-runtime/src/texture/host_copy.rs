@@ -43,8 +43,8 @@
 //! - **Made.** The making moves the image to `GENERAL` and writes zeros over every texel on the
 //!   host ([`start`]), as Metal's new `Shared` and `Managed` textures read zero: no first move
 //!   waits for a submission (`first_move.rs`), and nothing waits for the GPU.
-//! - **Copied.** `replace_region` copies the caller's bytes into the image on the host (and into
-//!   its depth twin), straight from them where they are laid out packed
+//! - **Copied.** `replace_region` copies the caller's bytes into the image on the host, straight
+//!   from them where they are laid out packed
 //!   (`HostLayout::is_packed`), else from packed bytes, and `get_bytes` copies the image's texels
 //!   out, into the
 //!   caller's bytes where they are laid out packed (`HostLayout::is_packed`), else into packed
@@ -59,7 +59,7 @@
 //!   lock a detach takes to present a stand-in (`detach.rs`), so it never reaches a `VkImage` that
 //!   went.
 
-use super::{twin_copy, Image};
+use super::Image;
 use crate::device::lock;
 use crate::error::{vulkan, Error};
 use crate::exit_guard;
@@ -207,19 +207,16 @@ unsafe fn write(
 
 impl Image {
     /// Whether its CPU copies run on the host: it was made with host-transfer usage, moved and
-    /// zeroed on the host (the module docs), and so was its depth twin where it has one. With a
-    /// decoded twin too: a read copies the BC image's blocks, and a write's decode into the twin is
-    /// made on the CPU and copied into the twin on the host at once (`Image::decode_written`).
+    /// zeroed on the host (the module docs). With a decoded twin too: a read copies the BC image's
+    /// blocks, and a write's decode into the twin is made on the CPU and copied into the twin on
+    /// the host at once (`Image::decode_written`).
     pub(super) fn takes_host_copies(&self) -> bool {
-        self.host_copies
-            && self.device.shared().host_copies.is_some()
-            && (self.twin.as_ref()).is_none_or(|twin| twin.host_copies)
+        self.host_copies && self.device.shared().host_copies.is_some()
     }
 
-    /// Copy `bytes`, laid out as `copy` reads them from a buffer, into the image on the host,
-    /// and into its depth twin the same texels; the image [takes host
-    /// copies](Self::takes_host_copies). Whether it did: not while the image presents a
-    /// stand-in (its texture's bytes detached meanwhile), whose image takes none.
+    /// Copy `bytes`, laid out as `copy` reads them from a buffer, into the image on the host;
+    /// the image [takes host copies](Self::takes_host_copies). Whether it did: not while the image
+    /// presents a stand-in (its texture's bytes detached meanwhile), whose image takes none.
     pub(super) fn host_write(
         &self,
         copy: vk::BufferImageCopy,
@@ -234,22 +231,17 @@ impl Image {
         if detached.is_some() {
             return Ok(false);
         }
-        // SAFETY: the image and its twin are live, made with host-transfer usage and in
-        // `GENERAL` since they were made; the caller checked the copy against the image's plan
-        // and `bytes` against its layout. The lock keeps the image's own `VkImage` presented.
-        unsafe {
-            write(functions, device, self.raw.get(), bytes, &[copy])?;
-            if let Some(twin) = &self.twin {
-                write(functions, device, twin.raw.get(), bytes, &[twin_copy(copy)])?;
-            }
-        }
+        // SAFETY: the image is live, made with host-transfer usage and in `GENERAL` since it
+        // was made; the caller checked the copy against the image's plan and `bytes` against its
+        // layout. The lock keeps the image's own `VkImage` presented.
+        unsafe { write(functions, device, self.raw.get(), bytes, &[copy])? };
         drop(detached);
         shared.counts.host_texel_copy();
         Ok(true)
     }
 
     /// [`host_write`](Self::host_write) of `copies`, each reading `bytes` at its offset, into
-    /// disjoint texels of an image without a depth twin (a decoded twin), on up to `threads`
+    /// disjoint texels of an image (a decoded twin), on up to `threads`
     /// threads at once: the Vulkan specification makes host copies race only where they access
     /// overlapping image memory, which disjoint texels never share. Whether it did: not while
     /// the image presents a stand-in.
@@ -265,7 +257,7 @@ impl Image {
         };
         let device = shared.vk().handle();
         let detached = lock(&self.detached);
-        if detached.is_some() || self.twin.is_some() {
+        if detached.is_some() {
             return Ok(false);
         }
         let image = self.raw.get();

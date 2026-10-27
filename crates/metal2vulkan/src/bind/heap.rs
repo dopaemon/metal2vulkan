@@ -400,12 +400,7 @@ fn member_view(
     class: &ImageHandleClass,
     layout: vk::ImageLayout,
 ) -> Result<ImageViewDesc, BindError> {
-    let TextureShape::Texture {
-        pixel_format,
-        depth_twin,
-        ..
-    } = *shape
-    else {
+    let TextureShape::Texture { pixel_format, .. } = *shape else {
         return Err(internal("a texture-buffer heap member"));
     };
     let raw = raw_held(shape)
@@ -431,7 +426,6 @@ fn member_view(
             layout,
             components: vk::ComponentMapping::IDENTITY,
             level: None,
-            twin: false,
             shader_swizzle: false,
         });
     }
@@ -494,11 +488,10 @@ fn member_view(
             layout,
             components: vk::ComponentMapping::IDENTITY,
             level: None,
-            twin: false,
             shader_swizzle: false,
         });
     }
-    let mut view = sampled_view(profile, pixel_format, class, depth_twin)?;
+    let mut view = sampled_view(profile, pixel_format, class)?;
     view.layout = layout;
     Ok(view)
 }

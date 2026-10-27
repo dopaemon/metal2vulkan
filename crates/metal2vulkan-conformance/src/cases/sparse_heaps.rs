@@ -80,9 +80,8 @@ const PADDED_FORMATS: [PixelFormat; 2] = [PixelFormat::BGR10XR, PixelFormat::BGR
 /// - **The two-plane extended-range pair.** The runtime refuses it for a sparse heap
 ///   (`NotImplemented(Format)`), so a case over it would be a `Refused` row standing for an open
 ///   product question rather than a measurement of Metal's tail arithmetic.
-/// - **Depth and stencil formats.** The runtime refuses a `Depth32Float` sparse texture that would
-///   need a depth twin (`NotImplemented(SparseHeaps)`) and refuses a dual-plane format outright.
-///   Their *tile* is recorded in [`crate::cases::sparse_tiles`], where no texture is made.
+/// - **Depth and stencil formats.** The runtime refuses a dual-plane format outright. Their *tile*
+///   is recorded in [`crate::cases::sparse_tiles`], where no texture is made.
 /// - **Sample counts other than 1, 2 and 4**, and a multisample texture of more than one level,
 ///   which Metal describes none of.
 pub const EXCLUDED: &str = "see this module's documentation";

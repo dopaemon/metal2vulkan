@@ -125,7 +125,6 @@ impl Texture {
                     Owner::Buffer { .. }
                     | Owner::Sparse(_)
                     | Owner::Heap(_)
-                    | Owner::HeapTwin
                     | Owner::HeapShadow(_) => return Err(refused(Some(image.as_ref()))),
                 };
                 if self.device().image_takes_view(base, record.pixel_format) {

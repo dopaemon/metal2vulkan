@@ -966,9 +966,8 @@ fn a8_without_a8_unorm_renders_masks_clears_and_blends_as_metal() {
 /// A 4-sample render over the lower left half of the target resolves as `R8Unorm`'s does, at the
 /// edge too, and as Metal's away from it (229 below it, 0 above), where every texel's samples
 /// agree: on the device without `A8_UNORM` (its `R8_UNORM` image's resolve), and with its own
-/// where it has the format, whose resolve under the lanes' `ResolvePolicy::Exact` is Metal's 8-bit
-/// unorm rule, as `R8Unorm`'s (probe `a8`: an `A8Unorm` resolve is `RGBA8Unorm`'s alpha;
-/// `bind::ColorResolveFormat::of`), where the device's average is not Metal's already.
+/// where it has the format, which the device's average resolves as it does `R8Unorm` (probe `a8`:
+/// an `A8Unorm` resolve is `RGBA8Unorm`'s alpha).
 #[test]
 fn a8_resolves_as_r8_unorm() {
     let messages = Messages::default();
@@ -991,9 +990,7 @@ fn a8_resolves_as_r8_unorm() {
 
 /// One leg of [`a8_resolves_as_r8_unorm`] on `lane`, named `what`.
 fn a8_resolve_leg(lane: &Lane, what: &str) {
-    let kinds =
-        [PixelFormat::A8Unorm, PixelFormat::R8Unorm].map(|pf| resolve_kind(&lane.device, pf, 4));
-    assert_eq!(kinds[0], kinds[1], "{what}: the resolve's kind");
+    let kind = resolve_kind(&lane.device, 4);
     let resolved = |pf: PixelFormat| {
         let ms = lane.texture(pf, 4, TextureUsage::RENDER_TARGET, 0);
         let one = lane.texture(
@@ -1035,7 +1032,7 @@ fn a8_resolve_leg(lane: &Lane, what: &str) {
             );
         }
     }
-    println!("A8-RESOLVE {what}: as R8Unorm's ({:?})", kinds[0]);
+    println!("A8-RESOLVE {what}: as R8Unorm's ({kind:?})");
 }
 
 /// The fetches of the probe (`a8`'s uses): a read of the byte 153 through `[[color(0)]]`, every
@@ -1230,9 +1227,7 @@ fn a8_alpha_to_coverage_covers_as_rgba8() {
             );
             one
         };
-        let rounded = [PixelFormat::A8Unorm, PixelFormat::RGBA8Unorm]
-            .into_iter()
-            .any(|pf| resolve_kind(&lane.device, pf, 4) == Some(Degradation::DeviceRoundedResolve));
+        let rounded = resolve_kind(&lane.device, 4) == Some(Degradation::DeviceRoundedResolve);
         let codes = u8::from(rounded);
         for step in 0..=32u8 {
             let alpha = f32::from(step) / 32.0;

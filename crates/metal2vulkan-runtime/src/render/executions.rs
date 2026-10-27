@@ -553,8 +553,7 @@ impl RenderLowering {
         self.degrade_extended_range_execution();
         // Its commands write the extended-range colors' codes alone: the shadows end.
         self.end_extended_shadows();
-        // Commands that set their own depth/stencil states may write the depth: a depth over its
-        // magnitude stand-in is merged back (`texture/signed_depth.rs`).
+        // Commands that set their own depth/stencil states may write the depth.
         self.depth_writes |= !icb.descriptor().inherit_depth_stencil_state;
         // And its commands hand the device's pass the states they draw under: their own, which
         // may write the depth, or the encoder's.

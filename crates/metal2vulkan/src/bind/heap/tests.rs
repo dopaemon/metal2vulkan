@@ -41,7 +41,6 @@ fn shape(ty: TextureType, pf: PixelFormat, samples: u32, usage: TextureUsage) ->
         usage,
         mipmap_level_count: 1,
         sparse: false,
-        depth_twin: false,
         swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
     }
 }
@@ -732,7 +731,6 @@ fn a_storage_write_makes_every_write_of_its_slot_general() {
         layout,
         components: vk::ComponentMapping::IDENTITY,
         level: None,
-        twin: false,
         shader_swizzle: false,
     };
     let sampled = HandleClass::Image(class(
@@ -1258,7 +1256,7 @@ fn a_form_a_heap_reads_is_held_raw_in_the_unsigned_class() {
             assert_eq!(fit(&s, &u2d), Fit::Holds, "{pf:?}");
             assert_eq!(fit(&s, &i2d), Fit::NumericType, "{pf:?}");
             let facts = TextureFacts::new(TextureType::Type2D, pf);
-            let mut slot = crate::bind::plan::resources::sampled_view(p, pf, &u2d, false)
+            let mut slot = crate::bind::plan::resources::sampled_view(p, pf, &u2d)
                 .unwrap_or_else(|e| panic!("{stem} {pf:?}: {e}"));
             slot.layout = layout;
             assert_eq!(

@@ -240,7 +240,7 @@ impl Device {
     /// of its own, presents the stand-in of its plan from now on: called before its texture is
     /// made, so nothing names its own `VkImage` first, and after its copies took that image.
     /// Nothing where the bytes lie in pages. Refused as `Device::stand_in` refuses, and
-    /// (`NotImplemented(DetachTextures)`) for an image with a depth twin.
+    /// (`NotImplemented(DetachTextures)`) for an image with a decoded twin.
     pub(in crate::texture) fn stand_in_while_detached(
         &self,
         bytes: &Buffer,
@@ -249,7 +249,7 @@ impl Device {
         if !bytes.detached() {
             return Ok(());
         }
-        if image.twin.is_some() || image.decoded.is_some() {
+        if image.decoded.is_some() {
             return Err(Error::NotImplemented(RuntimeGap::DetachTextures));
         }
         let stand_in = self.stand_in(image.plan())?;
@@ -296,20 +296,17 @@ impl TextureImages {
     /// failure leaves everything as it was (an image presenting one already takes it again).
     /// Refused (`NotImplemented(DetachTextures)`) where no stand-in presents an image exactly:
     /// one of texels its copies convert from the bytes (a two-plane YCbCr texture's), and one
-    /// with a depth twin, whose comparison views the stand-in does not present, or with a decoded
-    /// twin, whose sampled views it does not present.
+    /// with a decoded twin, whose sampled views the stand-in does not present.
     pub(crate) fn stand_ins(&self, device: &Device) -> Result<Vec<Arc<StandIn>>, Error> {
         if !self.exact {
             return Err(Error::NotImplemented(RuntimeGap::DetachTextures));
         }
         self.images
             .iter()
-            .map(
-                |image| match image.twin.is_some() || image.decoded.is_some() {
-                    true => Err(Error::NotImplemented(RuntimeGap::DetachTextures)),
-                    false => device.stand_in(image.plan()),
-                },
-            )
+            .map(|image| match image.decoded.is_some() {
+                true => Err(Error::NotImplemented(RuntimeGap::DetachTextures)),
+                false => device.stand_in(image.plan()),
+            })
             .collect()
     }
 

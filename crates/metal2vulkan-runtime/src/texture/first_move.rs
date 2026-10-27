@@ -663,7 +663,7 @@ impl FirstFill {
     }
 }
 
-/// A host call's copy of texels into an image (and into its depth twin), staged: `replace_region`'s
+/// A host call's copy of texels into an image, staged: `replace_region`'s
 /// where the image takes no host copies (`Texture::replace_region`).
 pub(crate) struct TexelCopy {
     source: vk::Buffer,

@@ -214,7 +214,7 @@ impl Texture {
         let usage = texture_usage(descriptor.usage, descriptor.swizzle);
         let plan = plan_image(&layout, usage, false, &facts)
             .map_err(|refusal| image_error(CALL, refusal))?;
-        let plan = device.with_undeclared_usage(plan, &layout, usage, false, &facts)?;
+        let plan = device.with_undeclared_usage(plan, &layout, usage, &facts)?;
         check(&plan)?;
         let hazard = options.hazard_tracking_mode()?;
         let private = TextureDescriptor {

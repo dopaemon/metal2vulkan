@@ -48,8 +48,8 @@ const EXTENDED: [ExtendedRange; 13] = [
 ];
 
 /// Every format a render pass's load pass rewrites (`bind::unused_bits_module`): the
-/// extended-range, padded and bfloat formats, the signed normalized formats and `RGB9E5Float`.
-const UNUSED_BITS: [PixelFormat; 20] = [
+/// extended-range, padded and bfloat formats.
+const UNUSED_BITS: [PixelFormat; 13] = [
     PixelFormat::BGR10XR,
     PixelFormat::BGR10XRSRGB,
     PixelFormat::BGRA10XR,
@@ -63,13 +63,6 @@ const UNUSED_BITS: [PixelFormat; 20] = [
     PixelFormat::R16Bfloat,
     PixelFormat::RG16Bfloat,
     PixelFormat::RGBA16Bfloat,
-    PixelFormat::R8Snorm,
-    PixelFormat::RG8Snorm,
-    PixelFormat::RGBA8Snorm,
-    PixelFormat::R16Snorm,
-    PixelFormat::RG16Snorm,
-    PixelFormat::RGBA16Snorm,
-    PixelFormat::RGB9E5Float,
 ];
 
 fn modules() -> Vec<Build> {
@@ -82,7 +75,6 @@ fn modules() -> Vec<Build> {
     plain!(
         capture_assembly_module,
         capture_settle_module,
-        depth_magnitude_module,
         flat_dispatch_module,
         index_bounds_fill_module,
         index_bounds_plan_module,

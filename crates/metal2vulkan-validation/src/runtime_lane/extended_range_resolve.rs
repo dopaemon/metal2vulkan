@@ -32,8 +32,12 @@ use metal2vulkan_runtime::{
     TextureDescriptor,
 };
 
-/// The kinds this lane's resolves announce, for `degrade_notices`' census.
-pub(super) const XR_RESOLVE: [Degradation; 1] = [Degradation::ExtendedRangeResolve];
+/// The kinds this lane's resolves announce, for `degrade_notices`' census: the crate-owned
+/// resolve after the pass, which no device's average replaces for an extended-range attachment.
+pub(super) const XR_RESOLVE: [Degradation; 2] = [
+    Degradation::ExtendedRangeResolve,
+    Degradation::ShaderResolve,
+];
 
 /// The target's width and height.
 const WIDTH: u64 = 8;
@@ -418,7 +422,7 @@ fn extended_range_resolves_are_metals_or_within_a_code() {
     );
     // The `Shared` textures and buffers the draws read and write announce their memory on a
     // device without unified memory.
-    let mut kinds = vec![XR_RESOLVE[0], Degradation::ShaderResolve];
+    let mut kinds = XR_RESOLVE.to_vec();
     kinds.extend(forced(&[(
         Degradation::SharedInSystemMemory,
         shared_in_system_memory(&lane.device),

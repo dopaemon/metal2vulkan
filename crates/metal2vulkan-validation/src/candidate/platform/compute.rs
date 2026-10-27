@@ -418,10 +418,9 @@ pub(super) fn module_censuses(
 /// `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to keep a value outside
 /// `[0, 1]` (`DriverFact::DepthImageKeepsValuesOutsideUnitRange` among the opened description's
 /// `driver_facts`, the runtime's own rule), which may store such a value clamped (the runtime's
-/// textures announce it, or keep the value in a depth twin's colour image, and this temporary
-/// bridge keeps its rows honest the same way). A context whose opened description is unknown
-/// records it, the conservative answer. Under a restriction the description carries the executing
-/// device's identity, so the facts are its driver's.
+/// textures announce it, and this temporary bridge keeps its rows honest the same way). A context
+/// whose opened description is unknown records it, the conservative answer. Under a restriction the
+/// description carries the executing device's identity, so the facts are its driver's.
 pub(super) fn executor_degrades(
     environment: &mut serde_json::Value,
     context: &VulkanContext,

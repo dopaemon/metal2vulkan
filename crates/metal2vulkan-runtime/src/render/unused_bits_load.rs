@@ -1,5 +1,4 @@
-//! The load pass of an extended-range, padded 10-bit or bfloat color attachment, and under the
-//! exact tile store of a signed normalized or `RGB9E5Float` one.
+//! The load pass of an extended-range, padded 10-bit or bfloat color attachment.
 //!
 //! - **Metal's answer** (on an Apple M4 under macOS 27.0.1 and on the consumer's Apple M3 Max under
 //!   macOS 26.7, alike; on both). An Apple GPU stores a render pass's attachments a 32 x 32 tile at
@@ -54,17 +53,14 @@
 //!   tiles there no draw reaches are rewritten here where Metal keeps them; but where capture
 //!   replay found the tiles the draws' primitives reach (`render/capture.rs`, Metal's, announced by
 //!   the command buffer where a primitive's reach was not measured).
-//! - **The exact tile store** (`TileStorePolicy::Exact`). The same pass, once it draws, writes a
-//!   single-sampled signed normalized or `RGB9E5Float` attachment's tiles back through their
+//! - **A signed normalized or `RGB9E5Float` attachment** keeps the device's load and store. The
+//!   same pass, once it draws, writes a single-sampled such attachment's tiles back through their
 //!   values (an Apple M3 Max under macOS 27.0.1): a channel's minimum code (-128, or -32768) is
 //!   stored as the code above it, and a word whose largest mantissa is below 256 under an exponent
-//!   above 0 normalized (`bind::unused_bits_module` of the format). Under the exact tile store the
-//!   load pass takes such an attachment as it takes an extended-range one, where the driver's pass
-//!   does not store them so already (`DriverFact::TileStoreIsMetals`: MoltenVK's pass is a Metal
-//!   pass); under the default, `TileStorePolicy::Device`, it leaves them to the device's load and
-//!   store, and a draw announces `snorm-minimum-kept` or `shared-exponent-kept`
-//!   ([`snorm_minimum_kept`], [`shared_exponent_kept`]), as it does for one the load pass does not
-//!   take.
+//!   above 0 normalized. The device's pass keeps such a code or word, and a draw announces
+//!   `snorm-minimum-kept` or `shared-exponent-kept` ([`snorm_minimum_kept`],
+//!   [`shared_exponent_kept`]), but on a driver whose pass stores them as Metal's
+//!   (`DriverFact::TileStoreIsMetals`: MoltenVK's pass is a Metal pass).
 //! - **Not here** (`degrade_unused_bits` announces `extended-range-bits-kept` at each draw): a
 //!   multisampled attachment (no copy reaches its samples), a texture held as a shadow of another
 //!   image or of a heap's bytes, a sparse one, and one whose image the device does not copy both
@@ -89,7 +85,7 @@ use crate::tracker::{Access, Barrier, Use, UseRange};
 use crate::values::ResourceOptions;
 use ash::vk;
 use metal2vulkan::bind::{TexelWords, UnusedBitsModule};
-use metal2vulkan::device::{DriverFact, TileStorePolicy};
+use metal2vulkan::device::DriverFact;
 use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::{PixelFormat, TextureType};
 use metal2vulkan::vk::{ImageType, ImageUsageFlags};
@@ -262,19 +258,9 @@ fn own(color: &ColorTarget) -> &Target {
 }
 
 /// Whether the load pass rewrites a texture of `texture`'s format: an extended-range, padded or
-/// bfloat one's always, and a signed normalized ([`SNORM_MINIMUM`]) or `RGB9E5Float` one's under
-/// the exact tile store (`TileStorePolicy::Exact`) on a driver whose store is not Metal's already
-/// (`DriverFact::TileStoreIsMetals`).
+/// bfloat one's.
 fn rewrites(texture: &Texture) -> bool {
-    let format = texture.pixel_format();
-    if ExtendedRange::of(format).is_some() {
-        return true;
-    }
-    let device = texture.device();
-    let stored = SNORM_MINIMUM.contains(&format) || format == PixelFormat::RGB9E5Float;
-    stored
-        && device.compile_device().policy().tile_store == TileStorePolicy::Exact
-        && !metals_store(device)
+    ExtendedRange::of(texture.pixel_format()).is_some()
 }
 
 /// Whether `device`'s render pass stores a signed normalized minimum code and an `RGB9E5Float`
@@ -388,41 +374,35 @@ const SNORM_MINIMUM: [PixelFormat; 6] = [
 ];
 
 /// Whether `color` is a single-sampled attachment of a signed normalized format
-/// ([`SNORM_MINIMUM`]), loaded and not discarded at the store, where the load pass does not take
-/// it: Metal's pass, once it draws, writes each tile a draw reaches back through the channels'
-/// values, so a minimum code (-128, or -32768) is stored as the code above it, where the device's
-/// pass keeps the bytes its draws do not write (`degrade_snorm_minimum`, which reads
-/// `DriverFact::TileStoreIsMetals`: a driver whose pass stores them as Metal's). The load pass
-/// rewrites them under the exact tile store (`TileStorePolicy::Exact`) where it takes the
-/// attachment.
+/// ([`SNORM_MINIMUM`]), loaded and not discarded at the store: Metal's pass, once it draws, writes
+/// each tile a draw reaches back through the channels' values, so a minimum code (-128, or -32768)
+/// is stored as the code above it, where the device's pass keeps the bytes its draws do not write
+/// (`degrade_snorm_minimum`, which reads `DriverFact::TileStoreIsMetals`: a driver whose pass
+/// stores them as Metal's).
 pub(super) fn snorm_minimum_kept(color: &ColorTarget) -> bool {
-    let target = own(color);
-    let discarded = color.store == StoreAction::DontCare && !color.late_store;
-    SNORM_MINIMUM.contains(&target.texture.pixel_format())
-        && target.samples == 1
-        && color.load == LoadAction::Load
-        && !color.memoryless
-        && !discarded
-        && takes(color, true).is_none()
+    kept_through_store(color, |format| SNORM_MINIMUM.contains(&format))
 }
 
 /// Whether `color` is a single-sampled `RGB9E5Float` attachment, loaded and not discarded at the
-/// store, where the load pass does not take it: Metal's pass, once it draws, writes each tile a
-/// draw reaches back through its texels' values, so a word whose largest mantissa is below 256
-/// under an exponent above 0 (one no Metal write leaves) is stored normalized, its mantissas
-/// shifted up as its exponent steps down, where the device's pass keeps the bytes its draws do
-/// not write (`degrade_shared_exponent`, which reads `DriverFact::TileStoreIsMetals`). The load
-/// pass rewrites them under the exact tile store (`TileStorePolicy::Exact`) where it takes the
-/// attachment.
+/// store: Metal's pass, once it draws, writes each tile a draw reaches back through its texels'
+/// values, so a word whose largest mantissa is below 256 under an exponent above 0 (one no Metal
+/// write leaves) is stored normalized, its mantissas shifted up as its exponent steps down, where
+/// the device's pass keeps the bytes its draws do not write (`degrade_shared_exponent`, which reads
+/// `DriverFact::TileStoreIsMetals`).
 pub(super) fn shared_exponent_kept(color: &ColorTarget) -> bool {
+    kept_through_store(color, |format| format == PixelFormat::RGB9E5Float)
+}
+
+/// Whether `color` is a single-sampled attachment of a format `of` takes, loaded and not
+/// discarded at the store.
+fn kept_through_store(color: &ColorTarget, of: impl Fn(PixelFormat) -> bool) -> bool {
     let target = own(color);
     let discarded = color.store == StoreAction::DontCare && !color.late_store;
-    target.texture.pixel_format() == PixelFormat::RGB9E5Float
+    of(target.texture.pixel_format())
         && target.samples == 1
         && color.load == LoadAction::Load
         && !color.memoryless
         && !discarded
-        && takes(color, true).is_none()
 }
 
 /// The color attachments of a pass's layout that each of a draw's kept-attachment notices names, as
@@ -431,7 +411,7 @@ pub(super) fn shared_exponent_kept(color: &ColorTarget) -> bool {
 /// ([`metals_store`]), the signed normalized ones ([`snorm_minimum_kept`],
 /// `degrade_snorm_minimum`) and the `RGB9E5Float` ones ([`shared_exponent_kept`],
 /// `degrade_shared_exponent`). They read the layout's colors, their textures' formats, samples,
-/// shadows and image plans, and the device's tile store policy and driver facts; all but the
+/// shadows and image plans, and the device's driver facts; all but the
 /// layout are fixed at creation, so an encoder decides them once for each layout it records
 /// under.
 #[derive(Debug, Default, PartialEq)]
@@ -525,10 +505,8 @@ pub(super) fn record(
                      rewrites only the tiles a draw's primitives reach (or every tile where a \
                      color attachment is cleared): in tiles no draw reaches the unused bits are \
                      made canonical and BGRA10_XR alpha codes clamped to [384, 894], a padded \
-                     word's low six bits zeroed (an _sRGB twin's code through Metal's table), a \
-                     bfloat code moved through half and, under the exact tile store, a signed \
-                     normalized minimum code raised and an RGB9E5Float word normalized, where \
-                     Metal keeps those texels' bytes"
+                     word's low six bits zeroed (an _sRGB twin's code through Metal's table) and \
+                     a bfloat code moved through half, where Metal keeps those texels' bytes"
                         .to_owned(),
                 )
             });

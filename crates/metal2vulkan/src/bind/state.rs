@@ -1168,11 +1168,11 @@ impl BoundTexture {
 impl TextureFacts {
     /// The facts of an image texture that can change a plan (its view facts): the type, the pixel
     /// format, the sample count, the usage, whether it is sparse, its level count, which decides a
-    /// storage slot's level views and pushed level count, whether it is held with a depth twin, its
-    /// swizzle, its address-mode map, its [`offset_base_axes`](Self::offset_base_axes), and
-    /// whether its planes are read in place ([`ycbcr_in_place`](Self::ycbcr_in_place), whose
-    /// words the slot's push field carries, not the shape). Its array length only changes the
-    /// view's subresource range, which is every layer.
+    /// storage slot's level views and pushed level count, its swizzle, its address-mode map, its
+    /// [`offset_base_axes`](Self::offset_base_axes), and whether its planes are read in place
+    /// ([`ycbcr_in_place`](Self::ycbcr_in_place), whose words the slot's push field carries, not
+    /// the shape). Its array length only changes the view's subresource range, which is every
+    /// layer.
     ///
     /// The level count is stated whatever the usage: plain Metal writes a texture made without
     /// `ShaderWrite` at every level, through every write form, as one made with it.
@@ -1187,7 +1187,6 @@ impl TextureFacts {
             usage: self.usage,
             mipmap_level_count: self.mipmap_level_count,
             sparse: self.sparse,
-            depth_twin: self.depth_twin,
             swizzle: self.swizzle,
             address_modes: self.address_modes,
             offset_base_axes: self.offset_base_axes(),
@@ -1382,18 +1381,6 @@ pub struct TextureFacts {
     /// (`shaderResourceResidency`); the plan refuses it elsewhere.
     #[cfg_attr(feature = "serde", serde(default))]
     pub sparse: bool,
-    /// The texture's texels are held in an `R32_SFLOAT` image, and a `D32_SFLOAT` twin holds them
-    /// for comparisons: a `Depth32Float` texture the program only reads or samples, made by a
-    /// consumer on a device without `VK_EXT_depth_range_unrestricted`, so that a texel outside [0,
-    /// 1] keeps its value, or on one whose driver is not measured to keep a denormal in a depth
-    /// image (the runtime's driver facts), so that a denormal does. A sampled view of it reads the
-    /// `R32_SFLOAT` image, and a view a comparison reads is of the twin
-    /// ([`ImageViewDesc::twin`](crate::bind::ImageViewDesc)).
-    /// Only a `Depth32Float` texture holds its texels there. A multisampled one does under
-    /// `MultisampleDepthTwinPolicy::Exact` and has no `D32_SFLOAT` twin beside it: Metal reads a
-    /// `depth2d_ms` and compares nothing, so no view of a twin is asked for.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth_twin: bool,
     /// `MTLTexture.swizzle`: the source of each channel the texture's reads and samples return,
     /// border texels included. A sample emulated by fetches reads its border taps through it, and
     /// an opaque-black border the device replaces is checked against it.
@@ -1447,7 +1434,6 @@ impl TextureFacts {
             array_length: 1,
             mipmap_level_count: 1,
             sparse: false,
-            depth_twin: false,
             swizzle: metal::TextureSwizzleChannels::DEFAULT,
             address_modes: metal::sampler::AddressModeMap::IDENTITY,
             parent_relative_level: 0,
@@ -2045,10 +2031,6 @@ pub enum TextureShape {
         /// where the module has none.
         #[cfg_attr(feature = "serde", serde(default))]
         sparse: bool,
-        /// The texture is held in an `R32_SFLOAT` image with a `D32_SFLOAT` twin
-        /// ([`TextureFacts::depth_twin`]): a sampled view reads the image, a compared one the twin.
-        #[cfg_attr(feature = "serde", serde(default))]
-        depth_twin: bool,
         /// The texture's swizzle ([`TextureFacts::swizzle`]): the border taps of a sample emulated
         /// by fetches read through it, and an opaque-black border the device replaces is checked
         /// against it.

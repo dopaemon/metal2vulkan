@@ -57,12 +57,6 @@
 //!   were, and the crate-owned resolve (`color_resolve.rs`) reads the samples the pass stores, so
 //!   the pass renders it through the image its texture keeps, copied into where the pass loads it
 //!   (`Load`), and never back (`resolve::keep_samples`).
-//! - **A render target's depth that may hold a negative value or a NaN**
-//!   (`texture/signed_depth.rs`), which a pass loads: it renders over its magnitude stand-in, the
-//!   image its texture keeps for the queue (`kept_backing`), whose words the pass writes from the
-//!   depth's before it and merges back after it where it stores the depth and may have written
-//!   it: its depth test is Metal's, and so is what it keeps, but for the merge's corner, which
-//!   `signed-depth-test` names.
 //! - **A pass's hidden depth and stencil**. In a pass without a depth/stencil attachment, plain
 //!   Metal tests a draw whose state uses depth or the stencil against a hidden depth of `float`,
 //!   1.0 at the pass's start, and a stencil of 0, kept per sample through the pass. Such a draw
@@ -155,11 +149,6 @@ pub(super) enum Cause {
     /// buffer keeps its bytes (`kept_bytes.rs`, which announces it, `dont-care-stand-in`): copied
     /// into where the pass loads it, and never back.
     KeptBytes,
-    /// A render target's 32-bit float depth that may hold a negative value or a NaN, which the
-    /// pass loads: it renders over the magnitude stand-in its texture keeps for the queue, written
-    /// from the depth before the pass and merged back after it (`texture/signed_depth.rs`), not
-    /// by the stand-in's own copies.
-    Magnitude,
     /// A multisampled color attachment the pass stores nothing of (`MultisampleResolve`) whose
     /// samples a resolve the runtime draws after the pass reads, which the pass must store for it
     /// (`resolve::keep_samples`): it renders through the image its texture keeps for the queue,
@@ -436,11 +425,11 @@ pub(super) fn stand_in_as(
     if stored {
         usage |= ImageUsageFlags::STORAGE;
     }
-    // The exact color resolve reads a multisampled color attachment as an input attachment
-    // (`color_resolve.rs`), as does the resolve into the attachment's format's sRGB twin, whose
-    // encoding no device's average writes (`color_resolve::twin_resolved`).
+    // The crate-owned color resolve reads a multisampled extended-range color attachment as an
+    // input attachment (`color_resolve.rs`), as does the resolve into the attachment's format's
+    // sRGB twin, whose encoding no device's average writes (`color_resolve::twin_resolved`).
     let resolved = multisampled
-        && (color_resolve::shader_rules(device, pixel_format, format, target.samples).is_some()
+        && (color_resolve::shader_rules(pixel_format, target.samples).is_some()
             || color_resolve::twin_resolved(pixel_format, target.samples));
     if color && (framebuffer_fetch::through_inputs(profile) || resolved) {
         usage |= ImageUsageFlags::INPUT_ATTACHMENT;

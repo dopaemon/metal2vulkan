@@ -59,7 +59,6 @@ pub(super) fn all_audits(
         storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
         linear_attachments: false,
-        multisample_depth_twin: false,
     };
     let limits = any_limits;
     let memo: RefCell<BTreeMap<PixelFormat, FormatAnswers>> = RefCell::default();
@@ -102,7 +101,6 @@ pub(super) fn format_capabilities(
         storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
         depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
         linear_attachments: false,
-        multisample_depth_twin: false,
     };
     let sparse = Err(Missing::Gap(RuntimeGap::SparseHeaps));
     answers(pf, &image, &any_limits, sparse).capabilities()
@@ -844,7 +842,6 @@ fn formats_without_a_made_multisample_texture_or_a_modelled_resolve_answer_neith
             storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
             depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
             linear_attachments: false,
-            multisample_depth_twin: false,
         };
         let found = |pf| {
             let sparse = Err(Missing::Gap(RuntimeGap::SparseHeaps));
@@ -929,7 +926,6 @@ fn extended_range_formats_answer_the_shaders_filter_and_blend() {
             storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
             depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
             linear_attachments: false,
-            multisample_depth_twin: false,
         };
         for pf in formats {
             let sparse = Err(Missing::Gap(RuntimeGap::SparseHeaps));
@@ -994,7 +990,6 @@ fn srgb_formats_held_as_their_unorm_twin_answer_the_twins_filter() {
             storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
             depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
             linear_attachments: false,
-            multisample_depth_twin: false,
         };
         for pf in [
             PixelFormat::R8UnormSRGB,
@@ -1064,7 +1059,6 @@ fn listed_formats_answer_at_most_their_apple9_cell() {
             storage_multisample: enabled.has(VkFeature::ShaderStorageImageMultisample),
             depth_images: crate::image_plan::DepthImageFacts::of(&enabled.driver_facts()),
             linear_attachments: false,
-            multisample_depth_twin: false,
         };
         for row in FormatRow::ALL {
             for &pf in row.formats() {

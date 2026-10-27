@@ -714,11 +714,12 @@ impl Case for TextureFills {
 
     fn allowances(&self) -> Vec<Allowance> {
         let mut allowances = Vec::new();
-        if self.raw == 260 {
-            // `Depth32Float_Stencil8`'s patterns are depth outside [0, 1]. Where the device's
-            // uploads announce that it may store such a value clamped, the format's bytes are not
-            // Metal's to match: the lane skips the format there, and here the digest goes
-            // unchecked, named, counted and reported, with that notice as the justification.
+        if matches!(self.raw, 252 | 260) {
+            // A 32-bit float depth's patterns may be depth outside [0, 1]
+            // (`Depth32Float_Stencil8`'s are). Where the device's uploads announce that it may
+            // store such a value clamped, the format's bytes are not Metal's to match: the lane
+            // skips the format there, and here the digest goes unchecked, named, counted and
+            // reported, with that notice as the justification.
             allowances.push(Allowance::new(
                 format!("case/{}", site(self.raw)),
                 Loosening::Unchecked,
@@ -730,20 +731,19 @@ impl Case for TextureFills {
             ));
         }
         // What this work announces on a device that needs it, which is the lane's own list: a
-        // fill of a color packed where fills ignore the color, a depth or block-compressed
-        // texture's twin and its precision, a two-plane texture shadowed in a heap's bytes and a
+        // fill of a color packed where fills ignore the color, a block-compressed texture's twin
+        // and its precision, a two-plane texture shadowed in a heap's bytes and a
         // mipmapped one whose later levels lie apart from the shadow, a float depth's denormals
         // and the combined format's clamp, and shared storage in system memory. Metal announces
         // none of them, so the notices site differs on such a device, and the difference is
         // justified where one of these fired. The format's own digest still compares, and only
-        // `Depth32Float_Stencil8`'s goes unchecked, above.
+        // the 32-bit float depth formats' go unchecked, above.
         use metal2vulkan_runtime::Degradation as D;
         for kind in [
             D::UnpackedFillColor,
             D::ShadowedTexture,
             D::HeapTwoPlaneLayout,
             D::RestrictedDepthUpload,
-            D::DepthTwin,
             D::DecodedBlockTwin,
             D::CarriedDecodedTwin,
             D::DecodedTexelPrecision,

@@ -7,7 +7,7 @@
 //!
 //! - **Which textures.** A texture's own image (not a view's), the runtime's in memory of its own
 //!   (not shareable, not a heap's, a buffer's or the caller's), `Private`, its hazards tracked,
-//!   without a depth twin, whose plan [`storage_candidate`] gives `STORAGE`, and whose `VkImage`
+//!   whose plan [`storage_candidate`] gives `STORAGE`, and whose `VkImage`
 //!   was never handed out ([`Texture::vk_image`](crate::Texture::vk_image) keeps it for good).
 //!   Noted once, at the first fetching pass that renders it into a scratch image for want of
 //!   `STORAGE`. An untracked texture keeps its scratch: the program orders its uses on other
@@ -285,7 +285,6 @@ impl Texture {
         );
         if !own
             || !image.identity.tracked
-            || image.twin.is_some()
             || self.storage_mode() != StorageMode::Private
             || form.taken.get().is_some()
             || form.exported.load(Ordering::Relaxed)

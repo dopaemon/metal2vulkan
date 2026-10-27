@@ -90,11 +90,6 @@ assoc-const	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	pub const SO
 assoc-const	metal2vulkan::bind::CompressedBlitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::CompressedBlitModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::CompressedBlitModule::WORDS_BINDING	pub const WORDS_BINDING: u32
-assoc-const	metal2vulkan::bind::DepthMagnitudeModule::EXACT_BINDING	pub const EXACT_BINDING: u32
-assoc-const	metal2vulkan::bind::DepthMagnitudeModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::DepthMagnitudeModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::DepthMagnitudeModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::DepthMagnitudeModule::STAND_IN_BINDING	pub const STAND_IN_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::SET	pub const SET: u32
@@ -597,11 +592,6 @@ assoc-const-value	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::CompressedBlitModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::CompressedBlitModule::SET	0
 assoc-const-value	metal2vulkan::bind::CompressedBlitModule::WORDS_BINDING	0
-assoc-const-value	metal2vulkan::bind::DepthMagnitudeModule::EXACT_BINDING	0
-assoc-const-value	metal2vulkan::bind::DepthMagnitudeModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::DepthMagnitudeModule::PUSH_BYTES	16
-assoc-const-value	metal2vulkan::bind::DepthMagnitudeModule::SET	0
-assoc-const-value	metal2vulkan::bind::DepthMagnitudeModule::STAND_IN_BINDING	1
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::SET	0
@@ -1474,12 +1464,10 @@ enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
 enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
-enum	metal2vulkan::device::MultisampleDepthTwinPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleDepthTwinPolicy
 enum	metal2vulkan::device::NanMinMaxPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum NanMinMaxPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
-enum	metal2vulkan::device::ResolvePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ResolvePolicy
 enum	metal2vulkan::device::Robustness	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Robustness
 enum	metal2vulkan::device::RoundingOrderPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RoundingOrderPolicy
 enum	metal2vulkan::device::SamplingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SamplingPolicy
@@ -1489,7 +1477,6 @@ enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialE
 enum	metal2vulkan::device::SubgroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SubgroupOp
 enum	metal2vulkan::device::TexelConversionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TexelConversionPolicy
 enum	metal2vulkan::device::Tier	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Tier
-enum	metal2vulkan::device::TileStorePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TileStorePolicy
 enum	metal2vulkan::device::Unorm8LinearFilterPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Unorm8LinearFilterPolicy
 enum	metal2vulkan::device::VertexNormalizedPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VertexNormalizedPolicy
 enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkExtension
@@ -2748,8 +2735,6 @@ field	metal2vulkan-runtime::WorkCounts.linear_passes_in_place	pub linear_passes_
 field	metal2vulkan-runtime::WorkCounts.linear_passes_through_copies	pub linear_passes_through_copies: u64
 field	metal2vulkan-runtime::WorkCounts.linked_use_questions_asked	pub linked_use_questions_asked: u64
 field	metal2vulkan-runtime::WorkCounts.live_tables_uploaded	pub live_tables_uploaded: u64
-field	metal2vulkan-runtime::WorkCounts.magnitude_stand_in_passes	pub magnitude_stand_in_passes: u64
-field	metal2vulkan-runtime::WorkCounts.magnitude_write_backs	pub magnitude_write_backs: u64
 field	metal2vulkan-runtime::WorkCounts.memory_blocks_live	pub memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.memory_frees	pub memory_frees: MemoryFrees
 field	metal2vulkan-runtime::WorkCounts.merged_draw_commands	pub merged_draw_commands: u64
@@ -2913,8 +2898,6 @@ field	metal2vulkan-runtime::WorkCounts.shadows_over_fresh_pages	pub shadows_over
 field	metal2vulkan-runtime::WorkCounts.shadows_sharing_truth	pub shadows_sharing_truth: u64
 field	metal2vulkan-runtime::WorkCounts.shadows_zeroed	pub shadows_zeroed: u64
 field	metal2vulkan-runtime::WorkCounts.shared_event_waits_held	pub shared_event_waits_held: u64
-field	metal2vulkan-runtime::WorkCounts.sign_strips	pub sign_strips: u64
-field	metal2vulkan-runtime::WorkCounts.signed_depth_switch_ons	pub signed_depth_switch_ons: u64
 field	metal2vulkan-runtime::WorkCounts.slot_return_nanos	pub slot_return_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.slot_returns	pub slot_returns: u64
 field	metal2vulkan-runtime::WorkCounts.slot_wait_nanos	pub slot_wait_nanos: u64
@@ -3128,8 +3111,6 @@ field	metal2vulkan::bind::ContinuedResult.count	pub count: u32
 field	metal2vulkan::bind::ContinuedResult.first	pub first: u32
 field	metal2vulkan::bind::ContinuedResult.offset	pub offset: u64
 field	metal2vulkan::bind::ContinuedResult.sum	pub sum: bool
-field	metal2vulkan::bind::DepthMagnitudeModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::DepthMagnitudeModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthSplitModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DepthSplitModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.fragment	pub fragment: Arc<[u32]>
@@ -3260,7 +3241,6 @@ field	metal2vulkan::bind::ImageViewDesc.format	pub format: vk::Format
 field	metal2vulkan::bind::ImageViewDesc.layout	pub layout: vk::ImageLayout
 field	metal2vulkan::bind::ImageViewDesc.level	pub level: Option<u32>
 field	metal2vulkan::bind::ImageViewDesc.shader_swizzle	pub shader_swizzle: bool
-field	metal2vulkan::bind::ImageViewDesc.twin	pub twin: bool
 field	metal2vulkan::bind::ImageViewDesc.view_type	pub view_type: vk::ImageViewType
 field	metal2vulkan::bind::ImageblockSize.height	pub height: u32
 field	metal2vulkan::bind::ImageblockSize.width	pub width: u32
@@ -3547,7 +3527,6 @@ field	metal2vulkan::bind::TessellationScanModule.requirements	pub requirements: 
 field	metal2vulkan::bind::TessellationScanModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::TextureFacts.address_modes	pub address_modes: metal::sampler::AddressModeMap
 field	metal2vulkan::bind::TextureFacts.array_length	pub array_length: u32
-field	metal2vulkan::bind::TextureFacts.depth_twin	pub depth_twin: bool
 field	metal2vulkan::bind::TextureFacts.mipmap_level_count	pub mipmap_level_count: u32
 field	metal2vulkan::bind::TextureFacts.own_format_views	pub own_format_views: bool
 field	metal2vulkan::bind::TextureFacts.parent_base_size	pub parent_base_size: [u32; 3]
@@ -3749,15 +3728,12 @@ field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: Handle
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
 field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
-field	metal2vulkan::device::DevicePolicy.multisample_depth_twin	pub multisample_depth_twin: MultisampleDepthTwinPolicy
 field	metal2vulkan::device::DevicePolicy.nan_and_min_max	pub nan_and_min_max: NanMinMaxPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
-field	metal2vulkan::device::DevicePolicy.resolve	pub resolve: ResolvePolicy
 field	metal2vulkan::device::DevicePolicy.rounding_order	pub rounding_order: RoundingOrderPolicy
 field	metal2vulkan::device::DevicePolicy.sampling	pub sampling: SamplingPolicy
 field	metal2vulkan::device::DevicePolicy.texel_conversion	pub texel_conversion: TexelConversionPolicy
-field	metal2vulkan::device::DevicePolicy.tile_store	pub tile_store: TileStorePolicy
 field	metal2vulkan::device::DevicePolicy.unorm8_linear_filter	pub unorm8_linear_filter: Unorm8LinearFilterPolicy
 field	metal2vulkan::device::DevicePolicy.vertex_normalized	pub vertex_normalized: VertexNormalizedPolicy
 field	metal2vulkan::device::DevicePolicy.ycbcr_filter	pub ycbcr_filter: YCbCrFilterPolicy
@@ -4624,7 +4600,6 @@ fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: 
 fn	metal2vulkan::bind::color_resolve_modules	pub fn color_resolve_modules(device: &Device, format: ColorResolveFormat, samples: u32, source: ResolveSource, feature: Feature) -> Result<ColorResolveModules, Error>
 fn	metal2vulkan::bind::color_write_table	pub fn color_write_table() -> &'static [u8]
 fn	metal2vulkan::bind::compressed_blit_module	pub fn compressed_blit_module(device: &Device, rule: CompressedBlit) -> Result<CompressedBlitModule, Error>
-fn	metal2vulkan::bind::depth_magnitude_module	pub fn depth_magnitude_module(device: &Device) -> Result<DepthMagnitudeModule, Error>
 fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
 fn	metal2vulkan::bind::depth_stencil_resolve_modules	pub fn depth_stencil_resolve_modules(device: &Device, draw: DepthStencilResolveDraw, feature: Feature) -> Result<DepthStencilResolveModules, Error>
@@ -5023,7 +4998,6 @@ macro-member	metal2vulkan-runtime::Degradation::DecodedBlockTwin	DecodedBlockTwi
 macro-member	metal2vulkan-runtime::Degradation::DecodedTexelPrecision	DecodedTexelPrecision = "decoded-texel-precision", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DepthBiasPastOne	DepthBiasPastOne = "depth-bias-past-one", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DepthDenormals	DepthDenormals = "depth-denormals", Precision,
-macro-member	metal2vulkan-runtime::Degradation::DepthTwin	DepthTwin = "depth-twin", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DetachedStorageKeepsWrites	DetachedStorageKeepsWrites = "detached-storage-keeps-writes", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceAnisotropicFilter	DeviceAnisotropicFilter = "device-anisotropic-filter";
 macro-member	metal2vulkan-runtime::Degradation::DeviceArithmetic	DeviceArithmetic = "device-arithmetic";
@@ -8437,9 +8411,6 @@ method	metal2vulkan::bind::CompressedBlit::of	pub fn of(pf: PixelFormat) -> Opti
 method	metal2vulkan::bind::CompressedBlit::texel_bytes	pub fn texel_bytes(self) -> u32
 method	metal2vulkan::bind::CompressedBlit::word	pub fn word(self, word: u32, odd: bool) -> u32
 method	metal2vulkan::bind::ContinuedResult::new	pub fn new(offset: u64, first: u32, count: u32, sum: bool) -> ContinuedResult
-method	metal2vulkan::bind::DepthMagnitudeModule::shape	pub fn shape(count: u32, merge: bool, flush: bool) -> [u8; 16]
-method	metal2vulkan::bind::DepthMagnitudeModule::stand_in	pub fn stand_in(bits: u32, flush: bool) -> u32
-method	metal2vulkan::bind::DepthMagnitudeModule::strip	pub fn strip(count: u32) -> [u8; 16]
 method	metal2vulkan::bind::DepthStencilResolveDraw::new	pub fn new(pick: DepthPick, samples: u32, write: ResolveWrite) -> DepthStencilResolveDraw
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
 method	metal2vulkan::bind::DrawMergeModule::push_constants	pub fn push_constants(header: u64, status: u64) -> Vec<u8>
@@ -9519,7 +9490,6 @@ struct	metal2vulkan::bind::CompensatedViewport	#[cfg_attr(feature = "serde", der
 struct	metal2vulkan::bind::CompressedBlitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CompressedBlitModule
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
 struct	metal2vulkan::bind::ContinuedResult	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ContinuedResult
-struct	metal2vulkan::bind::DepthMagnitudeModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthMagnitudeModule
 struct	metal2vulkan::bind::DepthSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthSplitModule
 struct	metal2vulkan::bind::DepthStencilCopyModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilCopyModules
 struct	metal2vulkan::bind::DepthStencilResolveDraw	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct DepthStencilResolveDraw
@@ -12096,8 +12066,6 @@ variant	metal2vulkan::bind::DepthStencilCopy::Depth16Bits	Depth16Bits
 variant	metal2vulkan::bind::DepthStencilCopy::Depth16Code	Depth16Code
 variant	metal2vulkan::bind::DepthStencilCopy::DepthBits	DepthBits
 variant	metal2vulkan::bind::DepthStencilCopy::DepthFromStandIn	DepthFromStandIn { form: DepthStandInForm }
-variant	metal2vulkan::bind::DepthStencilCopy::DepthMagnitude	DepthMagnitude
-variant	metal2vulkan::bind::DepthStencilCopy::MagnitudeBits	MagnitudeBits
 variant	metal2vulkan::bind::DepthStencilCopy::StencilBits	StencilBits
 variant	metal2vulkan::bind::DepthStencilCopy::StencilExport	StencilExport { source: CopySource }
 variant	metal2vulkan::bind::DepthStencilCopy::StencilPlane	StencilPlane { source: CopySource, bit: StencilBit }
@@ -12328,7 +12296,7 @@ variant	metal2vulkan::bind::TessellationRecords::Pool	Pool
 variant	metal2vulkan::bind::TexelWords::ColorPlane	ColorPlane
 variant	metal2vulkan::bind::TexelWords::Raw	Raw
 variant	metal2vulkan::bind::TextureShape::Buffer	Buffer { pixel_format: metal::PixelFormat,  swizzle: metal::TextureSwizzleChannels }
-variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  depth_twin: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  own_format_views: bool,  ycbcr_in_place: bool }
+variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  own_format_views: bool,  ycbcr_in_place: bool }
 variant	metal2vulkan::bind::TileMapError::Region	Region { level: u32, slice: u32, origin: [u32; 3], size: [u32; 3] }
 variant	metal2vulkan::bind::TileMapError::Shape	Shape
 variant	metal2vulkan::bind::TileMapError::TextureType	TextureType { texture_type: TextureType }
@@ -12557,8 +12525,6 @@ variant	metal2vulkan::device::HostPageTexturePolicy::Shadow	Shadow
 variant	metal2vulkan::device::Independence::All	All
 variant	metal2vulkan::device::Independence::None	None
 variant	metal2vulkan::device::Independence::Only32Bit	Only32Bit
-variant	metal2vulkan::device::MultisampleDepthTwinPolicy::Device	Device
-variant	metal2vulkan::device::MultisampleDepthTwinPolicy::Exact	Exact
 variant	metal2vulkan::device::NanMinMaxPolicy::Exact	Exact
 variant	metal2vulkan::device::NanMinMaxPolicy::Native	Native
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
@@ -12568,8 +12534,6 @@ variant	metal2vulkan::device::ResolveMode::Average	Average
 variant	metal2vulkan::device::ResolveMode::Max	Max
 variant	metal2vulkan::device::ResolveMode::Min	Min
 variant	metal2vulkan::device::ResolveMode::SampleZero	SampleZero
-variant	metal2vulkan::device::ResolvePolicy::Device	Device
-variant	metal2vulkan::device::ResolvePolicy::Exact	Exact
 variant	metal2vulkan::device::Robustness::None	None
 variant	metal2vulkan::device::Robustness::Rba	Rba
 variant	metal2vulkan::device::Robustness::Rba2	Rba2
@@ -12625,8 +12589,6 @@ variant	metal2vulkan::device::Tier::Emulated	Emulated
 variant	metal2vulkan::device::Tier::Linear	Linear
 variant	metal2vulkan::device::Tier::NoSubgroup	NoSubgroup
 variant	metal2vulkan::device::Tier::PartialFragment	PartialFragment
-variant	metal2vulkan::device::TileStorePolicy::Device	Device
-variant	metal2vulkan::device::TileStorePolicy::Exact	Exact
 variant	metal2vulkan::device::Unorm8LinearFilterPolicy::DeviceWithinOneCode	DeviceWithinOneCode
 variant	metal2vulkan::device::Unorm8LinearFilterPolicy::Exact	Exact
 variant	metal2vulkan::device::VertexNormalizedPolicy::Device	Device

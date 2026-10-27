@@ -86,10 +86,7 @@
 //! [`shadow_copy_in_module`] copies a merged texture's texels in and keeps them with one dispatch.
 //! A copy of many
 //! equal rows between two buffers is one dispatch of [`rows_copy_module`] where a copy's region
-//! per row costs more. A render pass that loads a
-//! 32-bit float depth holding a value Vulkan's depth test compares otherwise than Metal's (a
-//! negative value or a NaN, whose magnitude Metal compares) renders over its stand-in, written
-//! before the pass and merged back after it by [`depth_magnitude_module`]. A blit between a buffer
+//! per row costs more. A blit between a buffer
 //! and a two-plane extended-range texture moves its color words through [`plane_words_module`],
 //! and a blit between two such textures moves both planes as Metal's blit does through
 //! [`plane_copy_module`]. A rotated texture's texels move between its
@@ -101,8 +98,7 @@
 //! through [`tiled_texels_module`]. A render pass that loads an extended-range, padded 10-bit or
 //! bfloat color attachment and draws first rewrites the bits its codes leave unused through
 //! [`unused_bits_module`] of its format, in the 32 x 32 tiles a mask names, as Metal's tile store
-//! does; under the exact tile store it also raises a signed normalized attachment's minimum codes
-//! and normalizes an `RGB9E5Float` attachment's words there. The tiles a pass's draws reach, which Metal's tile store writes back, are the mask one
+//! does. The tiles a pass's draws reach, which Metal's tile store writes back, are the mask one
 //! dispatch of [`tile_reach_module`] bins its captured primitives into: [`capture_assembly_module`]
 //! assembles them from a pass's capture draws' records, and [`capture_settle_module`] widens the
 //! mask to every tile where the binning counted a primitive it cannot answer. A GPU blit that reads
@@ -144,7 +140,6 @@ pub(crate) mod capture_assembly;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
 pub(crate) mod compressed_blit;
-pub(crate) mod depth_magnitude;
 pub(crate) mod depth_stencil_copy;
 pub(crate) mod depth_stencil_resolve;
 pub(crate) mod dispatch;
@@ -216,7 +211,6 @@ pub use compressed_blit::{compressed_blit_module, CompressedBlit, CompressedBlit
 pub use etc_decode::{etc_decode_module, EtcDecode, EtcTexels};
 // The bytes of `WriteSource::ColorWriteTable`'s buffer.
 pub use crate::lower::arith::srgb::color_write_table;
-pub use depth_magnitude::{depth_magnitude_module, DepthMagnitudeModule};
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
     DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
