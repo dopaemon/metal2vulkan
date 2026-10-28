@@ -1179,7 +1179,8 @@ fn finish(
 /// (requirements included), serialized, and numbered with the fixed binding of
 /// [`ColorResolveModules`]. Refused, `Unsupported` naming `feature` (what the consumer resolves
 /// for) and what the device lacks, where it lacks what the modules need; an internal error for
-/// another sample count; an error where `source` is one [`fragment_typed_module`] refuses.
+/// another sample count; an error where `source` is sample planes of a twin resolve's format,
+/// which reads the attachment, or of an extended-range form whose copy does not move its bits.
 pub fn color_resolve_modules(
     device: &Device,
     format: ColorResolveFormat,
