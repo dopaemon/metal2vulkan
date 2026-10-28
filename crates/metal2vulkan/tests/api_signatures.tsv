@@ -8305,6 +8305,8 @@ method	metal2vulkan::bind::ChromaDecode::of	pub fn of(pf: PixelFormat) -> Option
 method	metal2vulkan::bind::ChromaDecode::texel_format	pub fn texel_format(self) -> Format
 method	metal2vulkan::bind::ChromaDecode::texel_pixel_format	pub fn texel_pixel_format(self) -> PixelFormat
 method	metal2vulkan::bind::ColorResolveFormat::channels	pub fn channels(self) -> [Option<ResolveChannel>; 4]
+method	metal2vulkan::bind::ColorResolveFormat::decodes_on_device	pub fn decodes_on_device(self) -> bool
+method	metal2vulkan::bind::ColorResolveFormat::device_srgb	pub fn device_srgb(self) -> ColorResolveFormat
 method	metal2vulkan::bind::ColorResolveFormat::exact	pub fn exact(self) -> bool
 method	metal2vulkan::bind::ColorResolveFormat::extended	pub fn extended(self) -> Option<ExtendedRange>
 method	metal2vulkan::bind::ColorResolveFormat::extended_range	pub fn extended_range(form: ExtendedRange) -> Option<ColorResolveFormat>
@@ -11072,6 +11074,7 @@ variant	metal2vulkan-runtime::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeI
 variant	metal2vulkan-runtime::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn
 variant	metal2vulkan-runtime::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
 variant	metal2vulkan-runtime::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
+variant	metal2vulkan-runtime::DriverFact::ColorClearIsMetals	ColorClearIsMetals
 variant	metal2vulkan-runtime::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan-runtime::DriverFact::ColorResolveAverageIsMetals	ColorResolveAverageIsMetals
 variant	metal2vulkan-runtime::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites
@@ -12295,6 +12298,7 @@ variant	metal2vulkan::device::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeI
 variant	metal2vulkan::device::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn
 variant	metal2vulkan::device::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
 variant	metal2vulkan::device::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
+variant	metal2vulkan::device::DriverFact::ColorClearIsMetals	ColorClearIsMetals
 variant	metal2vulkan::device::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
 variant	metal2vulkan::device::DriverFact::ColorResolveAverageIsMetals	ColorResolveAverageIsMetals
 variant	metal2vulkan::device::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites

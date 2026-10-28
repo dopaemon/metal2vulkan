@@ -16,7 +16,7 @@
 //! the green field. The kernels are the owned fixture `fpv_rgbx_textures`'s, each at its
 //! thread's texel of a 16 by 16 texture.
 
-use super::degrade_notices::on_device;
+use super::degrade_notices::{on_device, on_device_with};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::SamplerDescriptor;
@@ -25,9 +25,9 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_runtime::{
-    ClearColor, CommandBufferStatus, ComputePipelineState, Device, Error, LoadAction,
-    PipelineOptions, Region, RenderPassDescriptor, ResourceOptions, Size, StoreAction, Texture,
-    TextureDescriptor,
+    ClearColor, CommandBufferStatus, ComputePipelineState, Degradation, Device, DeviceOptions,
+    Error, LoadAction, PipelineOptions, Region, RenderPassDescriptor, ResourceOptions, Size,
+    StoreAction, Texture, TextureDescriptor,
 };
 
 /// A texture's width and height.
@@ -287,7 +287,10 @@ fn rgbx_writes_store_green_as_x() {
 }
 
 /// Metal's color fills of every RGBX format: three colors' texel bytes, and a
-/// byte fill's pattern cut at the texel.
+/// byte fill's pattern cut at the texel. A plain color fill of a format the device renders is the
+/// device's clear of the color (`blit_fill.rs`): where its fill announces
+/// `device-color-conversion`, asked for at each fill, a texel may stand a code from Metal's in a
+/// field (`color_fills::fields_apart`), the X field among them.
 #[test]
 fn rgbx_fills_store_metals_bytes() {
     let colors = [
@@ -330,7 +333,10 @@ fn rgbx_fills_store_metals_bytes() {
         ]
     };
     let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    on_device(|device, _| {
+    let each = |options: &mut DeviceOptions| {
+        options.announce_each = [Degradation::DeviceColorConversion].into_iter().collect();
+    };
+    on_device_with(each, |device, messages| {
         let mut differ = Vec::new();
         for (pf, wants) in cases {
             let bytes = FORMATS.iter().find(|f| f.0 == pf).unwrap().2;
@@ -353,14 +359,26 @@ fn rgbx_fills_store_metals_bytes() {
                     Some(c) => blit.fill_texture_color(&texture, 0, 0, region, c, None),
                 }
                 .unwrap();
+                let converted = super::degrade_notices::counts(&messages.take_notices())
+                    .contains_key(&Degradation::DeviceColorConversion);
                 blit.end_encoding().unwrap();
                 command_buffer.commit().unwrap();
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
                 assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
                 let got = bytes_of(&texture, bytes);
+                let metal: Vec<u8> = (0..want.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&want[i..i + 2], 16).unwrap())
+                    .collect();
                 let wrong = got
                     .chunks_exact(bytes)
-                    .filter(|texel| hex(texel) != want)
+                    .filter(|&texel| {
+                        let near = || {
+                            super::color_fills::fields_apart(pf, texel, &metal)
+                                .is_some_and(|apart| !apart.nans)
+                        };
+                        texel != metal && !(converted && near())
+                    })
                     .count();
                 if wrong > 0 {
                     differ.push(format!("{pf:?} {color:?}: {wrong} texels not {want}"));

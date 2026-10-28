@@ -242,7 +242,7 @@ use metal2vulkan::error::{Feature, RuntimeDriverDefect, Unsupported};
 use metal2vulkan::metal::format::{aspects, sampled_type, ExtendedRange, FormatMapping};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan::pipeline::SampledType;
-use metal2vulkan::vk::{ImageAspectFlags, ImageCreateFlags, ImageType, ImageUsageFlags};
+use metal2vulkan::vk::{Format, ImageAspectFlags, ImageCreateFlags, ImageType, ImageUsageFlags};
 
 /// A Vulkan resolve mode of a depth or stencil aspect: `NONE` where the aspect does not resolve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1414,6 +1414,18 @@ pub(super) fn scratch(
     usage: ImageUsageFlags,
     samples: u32,
 ) -> Result<Target, Error> {
+    scratch_viewed(maker, source, usage, samples, None)
+}
+
+/// [`scratch`], its image also taking views in `view` where one is named (mutable to it alone):
+/// the color resolve's copy that it reads through the device's sRGB decode (`color_resolve.rs`).
+pub(super) fn scratch_viewed(
+    maker: &CommandBuffer,
+    source: &Target,
+    usage: ImageUsageFlags,
+    samples: u32,
+    view: Option<Format>,
+) -> Result<Target, Error> {
     let format = source.format;
     let [width, height] = source.extent;
     let layers = source.layers;
@@ -1437,7 +1449,10 @@ pub(super) fn scratch(
     let aspects = aspects(pixel_format).unwrap_or(ImageAspectFlags::COLOR);
     let plan = ImagePlan {
         pixel_format,
-        flags: ImageCreateFlags::empty(),
+        flags: match view {
+            Some(_) => ImageCreateFlags::MUTABLE_FORMAT,
+            None => ImageCreateFlags::empty(),
+        },
         image_type: ImageType::TYPE_2D,
         format,
         extent: [width, height, 1],
@@ -1446,7 +1461,7 @@ pub(super) fn scratch(
         samples: sample_count(samples)
             .ok_or_else(|| internal("an attachment of a sample count Vulkan lacks"))?,
         usage: usage | ImageUsageFlags::TRANSFER_SRC,
-        view_formats: Vec::new(),
+        view_formats: view.map_or_else(Vec::new, |view| vec![format, view]),
         mapping: FormatMapping::direct(format, aspects),
         unavailable: TextureUsage::SHADER_READ
             | TextureUsage::SHADER_WRITE

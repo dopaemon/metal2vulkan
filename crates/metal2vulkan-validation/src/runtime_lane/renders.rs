@@ -940,7 +940,9 @@ fn a_code_apart(pf: PixelFormat, got: &[u8], want: &[u8]) -> bool {
 /// (`device-color-conversion`; a `Depth16Unorm` depth's `unorm-depth-rounding`), and a NaN of a
 /// half-float or small-float channel, which the device's clear converts as it likes, announced
 /// (`device-nan-encoding`); each printed. A format the device cannot render to is counted, not
-/// run.
+/// run. On a driver whose load operation clears as Metal's does
+/// (`DriverFact::ColorClearIsMetals`), every color clear is Metal's bytes and none announces
+/// `device-color-conversion`.
 #[test]
 fn clears_are_the_device_s_conversion_of_the_clear_value() {
     let messages = Messages::default();
@@ -1088,6 +1090,16 @@ fn clears_are_the_device_s_conversion_of_the_clear_value() {
          cannot render to",
         device.name(),
         unsupported.len()
+    );
+    let metals = device
+        .properties()
+        .driver_facts
+        .contains(&metal2vulkan::device::DriverFact::ColorClearIsMetals);
+    assert!(
+        !(metals && converted),
+        "{}: a color clear announced device-color-conversion where the load operation clears as \
+         Metal's",
+        device.name()
     );
     for why in &unsupported {
         eprintln!("unsupported: {why}");

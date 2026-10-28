@@ -370,6 +370,7 @@ const OUTSIDE: DriverFact = DriverFact::DepthImageKeepsValuesOutsideUnitRange;
 const FRAGDEPTH: DriverFact = DriverFact::FragmentDepthStoresUnchanged;
 const APART: DriverFact = DriverFact::DepthStencilImagesLieApart;
 const AVERAGE: DriverFact = DriverFact::ColorResolveAverageIsMetals;
+const CLEAR: DriverFact = DriverFact::ColorClearIsMetals;
 const HIDE: DriverFact = DriverFact::CompressedImagesHideAliasedWrites;
 const HOST: DriverFact = DriverFact::HostTransferImagesKeepTheirBytes;
 const OPTIMIZED: DriverFact = DriverFact::DepthStencilImagesStayGpuOptimized;
@@ -519,6 +520,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
                 OUTSIDE,
                 APART,
                 AVERAGE,
+                CLEAR,
                 OPTIMIZED,
                 DEPTH16,
                 FETCH,

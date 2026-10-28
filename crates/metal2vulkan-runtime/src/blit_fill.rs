@@ -52,10 +52,20 @@
 //!
 //! A **color fill** packs the color in `pixelFormat:` (the texture's own format without it) by
 //! the fill's own rules (`fill_value.rs`), which are not a `Clear` load action's, and fills that
-//! pattern: the packed texel's bytes, repeated or cut at the texture's texel (12 pairs of formats,
-//! 256 colors each: 128 colors packed in each of 70 formats into textures of 18 formats of 1 to 16
-//! bytes; on the M3 Max the 88 formats Metal packs a color in, 1,144 colors each, into
-//! `RGBA32Uint` texels). In every other format (213: compressed, 4:2:2, depth, stencil,
+//! pattern. The runtime packs it so, on the host, for every fill with `pixelFormat:` (a capability:
+//! Metal's packing in another format). A **plain** fill of a texture of a format whose fill
+//! converts a `float` (normalized, sRGB, half, float, small float, shared exponent;
+//! `fill_value::device_converts`) and that the device renders, its image holding Metal's bytes,
+//! is the device's own conversion of the color instead, as the native-arithmetic rule asks: a
+//! scratch image of the region in the texture's image format and samples, cleared whole by the
+//! device (`vkCmdClearColorImage`), copied into the region of each image the fill writes as a
+//! blit copy between the textures moves it. It is announced where the device's conversion may
+//! store another texel than Metal's packing (`fill_value::device_apart`,
+//! `device-color-conversion`; a half or small-float NaN, `device-nan-encoding`). A texture buffer
+//! and every other format are packed on the host. Metal fills the packed texel's bytes, repeated
+//! or cut at the texture's texel (12 pairs of formats, 256 colors each: 128 colors packed in each
+//! of 70 formats into textures of 18 formats of 1 to 16 bytes; on the M3 Max the 88 formats Metal
+//! packs a color in, 1,144 colors each, into `RGBA32Uint` texels). In every other format (213: compressed, 4:2:2, depth, stencil,
 //! two-plane, YCbCr, padded, `Invalid` and the private formats) Metal packs nothing and fills
 //! bytes of the calling thread's stack, the texel's bytes of a 16-byte buffer the packing writes:
 //! a probe that set the stack below its call to one byte read that byte back in every texel, and
@@ -144,30 +154,41 @@
 //! 32-bit float depth whose driver's fragment depth changes values). A pattern4 fill copies its
 //! bytes from a staging buffer.
 
-use super::blit::{bytes_in, reads, writes, BlitCommandEncoder};
+use super::blit::{bytes_in, reads, writes, BlitCommandEncoder, TRANSFER};
 use super::blit_plan::BufferLayout;
 use super::blit_plan::ImageCopyRegion;
 use super::blit_texture;
 use super::chroma_pairs::{is_four_two_two, TEXEL_BYTES};
+use super::clear_value;
 use super::clear_value::has_channels;
 use super::copy_plan::{
     block_bytes, block_extent, level_extent, BlitOption, CopyUnit, ImageRegion,
 };
 use super::error::{internal, invalid, Error, Problem, RuntimeGap};
-use super::fill_value::fill_texel;
+use super::fill_value::{device_apart, device_converts, device_nan, fill_texel};
 use super::heap::Heap;
+use super::image_plan::{sample_count, ImagePlan};
 use super::render_values::ClearColor;
 use super::replay::BlitCall;
 use super::sample_planes::{BitsCopy, BITS_COPY_STAGES};
 use super::texture::Texture;
+use super::texture_descriptor::TextureDescriptor;
+use super::tracker::Access;
 use super::two_planes;
+use super::values::ResourceOptions;
 use super::values::{Origin, Region, Size};
+use super::Device;
 use super::{Buffer, Degradation};
 use ash::vk;
 use metal2vulkan::bind::{PlanesCopy, YCbCrCodes};
-use metal2vulkan::metal::format::{padded_words, ycbcr_format, ExtendedRange};
-use metal2vulkan::metal::{PixelFormat, TextureType};
-use metal2vulkan::vk::ImageAspectFlags;
+use metal2vulkan::device::FormatUsage;
+use metal2vulkan::metal::format::{
+    byte_format, padded_words, ycbcr_format, ClearRoute, ExtendedRange, FormatMapping,
+};
+use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
+use metal2vulkan::vk::{
+    Format, FormatFeatureFlags2, ImageAspectFlags, ImageCreateFlags, ImageType, ImageUsageFlags,
+};
 use std::ops::Range;
 
 /// The most bytes a fill stages at once: a larger region copies them again.
@@ -513,6 +534,35 @@ fn placement(
     Ok((!images.is_empty()).then_some((slice, images)))
 }
 
+/// Announce the device's clear of a plain color fill of `pf` to `color` where it may store another
+/// texel than Metal's fill packs ([`device_apart`], `device-color-conversion`), and where it
+/// converts a half or small-float NaN as the device likes ([`device_nan`], `device-nan-encoding`).
+fn degrade_fill_conversion(device: &Device, pf: PixelFormat, color: [f64; 4]) {
+    if device_apart(pf, color) {
+        device.degrade(Degradation::DeviceColorConversion, || {
+            (
+                format!("a color fill of a {pf:?} texture to {color:?}"),
+                "the device clears the region by its own conversion of the color, which Vulkan \
+                 asks it to round to nearest, leaving a tie, an sRGB encode and a float's \
+                 rounding to it, where Metal's fill packs it by rules of its own (a tie rounded \
+                 half up, an sRGB channel the code whose decoded value is nearest): a channel can \
+                 store a code next to Metal's"
+                    .to_owned(),
+            )
+        });
+    }
+    if device_nan(pf, color) {
+        device.degrade(Degradation::DeviceNanEncoding, || {
+            (
+                format!("a {pf:?} texture's color fill to a NaN"),
+                "the device converts it to the format's NaN as it likes, where Metal's fill keeps \
+                 a half NaN's sign and payload and makes a small float's all ones"
+                    .to_owned(),
+            )
+        });
+    }
+}
+
 impl BlitCommandEncoder {
     /// `fillTexture:level:slice:region:bytes:length:` (Apple SPI): every unit of `region` of the
     /// texture's `level` and `slice` becomes `pattern`, repeated from its start and cut at the
@@ -573,6 +623,12 @@ impl BlitCommandEncoder {
     /// even, an integer channel's NaN is 0 or the extreme by its kind, and the extended-range
     /// formats are packed.
     ///
+    /// A plain fill (`pixel_format` `None`) of a texture of a normalized, sRGB, half, float or
+    /// small-float format the device renders is the device's clear of the color over the region
+    /// (the module docs), placed as the fill: a texel can stand a code from Metal's packing where
+    /// its conversion is in question, announced (`Degradation::DeviceColorConversion`; a half or
+    /// small-float NaN `Degradation::DeviceNanEncoding`).
+    ///
     /// A color packed in a format Metal packs no color in (compressed, 4:2:2, depth, stencil,
     /// two-plane, YCbCr, padded 10-bit, `Invalid`, the private formats) fills the command buffer's
     /// last color fill's packed texel, over zeros at its start (the module docs): Metal fills bytes
@@ -599,6 +655,28 @@ impl BlitCommandEncoder {
         // The texel, which the command buffer's slot takes; else the slot's bytes.
         let texel = fill_texel(packed_in, channels);
         let slot = self.core().command_buffer().fill_slot(texel.as_deref());
+        // A plain fill of a texture of a format the device renders: the device's clear of the
+        // color (the module docs). Logged as the call, which encoded again clears again.
+        let cleared = match pixel_format {
+            None => self.device_fill(texture)?.and_then(|format| {
+                clear_value::held_color(packed_in, format, channels, ClearRoute::ThroughHalf)
+            }),
+            Some(_) => None,
+        };
+        if let Some(value) = cleared {
+            return self.logged(
+                |_| {
+                    BlitCall::FillTextureColor(Box::new((
+                        texture.clone(),
+                        level,
+                        slice,
+                        region,
+                        color,
+                    )))
+                },
+                |this| this.cleared_fill(CALL, texture, (level, slice), region, (value, channels)),
+            );
+        }
         let pattern = texel.clone().unwrap_or(slot.to_vec());
         // Logged as the bytes it fills, which a call encoded again fills again.
         self.logged(
@@ -701,6 +779,183 @@ impl BlitCommandEncoder {
                 Ok(())
             },
         )
+    }
+
+    /// The Vulkan format in which a plain color fill of `texture` is the device's clear of the
+    /// color (the module docs): its image's, where that holds Metal's bytes of the texture's format
+    /// (`metal::format::byte_format`), the format's fill converts a `float`
+    /// ([`device_converts`]), the device renders the format and copies images of it both ways,
+    /// and the texture is not a texture buffer, whose fill writes its buffer's bytes. `None` where
+    /// the fill packs the color.
+    fn device_fill(&mut self, texture: &Texture) -> Result<Option<Format>, Error> {
+        let pf = texture.pixel_format();
+        let texels = matches!(
+            fill_unit(pf),
+            Some(FillUnit::Texels {
+                option: BlitOption::None,
+                ..
+            })
+        );
+        if texture.texture_type() == TextureType::TextureBuffer || !texels || !device_converts(pf) {
+            return Ok(None);
+        }
+        let Some(format) = byte_format(pf) else {
+            return Ok(None);
+        };
+        if texture
+            .image_plan()
+            .map_or(true, |plan| plan.format != format)
+        {
+            return Ok(None);
+        }
+        let device = self.core().device();
+        let profile = device.compile_device().profile();
+        let copies = FormatFeatureFlags2::TRANSFER_SRC | FormatFeatureFlags2::TRANSFER_DST;
+        let renders = profile.supports_format(format, FormatUsage::ColorAttachment)
+            && device
+                .shared()
+                .textures
+                .facts(profile)
+                .optimal(format)
+                .contains(copies);
+        Ok(renders.then_some(format))
+    }
+
+    /// The device's clear of `color` (its clear value `value`) into `region` of `texture`'s `level`
+    /// and `slice`, placed as a fill (the module docs): a scratch image of the region cleared whole
+    /// by the device ([`cleared_scratch`](Self::cleared_scratch)), copied into the region of each
+    /// depth image the fill writes as a blit copy between the two textures moves it. Announced
+    /// where the device's conversion may store another texel than Metal's fill packs.
+    fn cleared_fill(
+        &mut self,
+        call: &'static str,
+        texture: &Texture,
+        (level, slice): (u64, u64),
+        region: Region,
+        (value, color): (vk::ClearColorValue, [f64; 4]),
+    ) -> Result<(), Error> {
+        self.core().check_device(call, texture.device())?;
+        self.see(texture);
+        let Size {
+            width,
+            height,
+            depth,
+        } = region.size;
+        if width == 0 || height == 0 || depth == 0 {
+            return Ok(());
+        }
+        let Some((slice, images)) = placement(texture, level, slice, region)? else {
+            return Ok(());
+        };
+        let level = u32::try_from(level).map_err(|_| internal("a fill's level"))?;
+        let record = texture.record();
+        let [w, h, _] = level_extent(record, level).map(u64::from);
+        let x = cut(region.origin.x, width, w);
+        let y = cut(region.origin.y, height, h);
+        if x.is_empty() || y.is_empty() {
+            return Ok(());
+        }
+        let narrow = |v: u64| u32::try_from(v).map_err(|_| internal("a fill's region"));
+        let [left, top] = [narrow(x.start)?, narrow(y.start)?];
+        let size = [narrow(x.end - x.start)?, narrow(y.end - y.start)?];
+        let scratch = self.cleared_scratch(texture, size, value)?;
+        let layer = record.base_layer + narrow(slice)?;
+        let mut copies = Vec::new();
+        for z in images {
+            let at = |level, layer, origin| ImageRegion {
+                aspect: ImageAspectFlags::COLOR,
+                level,
+                layer,
+                layers: 1,
+                origin,
+                size: [size[0], size[1], 1],
+            };
+            copies.push(ImageCopyRegion {
+                src: at(0, 0, [0, 0, 0]),
+                dst: at(record.base_level + level, layer, [left, top, narrow(z)?]),
+            });
+        }
+        self.texture_copies(call, &scratch, texture, &copies)?;
+        degrade_fill_conversion(self.core().device(), texture.pixel_format(), color);
+        Ok(())
+    }
+
+    /// A scratch image of `texture`'s image format, samples and dimension (a 1D image's, or 2D)
+    /// over `width` by `height` texels, cleared whole by the device to `value`
+    /// (`vkCmdClearColorImage`, the device's conversion of a clear value): a texture the command
+    /// buffer holds until it completes.
+    fn cleared_scratch(
+        &mut self,
+        texture: &Texture,
+        [width, height]: [u32; 2],
+        value: vk::ClearColorValue,
+    ) -> Result<Texture, Error> {
+        let pf = texture.pixel_format();
+        let (format, one_row) = {
+            let plan = texture.image_plan()?;
+            (plan.format, plan.image_type == ImageType::TYPE_1D)
+        };
+        let samples = texture.record().samples;
+        let texture_type = match (one_row, samples > 1) {
+            (true, _) => TextureType::Type1D,
+            (false, false) => TextureType::Type2D,
+            (false, true) => TextureType::Type2DMultisample,
+        };
+        let descriptor = TextureDescriptor {
+            texture_type,
+            pixel_format: pf,
+            width: width.into(),
+            height: height.into(),
+            sample_count: samples.into(),
+            usage: TextureUsage::RENDER_TARGET,
+            resource_options: ResourceOptions::private(),
+            // Not a texture Metal keeps compressed, whose blits rewrite texels: the copy out of
+            // it moves the clear's bits (`compressed_blit.rs`).
+            allow_gpu_optimized_contents: false,
+            ..TextureDescriptor::default()
+        };
+        let plan = ImagePlan {
+            pixel_format: pf,
+            flags: ImageCreateFlags::empty(),
+            image_type: match one_row {
+                true => ImageType::TYPE_1D,
+                false => ImageType::TYPE_2D,
+            },
+            format,
+            extent: [width, height, 1],
+            levels: 1,
+            layers: 1,
+            samples: sample_count(samples)
+                .ok_or_else(|| internal("a fill of a sample count Vulkan lacks"))?,
+            usage: ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST,
+            view_formats: Vec::new(),
+            mapping: FormatMapping::direct(format, ImageAspectFlags::COLOR),
+            unavailable: TextureUsage::SHADER_READ
+                | TextureUsage::SHADER_WRITE
+                | TextureUsage::SHADER_ATOMIC
+                | TextureUsage::PIXEL_FORMAT_VIEW,
+        };
+        let scratch = Device::new_planned_texture(self.core().command_buffer(), &descriptor, plan)?;
+        let image = scratch.raw_image()?;
+        let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
+        let uses = [scratch.image_use(0..1, 0..1, write, true)?];
+        let range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        self.command(&uses, |device, raw| {
+            // SAFETY: the encoder's command buffer is recording outside a render pass; the image
+            // is live until it completes (the command buffer holds the scratch), rests in
+            // `GENERAL` and has transfer-destination usage; the range is its one level and layer,
+            // and its format, one the device renders, takes transfer writes.
+            unsafe {
+                device.cmd_clear_color_image(raw, image, vk::ImageLayout::GENERAL, &value, &[range])
+            };
+        })?;
+        Ok(scratch)
     }
 
     /// The fill of `pattern` into `region` of `texture`'s `level` and `slice` (the module docs).

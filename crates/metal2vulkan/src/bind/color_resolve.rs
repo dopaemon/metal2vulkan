@@ -17,6 +17,17 @@
 //!
 //!   Metal has no texture of more than 4 samples on Apple silicon: at 8 and more the modules apply
 //!   the same rules, which no Metal answer measures.
+//!
+//!   **The device's sRGB conversions** ([`ColorResolveFormat::device_srgb`]): where the device has
+//!   the sRGB format, the sRGB rule is the device's own decode and encode, not Metal's 12-bit
+//!   tables. The modules read the attachment through a view in the sRGB format
+//!   ([`ResolveSource::InputAttachment`]), whose read decodes each sample's channel, average the
+//!   decoded values (their `f32` sum times `1 / n`, exact at a power of two), and write the
+//!   average through a view in the sRGB format, whose store encodes it; the alpha keeps the unorm
+//!   rule. A near-equivalent of Metal's rule: with correctly rounded conversions, 1,758 of the
+//!   65,536 pairs of codes at 2 samples resolve one code from Metal's code, and none further (the
+//!   tests' model); the device's own conversions decide the rest. The crate's tables serve a
+//!   device that lacks the sRGB format, through the raw twin's views.
 //! - **of an extended-range attachment** ([`ColorResolveFormat::extended_range`], below), held in
 //!   its raw format's codes, which no device's resolve averages.
 //!
@@ -140,6 +151,9 @@ pub struct ColorResolveFormat {
     /// Whether the result is written through the raw twin's view
     /// ([`ColorResolveFormat::written_raw`]).
     written_raw: bool,
+    /// Whether the sRGB channels take the device's decode and encode
+    /// ([`ColorResolveFormat::device_srgb`]).
+    device_srgb: bool,
     /// The extended-range form whose raw codes the format holds
     /// ([`ColorResolveFormat::extended_range`]).
     extended: Option<ExtendedRange>,
@@ -172,6 +186,7 @@ impl ColorResolveFormat {
             format,
             channels,
             written_raw: false,
+            device_srgb: false,
             extended: None,
         })
     }
@@ -190,6 +205,7 @@ impl ColorResolveFormat {
                 format: form.raw_format(),
                 channels: [None; 4],
                 written_raw: false,
+                device_srgb: false,
                 extended: Some(form),
             }),
             _ => None,
@@ -242,8 +258,29 @@ impl ColorResolveFormat {
     pub fn written_raw(self) -> ColorResolveFormat {
         ColorResolveFormat {
             written_raw: self.raw_format() != self.format,
+            device_srgb: false,
             ..self
         }
+    }
+
+    /// The resolve taking the device's own sRGB decode and encode for its sRGB channels (the
+    /// module docs): it reads the attachment through a view in the format
+    /// ([`ResolveSource::InputAttachment`], whose read decodes each sample), averages the decoded
+    /// values, and writes the average through a view in the format, whose store encodes it, in
+    /// place of Metal's 12-bit tables. For a device that has the sRGB format; its alpha keeps the
+    /// unorm rule. A format with no sRGB channel is itself.
+    pub fn device_srgb(self) -> ColorResolveFormat {
+        ColorResolveFormat {
+            device_srgb: self.srgb(),
+            written_raw: self.written_raw && !self.srgb(),
+            ..self
+        }
+    }
+
+    /// Whether the sRGB channels take the device's decode and encode
+    /// ([`device_srgb`](Self::device_srgb)).
+    pub fn decodes_on_device(self) -> bool {
+        self.device_srgb
     }
 
     /// The format of the view the result is written through: the raw twin's where
@@ -733,6 +770,29 @@ fn alike(f: &mut FunctionBuilder<'_>, t: Types, texels: &[Value]) -> BResult<Val
     all_equal(f, t, &words)
 }
 
+/// The mean of `component` of each sample's `texels`, the values the device's sRGB view decoded:
+/// their `f32` sum, in sample order, times `1 / n`, exact for the power-of-two counts the
+/// modules take, which the sRGB view the result is written through encodes
+/// ([`ColorResolveFormat::device_srgb`]).
+fn device_mean(
+    f: &mut FunctionBuilder<'_>,
+    t: Types,
+    component: u32,
+    texels: &[Value],
+) -> BResult<Value> {
+    let mut sum: Option<Value> = None;
+    for &texel in texels {
+        let lane = f.composite_extract(texel, &[component])?;
+        sum = Some(match sum {
+            None => lane,
+            Some(s) => f.binary_no_contraction(BinOp::FAdd, s, lane)?,
+        });
+    }
+    let sum = sum.ok_or(crate::spirv::error::BuildError::IdSpaceExhausted)?;
+    let scale = float(f, t, 1.0 / texels.len() as f32)?;
+    f.binary_no_contraction(BinOp::FMul, sum, scale)
+}
+
 /// The resolved output floats (R, G, B, A; 0 where the format has no channel) of `format` from
 /// each sample's `texels` read from `source` (the module docs).
 ///
@@ -753,6 +813,24 @@ fn resolve_texel(
         .zip(format.channels)
         .filter_map(|(component, channel)| Some((component, channel?)))
         .collect();
+    // The device's sRGB conversions: the mean of the decoded samples, no comparison (its cost is
+    // the average's).
+    if format.device_srgb {
+        let mut lanes = [zero; 4];
+        for &(component, channel) in &channels {
+            lanes[component as usize] = match channel.rule {
+                ResolveRule::Srgb => device_mean(f, t, component, texels)?,
+                ResolveRule::Unorm => {
+                    let mut codes = Vec::with_capacity(texels.len());
+                    for &texel in texels {
+                        codes.push(code(f, t, None, channel, component, texel, source)?);
+                    }
+                    resolve(f, t, None, channel, &codes)?
+                }
+            };
+        }
+        return Ok(lanes);
+    }
     let (&first, rest) = texels
         .split_first()
         .ok_or(crate::spirv::error::BuildError::IdSpaceExhausted)?;
@@ -806,14 +884,17 @@ pub fn fragment_typed_module(
     if let Some(form) = format.extended {
         return extended_fragment(form, samples, source);
     }
-    if matches!(source, ResolveSource::Planes(_)) {
+    // The device's sRGB decode reads the attachment in the sRGB format itself.
+    if matches!(source, ResolveSource::Planes(_))
+        || (format.device_srgb && source != ResolveSource::InputAttachment)
+    {
         return Err(crate::spirv::error::BuildError::Type(
             crate::spirv::error::TypeRule::FunctionSignature,
         ));
     }
     let mut b = ModuleBuilder::new();
     let t = Types::new(&mut b)?;
-    let srgb = if format.srgb() {
+    let srgb = if format.srgb() && !format.device_srgb {
         Some(SrgbTables::declare(&mut b, t, format, source)?)
     } else {
         None

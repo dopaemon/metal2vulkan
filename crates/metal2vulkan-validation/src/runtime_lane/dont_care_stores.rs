@@ -401,7 +401,8 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
         &[RGBA8, PixelFormat::BGRA8UnormSRGB],
         true,
     );
-    first.extend(tie_cleared());
+    // `color_clear_draw_small_area` clears over a render area smaller than its attachment.
+    first.extend(tie_cleared(&lane.device, false));
     announces(&messages, "the kept passes", !metals(&lane), &first);
     quiet(lane, &messages);
 }
@@ -448,7 +449,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
             Degradation::RenderPassSplit,
             scope == BarrierScope::BUFFERS,
         )]));
-        first.extend(tie_cleared());
+        first.extend(tie_cleared(&lane.device, true));
         announces(&messages, case, true, &first);
         quiet(lane, &messages);
     }
@@ -476,7 +477,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
             }
         );
         let mut first = made(&lane, &[], &[RGBA8], true);
-        first.extend(tie_cleared());
+        first.extend(tie_cleared(&lane.device, true));
         announces(&messages, case, true, &first);
         quiet(lane, &messages);
     }
@@ -513,7 +514,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
                 }
             );
             let mut first = made(&lane, &[(&[RGBA8], (None, None), 4)], &[RGBA8], true);
-            first.extend(tie_cleared());
+            first.extend(tie_cleared(&lane.device, true));
             announces(&messages, case, true, &first);
         } else {
             eprintln!("{case} on {}: no sample locations", lane.device.name());
@@ -546,7 +547,7 @@ fn a_hidden_depth_announces_no_dont_care_store() {
         "hidden_depth: the draw passes the hidden depth of 1.0"
     );
     let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
-    first.extend(tie_cleared());
+    first.extend(tie_cleared(&lane.device, true));
     announces(&messages, "hidden_depth", false, &first);
     quiet(lane, &messages);
 }
@@ -604,6 +605,14 @@ fn a_clear_resolved_into_the_srgb_twin_without_a_draw_keeps_the_samples() {
         // (`color_resolve.rs`), announced `shader-resolve`.
         let mut first = made(&lane, &[], &[], false);
         first.insert(Degradation::ShaderResolve);
+        // Into an sRGB twin it decodes and encodes by the device's own sRGB conversions, every
+        // device having the format (`bind::ColorResolveFormat::device_srgb`).
+        if matches!(
+            res,
+            PixelFormat::BGRA8UnormSRGB | PixelFormat::RGBA8UnormSRGB
+        ) {
+            first.insert(Degradation::DeviceRoundedResolve);
+        }
         announces(&messages, &case, false, &first);
         let resolve = lane.read(&into, (0, 0), 4, BlitOption::None);
         let samples = resolved(&lane, &texture, att);

@@ -1488,7 +1488,9 @@ fn a_single_sampled_colour_resolve_copies_its_texels() {
 /// decides it. There an `RGBA8Unorm_sRGB` resolve texture takes `bcbcbc80` (each color channel's
 /// codes 0xff and 0x00 decoded, averaged in linear space and encoded again, and alpha's averaged
 /// as the linear channel it is) and an `RGBA8Unorm` one `80808080` (every channel's codes
-/// averaged), whichever format the attachment is.
+/// averaged), whichever format the attachment is. Into an sRGB texture the resolve decodes and
+/// encodes by the device's own sRGB conversions, so each color channel there stands within the
+/// two codes `device-rounded-resolve` states of Metal's ([`twin_resolved`]).
 #[test]
 fn a_resolve_into_the_srgb_twin_resolves_in_the_resolve_texture_s_encoding() {
     let (messages, _cache, lane) = lane();
@@ -1552,18 +1554,49 @@ fn a_resolve_into_the_srgb_twin_resolves_in_the_resolve_texture_s_encoding() {
                 }
             })
             .unwrap();
-            assert_eq!(
-                hex(&lane.read(&resolve, (0, 0), 4, BlitOption::None)),
-                hex(&repeat(&texel, (SIZE * SIZE) as usize)),
-                "{attachment:?} into {into:?} through a view of {view:?}, samples {}",
-                match draw {
-                    true => "that disagree",
-                    false => "that agree",
-                }
+            twin_resolved(
+                &lane.read(&resolve, (0, 0), 4, BlitOption::None),
+                texel,
+                srgb_written,
+                &format!(
+                    "{attachment:?} into {into:?} through a view of {view:?}, samples {}",
+                    match draw {
+                        true => "that disagree",
+                        false => "that agree",
+                    }
+                ),
             );
         }
     }
     quiet(lane, &messages);
+}
+
+/// Hold each texel of a twin resolve's `got` to Metal's `texel` (the lane's 4x4 texture): every
+/// byte where the resolve writes a UNORM texture, and where it writes an sRGB one (`srgb`), whose
+/// decode and encode are the device's own (`bind::ColorResolveFormat::device_srgb`), each color
+/// channel within the two codes `device-rounded-resolve` states and the alpha exactly. A texel
+/// apart from Metal's is printed.
+fn twin_resolved(got: &[u8], texel: [u8; 4], srgb: bool, what: &str) {
+    let codes = |c: usize| if srgb && c < 3 { 2 } else { 0 };
+    let within = got.chunks(4).all(|t| {
+        t.iter()
+            .zip(texel)
+            .enumerate()
+            .all(|(c, (&g, m))| g.abs_diff(m) <= codes(c))
+    });
+    assert!(
+        within && got.len() == 4 * (SIZE * SIZE) as usize,
+        "{what}: {} where Metal's is {}",
+        hex(got),
+        hex(&texel)
+    );
+    if got.chunks(4).any(|t| t != texel) {
+        eprintln!(
+            "{what}: {} where Metal's is {} (the device's sRGB conversions)",
+            hex(&got[..4]),
+            hex(&texel)
+        );
+    }
 }
 
 /// A multisampled color attachment resolved into its format's sRGB twin keeps the samples it held
@@ -1633,10 +1666,11 @@ fn samples_a_twin_resolve_reads_are_kept_as_metal_keeps_them() {
                         true => [0xbc, 0xbc, 0xbc, 0x80],
                         false => [0x80, 0x80, 0x80, 0x80],
                     };
-                    assert_eq!(
-                        hex(&lane.read(&resolve, (0, 0), 4, BlitOption::None)),
-                        hex(&repeat(&texel, (SIZE * SIZE) as usize)),
-                        "{label}: the resolve texture"
+                    twin_resolved(
+                        &lane.read(&resolve, (0, 0), 4, BlitOption::None),
+                        texel,
+                        srgb,
+                        &format!("{label}: the resolve texture"),
                     );
                 }
                 assert_eq!(

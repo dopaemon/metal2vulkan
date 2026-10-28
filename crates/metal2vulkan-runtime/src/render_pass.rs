@@ -749,6 +749,14 @@ pub(super) struct ColorTarget {
     /// The attachment's sample planes, where a draw of the pass reads it as them
     /// (`sample_planes.rs`; the encoder makes them at the first such draw).
     pub(super) planes: Option<Planes>,
+    /// The clear color of a `Clear` load the device converts with its rounding in question
+    /// (`clear_value::rounds_apart`), whose `device-color-conversion` the pass's load operation
+    /// does not owe: on a driver whose load operation clears as Metal's `Clear` load action does
+    /// (`DriverFact::ColorClearIsMetals`), of an attachment the pass's render area covers. The
+    /// clear made otherwise, before the pass, of an attachment its first instance leaves out
+    /// (`render.rs`), announces it ([`degrade_clear_conversion`]). `None` elsewhere: such a
+    /// clear's note is announced as the pass is laid out ([`layout`]).
+    pub(super) withheld_clear: Option<[f64; 4]>,
 }
 
 impl std::fmt::Debug for ColorTarget {
@@ -772,6 +780,7 @@ impl std::fmt::Debug for ColorTarget {
             .field("unresolved_across", &self.unresolved_across)
             .field("stand_in", &self.stand_in)
             .field("planes", &self.planes)
+            .field("withheld_clear", &self.withheld_clear)
             .finish()
     }
 }
@@ -1583,25 +1592,12 @@ pub(super) fn layout(
         }
         .ok_or_else(not_yet)?;
         // The device converts a float clear its own way, which can stand a code from Metal's
-        // where the rounding is in question (`clear_value::rounds_apart`); a word attachment's
-        // clear is Metal's codes.
-        let pf = texture.pixel_format();
-        if color.load_action == LoadAction::Clear
+        // where the rounding is in question (`clear_value::rounds_apart`), announced once the
+        // render area is known (below); a word attachment's clear is Metal's codes.
+        let withheld_clear = (color.load_action == LoadAction::Clear
             && word.is_none()
-            && clear_value::rounds_apart(pf, channels)
-        {
-            device.degrade(Degradation::DeviceColorConversion, || {
-                (
-                    format!("a {pf:?} color attachment's clear to {channels:?}"),
-                    "the device converts the clear color to the format's codes its own way, \
-                     where Vulkan leaves a tie, an sRGB encode and a float's rounding to it and \
-                     Metal's clear rounds each channel to nearest, a tie to even (a small \
-                     float's and a shared exponent's mantissas truncated): a channel can store \
-                     a code next to Metal's"
-                        .to_owned(),
-                )
-            });
-        }
+            && clear_value::rounds_apart(texture.pixel_format(), channels))
+        .then_some(channels);
         let straight_clear = ExtendedRange::of(texture.pixel_format()).and_then(|_| {
             clear_value::color(texture.pixel_format(), channels, ClearRoute::Straight)
         });
@@ -1647,6 +1643,7 @@ pub(super) fn layout(
             unresolved_across,
             stand_in,
             planes: None,
+            withheld_clear,
         }));
     }
     while colors.last().is_some_and(Option::is_none) {
@@ -1783,6 +1780,22 @@ pub(super) fn layout(
         TileRefusal::Nil(problem) => nil(call, Problem::RenderPass(problem)),
         TileRefusal::NotMeasured => Error::NotImplemented(RuntimeGap::TileAtSampleCount),
     })?;
+    // A clear whose rounding is in question is announced, but by the load operation of an
+    // attachment the render area covers on a driver whose load operation clears as Metal's does,
+    // which keeps it for a clear made otherwise (`ColorTarget::withheld_clear`).
+    let metals = device
+        .properties()
+        .driver_facts
+        .contains(&DriverFact::ColorClearIsMetals);
+    for color in colors.iter_mut().flatten() {
+        let Some(clear) = color.withheld_clear else {
+            continue;
+        };
+        if !(metals && color.target.extent == extent) {
+            degrade_clear_conversion(device, color.target.texture.pixel_format(), clear);
+            color.withheld_clear = None;
+        }
+    }
     let fetch_inputs = !colors.is_empty()
         && super::framebuffer_fetch::through_inputs(device.compile_device().profile());
     Ok(PassLayout {
@@ -1909,6 +1922,21 @@ fn target(
         samples: facts.samples,
         extent: sub.extent,
     })
+}
+
+/// Announce `device-color-conversion` for a clear of a color attachment of `pf` to `color` that
+/// the device converts with its rounding in question (`clear_value::rounds_apart`).
+pub(super) fn degrade_clear_conversion(device: &Device, pf: PixelFormat, color: [f64; 4]) {
+    device.degrade(Degradation::DeviceColorConversion, || {
+        (
+            format!("a {pf:?} color attachment's clear to {color:?}"),
+            "the device converts the clear color to the format's codes its own way, where \
+             Vulkan leaves a tie, an sRGB encode and a float's rounding to it and Metal's clear \
+             rounds each channel to nearest, a tie to even (a small float's and a shared \
+             exponent's mantissas truncated): a channel can store a code next to Metal's"
+                .to_owned(),
+        )
+    });
 }
 
 /// Whether `target` is not of a 2D image: planes of a 3D image (a 2D view of them), or a 1D

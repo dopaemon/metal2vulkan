@@ -455,7 +455,7 @@ fn a_state_color_draws_into_the_pass_color_at_its_place_in_the_record() {
     assert_eq!(left1, [0; 32], "color 1 on {name}");
     assert_eq!(rest0, rest1, "the clear on {name}");
     // Every pass clears to `CLEAR`, whose red 0.5 is a tie in an 8-bit channel.
-    first.extend(tie_cleared());
+    first.extend(tie_cleared(&lane.device, true));
     let notices = assert_made_once(&messages, &[], &first);
     assert!(!notices.contains_key(&KEPT_COLORS[0]), "on {name}");
     eprintln!("colors at their places in the record on {name}: Metal's bytes");
@@ -493,7 +493,7 @@ fn an_uncovered_color_is_kept_where_metal_s_code_reads_the_attachment() {
         first.extend(made(&lane, &solid, (Fragment::Solid, &[RGBA8]), writes, 1));
     }
     // Every pass clears to `CLEAR`, whose red 0.5 is a tie in an 8-bit channel.
-    first.extend(tie_cleared());
+    first.extend(tie_cleared(&lane.device, true));
     let notices = assert_made_once(&messages, &[], &first);
     assert!(!notices.contains_key(&KEPT_COLORS[0]), "exact on {name}");
     kept(OVER);

@@ -1639,7 +1639,13 @@ bound.
   planes merged back first). Never, whatever the
   format, on a device whose resolve is measured to round
   as Metal does (`DriverFact::ColorResolveAverageIsMetals`: MoltenVK's resolve is Metal's own).
-  Measured against Metal's rules at 2 and 4 samples on RADV (Mesa 26.0.8, the Radeon 780M and the RX
+  Also, on every device, a resolve into an 8-bit UNORM attachment's sRGB twin where the device has
+  the sRGB format: the crate-owned resolve decodes the samples and encodes their average by the
+  device's own sRGB conversions, where Metal's resolve takes its own 12-bit tables (with correctly
+  rounded conversions, 1,758 of the 65,536 pairs of codes at 2 samples land one code from
+  Metal's; MoltenVK 1.4.2 on the M3 Max: 696 of 262,144 channels at 2 samples, one code below;
+  lavapipe, Mesa 26.0.8: 57,865 of 524,288 at 4, within one code). Measured against Metal's rules
+  at 2 and 4 samples on RADV (Mesa 26.0.8, the Radeon 780M and the RX
   7900 XTX), ANV (Mesa 26.2.4, the Iris Xe), NVIDIA (615.71, the RTX 5080 Laptop GPU) and lavapipe
   (Mesa 26.2.4, at 4 samples): every unorm, snorm and packed 16-bit unorm
   channel within one code of Metal's, an sRGB channel within two (NVIDIA's at 4 samples; one
@@ -2758,7 +2764,10 @@ bound.
   may answer another sign or payload (llvmpipe: `0xffc00000`). Also, once per device, a GPU blit
   into, out of or between textures of which one is an `RG11B10Float` texture Metal keeps losslessly
   compressed, whose compression makes a NaN field the quiet NaN (`0x7e0`, `0x3f0`), where the
-  device's copy keeps the bits.
+  device's copy keeps the bits. The runtime announces it too for a plain color fill
+  (`BlitCommandEncoder::fill_texture_color` without a pixel format) to a NaN of a half or
+  small-float texture the device's clear writes, which converts the NaN as the device likes, where
+  Metal's fill keeps a half NaN's sign and payload and makes a small float's all ones.
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
   enabled whose driver is not measured to keep depth values outside `[0, 1]` without it.
@@ -2841,7 +2850,17 @@ bound.
   (a normalized channel within 1/1024 of a midpoint between two codes, an sRGB channel inside its
   range, a value the format does not hold exactly): the device converts the clear color, where
   Metal's clear rounds each channel to nearest, a tie to even, and truncates a small float's and a
-  shared exponent's mantissas.
+  shared exponent's mantissas. Not for a clear by the load operation of an attachment the pass's
+  render area covers on a driver whose load operation clears as Metal's `Clear` load action does
+  (`DriverFact::ColorClearIsMetals`: MoltenVK on the Apple9 GPUs under macOS 27, measured on the M3
+  Max); a clear made before the pass, of an attachment its first instance leaves out, is announced
+  there too. Also a plain color fill (`BlitCommandEncoder::fill_texture_color` without a pixel
+  format) of a texture of such a format the device renders, which the device's clear of the color
+  writes, to a color whose conversion is in question against Metal's fill packing (a normalized
+  channel within 1/1024 of a midpoint between two codes, more for a packed 16-bit channel, an sRGB
+  channel inside its range, a value a half, small float or shared exponent does not hold exactly):
+  Metal's fill rounds a tie half up and takes an sRGB channel's code whose decoded value is
+  nearest.
 - `metal2vulkan-degrade-device-interpolation` (precision). `PrecisionNote::DeviceInterpolation`: A
   fragment function reads a varying the device interpolates (`center_perspective`, `centroid`,
   `sample` or `no_perspective`, not `flat`) on a device not measured to interpolate as Metal does

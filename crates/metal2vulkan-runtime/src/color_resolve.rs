@@ -22,12 +22,18 @@
 //! Metal resolves in the resolve texture's encoding, takes the crate-owned resolve on every
 //! device: a subpass's resolve attachment is of its color attachment's own format
 //! (`VUID-VkSubpassDescription-pResolveAttachments-00850`), so no device's average writes the
-//! twin's encoding. Its rules are the resolve attachment's format's, and the attachment is read in
-//! the format whose codes it holds -- the UNORM member of the pair either way, which an sRGB
-//! attachment's image takes a view of and a UNORM one is in. Such a resolve reads the attachment
-//! itself, never its sample planes, whose copy format holds the codes under the attachment's own
-//! format's rules; the attachment's image, and a stand-in a pass renders it into, take the input
-//! attachment usage it reads them through where that is free ([`twin_resolved`],
+//! twin's encoding. Its rules are the resolve attachment's format's. An sRGB attachment resolving
+//! into its UNORM twin is read through its image's view in that twin, whose codes the UNORM rules
+//! average. A UNORM attachment resolving into its sRGB twin takes the device's own sRGB decode and
+//! encode where the device renders the sRGB format ([`decodes`],
+//! `bind::ColorResolveFormat::device_srgb`): the resolve reads the samples through a view in the
+//! sRGB format (a UNORM texture's image lists its twin's views, `image_plan.rs`) and writes their
+//! average through the resolve attachment's own view, announced as `device-rounded-resolve` on
+//! every device, Metal's resolve taking its own 12-bit tables; a device without the format reads
+//! the codes in the attachment's own format and takes those tables. Such a resolve reads the
+//! attachment itself, never its sample planes, whose copy format holds the codes under the
+//! attachment's own format's rules; the attachment's image, and a stand-in a pass renders it into,
+//! take the input attachment usage it reads them through where that is free ([`twin_resolved`],
 //! [`twin_read_view`]), and samples it can neither read nor copy are not built
 //! (`NotImplemented(Render)`).
 //!
@@ -54,18 +60,20 @@
 //!   image without it, or a device where it would change the image's memory requirements) but
 //!   takes transfer reads ([`copied`]): its level and the pass's layers over the render area are
 //!   copied (`vkCmdCopyImage`, one format and sample count) into a scratch image of its format and
-//!   samples that has the usage, held by the command buffer until it completes, and the resolve
-//!   reads the scratch as it reads an attachment. The copy moves each sample's bits; the one
+//!   samples that has the usage (and, for the device's sRGB decode, takes the sRGB twin's view),
+//!   held by the command buffer until it completes, and the resolve reads the scratch as it reads
+//!   an attachment. The copy moves each sample's bits; the one
 //!   device measured to change them, RADV, writes a 16-bit float NaN as `0xfe00`
 //!   (`RuntimeDriverDefect::MultisampledCopiesConvertFloatNans`), which the resolve counts as 0
 //!   whatever its bits. A caller's image has the transfer usage the runtime's texture of its
 //!   descriptor has (`texture/wrapped.rs`), so only an image of a format the device copies no
 //!   image of has neither usage.
 //!
-//! From any source, an 8-bit sRGB resolve writes its result through the resolve attachment's view
-//! in its UNORM twin where that image takes one ([`raw_view`],
+//! From any source, an 8-bit sRGB resolve by the tables writes its result through the resolve
+//! attachment's view in its UNORM twin where that image takes one ([`raw_view`],
 //! `bind::ColorResolveFormat::written_raw`): each code goes out as a unorm code's float, which the
-//! twin's store keeps as the code, with no table lookup and no sRGB encode.
+//! twin's store keeps as the code, with no table lookup and no sRGB encode. One by the device's
+//! decode writes through the attachment's own view, whose store encodes.
 //!
 //! A layered pass (`renderTargetArrayLength` 2 or more) resolves each of its layers in a render
 //! pass instance of its own, through views of that layer. Its resolve from the sample planes, which
@@ -99,7 +107,7 @@ use super::Device;
 use crate::shader_cache::driver::Making;
 use ash::vk;
 use metal2vulkan::bind::{color_resolve_modules, ColorResolveFormat, PlanesCopy, ResolveSource};
-use metal2vulkan::device::{DriverFact, FormatUsage};
+use metal2vulkan::device::{DeviceProfile, DriverFact, FormatUsage};
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::PixelFormat;
@@ -166,8 +174,10 @@ fn twin_rules(into: &Target) -> Option<ColorResolveFormat> {
 
 /// The rules of the crate-owned resolve `resolve` takes from the color attachment `source`: the
 /// resolve attachment's format's where it is the attachment's format's sRGB twin
-/// ([`twin_rules`], which no device's average writes, so a format with no rule is refused here and samples the resolve cannot read where it plans the pass), else the
-/// attachment's own ([`of_attachment`]).
+/// ([`twin_rules`], which no device's average writes, so a format with no rule is refused here and
+/// samples the resolve cannot read where it plans the pass), their sRGB channels by the device's
+/// own decode and encode where it reaches the samples through a view in the sRGB format
+/// ([`decodes`]), else the attachment's own ([`of_attachment`]).
 pub(super) fn of_resolve(
     device: &Device,
     source: &Target,
@@ -176,9 +186,29 @@ pub(super) fn of_resolve(
     if !resolve.twin {
         return of_attachment(device, source);
     }
-    twin_rules(&resolve.attachment)
-        .map(Some)
-        .ok_or(Error::NotImplemented(RuntimeGap::Render))
+    let rules = twin_rules(&resolve.attachment).ok_or(Error::NotImplemented(RuntimeGap::Render))?;
+    let decoded = rules.device_srgb();
+    match decoded.decodes_on_device() && decodes(device, source, rules.format())? {
+        true => Ok(Some(decoded)),
+        false => Ok(Some(rules)),
+    }
+}
+
+/// Whether a twin resolve into the sRGB format `srgb` reads the color attachment `source` through
+/// the device's own sRGB decode (`bind::ColorResolveFormat::device_srgb`, the module docs): the
+/// device renders `srgb`, and the resolve reaches the samples through a view in it, the
+/// attachment's where its image takes input attachment usage (an 8-bit UNORM texture's image
+/// lists its sRGB twin's views where the device has them, `image_plan.rs`), else a copy's
+/// ([`copied`]), whose scratch image takes the view ([`copy_out`]).
+fn decodes(device: &Device, source: &Target, srgb: Format) -> Result<bool, Error> {
+    let profile = device.compile_device().profile();
+    if !profile.supports_format(srgb, FormatUsage::ColorAttachment) {
+        return Ok(false);
+    }
+    match takes_input(source)? {
+        true => Ok(views_as(source.texture.image_plan()?, srgb, false)),
+        false => copied(device, source),
+    }
 }
 
 /// Whether the crate-owned resolve may read the color attachment `source`, whose image takes no
@@ -212,14 +242,26 @@ pub(super) fn twin_resolved(pf: PixelFormat, samples: u32) -> bool {
 }
 
 /// The view format a twin resolve reads a multisampled color attachment of `pf`, held in
-/// `format`, through, where its image must list one: an 8-bit sRGB attachment's UNORM twin, which
-/// both directions' rules read the codes as (the resolve texture's rules are the UNORM member's
-/// when the attachment is the sRGB one, and the sRGB member's raw form when it is the UNORM one).
-/// `None` where the resolve reads the attachment in its own format.
-pub(super) fn twin_read_view(pf: PixelFormat, format: Format, samples: u32) -> Option<Format> {
-    let raw = metal2vulkan::metal::format::srgb_raw_twin(pf)
-        .and_then(metal2vulkan::metal::format::direct_format)?;
-    (twin_resolved(pf, samples) && raw != format).then_some(raw)
+/// `format`, through, where its image must list one: an 8-bit sRGB attachment's UNORM twin, whose
+/// codes the resolve texture's UNORM rules average, and an 8-bit UNORM attachment's sRGB twin
+/// where `profile` renders it, through which the resolve into that twin takes the device's own
+/// decode ([`decodes`]). `None` where the resolve reads the attachment in its own format.
+pub(super) fn twin_read_view(
+    profile: &DeviceProfile,
+    pf: PixelFormat,
+    format: Format,
+    samples: u32,
+) -> Option<Format> {
+    use metal2vulkan::metal::format::{direct_format, srgb_raw_twin};
+    if !twin_resolved(pf, samples) {
+        return None;
+    }
+    let decoded = srgb_twin(pf).and_then(direct_format).filter(|&twin| {
+        ColorResolveFormat::of(twin).is_some_and(|rules| rules.device_srgb().decodes_on_device())
+            && profile.supports_format(twin, FormatUsage::ColorAttachment)
+    });
+    let read = decoded.or_else(|| srgb_raw_twin(pf).and_then(direct_format))?;
+    (read != format).then_some(read)
 }
 
 /// `plan` with input attachment usage, where the runtime may resolve its image by the crate-owned
@@ -770,14 +812,16 @@ fn written_use(into: &Target, layers: u32) -> Result<Use<ResourceKey>, Error> {
 }
 
 /// The copy of `samples`' level and `layers` layers over the render area `extent` into a scratch
-/// image of its format and samples that the exact resolve reads as its input attachment
-/// ([`copied`]): the scratch, the copy, and its uses (the read of the attachment and the write of
+/// image of its format and samples that the crate-owned resolve reads as its input attachment
+/// ([`copied`]), through a view in `view` where one is named (the sRGB twin the device decodes,
+/// [`decodes`]): the scratch, the copy, and its uses (the read of the attachment and the write of
 /// the scratch). The scratch is `maker`'s, held until it completes.
 fn copy_out(
     maker: &CommandBuffer,
     samples: &Target,
     layers: u32,
     extent: [u32; 2],
+    view: Option<Format>,
 ) -> Result<
     (
         Target,
@@ -793,7 +837,7 @@ fn copy_out(
         extent,
         ..samples.clone()
     };
-    let scratch = resolve::scratch(maker, &area, usage, samples.samples)?;
+    let scratch = resolve::scratch_viewed(maker, &area, usage, samples.samples, view)?;
     let at = |t: &Target| vk::ImageSubresourceLayers {
         aspect_mask: vk::ImageAspectFlags::COLOR,
         mip_level: t.level,
@@ -905,10 +949,13 @@ impl ShaderResolves {
                 .as_ref()
                 .filter(|_| last_storage.contains(&(index as u32)) && !resolve.twin);
             // An attachment read from a copy of its samples ([`copied`]) is read in its own
-            // format: the scratch image takes no other view. That is the rules' raw form where
-            // the attachment is already in it, which a twin resolve's UNORM attachment under its
-            // sRGB resolve texture's rules is.
-            let raw = raw_view(device, &color.target, format)?
+            // format, or in the sRGB twin the device decodes ([`decodes`]): the scratch image
+            // takes no other view. Its own is the rules' raw form where the attachment is already
+            // in it, which a twin resolve's UNORM attachment under its sRGB resolve texture's
+            // tables is. Under the device's decode the samples are read in the rules' format.
+            let decoded = format.decodes_on_device();
+            let raw = !decoded
+                && raw_view(device, &color.target, format)?
                 && (takes_input(&color.target)? || color.target.format == format.raw_format());
             let source = match planes {
                 Some(planes) => Source::Planes(planes.copy),
@@ -916,22 +963,24 @@ impl ShaderResolves {
             };
             // The view the source reads the samples through, the rules' own form or its raw
             // twin, must be one their image takes: a twin resolve reads an sRGB attachment
-            // through the UNORM twin its rules are in, and a UNORM one through its own format. A
-            // copy of the samples ([`copied`]) is read in the attachment's own format alone, the
-            // scratch image taking no other view.
+            // through the UNORM twin its rules are in, and a UNORM one through its own format or,
+            // under the device's decode, its sRGB twin's. A copy of the samples ([`copied`]) is
+            // read in the attachment's own format, or in the sRGB twin its scratch image takes
+            // for the device's decode ([`copy_out`]).
             let read_format = source.read_format(format);
             let reaches = match source.attachment() {
                 false => true,
                 true if takes_input(&color.target)? => {
                     views_as(color.target.texture.image_plan()?, read_format, false)
                 }
-                true => read_format == color.target.format,
+                true => read_format == color.target.format || decoded,
             };
             if !reaches {
                 return Err(Error::NotImplemented(RuntimeGap::Render));
             }
-            // The result goes out through the resolve attachment's raw view where it has one.
-            let format = match raw_view(device, &resolve.attachment, format)? {
+            // The result goes out through the resolve attachment's raw view where it has one,
+            // but for the device's encode, which its own view stores.
+            let format = match !decoded && raw_view(device, &resolve.attachment, format)? {
                 true => format.written_raw(),
                 false => format,
             };
@@ -1013,7 +1062,10 @@ impl ShaderResolves {
             let read_copy = source.attachment() && !takes_input(attachment)?;
             let scratch = match read_copy {
                 true if copied(device, attachment)? => {
-                    let (scratch, copy, used) = copy_out(maker, attachment, layers, layout.extent)?;
+                    let read_format = source.read_format(format);
+                    let view = (read_format != attachment.format).then_some(read_format);
+                    let (scratch, copy, used) =
+                        copy_out(maker, attachment, layers, layout.extent, view)?;
                     copies.push(copy);
                     copy_uses.extend(used);
                     Some(scratch)

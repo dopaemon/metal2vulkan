@@ -856,6 +856,23 @@ pub enum DriverFact {
     /// formats has on Apple's GPUs), so its average is Metal's resolve by construction. The
     /// runtime announces no `device-rounded-resolve` for such an attachment on a driver with it.
     ColorResolveAverageIsMetals,
+    /// A render pass's `CLEAR` load operation of a colour attachment its render area covers
+    /// stores the texel Metal's own `Clear` load action stores for the clear colour: MoltenVK
+    /// hands the operation to Metal as the attachment's load action wherever the render area
+    /// covers the attachment, the clear value's floats as Metal's clear colour, and Metal's
+    /// conversion of a clear colour takes its `float` first. Vulkan leaves a clear's tie, its sRGB
+    /// encode and a float's rounding to the device, so elsewhere a clear whose rounding is in
+    /// question is announced (`device-color-conversion`, `render_pass.rs`); on a driver with it
+    /// the runtime announces none for a clear by the load operation of an attachment the pass's
+    /// render area covers, and announces it for the same clear made otherwise (before the pass,
+    /// of an attachment the pass's first instance leaves out). Measured by
+    /// `runtime_lane::renders::clears_are_the_device_s_conversion_of_the_clear_value`, which on
+    /// such a driver also holds that the note stays unannounced: MoltenVK 1.4.2 on the M3 Max
+    /// under macOS 27.0.1, each of the 71 colour clears Metal was measured with (ties of 8-bit,
+    /// 10-bit and 16-bit unorm and snorm channels, sRGB channels, the packed 16-bit formats, half
+    /// and small floats, shared exponents and NaNs among them) into a 1x1 attachment, its 11
+    /// depth and 4 stencil clears beside them: all 86 texels Metal's bytes, none a code apart.
+    ColorClearIsMetals,
     /// An optimal colour image may keep its compression state apart from the memory it is bound
     /// to, so a write through a buffer or another image over its bytes can leave its texels as
     /// they were. Vulkan leaves an optimal image's texels undefined after such a write; Metal's
@@ -1938,6 +1955,10 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         device: None,
     },
     moltenvk_on_apple(DriverFact::ColorResolveAverageIsMetals),
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverFact::ColorClearIsMetals)
+    },
     Measured {
         fact: DriverFact::CompressedImagesHideAliasedWrites,
         driver: DriverId::INTEL_OPEN_SOURCE_MESA,

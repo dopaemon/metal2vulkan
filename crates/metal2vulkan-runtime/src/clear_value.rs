@@ -521,7 +521,7 @@ pub(crate) fn f32_to_f16(v: f32) -> u16 {
 }
 
 /// An IEEE half's value.
-fn f16_to_f32(h: u16) -> f32 {
+pub(super) fn f16_to_f32(h: u16) -> f32 {
     let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exponent = i32::from((h >> 10) & 0x1f);
     let mantissa = f64::from(h & 0x3ff);

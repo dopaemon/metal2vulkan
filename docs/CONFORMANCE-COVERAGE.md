@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1049 |
+| ledger rows (a case whose gap is recorded) | 1056 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3251,4 +3251,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
 | `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.56 co… |
 | `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.63 co… |
+| `texture-fills-42` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `texture-fills-70` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `texture-fills-71` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `texture-fills-80` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `texture-fills-81` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `texture-fills-110` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
+| `texture-fills-115` | Metal's plain colour fill (`fillTexture:...color:` with no pixel format; the case's c0, c4, c5 and c7) packs the colour by its fill's own rules, a tie rounded h… |
 

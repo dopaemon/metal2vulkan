@@ -322,7 +322,10 @@ fn whole_run(raw: u32, name: &str, at: usize, run: &[u8]) {
     );
 }
 
-/// The fill of `case` into `texture` by `blit`.
+/// The fill of `case` into `texture` by `blit`. A plain color case (no `pixelFormat:`) is packed
+/// in the texture's own format, the bytes Metal's plain fill writes: the runtime's plain fill of a
+/// format the device renders is the device's clear of the color, which `color_fills.rs` holds to
+/// these bytes and their placement.
 fn fill(
     blit: &mut metal2vulkan_runtime::BlitCommandEncoder,
     texture: &metal2vulkan_runtime::Texture,
@@ -340,7 +343,7 @@ fn fill(
             case.slice,
             region,
             *color,
-            pf.map(format),
+            Some(pf.map_or(texture.pixel_format(), format)),
         ),
         Fill::Zeros => blit.fill_texture(texture, case.level, case.slice, region, &[0]),
     }

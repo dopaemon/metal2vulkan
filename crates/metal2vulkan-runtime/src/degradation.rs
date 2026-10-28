@@ -703,7 +703,16 @@ degradations! {
         /// `color_resolve.rs`), one a fetching pass's sample planes hold as it ends included (the
         /// planes merged back first). Not where
         /// `DriverFact::ColorResolveAverageIsMetals` holds, for any format: MoltenVK's resolve is
-        /// Metal's own.
+        /// Metal's own. Also, on every device, a resolve into an 8-bit UNORM attachment's sRGB
+        /// twin where the device has the sRGB format: the crate-owned resolve reads the samples
+        /// through the device's sRGB decode and writes their average through its encode
+        /// (`bind::ColorResolveFormat::device_srgb`), where Metal's resolve takes its own 12-bit
+        /// tables; with correctly rounded conversions 1,758 of the 65,536 pairs of codes at 2
+        /// samples land one code from Metal's. Measured by
+        /// `runtime_lane::resolve_rounding::a_twin_resolve_into_srgb_rounds_as_announced`, which
+        /// holds the bound: MoltenVK 1.4.2 on the M3 Max, 696 of the 262,144 channels of every
+        /// pair of codes at 2 samples one code below Metal's (880 of 524,288 at 4); lavapipe (Mesa
+        /// 26.0.8, at 4 samples) 57,865 of 524,288, above and below; none past one code.
         /// Measured against Metal's rules at 2 and 4 samples
         /// (`runtime_lane::resolve_rounding::the_device_resolve_rounds_as_announced`, which holds
         /// the bound) on RADV (Mesa 26.0.8, the Radeon 780M and the RX 7900 XTX), ANV (Mesa
@@ -3889,6 +3898,30 @@ impl Device {
                          what a NaN or infinite sample makes of it, to the device",
                         color.target.format,
                     ),
+                )
+            });
+        }
+        // A resolve into the attachment's format's sRGB twin by the device's own sRGB decode and
+        // encode (`color_resolve.rs`), on every device: Metal's resolve takes its own tables.
+        let decoded = colors.clone().find(|color| {
+            color
+                .resolve
+                .as_ref()
+                .and_then(|r| r.shader)
+                .is_some_and(|rules| rules.decodes_on_device())
+        });
+        if let Some(color) = decoded {
+            self.degrade(Degradation::DeviceRoundedResolve, || {
+                (
+                    format!(
+                        "a resolve of a {:?} color attachment of {} samples into its format's \
+                         sRGB twin",
+                        color.target.texture.pixel_format(),
+                        color.target.samples
+                    ),
+                    "the resolve decodes the samples and encodes their average by the device's \
+                     own sRGB conversions, where Metal's resolve takes its 12-bit tables"
+                        .to_owned(),
                 )
             });
         }

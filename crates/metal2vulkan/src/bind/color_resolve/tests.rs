@@ -150,7 +150,8 @@ fn the_fragment_stage_needs_nothing_of_a_device() {
 fn the_modules_are_valid_on_every_committed_profile() {
     for (name, profile) in committed_profiles().expect("profiles") {
         for format in representatives() {
-            for (format, source) in cases(format) {
+            let device = (format.device_srgb(), ResolveSource::InputAttachment);
+            for (format, source) in cases(format).into_iter().chain([device]) {
                 for samples in [2, 4] {
                     let m = fragment_typed_module(format, samples, source).expect("module");
                     let _ = assert_valid(m, &profile);
@@ -197,6 +198,19 @@ fn the_modules_come_numbered_and_refuse_another_count_or_planes() {
         let refused = color_resolve_modules(&device, format, 4, planes, Feature::Format);
         assert!(refused.is_err(), "{format:?}");
     }
+    // The device's sRGB form reads the attachment in the sRGB format alone.
+    let srgb = ColorResolveFormat::of(Format::B8G8R8A8_SRGB)
+        .expect("closed")
+        .device_srgb();
+    assert!(color_resolve_modules(
+        &device,
+        srgb,
+        4,
+        ResolveSource::InputAttachment,
+        Feature::Format
+    )
+    .is_ok());
+    assert!(fragment_typed_module(srgb, 4, ResolveSource::RawInputAttachment).is_err());
 }
 
 // ---- The arithmetic on the interpreter ----
@@ -225,8 +239,7 @@ fn arithmetic_module(
 ) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let t = Types::new(&mut b).expect("types");
-    let srgb = format
-        .srgb()
+    let srgb = (format.srgb() && !format.decodes_on_device())
         .then(|| SrgbTables::declare(&mut b, t, format, source))
         .transpose()
         .expect("tables");
@@ -677,6 +690,130 @@ fn the_raw_twin_writes_srgb_codes_with_no_table() {
             .len()
     });
     assert!(raw + 256 <= own, "{raw} words against {own}");
+}
+
+// ---- The device's sRGB decode and encode ----
+
+/// The code a device's sRGB store keeps for the linear `x`, its conversion modelled correctly
+/// rounded: the encode (IEC 61966-2-1) of `x` in codes, to nearest.
+fn device_encoded(x: f32) -> u32 {
+    let x = f64::from(x).clamp(0.0, 1.0);
+    let encoded = if x <= 0.003_130_8 {
+        12.92 * x
+    } else {
+        1.055 * x.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0 + 0.5).floor() as u32
+}
+
+/// The device's sRGB form ([`ColorResolveFormat::device_srgb`]) declares none of Metal's tables
+/// and writes, for each sRGB channel, the mean of the decoded samples it read (their `f32` sum in
+/// sample order times `1 / n`), which the sRGB view it writes through encodes; the alpha keeps
+/// Metal's unorm rule: every format with an sRGB channel, random and edge texels at 2, 4 and 8
+/// samples.
+#[test]
+fn the_device_srgb_form_writes_the_mean_of_the_decoded_samples() {
+    let mut r = SplitMix(0x0044_5652);
+    for format in [
+        Format::R8_SRGB,
+        Format::R8G8_SRGB,
+        Format::R8G8B8A8_SRGB,
+        Format::B8G8R8A8_SRGB,
+    ] {
+        let resolve = ColorResolveFormat::of(format)
+            .expect("closed")
+            .device_srgb();
+        assert!(resolve.decodes_on_device(), "{format:?}");
+        assert_eq!(resolve.written_format(), format, "{format:?}");
+        let source = ResolveSource::InputAttachment;
+        let tables = fragment_typed_module(resolve, 4, source).expect("module");
+        let table =
+            fragment_typed_module(ColorResolveFormat::of(format).expect("closed"), 4, source)
+                .expect("module");
+        let words = |m| {
+            crate::spirv::serialize::serialize(m)
+                .expect("serialize")
+                .words
+                .len()
+        };
+        // Metal's tables hold 256 entries and more: the device's form holds none of them.
+        assert!(
+            words(tables) + 256 <= words(table),
+            "{format:?}: the device's form keeps a table"
+        );
+        for samples in [2usize, 4, 8] {
+            let texels: Vec<Vec<[u32; 4]>> = (0..256)
+                .map(|_| {
+                    (0..samples)
+                        .map(|_| {
+                            let mut codes = [0u32; 4];
+                            for (component, channel) in resolve.channels().iter().enumerate() {
+                                if channel.is_some() {
+                                    codes[component] = draw(&mut r);
+                                }
+                            }
+                            codes
+                        })
+                        .collect()
+                })
+                .collect();
+            let input = sample_words(resolve, source, &texels);
+            let out = dispatch(resolve, samples, source, input, texels.len())
+                .buffers
+                .remove(1);
+            for (i, texel) in texels.iter().enumerate() {
+                for (component, channel) in resolve.channels().iter().enumerate() {
+                    let Some(channel) = channel else { continue };
+                    let at = (i * 4 + component) * 4;
+                    let word = u32::from_le_bytes(out[at..at + 4].try_into().expect("word"));
+                    let codes: Vec<u32> = texel.iter().map(|s| s[component]).collect();
+                    let what = format!("{format:?} x{samples} component {component}: {codes:?}");
+                    match channel.rule {
+                        ResolveRule::Srgb => {
+                            let mut sum = read_as(ResolveRule::Srgb, codes[0]);
+                            for &c in &codes[1..] {
+                                sum += read_as(ResolveRule::Srgb, c);
+                            }
+                            let mean = sum * (1.0 / samples as f32);
+                            assert_eq!(word, mean.to_bits(), "{what}");
+                        }
+                        ResolveRule::Unorm => assert_eq!(
+                            stored_as(ResolveRule::Unorm, f32::from_bits(word)),
+                            metal(ResolveRule::Unorm, &codes),
+                            "{what}"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The device's sRGB form is a near-equivalent of Metal's rule, as the module docs state it: with
+/// the device's conversions correctly rounded, of every pair of 8-bit codes at 2 samples, 1,758
+/// resolve one code from Metal's and none further.
+#[test]
+fn the_device_srgb_form_stands_within_a_code_of_metal_s() {
+    let resolve = ColorResolveFormat::of(Format::R8_SRGB)
+        .expect("closed")
+        .device_srgb();
+    let source = ResolveSource::InputAttachment;
+    let texels: Vec<Vec<[u32; 4]>> = (0..65536u32)
+        .map(|p| vec![[p & 0xff, 0, 0, 0], [p >> 8, 0, 0, 0]])
+        .collect();
+    let input = sample_words(resolve, source, &texels);
+    let out = dispatch(resolve, 2, source, input, texels.len())
+        .buffers
+        .remove(1);
+    let mut apart = 0;
+    for (i, texel) in texels.iter().enumerate() {
+        let word = u32::from_le_bytes(out[i * 16..i * 16 + 4].try_into().expect("word"));
+        let got = device_encoded(f32::from_bits(word));
+        let want = metal(ResolveRule::Srgb, &[texel[0][0], texel[1][0]]);
+        assert!(got.abs_diff(want) <= 1, "{texel:?}: {got} against {want}");
+        apart += usize::from(got != want);
+    }
+    assert_eq!(apart, 1758);
 }
 
 // ---- The sRGB codes by estimate and correction ----

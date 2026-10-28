@@ -529,10 +529,11 @@ pub(super) fn stand_in_as(
             plan = planes;
         }
     }
-    // A multisampled 8-bit sRGB color stand-in that a resolve into its format's twin reads
-    // through the UNORM twin its rules are in (`color_resolve::twin_read_view`) is mutable to
-    // that view.
-    let raw = color_resolve::twin_read_view(pixel_format, plan.format, target.samples)
+    // A multisampled 8-bit color stand-in that a resolve into its format's twin reads through
+    // the other member of the pair (`color_resolve::twin_read_view`: an sRGB one through the
+    // UNORM twin its rules are in, a UNORM one through the sRGB twin the device decodes) is
+    // mutable to that view.
+    let raw = color_resolve::twin_read_view(profile, pixel_format, plan.format, target.samples)
         .filter(|_| resolved);
     if let Some(raw) = raw {
         plan.flags |= ImageCreateFlags::MUTABLE_FORMAT;

@@ -1996,9 +1996,15 @@ pub(super) fn expected_once(
 /// question, which the device converts its own way (`device-color-conversion`): such as 0.5 in an
 /// 8-bit unorm channel, 127.5 codes, a tie, or any value strictly between 0 and 1 in an sRGB
 /// one, whose encode Vulkan leaves to the device. A lane whose pipelines record the note has it
-/// already (`made_render_kinds`); MoltenVK's record none.
-pub(super) fn tie_cleared() -> BTreeSet<Degradation> {
-    forced(&[(Degradation::DeviceColorConversion, true)])
+/// already (`made_render_kinds`); MoltenVK's record none. Not where every such clear is by the load
+/// operation of an attachment its pass's render area covers (`covered`) on a driver whose load
+/// operation clears as Metal's does (`DriverFact::ColorClearIsMetals`).
+pub(super) fn tie_cleared(device: &Device, covered: bool) -> BTreeSet<Degradation> {
+    let metals = device
+        .properties()
+        .driver_facts
+        .contains(&DriverFact::ColorClearIsMetals);
+    forced(&[(Degradation::DeviceColorConversion, !(metals && covered))])
 }
 
 /// The kinds of `kinds` whose condition holds: each paired with the device fact, or the test's

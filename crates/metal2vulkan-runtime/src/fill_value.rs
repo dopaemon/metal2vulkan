@@ -67,6 +67,11 @@
 //! word's top 10 bits), and `RGBA16Float_XR` (halves of the `float` clamped to `[-384/510,
 //! 639/510]`, alpha to `[0, 1]`, NaN 0, an alpha of 0 or less `+0`).
 //!
+//! A plain fill of a texture of a format whose packing converts a `float` ([`device_converts`])
+//! and that the device renders is the device's clear of the color, not this packing
+//! (`blit_fill.rs`); [`device_apart`] and [`device_nan`] say where its texel may stand apart from
+//! the packed one.
+//!
 //! In every other format Metal packs no color (compressed, 4:2:2, depth, stencil, two-plane,
 //! YCbCr, padded 10-bit, `Invalid`, the private 10- and 12-bit, PQ and HLG formats, and
 //! `RGB10A2Unorm_sRGB`): its fill writes bytes it did not pack for the color (`blit_fill.rs`), and
@@ -379,6 +384,130 @@ pub(super) fn fill_texel(pf: PixelFormat, color: [f64; 4]) -> Option<Vec<u8>> {
         (bits, end.div_ceil(8) as usize)
     };
     Some(bits.to_le_bytes()[..bytes].to_vec())
+}
+
+/// Whether a color fill of `pf` packs the color by a conversion a device's clear makes of a
+/// `float` (the module docs): every field of the texel a normalized, sRGB, half, float or small
+/// float one (an RGBX format's X field zeros), or the shared exponent's. A plain fill of a
+/// texture of such a format that the device renders is the device's clear of the color
+/// (`blit_fill.rs`). Not an integer format's, whose clear value is an integer no device converts,
+/// nor a bfloat or extended-range one's, which no device clears from a `float`.
+pub(super) fn device_converts(pf: PixelFormat) -> bool {
+    use Conversion as C;
+    pf == PixelFormat::RGB9E5Float
+        || fields(pf).is_some_and(|fields| {
+            fields.iter().all(|f| {
+                matches!(
+                    f.conversion,
+                    C::Unorm(_)
+                        | C::Snorm(_)
+                        | C::Srgb
+                        | C::Half
+                        | C::Float
+                        | C::Ufloat(_)
+                        | C::Zero(_)
+                )
+            })
+        })
+}
+
+/// How near a midpoint between two codes a normalized channel's scaled color may lie where the
+/// device, which Vulkan asks to round to nearest, may store the other code than Metal's fill: a
+/// tie (which the fill rounds up, half away from zero signed), or a value the device's arithmetic
+/// may take across one, as for a clear (`clear_value.rs`).
+const TIE: f64 = 1.0 / 1024.0;
+
+/// Whether `r`, a value scaled to codes, lies within `margin` of a midpoint between two codes.
+fn near_tie(r: f64, margin: f64) -> bool {
+    (r - r.floor() - 0.5).abs() <= margin
+}
+
+/// Whether the device's clear of `color` for a texture of `pf` ([`device_converts`]) may store
+/// another texel than Metal's fill packs (the module docs), announced `device-color-conversion`:
+/// a normalized channel's value scaled within [`TIE`] of a midpoint between two codes (widened by
+/// the fill's rounding of the product to `float`, and for a packed 16-bit format by a step
+/// through `half`, which a device's clear may take as Metal's own clear does), an sRGB channel's
+/// value inside `(0, 1)` (the fill takes the code whose decoded value is nearest, the device
+/// encodes), and a half's, small float's or shared exponent's value it does not hold exactly. A
+/// NaN is [`device_nan`]'s, or stores 0 on both.
+pub(super) fn device_apart(pf: PixelFormat, color: [f64; 4]) -> bool {
+    use Conversion as C;
+    if pf == PixelFormat::RGB9E5Float {
+        return !shared_exact(color);
+    }
+    let Some(fields) = fields(pf) else {
+        return false;
+    };
+    // A packed 16-bit format: B5G6R5, A1BGR5, BGR5A1, ABGR4 and BGRA4.
+    let packed16 =
+        fields.len() >= 3 && fields.iter().map(|f| f.conversion.width()).sum::<u32>() == 16;
+    fields.iter().any(|f| {
+        let v = color[f.channel] as f32;
+        if v.is_nan() {
+            return false;
+        }
+        match f.conversion {
+            C::Unorm(bits) | C::Snorm(bits) => {
+                let (low, m) = match f.conversion {
+                    C::Unorm(_) => (0.0, largest(bits) as f64),
+                    _ => (-1.0, largest(bits - 1) as f64),
+                };
+                let margin = match packed16 {
+                    true => TIE + m / 2048.0,
+                    false => TIE + m / f64::from(1u32 << 24),
+                };
+                near_tie(f64::from(v.clamp(low, 1.0)) * m, margin)
+            }
+            C::Srgb => v > 0.0 && v < 1.0,
+            C::Half => {
+                let held = super::clear_value::f16_to_f32(super::clear_value::f32_to_f16(v));
+                held != v
+            }
+            C::Ufloat(mantissa) => {
+                let largest = (2.0 - 1.0 / f64::from(1u32 << mantissa)) * 2f64.powi(15);
+                let binade = super::clear_value::binade(v).max(-14);
+                let spacing = 2f64.powi(binade) / f64::from(1u32 << mantissa);
+                let held = v <= 0.0
+                    || v == f32::INFINITY
+                    || (f64::from(v) <= largest && (f64::from(v) / spacing).fract() == 0.0);
+                !held
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Whether `RGB9E5Float`'s texel of `color` is its red, green and blue exactly (NaN and negative
+/// values 0): each a whole number of the shared exponent's spacing, the largest at most 65408.
+fn shared_exact(color: [f64; 4]) -> bool {
+    let values = [color[0], color[1], color[2]].map(|x| {
+        let v = x as f32;
+        if v.is_nan() {
+            0.0
+        } else {
+            f64::from(v.max(0.0))
+        }
+    });
+    let max = values.iter().copied().fold(0.0, f64::max);
+    if max > 65408.0 {
+        return false;
+    }
+    let spacing = 2f64.powi(super::clear_value::binade(max as f32).max(-16) + 1 - 9);
+    values.iter().all(|v| (v / spacing).fract() == 0.0)
+}
+
+/// Whether the device's clear of `color` for a texture of `pf` ([`device_converts`]) converts a
+/// NaN to a half or small float as the device likes (announced `device-nan-encoding`), where
+/// Metal's fill keeps a half NaN's sign and payload and makes a small float's all ones. A
+/// normalized or shared exponent's NaN stores 0 on both, and a `float`'s the bits the clear value
+/// gives.
+pub(super) fn device_nan(pf: PixelFormat, color: [f64; 4]) -> bool {
+    fields(pf).is_some_and(|fields| {
+        fields.iter().any(|f| {
+            matches!(f.conversion, Conversion::Half | Conversion::Ufloat(_))
+                && color[f.channel].is_nan()
+        })
+    })
 }
 
 /// The largest code of a field of `bits`.

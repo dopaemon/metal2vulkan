@@ -4667,6 +4667,14 @@ impl RenderLowering {
         };
         if let Some(clears) = &backings_after_first {
             uses.extend(clears.uses.iter().cloned());
+            // A backing is cleared after the pass's first instance, not by a load operation: the
+            // note that operation does not owe is (`ColorTarget::withheld_clear`).
+            for color in layout.colors.iter().flatten().filter(|c| c.memoryless) {
+                if let Some(clear) = color.withheld_clear {
+                    let pf = color.target.texture.pixel_format();
+                    super::render_pass::degrade_clear_conversion(core.device(), pf, clear);
+                }
+            }
         }
         let backings_after_first = backings_after_first.filter(|_| inlined == 1);
         let mut copied_back =
@@ -4709,6 +4717,15 @@ impl RenderLowering {
                 .get(index as usize)
                 .and_then(Option::as_ref)
                 .ok_or_else(|| internal("a storage attachment the pass does not have"))?;
+            // Cleared before the pass, not by its load operation: the note that operation does
+            // not owe is (`ColorTarget::withheld_clear`).
+            if let Some(clear) = color
+                .withheld_clear
+                .filter(|_| color.load == LoadAction::Clear)
+            {
+                let pf = color.target.texture.pixel_format();
+                super::render_pass::degrade_clear_conversion(core.device(), pf, clear);
+            }
             if color.load == LoadAction::Clear && color.planes.is_none() {
                 match cleared_ahead(&color.target, layout.extent)? {
                     true => clears.push((&color.target, color.clear)),

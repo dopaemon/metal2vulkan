@@ -724,6 +724,12 @@ fn case_extent(n: u32) -> [u32; 2] {
 /// Draw a texture of `case` at `n` samples ([`case_extent`]), read its samples back, resolve it,
 /// and compare.
 fn resolve_case(lane: &Lane, case: &Case, n: u32) -> Result<Outcome, String> {
+    resolve_case_into(lane, case, n, case)
+}
+
+/// [`resolve_case`] resolving into a texture of `into`, a format of `case`'s channel layout (its
+/// sRGB twin), whose channels' rules the resolve is compared with.
+fn resolve_case_into(lane: &Lane, case: &Case, n: u32, into: &Case) -> Result<Outcome, String> {
     let [width, height] = case_extent(n);
     let mut r = SplitMix(0x5250_4c00 ^ (u64::from(n) << 32) ^ case.pf as u64);
     let pixels = (width * height) as usize;
@@ -791,7 +797,7 @@ fn resolve_case(lane: &Lane, case: &Case, n: u32) -> Result<Outcome, String> {
         .map_err(|e| format!("the fill's pipeline: {e}"))?;
     let values = buffer_with(device, &floats).map_err(|e| e.to_string())?;
     let shape = shape(device, width, n).map_err(|e| e.to_string())?;
-    let mut single = TextureDescriptor::texture_2d(case.pf, width.into(), height.into(), false);
+    let mut single = TextureDescriptor::texture_2d(into.pf, width.into(), height.into(), false);
     single.usage = TextureUsage::RENDER_TARGET;
     single.resource_options = ResourceOptions::private();
     let resolved: Texture = device
@@ -862,9 +868,9 @@ fn resolve_case(lane: &Lane, case: &Case, n: u32) -> Result<Outcome, String> {
             compare_shared(&mut outcome, (&drawn, &stored, &got), p, n as usize);
             continue;
         }
-        for &(offset, _, channel) in case.channels {
+        for (&(offset, _, drawn_as), &(_, _, channel)) in case.channels.iter().zip(into.channels) {
             outcome.channels += 1;
-            let bits = channel.bits();
+            let bits = drawn_as.bits();
             let field_of = |texels: &[u8], s: usize| {
                 let at = (p * n as usize + s) * case.bytes;
                 field(&texels[at..at + case.bytes], offset, bits)
@@ -1040,6 +1046,71 @@ fn the_device_resolve_rounds_as_announced() {
     assert!(
         past_bound.is_empty(),
         "the device's resolve past device-rounded-resolve's codes on {name}: {past_bound:#?}"
+    );
+    quiet(lane, &messages);
+}
+
+/// A resolve of a 4x or 2x `RGBA8Unorm` or `BGRA8Unorm` attachment into its sRGB twin, the
+/// crate-owned resolve on every device (no subpass resolve writes the twin's encoding), takes the
+/// device's own sRGB decode and encode, every device having those formats
+/// (`bind::ColorResolveFormat::device_srgb`): it announces `device-rounded-resolve`, and every
+/// channel stands within the codes the note states of Metal's rule ([`metal`]: its 12-bit
+/// tables), over every pair of codes at 2 samples and the lane's pattern at 4 ([`value`]). What
+/// the device gives against Metal's rule is printed, a measurement.
+#[test]
+fn a_twin_resolve_into_srgb_rounds_as_announced() {
+    let (messages, _cache, lane) = lane();
+    let name = lane.device.name().to_owned();
+    let case = |pf: PixelFormat| CASES.iter().find(|c| c.pf == pf).unwrap();
+    messages.take_notices();
+    let mut past_bound = Vec::new();
+    for n in [2u32, 4] {
+        let supported = lane
+            .device
+            .properties()
+            .supports_texture_sample_count(n.into())
+            .unwrap();
+        if !supported {
+            eprintln!("the twin resolve on {name}: no texture of {n} samples");
+            continue;
+        }
+        for (from, into) in [
+            (PixelFormat::RGBA8Unorm, PixelFormat::RGBA8UnormSRGB),
+            (PixelFormat::BGRA8Unorm, PixelFormat::BGRA8UnormSRGB),
+        ] {
+            let what = format!("{from:?} x{n} into {into:?} on {name}");
+            let outcome = resolve_case_into(&lane, case(from), n, case(into))
+                .unwrap_or_else(|why| panic!("{what}: {why}"));
+            if outcome.most_codes > case(into).device_codes() {
+                past_bound.push(format!("{what}: {} codes", outcome.most_codes));
+            }
+            eprintln!(
+                "the twin resolve {what}: {} of {} channels differ from Metal's rule ({} above \
+                 Metal's code, {} below, by {} codes at most; {} samples stored otherwise than \
+                 drawn){}",
+                outcome.differ,
+                outcome.channels,
+                outcome.above,
+                outcome.below,
+                outcome.most_codes,
+                outcome.changed,
+                if outcome.examples.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", outcome.examples.join("; "))
+                }
+            );
+        }
+    }
+    let counts = super::degrade_notices::counts(&messages.take_notices());
+    eprintln!("the twin resolve on {name}: announced {counts:?}");
+    assert!(
+        counts.contains_key(&Degradation::DeviceRoundedResolve),
+        "device-rounded-resolve on {name}: {counts:?}"
+    );
+    assert!(
+        past_bound.is_empty(),
+        "the twin resolve past device-rounded-resolve's codes on {name}: {past_bound:#?}"
     );
     quiet(lane, &messages);
 }

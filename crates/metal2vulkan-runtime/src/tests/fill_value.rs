@@ -1,7 +1,7 @@
 //! The texels Metal's color fills write (`fill_value.rs`): every texel of Metal's fills our probes
 //! read back, and the rules' edges.
 
-use crate::fill_value::fill_texel;
+use crate::fill_value::{device_apart, device_converts, device_nan, fill_texel};
 use metal2vulkan::metal::PixelFormat;
 use PixelFormat as P;
 
@@ -1013,5 +1013,78 @@ fn the_m3_packs_these_formats_and_no_other() {
     for raw in M3_UNPACKED {
         let pf = PixelFormat::try_from(raw).unwrap();
         assert_eq!(fill_texel(pf, [0.5; 4]), None, "{pf:?}");
+    }
+}
+
+/// A plain fill is the device's clear of the color only where the format's fill converts a
+/// `float` (`device_converts`), and the clear is announced where the device's conversion may store
+/// another texel than Metal's fill packs (`device_apart`: a normalized tie, which the fill rounds
+/// half up, a packed 16-bit channel within the step through `half` of one, an sRGB value inside
+/// `(0, 1)`, a value a half, small float or shared exponent does not hold), or a NaN it converts
+/// as it likes (`device_nan`).
+#[test]
+fn the_device_s_clear_is_announced_where_its_conversion_is_in_question() {
+    for pf in [
+        P::RGBA8Unorm,
+        P::RGBA8UnormSRGB,
+        P::RG8Snorm,
+        P::RGBA16Float,
+        P::R32Float,
+        P::RG11B10Float,
+        P::RGB9E5Float,
+        P::B5G6R5Unorm,
+        P::RGBX8Unorm,
+    ] {
+        assert!(device_converts(pf), "{pf:?}");
+    }
+    for pf in [
+        P::RGBA8Uint,
+        P::RG16Sint,
+        P::R16Bfloat,
+        P::BGRA10XR,
+        P::BGR10XRSRGB,
+        P::Depth32Float,
+        P::BC1RGBA,
+    ] {
+        assert!(!device_converts(pf), "{pf:?}");
+    }
+    let one = |x: f64| [x, 0.0, 0.0, 1.0];
+    let apart = [
+        (P::RGBA8Unorm, one(0.5), true),
+        (P::RGBA8Unorm, one(0.25), false),
+        (P::RGBA8Unorm, one(1.0), false),
+        (P::RGBA8Unorm, one(f64::NAN), false),
+        // Off a tie by a hundredth of a code: a tie for a packed 16-bit channel, whose clear may
+        // step through `half`, and not for an 8-bit one.
+        (P::RGBA8Unorm, one(127.51 / 255.0), false),
+        (P::B5G6R5Unorm, one(15.51 / 31.0), true),
+        (P::R16Unorm, one(0.5 / 65535.0), true),
+        (P::RG8Snorm, one(-0.5 / 127.0), true),
+        (P::RG8Snorm, one(-1.0), false),
+        (P::RGBA8UnormSRGB, one(0.5), true),
+        (P::RGBA8UnormSRGB, [0.0, 1.0, 0.0, 0.5], true),
+        (P::RGBA8UnormSRGB, [0.0, 1.0, 0.0, 0.25], false),
+        (P::RGBA16Float, one(0.1), true),
+        (P::RGBA16Float, one(0.5), false),
+        (P::RGBA16Float, one(1e6), true),
+        (P::R32Float, one(0.1), false),
+        (P::RG11B10Float, one(0.1), true),
+        (P::RG11B10Float, one(0.5), false),
+        (P::RG11B10Float, one(-1.0), false),
+        (P::RGB9E5Float, [1.0, 0.5, 0.25, 0.0], false),
+        (P::RGB9E5Float, [0.1, 0.5, 0.25, 0.0], true),
+        (P::RGB9E5Float, [1e6, 0.0, 0.0, 0.0], true),
+    ];
+    for (pf, color, want) in apart {
+        assert_eq!(device_apart(pf, color), want, "{pf:?} {color:?}");
+    }
+    for (pf, want) in [
+        (P::RGBA16Float, true),
+        (P::RG11B10Float, true),
+        (P::R32Float, false),
+        (P::RGBA8Unorm, false),
+        (P::RGB9E5Float, false),
+    ] {
+        assert_eq!(device_nan(pf, one(f64::NAN)), want, "{pf:?}");
     }
 }

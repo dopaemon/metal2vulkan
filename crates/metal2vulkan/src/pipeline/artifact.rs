@@ -852,8 +852,11 @@ pub enum PrecisionNote {
     /// Metal's sampler: Metal hands back a half-float texel's NaN as `0x7fc00000`, and the handle
     /// carries no class to convert it by. The runtime announces it too for a GPU blit through an
     /// `RG11B10Float` texture Metal keeps losslessly compressed: Metal's compression makes a NaN
-    /// field the quiet NaN (`0x7e0`, `0x3f0`), and the device's copy keeps its bits. Validation
-    /// derives no tolerance and no explanation from it, as for `DeviceDenormals`.
+    /// field the quiet NaN (`0x7e0`, `0x3f0`), and the device's copy keeps its bits. And for a
+    /// plain color fill to a NaN of a half or small-float texture the device's clear writes: the
+    /// device converts the NaN as it likes, where Metal's fill keeps a half NaN's sign and payload
+    /// and makes a small float's all ones. Validation derives no tolerance and no explanation from
+    /// it, as for `DeviceDenormals`.
     DeviceNanEncoding,
     /// The device compares a depth texture's texels (a sample or a gather with comparison) on a
     /// device without `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to
@@ -1110,7 +1113,16 @@ pub enum PrecisionNote {
     /// an sRGB encode and a float's rounding to it, where Metal's clear rounds each channel to
     /// nearest, a tie to even (a packed 16-bit channel through `half`) and truncates a small
     /// float's and a shared exponent's mantissas. A normalized channel lies within 1/1024 of a
-    /// midpoint between two codes there, and stores one of the two.
+    /// midpoint between two codes there, and stores one of the two. Not for a clear by the load
+    /// operation of an attachment the pass's render area covers on a driver whose load operation
+    /// clears as Metal's `Clear` load action does (`DriverFact::ColorClearIsMetals`: MoltenVK on
+    /// the Apple9 GPUs under macOS 27, measured on the M3 Max).
+    ///
+    /// Also (the runtime announces it): a plain color fill (`fillTexture…color:` without
+    /// `pixelFormat:`) of a texture of such a format the device renders, which the device's clear
+    /// of the color writes, to a color whose conversion is in question against Metal's fill
+    /// packing, which rounds a normalized tie half up and takes the sRGB code whose decoded value
+    /// is nearest (a packed 16-bit channel's margin widened by a step through `half`).
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
