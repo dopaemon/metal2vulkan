@@ -357,6 +357,28 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
 }
 
+/// The declaration a case needs where its kernel reaches a texture or a sampler through an
+/// **argument buffer**: `set-past-layout-support`, which the runtime announces where it makes a
+/// descriptor set layout its driver's `vkGetDescriptorSetLayoutSupport` refuses though the driver
+/// runs it ([`metal2vulkan_runtime::Degradation::SetPastLayoutSupport`]).
+///
+/// **Why it is the venue's and the case's shape.** Such a kernel takes the handle heap, set 1,
+/// whose arrays hold the device's update-after-bind capacity (65536 descriptors each on the M3
+/// Max). MoltenVK answers the layout query by the sum of the bindings' counts against
+/// `maxPerSetDescriptors` (1212 there), ignoring the update-after-bind limits it reports, so it
+/// refuses every such set though it makes and runs it; Vulkan's validation layer reports each one
+/// (`VUID-vkCreateDescriptorSetLayout-support-09582`), and the notice says so. lavapipe supports
+/// the same layouts and announces nothing; Metal recorded nothing. The query is not ours to answer
+/// otherwise: it is asked of the create info the layout is made from.
+///
+/// **It is a declaration and never an excuse**, like [`shared_memory_notice`]: it loosens the
+/// notices site alone, so every value of a case that names it still compares exactly. A case names
+/// it from its own shape (a texture or sampler in an argument buffer that a dispatch reads), never
+/// from the venue, and says in a comment which run it rests on.
+pub fn set_past_layout_notice() -> crate::allowance::Allowance {
+    notice_allowance(metal2vulkan_runtime::Degradation::SetPastLayoutSupport.code())
+}
+
 /// The notices that state **the device's own answer** to an arithmetic or value question, which the
 /// suite holds declared at the notices site for every case ([`native_note_declarations`]).
 ///

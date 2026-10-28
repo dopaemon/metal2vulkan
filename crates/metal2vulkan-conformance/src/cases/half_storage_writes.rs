@@ -322,7 +322,15 @@ impl Case for HalfStorageWrites {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The held form writes a texture held in an argument buffer, whose heap set MoltenVK's
+        // layout query refuses ([`crate::replay::set_past_layout_notice`]): announced by the three
+        // held rows on the M3 Max under MoltenVK 1.4.2, by none on lavapipe.
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        if self.form == Form::Held {
+            allowances.push(crate::replay::set_past_layout_notice());
+        }
+        allowances
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

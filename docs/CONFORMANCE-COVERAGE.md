@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1056 |
+| ledger rows (a case whose gap is recorded) | 1130 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2221,27 +2221,65 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-stride-inline-bytes` | The runtime refuses a kernel's `[[stage_in]]` fetch of INLINE BYTES bound with `MTLAttributeStrideStatic`, where plain Metal answers. Measured on this M3 Max (m… |
 | `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-r16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-rg16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
-| `half-output-blends-r16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-r16f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rg16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rg16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rg16f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rg16f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rgba16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rgba16f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rgba16f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rgba16f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rg32f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rg32f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rg32f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rgba32f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rgba32f` | Metal's stored blend result rounds the SOURCE product to the attachment's precision and carries the DESTINATION product into the sum unrounded -- `round(round(S… |
-| `half-output-blends-rgba32f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
-| `half-output-blends-rgba32f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
+| `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
+| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
 | `format-footprints-astc-4x2-and-8x4` | The runtime answers Metal's heap footprint for ASTC's 4x2 and 8x4 footprints, which is arithmetic over a descriptor, but holds no image of any of them, so `newT… |
 | `format-footprints-plain-stragglers` | Plain Metal makes a texture of `ARGB8Unorm_sRGB` in all eight non-multisample texture types and takes a host `replaceRegion:`/`getBytes:` round trip through eac… |
 | `format-footprints-one-plane-ycbcr` | The runtime answers Metal's heap footprint for Apple's nine one-plane YCbCr formats, which is arithmetic over a descriptor, but holds no image of any of them, s… |
@@ -2356,7 +2394,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
-| `half-output-blends-r32f` | A blend whose factor reads the blend colour. Metal and our side compute the same factor from it: `bc-1mbc` and `1mbc-zero` are code-identical to Metal in all si… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
@@ -2512,6 +2549,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
+| `host-page-writes-kernel-store-read-only` | Metal drops a kernel's stores into memory whose backing is read-only, and a later command of the same command buffer reads them back from the GPU's caches (the … |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
@@ -2556,6 +2594,35 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
 | `attribute-format-fetches` | A NaN of a narrow float attribute (`half`, or a small float of `FloatRG11B10`) fetched by fixed-function vertex input: Metal answers its canonical `0x7FC00000`,… |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
+| `attribute-format-fetches` | A `half` attribute's NaN fetched through `[[stage_in]]` into the fixture's `half2` and reinterpreted (`as_type<ushort>`): Metal moves the attribute's own bits, … |
 | `border-swizzles-rgba8unorm` | A sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view and the device's own conversion: an 8-bit code's value… |
 | `border-swizzles-rgba8unorm` | A sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view and the device's own conversion: an 8-bit code's value… |
 | `border-swizzles-rgba8unorm` | A sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view and the device's own conversion: an 8-bit code's value… |
@@ -2790,6 +2857,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-write-nans-rg32f` | A `half` NaN written to a 32-bit float storage texture: Metal stores its canonical `0x7FC00000`, and ours stores the device's widening of the `half`, which keep… |
 | `half-write-nans-rgba16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, and ours stores the quiet NaN `0x7E00` (the first differing element … |
 | `half-write-nans-rgba32f` | A `half` NaN written to a 32-bit float storage texture: Metal stores its canonical `0x7FC00000`, and ours stores the device's widening of the `half`, which keep… |
+| `half-write-nans-r16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, sign and payload kept, and ours stores the one positive quiet NaN `0… |
+| `half-write-nans-rg16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, sign and payload kept, and ours stores the one positive quiet NaN `0… |
+| `half-write-nans-rgba16f` | A `half` NaN written to a 16-bit float storage texture: Metal stores the `half`'s own bits, sign and payload kept, and ours stores the one positive quiet NaN `0… |
 | `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
 | `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
 | `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
@@ -2808,6 +2878,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `integer-vertex-attributes` | An integer attribute the function reads as `half`: Metal rounds the value to `half` (32767 to 32768, 2049 to 2048, and a value past the range to infinity), and … |
 | `math-frexp-ilogb-half` | `frexp` of a signalling `half` NaN: Metal's mantissa is the operand's own bits (0x7C01), and ours is the device's quiet NaN of the same payload (0x7E01). `nativ… |
 | `math-frexp-ilogb-half` | `frexp` of a signalling `half` NaN: Metal's mantissa is the operand's own bits (0x7C01), and ours is the device's quiet NaN of the same payload (0x7E01). `nativ… |
+| `math-frexp-ilogb-half` | `frexp` of a `half` NaN, each of the sweep's three (a quiet one with a payload, a negative one, a signalling one): Metal's mantissa is the operand's own bits (0… |
+| `math-frexp-ilogb-half` | `frexp` of a `half` NaN, each of the sweep's three (a quiet one with a payload, a negative one, a signalling one): Metal's mantissa is the operand's own bits (0… |
 | `nearest-sample-positions` | A nearest sample at coordinates on texel boundaries under repeat and mirrored repeat: where the elements differ, ours reads the neighbouring texel (Metal 88 aga… |
 | `nearest-sample-positions` | A nearest sample at coordinates on texel boundaries under repeat and mirrored repeat: where the elements differ, ours reads the neighbouring texel (Metal 88 aga… |
 | `norm-storage-codes-rgb10a2unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
@@ -2833,6 +2905,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pass-bytes-half-tanh-regimes` | Each word holds two `half` results of `tanh` over its regimes, which the device computes by its own `Tanh` (a `half` held as `float`, on every device) and round… |
 | `pass-bytes-half-tanh-regimes` | Each word holds `fast::tanh` of a `float` over its regimes, which the device computes by its own `Tanh` (`native-transcendentals`, on every device; a NaN's bits… |
 | `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
+| `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
+| `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
 | `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
 | `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |

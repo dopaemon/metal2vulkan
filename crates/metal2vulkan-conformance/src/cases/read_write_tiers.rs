@@ -887,12 +887,15 @@ impl Case for HeldReadWrite {
         // view (`unnamed-texture-unviewable`): the array holds the class's neutral at the
         // texture's ID. Measured firing on llvmpipe (LLVM 21.1.8), in the run whose `beyond` rows
         // of the two sRGB formats and `BGR10A2Unorm` are refused at their dispatch. Both sit at
-        // the notices site alone: every texel is still compared.
+        // the notices site alone: every texel is still compared. And the held textures' heap set,
+        // which MoltenVK's layout query refuses ([`crate::replay::set_past_layout_notice`]):
+        // announced on the M3 Max under MoltenVK 1.4.2, not on lavapipe.
         vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::UnnamedTextureUnviewable.code(),
             ),
+            crate::replay::set_past_layout_notice(),
         ]
     }
 

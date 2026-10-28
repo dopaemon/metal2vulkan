@@ -618,7 +618,7 @@ impl VariantObjects {
                 .collect(),
             heap_layout: layout.sets.get(1).cloned(),
             heap: Mutex::new(None),
-            kinds: Kinds::of(stages, pipeline),
+            kinds: Kinds::of(stages, pipeline, understates_support(device)),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
             quiet_formats: Mutex::new(None),
@@ -698,7 +698,7 @@ impl VariantObjects {
                 .collect(),
             heap_layout: layout.sets.get(1).cloned(),
             heap: Mutex::new(None),
-            kinds: Kinds::of(stages, pipeline),
+            kinds: Kinds::of(stages, pipeline, understates_support(device)),
             tested: tested_slots_of(stages),
             bound: Mutex::new(None),
             quiet_formats: Mutex::new(None),
@@ -1100,8 +1100,7 @@ fn layout_support(
     set: &DescriptorSetLayout,
     info: &vk::DescriptorSetLayoutCreateInfo<'_>,
 ) -> SetSupport {
-    let understated = (device.properties().driver_defects)
-        .contains(&RuntimeDriverDefect::SetLayoutSupportUnderstated);
+    let understated = understates_support(device);
     let total = set.bindings.iter().map(|b| u64::from(b.count)).sum();
     set_support(total, understated, || {
         let mut support = vk::DescriptorSetLayoutSupport::default();
@@ -1115,6 +1114,13 @@ fn layout_support(
         };
         support.supported == vk::TRUE
     })
+}
+
+/// Whether `device`'s driver understates its descriptor set layout support
+/// (`RuntimeDriverDefect::SetLayoutSupportUnderstated`): it runs layouts its
+/// `vkGetDescriptorSetLayoutSupport` refuses.
+fn understates_support(device: &Device) -> bool {
+    (device.properties().driver_defects).contains(&RuntimeDriverDefect::SetLayoutSupportUnderstated)
 }
 
 /// Whether the runtime makes, on the device `description` names, a descriptor set layout its
@@ -1168,6 +1174,15 @@ pub(crate) fn set_support(
     } else {
         SetSupport::Refused
     }
+}
+
+/// Whether a layout of `total` descriptors may be one [`set_support`] answers
+/// [`SetSupport::Understated`] for on a device whose driver understates its support
+/// (`understated`): one past [`LEAST_PER_SET_DESCRIPTORS`] there, which the driver is asked about.
+/// The kinds a variant may announce (`Kinds::of`) hold `Degradation::SetPastLayoutSupport` by
+/// it, so a bind announces the notice whatever else the variant records.
+pub(crate) fn may_pass_support(total: u64, understated: bool) -> bool {
+    understated && total > LEAST_PER_SET_DESCRIPTORS
 }
 
 /// `f` of the `VkDescriptorSetLayoutCreateInfo` of `set` as [`create_set_layout`] makes it.

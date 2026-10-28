@@ -283,3 +283,67 @@ fn a_set_layout_past_the_least_per_set_limit_is_made_as_the_driver_answers() {
         }
     }
 }
+
+/// A variant's kinds hold `set-past-layout-support` wherever a set of its layout is one its
+/// driver may refuse though it runs it, whatever else the variant records: a bind announces only
+/// the kinds its variant holds (`Kinds::of`), and the kinds were the stages' notes alone, so a
+/// device announcing the notice at every occurrence (`DeviceOptions::announce_each`) announced it
+/// only for a variant that also recorded a precision note. The kernel is `hsw_held`
+/// (`validation/fixtures/public/engine/hsw_storage_writes.ll`, `llvm-as`), which writes a texture
+/// it reaches through an argument buffer, compiled for the committed MoltenVK profile, whose heap
+/// set holds far more than 1024 descriptors.
+#[test]
+fn a_set_past_the_drivers_support_is_among_its_variants_kinds() {
+    use crate::degradation::{CompiledPipeline, Degradation, Kinds};
+    use crate::pipeline::objects::{may_pass_support, LEAST_PER_SET_DESCRIPTORS};
+    use metal2vulkan::device::{Device, DevicePolicy};
+    use metal2vulkan::library::Library;
+    use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
+    use metal2vulkan::Budget;
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation");
+    let ll = root.join("fixtures/public/engine/hsw_storage_writes.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).expect("llvm-as");
+    let text = std::fs::read_to_string(root.join("profiles/moltenvk-m3.json")).expect("profile");
+    let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    let device = Device::new(description, DevicePolicy::default()).expect("device");
+    let function = Library::from_air(&bitcode)
+        .expect("library")
+        .function("hsw_held")
+        .expect("function");
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
+    let pipeline = device
+        .compile_compute_pipeline(&descriptor, &Budget::standard())
+        .expect("compiles");
+    let totals: Vec<u64> = (pipeline.layout.sets.iter())
+        .map(|set| set.bindings.iter().map(|b| u64::from(b.count)).sum())
+        .collect();
+    assert!(
+        totals
+            .iter()
+            .any(|&total| total > LEAST_PER_SET_DESCRIPTORS),
+        "no set past {LEAST_PER_SET_DESCRIPTORS} descriptors: {totals:?}"
+    );
+    let stages = [pipeline.stage.clone()];
+    for understated in [true, false] {
+        let kinds = Kinds::of(&stages, CompiledPipeline::Kernel(&pipeline), understated);
+        assert_eq!(
+            kinds.holds(Degradation::SetPastLayoutSupport),
+            understated,
+            "sets of {totals:?} descriptors, the driver understating its support: {understated}"
+        );
+    }
+    // The kinds' test agrees with the making's: a layout whose making may be past the driver's
+    // answer is exactly one `set_support` asks the driver about where it understates.
+    use crate::pipeline::objects::{set_support, SetSupport};
+    for understated in [false, true] {
+        for total in [0, 1023, LEAST_PER_SET_DESCRIPTORS, 1025, 1212, 65536] {
+            assert_eq!(
+                may_pass_support(total, understated),
+                set_support(total, understated, || false) == SetSupport::Understated,
+                "{total} descriptors, understated: {understated}"
+            );
+        }
+    }
+}

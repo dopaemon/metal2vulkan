@@ -58,7 +58,7 @@ use super::color_resolve;
 use super::device::{DebugMessage, Device, MessageKind, MessageSeverity};
 use super::error::Error;
 use super::fragment_imageblock::PassImageblock;
-use super::pipeline::objects::{set_layout_support, SetSupport};
+use super::pipeline::objects::{may_pass_support, set_layout_support, SetSupport};
 use super::render_pass::{ColorTarget, PassLayout, Target};
 use super::render_target::{self, depth_stencil_steps, HandedDontCare, PassShape};
 use super::render_values::{LoadAction, StoreAction};
@@ -2547,9 +2547,16 @@ impl Kinds {
     /// The kinds `stages` (a variant's) may announce where the variant or a `VkPipeline` of it is
     /// made (`Device::degrade_stages`, `Device::degrade_specialized`), and those of the variant's
     /// `pipeline` (`Device::degrade_pipeline`): every note's, a specialized one's under any
-    /// specialization (a filter note's two-plane YCbCr kind among them), and each other kind a
-    /// stage's or the pipeline's records state.
-    pub(crate) fn of(stages: &[StageModule], pipeline: CompiledPipeline<'_>) -> Kinds {
+    /// specialization (a filter note's two-plane YCbCr kind among them), each other kind a
+    /// stage's or the pipeline's records state, and [`Degradation::SetPastLayoutSupport`] where a
+    /// set of the pipeline's layout is one its driver may refuse though it runs it
+    /// (`may_pass_support`, on a driver that `understated` its support), whatever else the variant
+    /// records: a bind announces only kinds held here.
+    pub(crate) fn of(
+        stages: &[StageModule],
+        pipeline: CompiledPipeline<'_>,
+        understated: bool,
+    ) -> Kinds {
         let mut kinds = Kinds::default();
         for stage in stages {
             let notes = stage.precision_notes.iter().copied();
@@ -2569,6 +2576,13 @@ impl Kinds {
                 kinds.add(Degradation::ImplementationDefinedReconvergence);
             }
         }
+        let sets = &pipeline.layout().sets;
+        if sets.iter().any(|set| {
+            let total = set.bindings.iter().map(|b| u64::from(b.count)).sum();
+            may_pass_support(total, understated)
+        }) {
+            kinds.add(Degradation::SetPastLayoutSupport);
+        }
         if let CompiledPipeline::Render(render) = pipeline {
             if render
                 .requirements
@@ -2584,6 +2598,13 @@ impl Kinds {
     fn add(&mut self, kind: Degradation) {
         let (word, bit) = kind.bit();
         self.0[word] |= bit;
+    }
+
+    /// Whether `kind` is among them.
+    #[cfg(test)]
+    pub(crate) fn holds(&self, kind: Degradation) -> bool {
+        let (word, bit) = kind.bit();
+        self.0[word] & bit != 0
     }
 }
 
