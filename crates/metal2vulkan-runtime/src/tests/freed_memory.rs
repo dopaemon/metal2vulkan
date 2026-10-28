@@ -17,6 +17,10 @@
 //! as the caller may unmap the pages then; with a keep-alive alone (a runtime extension), its free
 //! and the keep-alive's drop on a handler thread, the release returning first.
 //!
+//! The device's in-place check (`in_place_check.rs`) makes no-copy buffers of its own, over pages
+//! it maps or exports: each takes a keep-alive, so its release, behind batches in flight on a
+//! device that parks freed memory, delays no deallocator and announces nothing.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
@@ -753,5 +757,81 @@ fn a_release_with_a_keep_alive_alone_posts_its_free() {
         *runs.thread.lock().unwrap(),
         Some(std::thread::current().id()),
         "the keep-alive dropped on the releasing thread"
+    );
+}
+
+/// The device's in-place check runs while batches of the program's are in flight, on a device
+/// that parks freed memory: its own no-copy buffers go behind them with their keep-alives, so no
+/// deallocator is delayed (`host_deallocators_delayed`) and none is announced. Each import of
+/// theirs went with a keep-alive alone, its free posted to a handler thread
+/// (`host_import_releases_posted`), which shows the releases took the keep-alive's path: where the
+/// free found a batch in flight its memory was parked (`freed_memory_parked`, printed; whether it
+/// did is the GPU's timing). Without the keep-alives the check's release frees the import itself,
+/// and its deallocator waits for a batch in flight. Where the device makes no no-copy buffer of
+/// the check's (no host import), it says so and passes.
+#[test]
+fn the_in_place_check_s_buffers_delay_no_deallocator_behind_batches_in_flight() {
+    use metal2vulkan::device::HostPageTexturePolicy;
+    let scratch = Scratch::new("in-place-check");
+    let mut options = DeviceOptions {
+        kinds: match cfg!(m2v_cpu_icd) {
+            true => vec![DeviceKind::Cpu],
+            false => vec![
+                DeviceKind::Discrete,
+                DeviceKind::Integrated,
+                DeviceKind::Virtual,
+            ],
+        },
+        shader_cache: ShaderCacheOptions {
+            directory: Some(scratch.0.clone()),
+            ..ShaderCacheOptions::default()
+        },
+        ..DeviceOptions::default()
+    };
+    options.policy.host_page_textures = HostPageTexturePolicy::InPlace;
+    let device = Device::system_default_with(&options).unwrap();
+    device.park_freed_memory();
+    let queue = device.new_command_queue().unwrap();
+    let target = device
+        .new_buffer(FILLED, ResourceOptions::private())
+        .unwrap();
+    let before = device.work_counts();
+    // The check settled, its buffers' imports went, and the frees their releases posted ran.
+    let done = || {
+        let now = device.work_counts();
+        device.settle_in_place_checks(Duration::ZERO)
+            && now.host_imports_live == before.host_imports_live
+            && now.host_import_releases_pending == before.host_import_releases_pending
+    };
+    // The first batch is in flight as the check starts, and a next one is submitted before each
+    // completes, until it is done.
+    let mut in_flight = filling(&queue, &target);
+    let deadline = Instant::now() + WAIT;
+    while !done() {
+        assert!(Instant::now() < deadline, "the check's buffers never went");
+        let next = filling(&queue, &target);
+        in_flight.wait_until_completed_for(WAIT).unwrap();
+        in_flight = next;
+    }
+    in_flight.wait_until_completed_for(WAIT).unwrap();
+    let after = device.work_counts();
+    let report = device.in_place_check_report();
+    let delayed = after.host_deallocators_delayed - before.host_deallocators_delayed;
+    let posted = after.host_import_releases_posted - before.host_import_releases_posted;
+    let parked = after.freed_memory_parked - before.freed_memory_parked;
+    eprintln!(
+        "IN-PLACE-CHECK-RELEASES: {report:?}: posted {posted}, parked {parked}, delayed {delayed}"
+    );
+    let checked = |class: &str| {
+        (report.iter()).any(|line| line.starts_with(class) && !line.ends_with("Unchecked"))
+    };
+    if !checked("Pointer") && !checked("DmaBuf") {
+        eprintln!("IN-PLACE-CHECK-RELEASES: the check made no no-copy buffer");
+        return;
+    }
+    assert_eq!(delayed, 0, "a deallocator was delayed");
+    assert!(
+        posted > 0,
+        "no import of the check's went with a keep-alive alone"
     );
 }

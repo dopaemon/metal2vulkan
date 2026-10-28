@@ -1585,8 +1585,8 @@ impl Drop for ExportedPages {
     fn drop(&mut self) {
         let raw_device = self.device.shared().vk();
         // SAFETY: nothing is bound to the allocation, and no command reads it: the buffer and the
-        // images over its dma-buf have their own imports, and the buffer let go of the pages
-        // before its deallocator dropped these. Freeing it unmaps it.
+        // images over its dma-buf have their own imports, and these, the buffer's keep-alive, go
+        // once its import was freed. Freeing it unmaps it.
         unsafe { release::object(raw_device, self.memory) };
     }
 }

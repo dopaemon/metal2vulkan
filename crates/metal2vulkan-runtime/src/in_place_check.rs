@@ -42,7 +42,7 @@ use crate::exit_guard;
 use crate::host_memory::HostMemory;
 use crate::in_place::{encode, mark_checking, record_name, PagesClass, Verdict};
 use crate::values::ResourceOptions;
-use crate::{Buffer, Device, TextureDescriptor};
+use crate::{Buffer, BufferContents, BufferDescriptor, Device, TextureDescriptor};
 use metal2vulkan::device::HostPageTexturePolicy;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
@@ -298,30 +298,58 @@ impl ClassPages {
 }
 
 /// A no-copy buffer of `length` bytes over anonymous pages mapped for it, imported by their
-/// pointer, which its deallocator unmaps.
+/// pointer, which its keep-alive unmaps ([`Anonymous`]). `None` where the device makes none, or
+/// does not import the pointer (dma-bufs).
 #[cfg(unix)]
 fn pointer_pages(device: &Device, length: u64) -> Option<ClassPages> {
     let start = map_anonymous(length)?;
-    let unmap = move |pointer: NonNull<u8>, length: u64| unmap(pointer, length);
+    let pages: crate::KeepAlive = Box::new(Anonymous { start, length });
     // SAFETY: the pages are this process's private anonymous mapping, readable and writable,
-    // which stays until the deallocator unmaps it, and which nothing else maps or frees.
-    let made = unsafe {
-        device.new_buffer_with_bytes_no_copy(
-            HostMemory::new(start),
-            length,
-            ResourceOptions::shared(),
-            Some(Box::new(unmap)),
-        )
-    };
-    let Ok(buffer) = made else {
-        // A refused buffer runs no deallocator: the pages are unmapped here.
-        unmap(start, length);
-        return None;
-    };
+    // which stays until the keep-alive unmaps it, and which nothing else maps or frees.
+    let memory = unsafe { HostMemory::new(start) };
+    let buffer = no_copy_kept(device, memory, length, pages)?;
     if buffer.over_dma_buf() {
         return None;
     }
     Some(ClassPages { buffer, start })
+}
+
+/// A no-copy buffer of `length` bytes over `memory`, whose pages `pages` keeps mapped: a
+/// keep-alive, not a deallocator, so the buffer's release runs at Metal's moment and waits for no
+/// batch submitted before it (`HostPages`'s release), and `pages` goes once the import is freed
+/// (`KeepAlive`). `None` where the device refuses the buffer, `pages` dropped with the refusal.
+#[cfg(unix)]
+fn no_copy_kept(
+    device: &Device,
+    memory: HostMemory,
+    length: u64,
+    pages: crate::KeepAlive,
+) -> Option<Buffer> {
+    let contents = BufferContents::NoCopy {
+        memory,
+        deallocator: None,
+        keep_alive: Some(pages),
+    };
+    let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents);
+    device.new_buffer_with_descriptor(descriptor).ok()
+}
+
+/// Anonymous pages [`map_anonymous`] mapped, unmapped as this goes: a check buffer's keep-alive.
+#[cfg(unix)]
+struct Anonymous {
+    start: NonNull<u8>,
+    length: u64,
+}
+
+// SAFETY: the mapping is this value's alone to unmap, from any thread, once nothing uses it.
+#[cfg(unix)]
+unsafe impl Send for Anonymous {}
+
+#[cfg(unix)]
+impl Drop for Anonymous {
+    fn drop(&mut self) {
+        unmap(self.start, self.length);
+    }
 }
 
 /// Anonymous private pages of `length` bytes, readable and writable, read as zero.
@@ -371,20 +399,13 @@ fn dma_buf_pages(device: &Device, length: u64) -> Option<ClassPages> {
     let exported = crate::dma_buf::ExportedPages::make(device, length)?;
     let start = exported.start();
     let source = exported.source();
-    // The allocation goes once the buffer's imports are freed: its deallocator holds it.
-    let deallocator = move |_: NonNull<u8>, _: u64| drop(exported);
+    // The allocation goes once the buffer's imports are freed: its keep-alive holds it.
+    let pages: crate::KeepAlive = Box::new(exported);
     // SAFETY: the pages are the device's mapped allocation, readable and writable, which stays
-    // mapped until the deallocator lets go of it; the source answers every request over them
+    // mapped until the keep-alive lets go of it; the source answers every request over them
     // with a dma-buf of exactly those pages (`ExportedPages::source`).
-    let made = unsafe {
-        device.new_buffer_with_bytes_no_copy(
-            HostMemory::with_dma_buf(start, source),
-            length,
-            ResourceOptions::shared(),
-            Some(Box::new(deallocator)),
-        )
-    };
-    let buffer = made.ok()?;
+    let memory = unsafe { HostMemory::with_dma_buf(start, source) };
+    let buffer = no_copy_kept(device, memory, length, pages)?;
     if !buffer.over_dma_buf() {
         return None;
     }
