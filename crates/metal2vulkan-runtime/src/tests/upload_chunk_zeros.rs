@@ -134,9 +134,11 @@ fn a_regions_tail_reads_zero_over_a_dirty_chunk() {
     );
 }
 
-/// `scale_and_offset` of the examples fixture, every slot bound, dispatched `dispatches` times in
-/// each of `command_buffers` command buffers: the `new_buffer_bytes_cleared` those command buffers
-/// moved, and the arena bytes the last of them took.
+/// `scale_and_offset` of the examples fixture, its two device buffers bound and its constant set
+/// inline before each dispatch (a region of its own in the arena, the scale `index`), dispatched
+/// `dispatches` times in each of `command_buffers` command buffers: the
+/// `new_buffer_bytes_cleared` those command buffers moved, and the arena bytes the last of them
+/// took.
 ///
 /// One command buffer of one dispatch runs first, outside the window, so that what the device sets
 /// up once — its pools, its sets, its kernel — is not read as a command buffer's own cost. Every
@@ -162,10 +164,11 @@ fn cleared(command_buffers: usize, dispatches: usize) -> (u64, u64) {
         let command_buffer = queue.command_buffer().unwrap();
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&state).unwrap();
-        for index in [0, 1, 2] {
+        for index in [0, 1] {
             encoder.set_buffer(Some(&buffer), 0, index).unwrap();
         }
-        for _ in 0..dispatches {
+        for index in 0..dispatches {
+            encoder.set_bytes(&(index as f32).to_le_bytes(), 2).unwrap();
             encoder
                 .dispatch_threads(Size::new(1, 1, 1), Size::new(1, 1, 1))
                 .unwrap();
@@ -200,7 +203,7 @@ fn cleared(command_buffers: usize, dispatches: usize) -> (u64, u64) {
 ///
 /// Now a region clears its own unwritten bytes and a chunk clears none, so the fixed term is what
 /// the command buffer's own regions leave unwritten — nothing, for this kernel — and each
-/// dispatch's sink region clears its own length and no more.
+/// dispatch's inline constant clears its region's tail past its four bytes and no more.
 #[test]
 fn a_command_buffers_fixed_clear_is_not_a_chunk() {
     let (one_one, arena_one) = cleared(1, 1);
@@ -243,8 +246,8 @@ fn a_command_buffers_fixed_clear_is_not_a_chunk() {
          {FIRST_CHUNK_BYTES}: its chunks must be made without a clear and its regions clear their \
          own unwritten bytes alone"
     );
-    // And what a dispatch adds is its sink region's own bytes, which the arena's own figure bounds
-    // from above: a region's bytes cleared can never exceed the bytes it took.
+    // And what a dispatch adds is its constant region's own tail, which the arena's own figure
+    // bounds from above: a region's bytes cleared can never exceed the bytes it took.
     let per_dispatch_arena = (arena_sixteen - arena_one) / 15;
     assert!(
         per_dispatch > 0 && per_dispatch <= per_dispatch_arena,
