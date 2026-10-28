@@ -321,8 +321,8 @@ use crate::bind::plan::resources::{separate_samplers, ResourcePlanner};
 use crate::bind::plan::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, large_view_candidates, mark_disjoint,
-    plan_buffer, psb_variant, range_variant, record_specialized, snapshot_forms, srgb_twin_variant,
-    srgb_variant, storage_view_variant, used_uses, ycbcr_in_place_variant,
+    plan_buffer, psb_variant, range_variant, record_specialized, snapshot_forms, srgb_variant,
+    storage_view_variant, used_uses, ycbcr_in_place_variant,
 };
 use crate::bind::plan::{
     AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorSite, FactorTemplate,
@@ -1962,8 +1962,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     resources.combined(texture, sampler, b.immutable_sampler.as_ref())?
                 }
                 BindingSource::SeparateTexture { texture, sampler } => {
-                    let use_ = sampler.sampler_binding_use();
-                    let immutable = separate.get(&(texture.stage, use_)).ok_or_else(|| {
+                    let immutable = separate.get(&(texture.stage, sampler)).ok_or_else(|| {
                         internal(format!(
                             "separate texture {texture:?} without its sampler {sampler:?}"
                         ))
@@ -2140,10 +2139,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 }
                 // A sparse texture's tile map.
                 BindingSource::TileMap(slot) => resources.tile_map(slot),
-                // An 8-bit sRGB texture's raw view.
-                BindingSource::RawTexture(slot) => {
-                    resources.raw_texture(set.set, b.binding, b.ty, slot)?
-                }
                 // The `half` shadow of an extended-range attachment the draw's instance holds.
                 BindingSource::ExtendedShadow(color_index) => {
                     WriteSource::ExtendedShadow { color_index }
@@ -2481,7 +2476,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.storage_view_slots = storage_view_variant(&p.dependencies, &buffers, profile);
     variant.cross_class = cross_variant(&p.dependencies, &p.interface.slots, shape);
     variant.srgb_textures = srgb_variant(profile, &p.dependencies, shape, &variant.cross_class);
-    variant.srgb_twins = srgb_twin_variant(profile, &variant.srgb_textures, shape);
     variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;
@@ -2538,7 +2532,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         &snapshot_textures,
         &p.interface.slots,
         shape,
-        (&variant.srgb_textures, &variant.cross_class),
+        &variant.cross_class,
     );
     variant.depth_clamp_range = depth_clamp_range;
     variant.rotated_weights = rotated_weights;

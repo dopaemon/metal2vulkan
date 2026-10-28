@@ -219,12 +219,14 @@ pub struct StageIo {
     /// (`NeedsInput(ColorWrites)`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub word_colors: BTreeMap<u32, crate::metal::format::WordAttachment>,
-    /// The input attachments the fragment function reads through Metal's decode of their bytes
-    /// (`LoweringInputs::srgb_fetches`): each read snaps the device's sRGB decode back to its
-    /// byte and decodes that by Metal's table. Link refuses a stage compiled for another set
-    /// than the pipeline's (`NeedsInput(ColorWrites)`).
+    /// The input attachments the fragment function reads as `float` texels through the device's
+    /// decode, on a device that does not decode through Metal's own texture unit (without
+    /// `VkProperty::MetalSampler`): a render pipeline whose attachment there has an 8-bit sRGB
+    /// format records `PrecisionNote::SrgbTexelDecode` for the stage
+    /// (`color_writes::pipeline_writes`), the device's sRGB decode standing for Metal's
+    /// twelve-bit table.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub srgb_fetches: std::collections::BTreeSet<u32>,
+    pub decoded_fetches: std::collections::BTreeSet<u32>,
     /// The attachments held with their channels rotated (`LoweringInputs::rotated_colors`) that
     /// the fragment function writes through an output variable of either dual-source index, by
     /// color index: each such output stores Metal's channels rotated

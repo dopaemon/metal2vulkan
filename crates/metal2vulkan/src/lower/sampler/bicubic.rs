@@ -169,7 +169,7 @@ impl Bicubic {
     /// ([`PINNED_WORDS`]), and Metal's offset rule on each axis a constant offset moves
     /// (`position::OFFSET_RULE_WORDS`). The estimate bounds every public bicubic fixture
     /// (`the_estimate_bounds_the_bicubic_fixtures`), every raw form
-    /// (`the_raw_estimate_bounds_its_emission`), and the mirrored forms (`mirrored_axes`).
+    /// (`the_srgb_estimate_bounds_its_emission`), and the mirrored forms (`mirrored_axes`).
     pub(super) fn words(&self) -> u32 {
         let (base, taps) = if self.linear_only() {
             (448, 2)

@@ -6,7 +6,8 @@
 //! carrier and its reads go through a decoded twin, announced `carried-decoded-twin` once and
 //! `decoded-texel-precision` once ([`ASTC_TWINS`]). Every format's texels read as Metal's after
 //! every kind of write ([`astc_texels_read_as_metal_s`]): an LDR form's within 1/510, an sRGB
-//! form's exactly (its twin's 8-bit codes read raw and decoded through Metal's table); a new
+//! form's as the device decodes its twin's 8-bit codes, Metal's own 8-bit codes (through Metal's
+//! own texture unit Metal's value exactly, elsewhere `srgb-texel-decode`: [`reads_as`]); a new
 //! texture's zero blocks as magenta; then blocks a CPU copy
 //! wrote, a blit from a buffer, a fill of one block, and a copy from another ASTC texture, each
 //! read by a command buffer after the write's, each decoded into the twin by a GPU decode pass (a
@@ -333,7 +334,8 @@ fn astc_texels_read_as_metal_s() {
                     for c in 0..4 {
                         let off = (got[c] - want[c]).abs();
                         most = most.max(off);
-                        let fits = reads_as(decode, got[c], want[c]);
+                        let exact = super::pixel_samplers::metal_sampler(device);
+                        let fits = reads_as(decode, c, got[c], want[c], exact);
                         if !fits && wrong.len() < 24 {
                             wrong.push(format!(
                                 "{pf:?} {what} texel {t} channel {c}: {} against Metal's {}",
@@ -405,39 +407,42 @@ fn astc_texels_read_as_metal_s() {
     });
 }
 
-/// Whether `got` reads as Metal's `want` for a channel of a texel of `decode` (the module docs):
-/// an sRGB form's bit for bit (its twin's codes, decoded through Metal's table); an LDR form's
-/// within 1/510.
-fn reads_as(decode: AstcDecode, got: f32, want: f32) -> bool {
-    match decode.srgb {
-        true => got.to_bits() == want.to_bits(),
-        false => (got - want).abs() <= UNORM8_BOUND,
+/// Whether `got` reads as Metal's `want` for channel `c` of a texel of `decode` on a device that
+/// samples through Metal's own texture unit where `exact` (the module docs): an sRGB form's color
+/// as the device's decode of the twin's code (`srgb_decode_holds`) and its alpha as the device's
+/// conversion of it (`converted_holds`); an LDR form's within 1/510.
+fn reads_as(decode: AstcDecode, c: usize, got: f32, want: f32, exact: bool) -> bool {
+    match (decode.srgb, c) {
+        (true, 3) => super::converted_holds(got, want, exact),
+        (true, _) => super::srgb_decode_holds(got, want, exact),
+        (false, _) => (got - want).abs() <= UNORM8_BOUND,
     }
 }
 
-/// Note in `wrong` that `what`'s texels `got` are off Metal's decode of every one of `blocks`.
+/// Note in `wrong` that `what`'s texels `got` are off Metal's decode of every one of `blocks`, on
+/// a device that samples through Metal's own texture unit where `exact`.
 fn check(
     wrong: &mut Vec<String>,
     what: String,
-    decode: AstcDecode,
+    (decode, exact): (AstcDecode, bool),
     got: &[[f32; 4]],
     blocks: &[&[u8]],
 ) {
-    let off = off_metal(decode, got, blocks);
+    let off = off_metal((decode, exact), got, blocks);
     if off > 0 {
         wrong.push(format!("{what}: {off} texels off Metal's"));
     }
 }
 
 /// The texels of `got` (`SIDE` x `SIDE`) that read as Metal's texel at their place of none of
-/// `blocks` ([`reads_as`]), each a level of `decode`'s blocks.
-fn off_metal(decode: AstcDecode, got: &[[f32; 4]], blocks: &[&[u8]]) -> usize {
+/// `blocks` ([`reads_as`], `exact` as there), each a level of `decode`'s blocks.
+fn off_metal((decode, exact): (AstcDecode, bool), got: &[[f32; 4]], blocks: &[&[u8]]) -> usize {
     let wants: Vec<_> = blocks.iter().map(|b| metal_texels(decode, b)).collect();
     (got.iter().enumerate())
         .filter(|(t, texel)| {
             !wants
                 .iter()
-                .any(|want| (0..4).all(|c| reads_as(decode, texel[c], want[*t][c])))
+                .any(|want| (0..4).all(|c| reads_as(decode, c, texel[c], want[*t][c], exact)))
         })
         .count()
 }
@@ -461,6 +466,7 @@ fn astc_cpu_writes_decode_on_the_cpu() {
     on_device(|device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
+        let exact = super::pixel_samplers::metal_sampler(device);
         let queue = device.new_command_queue().unwrap();
         let busy = Busy::new(device, &queue);
         let mut wrong = Vec::new();
@@ -478,6 +484,7 @@ fn astc_cpu_writes_decode_on_the_cpu() {
             let decode = AstcDecode::of(pf).unwrap();
             let (row, count) = (row_bytes(decode), block_count(decode));
             let seed = 0xa57c_b000 + 0x100 * f as u64;
+            let checked = (decode, exact);
             // Made and written while nothing is in flight.
             let made = device.work_counts();
             let target = texture(device, pf, TextureUsage::SHADER_READ);
@@ -496,7 +503,7 @@ fn astc_cpu_writes_decode_on_the_cpu() {
             check(
                 &mut wrong,
                 format!("{pf:?} written"),
-                decode,
+                checked,
                 &got,
                 &[&blocks],
             );
@@ -580,12 +587,12 @@ fn astc_cpu_writes_decode_on_the_cpu() {
                 let got = texels(&out);
                 let what = format!("{pf:?} {behind:?}");
                 match behind {
-                    Behind::Event => check(&mut wrong, what, decode, &got, &[&new]),
-                    Behind::Busy => check(&mut wrong, what, decode, &got, &[&old, &new]),
+                    Behind::Event => check(&mut wrong, what, checked, &got, &[&new]),
+                    Behind::Busy => check(&mut wrong, what, checked, &got, &[&old, &new]),
                 }
                 let later = texels(&later_out);
                 let what = format!("{pf:?} {behind:?} later");
-                check(&mut wrong, what, decode, &later, &[&new]);
+                check(&mut wrong, what, checked, &later, &[&new]);
             }
         }
         eprintln!(
@@ -655,7 +662,8 @@ fn astc_views_in_the_other_colour_space_read_as_metal_s() {
                 let want = metal_texels(decode, blocks);
                 for (t, (got, want)) in got.iter().zip(&want).enumerate() {
                     for c in 0..4 {
-                        let fits = reads_as(decode, got[c], want[c]);
+                        let exact = super::pixel_samplers::metal_sampler(device);
+                        let fits = reads_as(decode, c, got[c], want[c], exact);
                         if !fits && wrong.len() < 24 {
                             wrong.push(format!(
                                 "{pf:?} as {:?} {what} texel {t} channel {c}: {} against Metal's {}",

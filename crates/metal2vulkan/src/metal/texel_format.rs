@@ -102,32 +102,31 @@
 //! `R8Unorm`, `R16Float`, and `R32Float`, in 1D and 2D: the P2a probe).
 //!
 //! **sRGB.** Metal decodes an 8-bit sRGB color channel through its twelve-bit table (the code `c`
-//! to the step `k`, the value `k / 4095`, `lower::arith::srgb`), which the device's decode does
-//! not reproduce, and reads alpha as `c / 255`: a read or a nearest sample with a `half` result
-//! rounds that value to nearest even, a gather's likewise, and a read or a nearest sample with a
-//! `float` result rounds it to `f32` to nearest even (`RGBA8Unorm_sRGB`, every code: `f8f81b81`,
-//! the probe cases). A linear sample sums the taps' steps exactly with the linear filter's weights,
-//! rounds the sum half up onto `1/4095` (alpha's codes onto `1/(16 · 255)`), and that value to
-//! nearest even, to `half` or `f32` (the probe cases and P2a), as the bicubic filter sums them.
-//! Only the raw code gives these values, so a texture bound in such a format is read through a
-//! UNORM view of the same image ([`srgb_raw_view`]): the `RuntimeFact::SrgbTexture` variant of a
-//! function. Its [`texel_format`] is [`UNORM`](BicubicTexels::UNORM) and
-//! [`SRGB`](BicubicTexels::SRGB) with its channels, never [`EXACT`](BicubicTexels::EXACT): a
-//! conversion of the device's value keeps its rounding. A gather's `float` value is not
-//! measured, so it keeps the device's decode (`PrecisionNote::SrgbTexelDecode`). `RGBA8Unorm_sRGB`
-//! was read, and so were `BGRA8Unorm_sRGB`, `R8Unorm_sRGB`, and `RG8Unorm_sRGB` (the probe): they
-//! take its rule ([`srgb_raw`]). So do the sRGB forms of BC1 to BC3 and BC7 (an Apple M4: every
-//! color channel of their random blocks' reads is the step of the unorm form's
-//! 8-bit code, alpha `c / 255`), read through their unorm views: exact where the device decodes the
-//! unorm form's codes as Metal does (BC7's on every venue measured, as Direct3D specifies its
-//! decode bit for bit; BC1 to BC3's where the driver has `DriverFact::ColorBlockDecodeIsMetals`,
-//! and elsewhere announced as `compressed-texel-decode`). So do the ASTC sRGB formats, whose
-//! colour Metal reads as the table's step of the top byte of each channel's decode (`bind::AstcDecode`,
-//! an Apple M3 Max): read through the unorm view of their decoded twin's codes on a device without
-//! the format, exact; a device with it decodes them itself, as its unorm view would decode the
-//! blocks the LDR way, so they take the rule only where the device holds the codes
-//! ([`srgb_raw_on`]). The other compressed and the wide sRGB formats are not measured and keep the
-//! device's decode.
+//! to the step `k`, the value `k / 4095` correctly rounded to the result, `lower::arith::srgb`)
+//! and reads alpha as `c / 255`; its linear and bicubic filters sum the decoded steps
+//! (`RGBA8Unorm_sRGB`, every code: `f8f81b81`, the probe cases). The device decodes such a texel
+//! itself, through a view of the image in the sRGB format (Vulkan's texel decode applies the sRGB
+//! EOTF to the codes before filtering, within the device's precision), and that is the only form
+//! wherever the device samples the format: a texture slot's reads, samples, gathers and bicubic
+//! taps take it, recording `PrecisionNote::SrgbTexelDecode` where the bound format's class has
+//! [`SRGB`](BicubicTexels::SRGB) on a device that does not decode through Metal's own texture
+//! unit (`VkProperty::MetalSampler`, whose decode is Metal's). The class is
+//! [`UNORM`](BicubicTexels::UNORM) and [`SRGB`](BicubicTexels::SRGB) with its channels, never
+//! [`EXACT`](BicubicTexels::EXACT): a `half` result rounds the device's `float` value, and a
+//! bicubic sample sums the device's decoded taps. The formats ([`srgb_coded`]) are
+//! `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`, `R8Unorm_sRGB` and `RG8Unorm_sRGB` (the probe), their
+//! `RGBX8Unorm_sRGB` kin, and the sRGB forms of BC1 to BC3, BC7, PVRTC, ETC2, EAC and ASTC, whose
+//! decoded 8-bit codes Metal decodes alike (an Apple M4, an Apple M3 Max): a device without such
+//! a compressed format samples its decoded twin through an `R8G8B8A8_SRGB` view of the twin's
+//! codes (`bind::AstcDecode`, `bind::PvrtcDecode`, `bind::EtcDecode`), its own decode again.
+//!
+//! A device that cannot sample an 8-bit sRGB format holds a sampled texture of it as the format's
+//! UNORM twin (`metal::format::srgb_raw_twin`, [`srgb_twin_on`]: `R8Unorm_sRGB` and
+//! `RG8Unorm_sRGB` on lavapipe, `RG8Unorm_sRGB` on ANV and NVIDIA among the committed profiles),
+//! whose views read the codes as `c / 255`. Having no sRGB decode there, the slot's
+//! `RuntimeFact::SrgbTexture` variant decodes the codes through Metal's table: a read, a nearest
+//! sample, a pixel-coordinate fetch, a gather and a bicubic tap exactly, any other sample the
+//! device's filter of the codes (`PrecisionNote::SrgbTexelDecode`).
 //!
 //! **Depth formats**. A depth texture has no `half` result, and no linear filter is emulated on
 //! one, so its class is read by a read, plain gather or sample of one texel with a `float` result
@@ -155,7 +154,6 @@
 
 use crate::metal::bicubic::{texels, BicubicTexels};
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
-use crate::vk;
 
 /// The treatment of a bound format's texels with a `half` result: the value of the
 /// `SpecKey::TexelFormat` specialization constant, the bits of [`BicubicTexels`] for a measured
@@ -603,8 +601,8 @@ pub fn texel_format(pf: PixelFormat) -> TexelFormat {
     }
     match texels(pf) {
         Some(t) if measured => TexelFormat(t.0),
-        // Measured through the raw view only: the device's view gives no code (module docs).
-        Some(t) if srgb_raw(pf) => TexelFormat(t.0 | BicubicTexels::SRGB),
+        // An sRGB format's family, its channels sRGB codes (module docs).
+        Some(t) if srgb_coded(pf) => TexelFormat(t.0 | BicubicTexels::SRGB),
         // A cube gather's corner, measured alone, and a packed format's codes, with its family
         // where Metal's linear filter of it is measured: a packed normalized format's `EXACT`
         // sum on its field's grids, a small float's half-float one (module docs).
@@ -853,14 +851,10 @@ pub fn heap_class_index(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> u32
         .map_or(from, |i| from + u32::try_from(i).unwrap_or(0))
 }
 
-/// Whether Metal decodes `pf`'s texels from their raw 8-bit codes through its twelve-bit table
-/// (module docs): the 8-bit sRGB formats whose raw code a UNORM view of the same image reads,
-/// the sRGB forms of BC1 to BC3 and BC7, whose codes their unorm views decode, the PVRTC,
-/// ETC2 and EAC sRGB formats, whose codes their linear forms decode (`bind::PvrtcDecode`,
-/// `bind::EtcDecode`; a decoded twin's codes on a device without them), and the ASTC sRGB
-/// formats, whose codes their decoded twin holds (`bind::AstcDecode`), which a device takes only
-/// where it holds the twin ([`srgb_raw_on`]).
-pub fn srgb_raw(pf: PixelFormat) -> bool {
+/// Whether `pf`'s color channels are 8-bit sRGB codes, which Metal decodes through its twelve-bit
+/// table (module docs): the 8-bit sRGB formats, and the sRGB forms of BC1 to BC3, BC7, PVRTC, ETC2,
+/// EAC and ASTC, whose blocks decode to such codes.
+pub fn srgb_coded(pf: PixelFormat) -> bool {
     use PixelFormat as P;
     matches!(
         pf,
@@ -897,44 +891,15 @@ pub fn srgb_raw(pf: PixelFormat) -> bool {
     )
 }
 
-/// Whether `profile`'s device reads a texture of `pf` from its raw codes as Metal decodes them
-/// ([`srgb_raw`]): where the format it samples `pf` in has a raw view ([`srgb_raw_view`]), or where
-/// it samples no format of `pf`'s, which the binder holds as its UNORM twin
-/// (`metal::format::srgb_raw_twin`) or refuses. An ASTC sRGB format a device samples itself has
-/// none: its unorm form widens the blocks' endpoints the LDR way (`bind::AstcDecode`), so no view
-/// of its image reads Metal's codes, and the device's own sRGB decode answers.
-pub fn srgb_raw_on(pf: PixelFormat, profile: &crate::device::profile::DeviceProfile) -> bool {
+/// Whether `profile`'s device holds a sampled texture of `pf` as its 8-bit sRGB format's UNORM twin
+/// (`metal::format::srgb_raw_twin`): it samples no format of `pf`'s and samples the twin's, whose
+/// views read the codes, so a function decodes them itself (module docs). The runtime's image plan
+/// holds the twin by the same format features.
+pub fn srgb_twin_on(pf: PixelFormat, profile: &crate::device::profile::DeviceProfile) -> bool {
     use crate::device::requirements::FormatUsage;
     let usages = [FormatUsage::SampledImage].into();
-    srgb_raw(pf)
-        && match crate::metal::format::vk_format(pf, &usages, profile) {
-            Ok(m) => srgb_raw_view(m.format).is_some(),
-            Err(_) => true,
-        }
-}
-
-/// The raw view's format of an image of Vulkan format `format`, the sampled view of an
-/// [`srgb_raw`] format: the UNORM format of the same channels and bits (a BC, PVRTC, ETC2 or EAC
-/// format's of the same blocks), which views the image's texels as their codes (`c / 255`). `None` for any
-/// other format.
-pub fn srgb_raw_view(format: vk::Format) -> Option<vk::Format> {
-    use vk::Format as F;
-    Some(match format {
-        F::R8_SRGB => F::R8_UNORM,
-        F::R8G8_SRGB => F::R8G8_UNORM,
-        F::R8G8B8A8_SRGB => F::R8G8B8A8_UNORM,
-        F::B8G8R8A8_SRGB => F::B8G8R8A8_UNORM,
-        F::BC1_RGBA_SRGB_BLOCK => F::BC1_RGBA_UNORM_BLOCK,
-        F::BC2_SRGB_BLOCK => F::BC2_UNORM_BLOCK,
-        F::BC3_SRGB_BLOCK => F::BC3_UNORM_BLOCK,
-        F::BC7_SRGB_BLOCK => F::BC7_UNORM_BLOCK,
-        F::PVRTC1_2BPP_SRGB_BLOCK_IMG => F::PVRTC1_2BPP_UNORM_BLOCK_IMG,
-        F::PVRTC1_4BPP_SRGB_BLOCK_IMG => F::PVRTC1_4BPP_UNORM_BLOCK_IMG,
-        F::ETC2_R8G8B8_SRGB_BLOCK => F::ETC2_R8G8B8_UNORM_BLOCK,
-        F::ETC2_R8G8B8A1_SRGB_BLOCK => F::ETC2_R8G8B8A1_UNORM_BLOCK,
-        F::ETC2_R8G8B8A8_SRGB_BLOCK => F::ETC2_R8G8B8A8_UNORM_BLOCK,
-        _ => return None,
-    })
+    let samples = |pf| crate::metal::format::vk_format(pf, &usages, profile).is_ok();
+    !samples(pf) && crate::metal::format::srgb_raw_twin(pf).is_some_and(samples)
 }
 
 #[cfg(test)]
@@ -942,43 +907,34 @@ mod tests {
     use super::*;
     use BicubicTexels as T;
 
-    /// The raw view is the UNORM twin of each candidate image format of an [`srgb_raw`] format (a
-    /// PVRTC, ETC2, EAC or ASTC sRGB format's decoded twin's among them), but an ASTC sRGB
-    /// format's own block, whose unorm form decodes the blocks the LDR way; nothing else has one.
+    /// An sRGB-coded format's twin (`metal::format::srgb_raw_twin`) is a format whose direct image
+    /// format is the UNORM format of the sRGB format's own class: the same channels and bits, read
+    /// as their codes; nothing else has one, nor an ASTC sRGB format, whose unorm form decodes the
+    /// blocks otherwise.
     #[test]
-    fn an_srgb_format_has_a_raw_view_of_its_own_channels() {
-        for &pf in PixelFormat::ALL {
-            let astc = crate::bind::AstcDecode::of(pf).is_some();
-            for format in crate::metal::format::candidate_formats(pf) {
-                let own_block = astc && crate::metal::format::direct_format(pf) == Some(format);
-                assert_eq!(
-                    srgb_raw_view(format).is_some(),
-                    srgb_raw(pf) && !own_block,
-                    "{pf:?}: {format:?}"
-                );
-            }
-        }
-        assert_eq!(
-            srgb_raw_view(vk::Format::B8G8R8A8_SRGB),
-            Some(vk::Format::B8G8R8A8_UNORM)
-        );
-    }
-
-    /// An [`srgb_raw`] format's twin (`metal::format::srgb_raw_twin`) is a format whose direct
-    /// image format is the raw view of the sRGB format's: the same channels and bits, read as
-    /// their codes; nothing else has one, nor an ASTC sRGB format.
-    #[test]
-    fn an_srgb_format_s_twin_holds_its_raw_view() {
+    fn an_srgb_format_s_twin_holds_its_codes() {
         for &pf in PixelFormat::ALL {
             match crate::metal::format::srgb_raw_twin(pf) {
                 Some(twin) => {
-                    assert!(srgb_raw(pf), "{pf:?}");
-                    let own = crate::metal::format::direct_format(pf).and_then(srgb_raw_view);
-                    assert_eq!(own, crate::metal::format::direct_format(twin), "{pf:?}");
+                    assert!(srgb_coded(pf), "{pf:?}");
+                    let own = crate::metal::format::direct_format(pf).and_then(|f| f.block());
+                    let codes = crate::metal::format::direct_format(twin).and_then(|f| f.block());
+                    // A PVRTC RGB format and its twin are held only through decoded twins.
+                    let (own, codes) = match (own, codes) {
+                        (Some(own), Some(codes)) => (own, codes),
+                        (None, None) => continue,
+                        _ => panic!("{pf:?}: one of the pair without a direct format"),
+                    };
+                    assert_eq!(own.color, Some(crate::vk::NumericFormat::Srgb), "{pf:?}");
+                    assert_eq!(codes.color, Some(crate::vk::NumericFormat::Unorm), "{pf:?}");
+                    assert_eq!(
+                        (own.class, own.size, own.component_bits),
+                        (codes.class, codes.size, codes.component_bits),
+                        "{pf:?}"
+                    );
                 }
-                // An ASTC sRGB format has none: its unorm form decodes the blocks otherwise.
                 None => assert!(
-                    !srgb_raw(pf) || crate::bind::AstcDecode::of(pf).is_some(),
+                    !srgb_coded(pf) || crate::bind::AstcDecode::of(pf).is_some(),
                     "{pf:?}"
                 ),
             }
@@ -1001,7 +957,7 @@ mod tests {
 
     /// An RGBX format converts as its RGBA twin with red, green and blue (every
     /// read, sample, gather and bicubic sample equals the twin's but for alpha 1): its family,
-    /// an `_sRGB` one's raw codes through the twin's raw view.
+    /// an `_sRGB` one's sRGB codes.
     #[test]
     fn rgbx_formats_convert_as_their_twins_with_three_channels() {
         use PixelFormat as P;
@@ -1020,7 +976,7 @@ mod tests {
                 [true, true, true, false],
                 "{pf:?}"
             );
-            assert_eq!(srgb_raw(pf), srgb_raw(twin), "{pf:?}");
+            assert_eq!(srgb_coded(pf), srgb_coded(twin), "{pf:?}");
         }
         // The integer formats, as their twins, convert by no family.
         for pf in [P::RGBX8Uint, P::RGBX16Sint, P::RGBX32Uint] {

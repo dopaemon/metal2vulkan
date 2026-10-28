@@ -136,7 +136,7 @@ mod engine_sparse_unmapped;
 mod engine_spec_bits;
 mod engine_specialized;
 mod engine_spirv_cross_forms;
-mod engine_srgb_raw;
+mod engine_srgb_decode;
 mod engine_stage_io;
 mod engine_stage_io_tail;
 mod engine_stage_root_attributes;

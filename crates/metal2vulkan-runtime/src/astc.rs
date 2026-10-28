@@ -20,7 +20,8 @@
 //!   blit out of it hand back the blocks written. Its sampled views present its decoded twin
 //!   (`texture/decoded_twin.rs`), Metal's decode of the blocks as 8-bit codes (an LDR form's the
 //!   code nearest Metal's 12-bit value, announced `decoded-texel-precision`; an sRGB form's its own
-//!   codes, which its slots read raw and decode through Metal's table, exactly), decoded after each write as a BC
+//!   codes, which its slots read through the twin's `R8G8B8A8_SRGB` view, the device's decode,
+//!   announced `srgb-texel-decode`), decoded after each write as a BC
 //!   texture's twin is: on the GPU (`bind::astc_decode_module`), or a host write's on the CPU.
 //!   A view in the texture's other colour space (its `_sRGB` or LDR form) presents a second twin
 //!   of that form's decode, made at the first such view. Refused: a heap's or a sparse heap's

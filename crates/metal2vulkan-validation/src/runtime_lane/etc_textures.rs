@@ -6,9 +6,9 @@
 //! holds its blocks in a carrier and its reads go through a decoded twin, announced
 //! `carried-decoded-twin` once and, for an 11-bit format, `decoded-texel-precision` once. Every
 //! format's texels read as Metal's after every kind of write ([`etc_texels_read_as_metal_s`]): an
-//! 8-bit format's exactly (an sRGB form's colour through Metal's table, read from the twin's
-//! codes; where the device does not sample through Metal's own texture unit, within its
-//! conversion of the codes, announced `device-texel-conversion`: `converted_holds`), an 11-bit
+//! 8-bit format's exactly (where the device does not sample through Metal's own texture unit,
+//! within its conversion of the codes, announced `device-texel-conversion`: `converted_holds`; an
+//! sRGB form's colour there the device's decode of the code, `srgb_decode_holds`), an 11-bit
 //! format's within half a 16-bit step; a new texture's zero blocks, then blocks a CPU copy wrote,
 //! a blit from a buffer, a fill of one block and a copy from another texture, each read by a
 //! command buffer after the write's, each decoded into the twin (a blit's by a GPU decode pass, a
@@ -20,7 +20,7 @@
 
 use super::astc_textures::{blit, download, read_whole, reader, texture, upload};
 use super::degrade_notices::{counts, on_device};
-use super::{converted_holds, pixel_samplers::metal_sampler};
+use super::{converted_holds, pixel_samplers::metal_sampler, srgb_decode_holds};
 use metal2vulkan::bind::{EtcDecode, EtcTexels, PvrtcDecode};
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::metal::format::{srgb_raw_twin, vk_format, FormatEmulation};
@@ -171,7 +171,11 @@ fn etc_texels_read_as_metal_s() {
                 let exact = !decode.eleven_bit();
                 for (t, (got, want)) in got.iter().zip(&want).enumerate() {
                     for c in 0..4 {
+                        let srgb = c < 3 && srgb_raw_twin(read_as).is_some();
                         let fits = match exact {
+                            true if srgb => {
+                                srgb_decode_holds(got[c], want[c], metal_sampler(device))
+                            }
                             true => converted_holds(got[c], want[c], metal_sampler(device)),
                             false => (got[c] - want[c]).abs() <= compact_bound(pf),
                         };

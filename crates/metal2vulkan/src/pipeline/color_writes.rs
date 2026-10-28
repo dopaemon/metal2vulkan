@@ -179,7 +179,10 @@ fn metal_color_writes(p: &DeviceProfile) -> bool {
 /// `StageIo::half_fast_colors` stores some channel ([`stores_output`]), and
 /// `PrecisionNote::CoverageReadsRoundedAlpha` where the pipeline covers by alpha
 /// (`alpha_to_coverage`, `GraphicsState::alpha_to_coverage`) and the function rounds that alpha to
-/// nearest even ([`rounds_coverage_alpha`]). Each sorted, each entry once.
+/// nearest even ([`rounds_coverage_alpha`]), and `PrecisionNote::SrgbTexelDecode` where an
+/// attachment of `StageIo::decoded_fetches` has an sRGB format: the device's sRGB decode of the
+/// input attachment, where Metal decodes the bytes through its twelve-bit table. Each sorted, each
+/// entry once.
 pub(crate) fn pipeline_writes(
     a: &FunctionArtifact,
     colors: &[Option<ColorAttachmentState>],
@@ -215,6 +218,16 @@ pub(crate) fn pipeline_writes(
     let stored = |c: &u32| attachment(c).is_some_and(stores_output);
     if a.interface.io.half_fast_colors.iter().any(stored) {
         insert(&mut notes, PrecisionNote::HalfOutputFastMathBlend);
+    }
+    let srgb = |c: &u32| {
+        attachment(c).is_some_and(|s| {
+            s.format
+                .block()
+                .is_some_and(|b| b.color == Some(crate::vk::NumericFormat::Srgb))
+        })
+    };
+    if a.interface.io.decoded_fetches.iter().any(srgb) {
+        insert(&mut notes, PrecisionNote::SrgbTexelDecode);
     }
     (notes, rounded)
 }
@@ -330,7 +343,6 @@ pub(crate) fn check(
     if writes_hold(fragment, colors, (alpha_to_coverage, rounding), p)
         && wanted_extended_range(fragment, colors, rounding) == io.extended_range_colors
         && wanted_word_colors(fragment, colors, alpha_to_coverage, p) == io.word_colors
-        && wanted_srgb_fetches(fragment, colors) == io.srgb_fetches
         && wanted_rotated(fragment, colors, p) == io.rotated_colors
         && wanted_alpha_in_red(fragment, colors, p) == io.alpha_in_red_colors
         && wanted_rotated_factors(fragment, colors, p) == io.rotated_factors
@@ -343,41 +355,6 @@ pub(crate) fn check(
     } else {
         Err(Error::NeedsInput(RuntimeInput::ColorWrites))
     }
-}
-
-/// Whether a fetched color attachment of `pf` is read through Metal's decode of its bytes
-/// (`LoweringInputs::srgb_fetches`): `RGBA8Unorm_sRGB` and `BGRA8Unorm_sRGB`, whose fetch our
-/// probes measured. The one- and two-channel sRGB formats' are not.
-pub fn srgb_fetched(pf: metal::PixelFormat) -> bool {
-    matches!(
-        pf,
-        metal::PixelFormat::RGBA8UnormSRGB | metal::PixelFormat::BGRA8UnormSRGB
-    )
-}
-
-/// The input attachments `fragment` reads whose pixel format in `colors` takes Metal's decode
-/// ([`srgb_fetched`]): the set the function must have compiled under
-/// (`StageIo::srgb_fetches`).
-pub(crate) fn wanted_srgb_fetches(
-    fragment: &FunctionArtifact,
-    colors: &[Option<ColorAttachmentDescriptor>],
-) -> BTreeSet<u32> {
-    fragment
-        .interface
-        .descriptors
-        .iter()
-        .filter_map(|d| match d.slot.kind {
-            crate::pipeline::sym::ResourceKind::InputAttachment(color) => Some(color),
-            _ => None,
-        })
-        .filter(|&c| {
-            colors
-                .get(c as usize)
-                .copied()
-                .flatten()
-                .is_some_and(|a| srgb_fetched(a.pixel_format))
-        })
-        .collect()
 }
 
 /// The extended-range color attachments of a render pipeline whose color attachments are

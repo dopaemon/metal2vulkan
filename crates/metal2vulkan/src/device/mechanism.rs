@@ -35,7 +35,7 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // Keyed by a per-slot StorageImageChoice, a separate per-function compile.
         RuntimeFact::StorageTextureFormat { .. }
         | RuntimeFact::StorageTextureNumericType { .. } => Mechanism::Variant,
-        // Keyed by the slots bound in an sRGB format whose raw code the function reads.
+        // Keyed by the slots bound to an sRGB format's UNORM twin, whose codes the function decodes.
         RuntimeFact::SrgbTexture { .. } => Mechanism::Variant,
         RuntimeFact::SamplerCoordinates { .. } => Mechanism::Specialization,
         RuntimeFact::SamplerReduction { .. } => Mechanism::PlanTimeCheck,
@@ -186,9 +186,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The function marks the `ExecutionStatus` buffer its `ExecutionStatus` fact binds; the
         // consumer reads the bit after the command buffer.
         RuntimeFact::AbsentArgumentRead { .. } => Mechanism::None,
-        // The planner refuses an sRGB texture the device cannot sample at a slot the function
-        // decodes through the device.
-        RuntimeFact::SrgbDeviceDecode { .. } => Mechanism::PlanTimeCheck,
         // A separate compile of the pipeline, which a pass with colors the pipeline lacks asks
         // for.
         RuntimeFact::ZeroedColor { .. } | RuntimeFact::DroppedColor { .. } => Mechanism::Variant,

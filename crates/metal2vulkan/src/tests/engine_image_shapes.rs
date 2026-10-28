@@ -14,7 +14,7 @@
 //! The mapping, written out again here: 1D, 2D and 3D types are their dimension, an array type
 //! is arrayed, a multisample type is multisampled, a cube is a cube, a cube array an arrayed
 //! cube, and a texture buffer a buffer image. `ImageViewShape` makes a cube or a cube array an
-//! arrayed 2D image in the slot's own binding and its raw view, which texel reads go through; a
+//! arrayed 2D image in the slot's own binding, which texel reads go through; a
 //! combined image sampler's or a separate texture's binding samples, and keeps the cube. Each
 //! binding that holds a texture slot's image is checked.
 //!
@@ -147,7 +147,7 @@ fn expected(texture_type: TextureType, cube_as_array: bool) -> Shape {
 /// texture slot's image.
 fn texture_slot(resource: &ResourceSlot) -> Option<(u32, bool)> {
     match resource.kind {
-        ResourceKind::Texture | ResourceKind::RawTexture => Some((resource.index, false)),
+        ResourceKind::Texture => Some((resource.index, false)),
         ResourceKind::CombinedTextureSampler(_) => Some((resource.index, true)),
         ResourceKind::SeparateTexture(_) => resource.separate_texture_of().map(|(t, _)| (t, true)),
         _ => None,

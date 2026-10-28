@@ -102,9 +102,7 @@
 //! whose codes the form holds too, and a swizzled view's lanes are channels or those constants.
 //!
 //! **The view the copy fetches through** is the one the read it stands for would have fetched, and
-//! the one the binder names the form by: the slot's raw view where the slot's reads take the raw
-//! codes (an 8-bit sRGB texel's, `metal::texel_format::srgb_raw_view`), else the slot's own image
-//! ([`fetches_raw`]).
+//! the one the binder names the form by: the slot's own image.
 
 use std::collections::BTreeMap;
 
@@ -243,24 +241,10 @@ pub(super) fn declare(
     Ok(d)
 }
 
-/// Whether the copy of slot `index`, and so each read of it the snapshot stands for, fetches
-/// through the slot's raw view rather than through its image: where the slot's reads take the raw
-/// codes (an 8-bit sRGB texel's, `SlotPlan::raw`), the view the binder names the snapshot's form
-/// by (`bind::plan::slots`'s `snapshot_forms`, `metal::texel_format::srgb_raw_view`).
-pub(crate) fn fetches_raw(cx: &EmitCx<'_>, index: u32) -> bool {
-    cx.decl.families.texture.raw.contains_key(&index)
-}
-
-/// The image variable the copy of slot `index` fetches from, with its image type: the slot's raw
-/// view where its reads take one ([`fetches_raw`]), else its image.
+/// The image variable the copy of slot `index` fetches from, with its image type: the slot's
+/// image.
 fn source(cx: &EmitCx<'_>, index: u32) -> Option<(GlobalId, TypeId)> {
-    let texture = &cx.decl.families.texture;
-    let &(img, ty) = texture.images.get(&index)?;
-    match fetches_raw(cx, index) {
-        // An 8-bit sRGB slot's raw view is a second binding of the slot's own image type.
-        true => texture.raw.get(&index).map(|&g| (g, ty)),
-        false => Some((img, ty)),
-    }
+    cx.decl.families.texture.images.get(&index).copied()
 }
 
 /// Whether `form`'s codes hold every lane an image of sampled type `sampled` returns: a float
@@ -599,7 +583,7 @@ pub(crate) struct SnapshotRead {
 }
 
 /// The snapshot read standing for a fetch of texture slot `index` from image `img` (loaded from
-/// the image or raw view the copy fetches from), or `None` where the function reads the slot
+/// the image the copy fetches from), or `None` where the function reads the slot
 /// directly. The read must be the fetch of a single-sampled 2D level the copy makes: anything
 /// else is an invariant failure, since the slot's interface fact admits no other.
 pub(crate) fn prepare(

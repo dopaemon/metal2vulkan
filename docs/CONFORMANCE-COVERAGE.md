@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 882 |
+| ledger rows (a case whose gap is recorded) | 903 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2683,20 +2683,20 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `fetch-ordered-bgra8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-bgra8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-bgra8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
-| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-bgra8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
 | `fetch-ordered-rgba8unorm-red-alpha` | A fragment function's colour write into an 8-bit unorm attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): Metal's store… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
-| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the device enc… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
+| `fetch-ordered-rgba8unorm-srgb` | A fragment function's colour write into an 8-bit sRGB attachment it also fetches (the `x1` to `x3` sites fetch and store it once to three times): the function r… |
 | `half-read-nans-r16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
 | `half-read-nans-r16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
 | `half-read-nans-rg16f` | A `float` read or nearest sample of a 16-bit float texel's NaN: Metal answers its canonical `0x7FC00000`, and ours is this device's widening of the texel, which… |
@@ -3084,4 +3084,25 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
 | `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
 | `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `etc2-rgb8-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
+| `etc2-rgb8-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
+| `etc2-rgb8a1-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
+| `eac-rgba8-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
+| `eac-rgba8-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
+| `astc-4x4-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-5x4-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-5x5-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-6x5-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-6x6-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-8x5-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-8x6-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-8x8-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-10x5-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-10x6-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-10x8-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-10x10-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-12x10-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `astc-12x12-srgb` | A read of an ASTC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code by its o… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
+| `read-write-tier-round-trip-float` | A read of the round-tripped 8-bit sRGB texels through the texture's sRGB view: the device decodes each 8-bit code by its own sRGB transfer function, where Metal… |
 

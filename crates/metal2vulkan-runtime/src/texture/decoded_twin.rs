@@ -40,7 +40,7 @@
 //!
 //! **ASTC** (`astc.rs`): its twin holds Metal's decode as 8-bit codes (`TwinDecode::Astc`; an LDR
 //! form's the code nearest Metal's 12-bit value, an sRGB form's its own codes, which its slots read
-//! raw and decode through Metal's table), kept in step as above (`bind::astc_decode_module` on the
+//! through the twin's sRGB view, the device's decode), kept in step as above (`bind::astc_decode_module` on the
 //! GPU, `AstcDecode::decode_into` on the CPU): a pass's bands are of the texture's texels, each
 //! band's blocks copied out of the carrier's texels over them. A new one's zero blocks read
 //! magenta (an error block).
@@ -64,7 +64,8 @@
 //! `WorkCounts::second_twins`, `second_twin_checks`, `second_twin_decodes`).
 //!
 //! **PVRTC** (`pvrtc.rs`): its twin holds the blocks' codes (`TwinDecode::Pvrtc`,
-//! `R8G8B8A8_UNORM`; an sRGB form's slots read them raw and decode them through Metal's table),
+//! `R8G8B8A8_UNORM`; an sRGB form's slots read them through its `R8G8B8A8_SRGB` view, the
+//! device's decode),
 //! which serve the views of the format's linear and sRGB forms alike. Each texel's colors come
 //! from the four blocks around it, wrapping at the level's edges, so a write's decode is of whole
 //! levels (`twin_region`): on the GPU (`bind::pvrtc_decode_module`), each band of a level's rows
@@ -320,8 +321,8 @@ impl Decoded {
     fn view_format(&self, format: Format) -> Option<Format> {
         use Format as F;
         // An ASTC texture's binding views name its candidate's 8-bit format (its `_sRGB` form's
-        // `R8G8B8A8_SRGB`, or its raw view `R8G8B8A8_UNORM`, whose codes its twin holds): the
-        // twin's own view of it, or an LDR twin's exact values.
+        // `R8G8B8A8_SRGB`, whose codes its twin holds, or `R8G8B8A8_UNORM`): the twin's own view
+        // of it, or an LDR twin's exact values.
         // A PVRTC texture's name the same formats, and the twin holds their codes; so does an
         // ETC2 or EAC 8-bit format's, and an 11-bit one's name its compact texels' format. A
         // 4:2:2 texture's name the codes' `R8G8B8A8_UNORM` alone (it has no sRGB form).
@@ -418,8 +419,8 @@ pub(crate) fn twin_plan(
 impl Device {
     /// The texels of the decoded twin of an ASTC texture of `decode` on this device: 8-bit codes,
     /// an LDR form's each the code nearest Metal's 12-bit value (`decoded-texel-precision`), an
-    /// sRGB form's its own, which its slots read raw and decode through Metal's table, exactly
-    /// (`metal::texel_format::srgb_raw_on`). Refused where the device does not take the codes'
+    /// sRGB form's its own, which its `R8G8B8A8_SRGB` view decodes, the device's sRGB decode
+    /// (`metal::texel_format::srgb_coded`). Refused where the device does not take the codes'
     /// format so (no conformant device).
     fn astc_texels(&self, decode: AstcDecode) -> Result<AstcTexels, Error> {
         let facts = self

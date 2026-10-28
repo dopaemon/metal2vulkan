@@ -618,7 +618,7 @@ fn plan_held(
 
     let wants = |bit: TextureUsage| usage.contains(bit);
     // An 8-bit sRGB format the device cannot sample is sampled through its UNORM twin's view,
-    // whose raw codes the shader decodes as Metal does ([`holds_srgb_twin`]).
+    // whose codes the shader decodes through Metal's table ([`holds_srgb_twin`]).
     let sampled = vk_format(pf, &[FormatUsage::SampledImage].into(), profile)
         .ok()
         .or_else(|| {
@@ -823,18 +823,6 @@ fn plan_held(
         )));
     }
 
-    // The raw view through which a function decodes an 8-bit sRGB format's codes as Metal does: its
-    // UNORM twin's format, which the sRGB pair's views below list for the formats Metal pairs;
-    // `RGBX8Unorm_sRGB` has no pair (Metal's view between it and `RGBX8Unorm` is not measured), so
-    // its sampled image lists the raw view alone.
-    if usage_flags.contains(ImageUsageFlags::SAMPLED) {
-        if let Some(raw) = srgb_raw_twin(pf)
-            .and_then(direct_format)
-            .filter(|&raw| compatible(format, raw, true))
-        {
-            views.insert(raw);
-        }
-    }
     // The sRGB twin's views, which Metal makes without `PixelFormatView`; not the view of the
     // twin's word (`WordAttachment`), which would make every such render target mutable for a view
     // few textures take: an attachment view of the twin the device renders only through its word

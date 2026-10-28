@@ -758,6 +758,8 @@ mod snorm_tile_store;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod sparse_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod srgb_decode;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod srgb_storage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod stage_in_regions;
@@ -1675,6 +1677,31 @@ fn converted_holds(got: f32, want: f32, exact: bool) -> bool {
             && got.is_finite()
             && want.is_finite()
             && got.to_bits().abs_diff(want.to_bits()) <= 1)
+}
+
+/// Whether `got`, a `float` channel a module read from a texel's 8-bit sRGB color code, holds as
+/// Metal's `want` (the code's step of Metal's twelve-bit table over 4095, [`srgb_step`]): bit for
+/// bit where `exact` (the device samples through Metal's own texture unit,
+/// `pixel_samplers::metal_sampler`), else as the device's decode of the same code
+/// (`PrecisionNote::SrgbTexelDecode`, whose precision Vulkan does not set): nearer `want` than
+/// Metal's value of either neighbouring code.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn srgb_decode_holds(got: f32, want: f32, exact: bool) -> bool {
+    if got.to_bits() == want.to_bits() {
+        return true;
+    }
+    if exact || !got.is_finite() {
+        return false;
+    }
+    let value = |c: u32| (f64::from(srgb_step(c)) / 4095.0) as f32;
+    let Some(code) = (0..=255).find(|&c| value(c).to_bits() == want.to_bits()) else {
+        return false;
+    };
+    let off = |v: f32| (f64::from(got) - f64::from(v)).abs();
+    [code.checked_sub(1), (code < 255).then_some(code + 1)]
+        .into_iter()
+        .flatten()
+        .all(|n| off(want) < off(value(n)))
 }
 
 /// Whether `got` holds as Metal's `half` result `want` (a value on the `half` grid, widened) under

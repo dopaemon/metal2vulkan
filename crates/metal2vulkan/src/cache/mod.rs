@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1890;
+pub const SEMANTICS_VERSION: u32 = 1891;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 1890;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 468;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 469;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 468;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1671;
+pub const RUNTIME_VERSION: u32 = 1672;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -181,21 +181,16 @@ pub struct VariantKey {
     /// per-stage limit). The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub storage_view_slots: BTreeSet<SlotRef>,
-    /// Texture slots bound in an 8-bit sRGB format whose raw codes the function reads: every slot
-    /// of a `RuntimeFact::SrgbTexture` the shape binds in a `metal::texel_format::srgb_raw` format.
-    /// The function's reads, nearest samples, and gathers there read the slot's raw view
-    /// (`ResourceKind::RawTexture`, `CombinedSampler::raw`) and decode Metal's twelve-bit table;
-    /// the plan of a pipeline compiled under it states it.
+    /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
+    /// holds as the format's UNORM twin (`metal::format::srgb_raw_twin`), whose views read the
+    /// codes (`c / 255`): every slot of a `RuntimeFact::SrgbTexture` the shape binds in such a
+    /// format (`metal::texel_format::srgb_twin_on`). The function decodes what it reads there
+    /// through Metal's twelve-bit table, as the device would through an sRGB view it lacks
+    /// (`LoweringInputs::srgb_textures`); a slot bound in an sRGB format the device samples reads
+    /// the device's decode and is no slot of this. The plan of a pipeline compiled under it
+    /// states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
-    /// Slots of [`srgb_textures`](Self::srgb_textures) bound to a texture whose 8-bit sRGB format
-    /// the device cannot sample, which it holds as the format's UNORM twin
-    /// (`metal::format::srgb_raw_twin`), whose views read the codes (`c / 255`): the accesses the
-    /// raw codes do not serve exactly (a runtime sampler's sample, a filter the emulation does not
-    /// reach) sample the twin and decode the device's filtered codes
-    /// (`LoweringInputs::srgb_twins`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub srgb_twins: BTreeSet<SlotRef>,
     /// Fragment texture slots the draw reads through a snapshot an earlier draw of the same
     /// primitives took (`LoweringInputs::snapshot_textures`), each with the form the snapshot
     /// keeps its texels in (`SnapshotForm::of` the slot's bound view): the slots
@@ -528,7 +523,6 @@ impl VariantKey {
             && !self.dropped_vertex_layer
             && self.storage_view_slots.is_empty()
             && self.srgb_textures.is_empty()
-            && self.srgb_twins.is_empty()
             && self.snapshot_textures.is_empty()
             && self.ycbcr_in_place.is_empty()
             && self.address_maps.is_empty()
@@ -627,12 +621,6 @@ impl VariantKey {
             .collect();
         out.srgb_textures = self
             .srgb_textures
-            .iter()
-            .filter(|s| s.stage == stage)
-            .copied()
-            .collect();
-        out.srgb_twins = self
-            .srgb_twins
             .iter()
             .filter(|s| s.stage == stage)
             .copied()

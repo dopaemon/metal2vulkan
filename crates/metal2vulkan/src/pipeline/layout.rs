@@ -125,10 +125,6 @@ pub enum BindingSource {
         stage: Stage,
         sampler: CombinedSampler,
     },
-    /// The raw view of the texture bound at a Metal `[[texture(n)]]` slot: a sampled image of the
-    /// same image in the UNORM format of its channels, which reads an 8-bit sRGB texture's raw
-    /// codes (`RuntimeFact::SrgbTexture`).
-    RawTexture(SlotRef),
     /// The `half` shadow of the extended-range color attachment of this color index that the
     /// draw's render pass instance holds (`ResourceKind::ExtendedShadow`), bound as a storage
     /// image.

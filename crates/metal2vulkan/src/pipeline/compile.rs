@@ -1953,36 +1953,6 @@ pub(crate) fn kernel_inputs_read(
     })
 }
 
-/// The color attachments the specialized fragment entry `spec` reads (`[[color(n)]]`) whose
-/// pixel format in `colors` is `RGBA8Unorm_sRGB` or `BGRA8Unorm_sRGB`
-/// (`LoweringInputs::srgb_fetches`). Empty for any other stage.
-pub(crate) fn srgb_fetches(
-    spec: &air::Entry,
-    colors: &[Option<ColorAttachmentDescriptor>],
-) -> BTreeSet<u32> {
-    if !matches!(spec.ep.stage, AbiStage::Fragment { .. }) {
-        return BTreeSet::new();
-    }
-    spec.ep
-        .params
-        .iter()
-        .filter_map(|b| match b.role {
-            ParamRole::ColorInput {
-                index: AbiInt::Const(color),
-                ..
-            } => Some(color),
-            _ => None,
-        })
-        .filter(|&c| {
-            colors
-                .get(c as usize)
-                .copied()
-                .flatten()
-                .is_some_and(|a| crate::pipeline::color_writes::srgb_fetched(a.pixel_format))
-        })
-        .collect()
-}
-
 /// The color attachments the specialized fragment entry `spec` writes (an output of either
 /// dual-source index) whose pixel format in `colors` is a signed integer. Empty for any other
 /// stage.
@@ -2324,7 +2294,6 @@ fn lower_inputs(
             out.unattached_colors =
                 unattached_colors_written(spec, d.color_attachments, d.alpha_to_coverage);
             out.framebuffer_fetch = fetch_inputs(spec, d, variant, p);
-            out.srgb_fetches = srgb_fetches(spec, d.color_attachments);
             let read = raw_indices_read(spec);
             out.viewport_index_varying = written.viewport && read.viewport;
             out.render_target_array_index_varying = written.layer && read.layer;

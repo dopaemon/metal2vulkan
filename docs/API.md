@@ -838,7 +838,8 @@ Textures follow Metal's texel rules: sparse textures report residency where the 
 `Depth32Float` texels are the device's depth image's (a value it clamps or a denormal it flushes is
 announced, `restricted-depth-upload`, `depth-denormals`), `ulong` textures and their atomics use
 64-bit images where the device has them, and `half` and sRGB reads give Metal's values or record
-their bound. The
+their bound (an sRGB texel is the device's own decode wherever the device samples its format,
+`srgb-texel-decode`). The
 rustdoc of `BindState`, `TextureFacts` and `BindingPlan` states each rule.
 
 ## 6. At bind time
@@ -2283,12 +2284,12 @@ bound.
   on random blocks of every format; a driver not named is unmeasured, and validation derives no
   tolerance from them.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
-  form's code through Metal's table), where Metal interpolates with 6-bit weights: a BC1 to BC3
-  channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop GPU; BC3's
-  alpha 6/255) and lavapipe, 1/255 on ANV; a BC4 or BC5 channel up to 7.3/255 (signed 0.064) on
-  NVIDIA, 1.3/255 (signed 0.013) on ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV (Mesa
-  26.2.4, the Radeon 780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7 channel a
-  `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's.
+  form's code through the device's sRGB decode), where Metal interpolates with 6-bit weights: a BC1
+  to BC3 channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop
+  GPU; BC3's alpha 6/255) and lavapipe, 1/255 on ANV; a BC4 or BC5 channel up to 7.3/255 (signed
+  0.064) on NVIDIA, 1.3/255 (signed 0.013) on ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV
+  (Mesa 26.2.4, the Radeon 780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7
+  channel a `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's.
 - `metal2vulkan-degrade-cpu-block-decode` (performance). `CpuBlockDecode`: A CPU copy into a texture
   with a decoded twin (`replace_region`) whose CPU copies go on the host or the staging queue: its
   region is decoded on the CPU, on the device's decode thread, and copied into the twin; the first
@@ -2330,8 +2331,8 @@ bound.
   texels answers the nearest 8-bit code to Metal's 12-bit value, at most 1/510 off it; an EAC 11-bit
   texture's, the nearest 16-bit normalized code to Metal's 11-bit value, at most half a 16-bit step
   off it (Metal reads an EAC 11-bit channel as `c / 2047`, signed `c / 1023`). An ASTC sRGB
-  texture's twin holds Metal's own 8-bit codes, which its slots decode through Metal's table:
-  exact.
+  texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's sRGB view,
+  the device's decode (`srgb-texel-decode`).
 - `metal2vulkan-degrade-shared-present-queue` (performance). `SharedPresentQueue`: A command queue
   made for presenting (`Device::new_command_queue_for_presenting`) on a device that reserved no
   `VkQueue` for presenting: its queue family has no queue past the ones the round robin takes
@@ -2729,7 +2730,12 @@ bound.
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit
-  sRGB format.
+  sRGB format. The device's decode is the only form wherever it samples the format (an 8-bit sRGB
+  format, or the sRGB form of a BC, PVRTC, ETC2, EAC or ASTC format, through the texture's or its
+  decoded twin's sRGB view), so it is announced at a draw or dispatch that binds such a texture,
+  at an argument buffer's texture access, and at a render pipeline that reads an sRGB color
+  attachment as an input attachment; never on MoltenVK, whose decode is Metal's own. Where the
+  device holds the format as its UNORM twin, only a filtered sample announces it.
 - `metal2vulkan-degrade-float-sample-filter` (precision). `PrecisionNote::FloatSampleFilter`: The
   module samples a texture with a `float` result through a filter that Metal's own sampler
   (MoltenVK) answers otherwise than Metal filters the format bound there: a two-plane YCbCr

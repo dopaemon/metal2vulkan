@@ -41,16 +41,15 @@
 //! function writes, the write blends over the same input attachment (`input_blend`), which a
 //! `[[color(n)]]` read of the attachment shares ([`input_texel`]).
 //!
-//! **An 8-bit four-channel sRGB attachment** (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`) reads through
-//! its input attachment the device's decode, which is not Metal's: Metal decodes a color byte to
-//! its twelve-bit step over 4095, and lavapipe's decode lands elsewhere at many bytes. Where the
-//! pipeline names the color (`LoweringInputs::srgb_fetches`), the read snaps the device's value
-//! back to its byte by Metal's encode (`math::pack` of `unorm4x8_srgb`), on which every byte's
-//! exact decode lands at least 4.9e-5 inside its code's interval, and decodes the byte by Metal's
-//! table (`math::unpack`), as the storage form reads its bytes; alpha's byte over 255 comes back as
-//! it was. Exact wherever the device's decode lies within that margin of the exact one, which the
-//! fetch lane checks on every byte. The interface records the color (`StageIo::srgb_fetches`),
-//! which link holds the pipeline's to.
+//! **An 8-bit sRGB attachment** (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB` and the rest) reads through
+//! its input attachment the device's decode of its bytes, Vulkan's sRGB EOTF within the device's
+//! precision, where Metal decodes a color byte to its twelve-bit step over 4095. On a device that
+//! decodes through Metal's own texture unit (`VkProperty::MetalSampler`) that is Metal's decode,
+//! and the module requires the property; elsewhere the interface records each `float` color it
+//! reads so (`StageIo::decoded_fetches`), and a render pipeline whose attachment there has such a
+//! format records `PrecisionNote::SrgbTexelDecode` (`color_writes::pipeline_writes`). The
+//! interlocked storage form reads the attachment's bytes, no sRGB view of them, and decodes them
+//! by Metal's table itself (`fetch`).
 //!
 //! **An `A8Unorm` attachment whose image holds Metal's alpha in red** (`R8_UNORM` on a device
 //! without `A8_UNORM`, `LoweringInputs::alpha_in_red_colors`) reads `(r, 0, 0, 1)` through its
@@ -68,12 +67,12 @@
 use std::collections::BTreeMap;
 
 use crate::air::abi::{AbiInt, OutputRole, ParamBinding, ParamRole};
-use crate::air::intrinsics::{PackDir, PackFormat};
+
 use crate::air::ir::{ArgIdx, TypeId as AirTypeId, Value};
 use crate::device::requirements::VkFeature;
 use crate::error::{Attachment, Capability, DescriptorError, Error, Feature, Unsupported};
 use crate::lower::arith::legal::{form_on, refuse_int64_interface};
-use crate::lower::arith::{extended_range, math, narrow, ops, srgb, Form, Held};
+use crate::lower::arith::{extended_range, narrow, ops, Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::metal::format::ExtendedRange;
@@ -101,10 +100,6 @@ pub struct ColorInput {
     /// image holds Metal's raw texels: an input attachment of the raw format's `uint`s, which
     /// the read decodes to Metal's tile value. `None` for a format held directly.
     pub extended: Option<ExtendedRange>,
-    /// The attachment is `RGBA8Unorm_sRGB` or `BGRA8Unorm_sRGB` (`LoweringInputs::srgb_fetches`):
-    /// an input attachment's read snaps the device's decode back to its byte and decodes that by
-    /// Metal's table.
-    pub srgb: bool,
     /// The attachment's image holds Metal's alpha in red (`LoweringInputs::alpha_in_red_colors`,
     /// `A8Unorm` in `R8_UNORM`): a read, `(r, 0, 0, 1)` from the image, is Metal's `(0, 0, 0, r)`.
     pub alpha_red: bool,
@@ -173,7 +168,6 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         color,
         form,
         extended: extended.map(|e| e.form),
-        srgb: cx.inputs.srgb_fetches.contains(&color),
         alpha_red: cx.inputs.alpha_in_red_colors.contains(&color),
     };
     // The interlocked storage form `fetch::plan` chose.
@@ -225,18 +219,23 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
             .extended_range_colors
             .insert(color, e);
     }
-    // An 8-bit four-channel sRGB attachment's input reads the device's decode, which the read
-    // snaps back to its byte and decodes by Metal's table: a float (an integer read is Metal's
-    // pipeline error). The interface records the attachment, which link holds the pipeline's to
-    // (`color_writes::check`).
-    if input.srgb {
-        if !form.is_float() {
-            return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
-                index: color,
-            }));
+    // A `float` color the device's input attachment decodes, an 8-bit sRGB format's through its
+    // sRGB EOTF: Metal's decode on a device that decodes through Metal's own texture unit, which
+    // the module then requires; elsewhere the interface records the color, whose pipeline notes the
+    // decode where the attachment is such a format (`color_writes::pipeline_writes`).
+    if form.is_float() && extended.is_none() && !input.alpha_red {
+        let metal = cx
+            .profile
+            .fields()
+            .enabled
+            .properties
+            .contains(&crate::device::requirements::VkProperty::MetalSampler);
+        match metal {
+            true => cx.families.sampler.metal_sampler = true,
+            false => {
+                cx.families.stage_io.interface.decoded_fetches.insert(color);
+            }
         }
-        cx.families.arith.srgb.get_or_insert(PackDir::Unpack);
-        cx.families.stage_io.interface.srgb_fetches.insert(color);
     }
     // An attachment whose image holds Metal's alpha in red reads the red as Metal's alpha: a float
     // (an integer read is Metal's pipeline error). The interface records the attachment, which
@@ -317,10 +316,6 @@ pub(super) fn words(cx: &SelectCx<'_>, colors: &[ColorInput]) -> u64 {
         .copied()
         .collect();
     let decodes = self::uses(cx, &extended);
-    // An sRGB attachment's read encodes the device's value and decodes the byte.
-    let srgb: Vec<ColorInput> = colors.iter().filter(|c| c.srgb).copied().collect();
-    let snaps = self::uses(cx, &srgb);
-    let snap = u64::from(3 * srgb::SEARCH_WORDS + 3 * srgb::STEP_WORDS) + 400;
     // An alpha-in-red attachment's read moves its red to alpha: a shuffle and its zero.
     let red: Vec<ColorInput> = colors.iter().filter(|c| c.alpha_red).copied().collect();
     let moves = self::uses(cx, &red);
@@ -331,7 +326,6 @@ pub(super) fn words(cx: &SelectCx<'_>, colors: &[ColorInput]) -> u64 {
         .saturating_mul(attachments.len() as u64)
         .saturating_add(READ_WORDS.saturating_mul(uses))
         .saturating_add(u64::from(extended_range::DECODE_WORDS + 120).saturating_mul(decodes))
-        .saturating_add(snap.saturating_mul(snaps))
         .saturating_add(ALPHA_IN_RED_WORDS.saturating_mul(moves))
 }
 
@@ -435,20 +429,6 @@ pub(super) fn value(
         Some(form) => {
             let table = crate::lower::texture::extended_table(cx, form)?;
             extended_range::tile_value(fb, form, texel, table)?
-        }
-        // The device's decode, snapped back to its byte by Metal's encode (every byte's exact
-        // decode lies at least 4.9e-5 inside its code's encode interval), then Metal's decode.
-        None if c.srgb => {
-            let Some(table) = cx.decl.families.arith.srgb else {
-                return Err(cx.fail("an sRGB input attachment read without Metal's table"));
-            };
-            let f4 = Form {
-                held: Held::Float(crate::lower::arith::FloatFmt::F32),
-                lanes: 4,
-            };
-            let test = crate::lower::arith::nan::NanTest::for_modes(&cx.plan.families.arith.modes);
-            let byte = math::pack(fb, PackFormat::Unorm4x8Srgb, f4, texel, Some(table), test)?;
-            math::unpack(fb, PackFormat::Unorm4x8Srgb, f4, byte, Some(table))?
         }
         // The image's red, Metal's alpha: `(0, 0, 0, r)`.
         None if c.alpha_red => alpha_in_red(fb, texel)?,

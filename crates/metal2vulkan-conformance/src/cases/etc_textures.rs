@@ -48,9 +48,10 @@
 //! code, not Metal's `c / 255` correctly rounded, which the runtime announces as
 //! `device-texel-conversion`, whose note bounds it at **one `f32` ulp** for 8- and 16-bit codes. It reaches the three **linear** 8-bit formats
 //! (`ETC2_RGB8`, `ETC2_RGB8A1`, `EAC_RGBA8`): their twin holds Metal's codes exactly and the
-//! device converts them. It does not reach their sRGB forms, whose colour the function decodes
-//! from the raw code through Metal's twelve-bit table itself and whose alpha it converts by the
-//! format's class, so no device arithmetic stands between the twin's codes and the answer.
+//! device converts them. Their sRGB forms read the device's sRGB decode of the twin's codes
+//! (`srgb-texel-decode`), a native note that loosens no value: Metal's answer through Metal's own
+//! texture unit, and elsewhere a value the device's decode moves is a `known-gaps.tsv` row of the
+//! venue.
 //!
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
@@ -284,11 +285,10 @@ impl EtcTextures {
     /// Decided from the format's own shape, never from the device or the case's name: the twin
     /// holds 8-bit codes ([`EtcDecode::eleven_bit`] is false — an 11-bit format's compact twin
     /// holds 16-bit codes, whose own, wider bound `compact_bound` already covers) and the format
-    /// is not an sRGB form ([`srgb_raw_twin`]), whose colour the function decodes from the raw
-    /// code through Metal's table and whose alpha it converts by the format's class, so no device
-    /// conversion is involved either way. It is the same test the translator's read path makes
-    /// (`lower::texture`: an sRGB slot's raw codes are converted exactly, so its access records
-    /// no `PrecisionNote::DeviceTexelConversion`).
+    /// is not an sRGB form ([`srgb_raw_twin`]), whose texel is the device's sRGB decode of the
+    /// twin's codes (`srgb-texel-decode`), a native note that loosens no value: through Metal's
+    /// own texture unit Metal's, elsewhere a `known-gaps.tsv` row of the venue where the device's
+    /// decode moves it, so it names no texel allowance.
     fn device_converts_codes(&self) -> bool {
         !self.decode().eleven_bit() && srgb_raw_twin(self.format().format).is_none()
     }
@@ -573,8 +573,8 @@ mod tests {
     ///
     /// - the three **linear** 8-bit formats, whose codes the device converts: one `f32` ulp, both
     ///   rounds;
-    /// - their **sRGB** forms, whose colour the function decodes from the raw code through Metal's
-    ///   twelve-bit table itself: **nothing at all**;
+    /// - their **sRGB** forms, the device's sRGB decode of the codes, whose note loosens no value:
+    ///   **nothing at all**;
     /// - the four EAC **11-bit** formats, read from a compact 16-bit twin: half a 16-bit step by
     ///   the format's signedness.
     #[test]

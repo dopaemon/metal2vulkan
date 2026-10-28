@@ -34,7 +34,8 @@
 //!   announced `carried-decoded-twin` once: every format's texels read exactly as Metal's
 //!   (`metal2vulkan::bind::PvrtcDecode`, matched against an Apple M3 Max by its own tests; where
 //!   the device does not sample through Metal's own texture unit, within its conversion of the
-//!   codes, announced `device-texel-conversion`: `converted_holds`), and so
+//!   codes, announced `device-texel-conversion`: `converted_holds`, an sRGB form's colour the
+//!   device's decode of its code, announced `srgb-texel-decode`: `srgb_decode_holds`), and so
 //!   do its view's as the format's other colour space, after a CPU copy, a row-linear blit and a
 //!   copy from another texture, each decoded into the twin (a blit's by a GPU decode pass, a CPU
 //!   copy's by one or on the CPU, counted in `WorkCounts`; [`pvrtc_texels_read_as_metal_s`]).
@@ -1164,7 +1165,11 @@ fn pvrtc_texels_read_as_metal_s() {
                     for (t, got) in got.iter().enumerate() {
                         for (c, &got) in got.iter().enumerate() {
                             let want = as_read.metal_value(c, codes[4 * t + c]);
-                            if !converted_holds(got, want, exact) && wrong.len() < 24 {
+                            let holds = match as_read.srgb && c < 3 {
+                                true => super::srgb_decode_holds(got, want, exact),
+                                false => converted_holds(got, want, exact),
+                            };
+                            if !holds && wrong.len() < 24 {
                                 wrong.push(format!(
                                     "{pf:?} {what} read as {through:?}, texel {t} channel {c}: \
                                      {got} against Metal's {want}"

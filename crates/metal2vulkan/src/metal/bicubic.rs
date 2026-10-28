@@ -101,12 +101,13 @@ impl BicubicTexels {
     pub const EXACT: u32 = 1 << 8;
     /// With [`EXACT`](Self::EXACT): the codes are 16-bit.
     pub const WIDE16: u32 = 1 << 9;
-    /// The channels are 8-bit sRGB codes (`metal::texel_format::srgb_raw`). With
-    /// [`EXACT`](Self::EXACT), set only where a function reads the raw codes (the slot's
-    /// `SrgbTexture` variant), each tap's color value is a step of Metal's twelve-bit table on the
-    /// grid `1/4095`, and its alpha a code on `1/(16 · 255)`, so the exact sum rounds half up onto
-    /// those grids. [`texels`] never sets it; `metal::texel_format::texel_format` does, without
-    /// `EXACT`.
+    /// The channels are 8-bit sRGB codes (`metal::texel_format::srgb_coded`). With
+    /// [`EXACT`](Self::EXACT), set only where a function decodes the codes itself (the slot's
+    /// `SrgbTexture` variant: a format the device holds as its UNORM twin), each tap's color value
+    /// is a step of Metal's twelve-bit table on the grid `1/4095`, and its alpha a code on
+    /// `1/(16 · 255)`, so the exact sum rounds half up onto those grids. [`texels`] never sets it;
+    /// `metal::texel_format::texel_format` does, without `EXACT`, where the device decodes the
+    /// taps and the sum is the emulated one.
     pub const SRGB: u32 = 1 << 10;
     /// The channels are Apple's extended-range codes (`metal::format::ExtendedRange`), set with
     /// [`EXACT`](Self::EXACT) where a function samples such a texture, and with
@@ -250,11 +251,8 @@ pub fn texels(pf: PixelFormat) -> Option<BicubicTexels> {
         // on an Apple M3 Max under macOS 27.0.1: reads, nearest, linear and bicubic samples and
         // gathers bit for bit, `bind::ChromaDecode`): `RGBX8Unorm`'s treatment.
         P::GBGR422 | P::BGRG422 => (exact8u, RGB),
-        // A BC sRGB form reads its codes through its unorm view, as an 8-bit sRGB format does;
-        // so does a PVRTC, ETC2 or EAC sRGB form (its linear form's codes, `bind::PvrtcDecode`,
-        // `bind::EtcDecode`), an RGB one's alpha 1, and an ASTC sRGB form its decoded twin's
-        // (`bind::AstcDecode`; a device with the format decodes it itself, and the binder takes
-        // this treatment there for none, `metal::texel_format::srgb_raw_on`).
+        // A BC, PVRTC, ETC2, EAC or ASTC sRGB form's texels are 8-bit sRGB codes once decoded,
+        // which Metal filters as an 8-bit sRGB format's; an RGB one's alpha 1.
         P::BC1RGBASRGB
         | P::BC2RGBASRGB
         | P::BC3RGBASRGB

@@ -278,7 +278,7 @@ fn a_numeric_slot_binds_either_integer_type() {
             alpha_red_texels: Default::default(),
         };
         let (write, _) = planner
-            .plain_texture(0, 1, vk::DescriptorType::STORAGE_IMAGE, texture, false)
+            .plain_texture(0, 1, vk::DescriptorType::STORAGE_IMAGE, texture)
             .expect("plan");
         let bound = matches!(write, WriteSource::Texture { .. });
         (bound, planner.variant.storage_images.get(&texture).copied())
@@ -1460,12 +1460,12 @@ fn an_a8_texture_buffer_without_a8_unorm_views_its_bytes_in_red() {
             true => vk::Format::R8_UNORM,
             false => vk::Format::A8_UNORM,
         };
-        let planned = planner.plain_texture(0, 0, uniform_ty, uniform, false);
+        let planned = planner.plain_texture(0, 0, uniform_ty, uniform);
         let Ok((WriteSource::TexelBuffer { format, .. }, _)) = planned else {
             panic!("{profile}: {planned:?}");
         };
         assert_eq!(format, own, "{profile}: the uniform view");
-        let planned = planner.plain_texture(0, 1, storage_ty, storage, false);
+        let planned = planner.plain_texture(0, 1, storage_ty, storage);
         let Ok((WriteSource::TexelBuffer { format, .. }, _)) = planned else {
             panic!("{profile}: {planned:?}");
         };
@@ -1500,7 +1500,7 @@ fn an_a8_texture_buffer_without_a8_unorm_views_its_bytes_in_red() {
         // A read that does not apply the swizzle.
         let plain = shape(TextureSwizzleChannels::DEFAULT);
         let mut planner = make(&p, &plain, &slots, &[]);
-        let planned = planner.plain_texture(0, 0, uniform_ty, uniform, false);
+        let planned = planner.plain_texture(0, 0, uniform_ty, uniform);
         match held {
             true => assert_eq!(
                 planned.map(|(w, _)| w),

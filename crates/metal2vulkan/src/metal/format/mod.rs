@@ -201,8 +201,8 @@ pub enum FormatEmulation {
     /// [`EtcDecode`](crate::bind::EtcDecode), [`ChromaDecode`](crate::bind::ChromaDecode)), which
     /// the consumer decodes after each write. The candidate's format is the twin's view of compact
     /// texels, `R8G8B8A8_UNORM` (an `_sRGB` form's `R8G8B8A8_SRGB`), whose texels are 8-bit codes
-    /// of Metal's values (a PVRTC, ETC2, EAC or 4:2:2 format's own codes, an sRGB one's read raw,
-    /// `texel_format::srgb_raw`), or an EAC 11-bit
+    /// of Metal's values (a PVRTC, ETC2, EAC or 4:2:2 format's own codes, an sRGB one's decoded by
+    /// the device through that view, `texel_format::srgb_coded`), or an EAC 11-bit
     /// format's 16-bit normalized codes nearest Metal's values (`R16_UNORM`, `R16_SNORM` and their
     /// two-channel forms); for an ASTC or an EAC 11-bit format the consumer may hold Metal's values
     /// exactly as `float`s instead ([`AstcTexels`](crate::bind::AstcTexels),
@@ -1134,9 +1134,8 @@ macro_rules! formats_named_not_held {
             // component mapping cannot move the function, which format conversion applies
             // before the swizzle, so an image of it would read Metal's alpha decoded and
             // Metal's blue linear: two channels of four wrong, not a near-equivalent. Holding
-            // it exactly needs the raw-code sRGB decode in the shader
-            // (`metal::texel_format::srgb_raw`) as the only read of it, not as a refinement
-            // over the device's decode.
+            // it needs an sRGB decode of the codes in the shader as the only read of it, which
+            // no view gives.
             | PixelFormat::ARGB8UnormSRGB
             | PixelFormat::RGB16Unorm
             | PixelFormat::RGB16Snorm
@@ -1954,12 +1953,12 @@ fn candidates(pf: PixelFormat) -> Result<(vk::ImageAspectFlags, &'static [Candid
     }
 }
 
-/// The UNORM format of an 8-bit sRGB format whose texels Metal decodes from their raw codes
-/// (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`; a BC, PVRTC, ETC2 or
-/// EAC sRGB format's unorm form, the same blocks): the same channels and bits, its texels the sRGB format's codes
-/// read as `c / 255`. A device that cannot sample the sRGB format holds a sampled texture of it in
-/// this format, and a pipeline reads the raw codes through its view and decodes them as Metal does.
-/// `None` for any other format.
+/// The UNORM format of an 8-bit sRGB format (`R8Unorm_sRGB`, `RG8Unorm_sRGB`, `RGBA8Unorm_sRGB`,
+/// `BGRA8Unorm_sRGB`, `RGBX8Unorm_sRGB`; a BC, PVRTC, ETC2 or EAC sRGB format's unorm form, the
+/// same blocks): the same channels and bits, its texels the sRGB format's codes read as `c / 255`.
+/// A device that cannot sample the sRGB format holds a sampled texture of it in this format
+/// (`texel_format::srgb_twin_on`), and a pipeline reads the codes through its view and decodes
+/// them through Metal's table, having no sRGB view to decode them. `None` for any other format.
 pub fn srgb_raw_twin(pf: PixelFormat) -> Option<PixelFormat> {
     use PixelFormat as P;
     Some(match pf {

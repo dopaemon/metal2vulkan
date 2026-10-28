@@ -2093,37 +2093,30 @@ fn select_one(
     if matches!(op, SampleOp::Sample { .. } | SampleOp::Gather { .. }) {
         cx.families.sampler.device_sampling = true;
     }
-    // Whether the device's sampler is Metal's own (`VkProperty::MetalSampler` alone), whose sRGB
-    // decode is Metal's table.
-    let metal_unit = cx
-        .profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    // An 8-bit sRGB texel Metal decodes from its raw code: a nearest sample's, a pixel fetch's, a
-    // `half` gather's, a `float` gather's on a device whose sampler is not Metal's own (Metal's own
-    // sampler gathers the table's decode; a gather reads one texel per lane, so the table's decode
-    // is exact and cheap), and a bicubic sample's. Under the slot's twin variant (a bound format the
-    // device cannot sample) the device's view reads the codes, so an access the raw codes do not
-    // serve decodes what the device samples there (`srgb_codes`). An LOD query reads no texel.
+    // An 8-bit sRGB texture the device reads through its own sRGB view, but under the slot's twin
+    // variant (a bound format the device cannot sample, held as its UNORM twin), whose view reads
+    // the codes: a nearest sample's, a pixel fetch's, a gather's and a bicubic sample's texels are
+    // one texel's codes, decoded exactly through Metal's table (`raw`), and any other sample's are
+    // the device's filter of the codes, decoded through it (`srgb_codes`). An LOD query reads no
+    // texel.
     let (raw, srgb_codes) = match form {
         Some(f) if matches!(f.conv, TexelConv::F16 | TexelConv::F32) => {
             use crate::lower::texture::SrgbReach;
             let reach = match &op {
-                SampleOp::PixelFetch { .. } | SampleOp::Bicubic(_) => SrgbReach::Raw,
-                SampleOp::Sample { dref: None, .. } => match stat {
-                    Some((r, _)) if nearest_texel(r)? => SrgbReach::Raw,
-                    _ => SrgbReach::Device,
-                },
-                SampleOp::Gather { .. } if f.conv == TexelConv::F16 || !metal_unit => {
-                    SrgbReach::Raw
+                SampleOp::PixelFetch { .. } | SampleOp::Bicubic(_) | SampleOp::Gather { .. } => {
+                    SrgbReach::Codes
                 }
-                _ => SrgbReach::Device,
+                SampleOp::Sample { dref: None, .. } => match stat {
+                    Some((r, _)) if nearest_texel(r)? => SrgbReach::Codes,
+                    _ => SrgbReach::Filtered,
+                },
+                _ => SrgbReach::Filtered,
             };
-            let read = crate::lower::texture::srgb_texels(cx, image, shape, reach)?;
-            let codes = reach != SrgbReach::Raw && crate::lower::texture::srgb_twin(cx, image)?;
-            (read && reach == SrgbReach::Raw, codes)
+            let twin = crate::lower::texture::srgb_texels(cx, image, shape, reach, m)?;
+            (
+                twin && reach == SrgbReach::Codes,
+                twin && reach == SrgbReach::Filtered,
+            )
         }
         _ => (false, false),
     };
@@ -2265,7 +2258,6 @@ fn select_one(
                 sampler,
                 compare,
                 cube_gradient,
-                raw,
             };
             cx.families.sampler.combined.insert(key);
             Source::Combined(key)
@@ -2408,6 +2400,7 @@ fn select_one(
         swizzle,
         offset_base,
         anisotropic,
+        raw,
         srgb_codes,
         clamp_reference,
     };

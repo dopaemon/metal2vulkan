@@ -113,9 +113,7 @@ pub(crate) use input_blend::texel as input_blend_texel;
 pub use input_blend::{select_second_output as select_input_second_output, InputBlend};
 #[cfg(test)]
 pub(crate) use snapshot::{decode as snapshot_decode, encode as snapshot_encode};
-pub(crate) use snapshot::{
-    fetches_raw as snapshot_fetches_raw, prepare as snapshot_prepare, read as snapshot_read,
-};
+pub(crate) use snapshot::{prepare as snapshot_prepare, read as snapshot_read};
 pub(crate) use stencil::{face_word, SHADOW_FORMAT};
 pub use stencil::{select_output as select_stencil_output, ShadowStencil};
 pub(crate) use word_input::merge as word_input_merge;

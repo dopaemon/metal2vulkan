@@ -225,10 +225,6 @@ pub struct SlotPlan {
     /// (`TexelFormat::unmeasured_on_metal_sampler`): the slot declares its `UnmeasuredTexels`
     /// specialization, which the note's clause tests.
     pub unmeasured: bool,
-    /// A read of the slot, or an emulated linear sample of its cube's faces, takes an 8-bit sRGB
-    /// texel's raw code from the slot's raw view (`ResourceKind::RawTexture`), the slot being one
-    /// of `LoweringInputs::srgb_textures` (`RuntimeFact::SrgbTexture`).
-    pub raw: bool,
     /// A read of the slot, a texture buffer, applies the bound texture buffer's swizzle, which
     /// the slot's `TextureSwizzle` specialization gives (`RuntimeFact::TextureSwizzle`); or the
     /// slot, a storage slot of `LoweringInputs::swizzled_storage`, applies the bound texture's to
@@ -271,7 +267,6 @@ impl SlotPlan {
             texel_format: false,
             half_filtered: false,
             unmeasured: false,
-            raw: false,
             swizzle: false,
             constant_lanes: false,
             offset_base: false,
@@ -1139,11 +1134,7 @@ fn declare_slot(
         let n = views.unwrap_or(1);
         counts.storage_images = counts.storage_images.saturating_add(n);
     } else {
-        // The raw view's binding beside the texture's own: an 8-bit sRGB texture's codes, or a
-        // 16-bit float texture's own bits.
-        counts.sampled_images = counts
-            .sampled_images
-            .saturating_add(if s.raw { 2 } else { 1 });
+        counts.sampled_images = counts.sampled_images.saturating_add(1);
     }
     Ok(ImageDecl {
         dim,

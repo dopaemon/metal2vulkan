@@ -33,7 +33,7 @@
 //! that view (`runtime::attachment_stand_in`), or at 4x, on a device without multisampled storage
 //! images, into sample planes made so (`runtime::sample_planes`). Through input attachments
 //! (lavapipe) the function reads the device's own decode of the code, which on llvmpipe is not
-//! Metal's, and takes it back to its code by Metal's encode and decodes that by Metal's table.
+//! Metal's, and the pipeline records `srgb-texel-decode` there alone (asserted).
 //! Every byte is Metal's in either form, but where the pipeline records `device-color-conversion`
 //! (the device's encode of the written color, every device but MoltenVK's): there a channel within
 //! one code of Metal's holds, counted and printed (`device_rounded`), and a case of more than one
@@ -484,8 +484,13 @@ fn an_srgb_target_is_fetched_as_metal_fetches_it() {
                 .pipeline(&lane, (&fetch, "fetch_ordered"), false, all)
                 .unwrap();
             let descriptor = target.descriptor(&lane, (&fetch, "fetch_ordered"), false, all);
-            let converts = made_render_kinds(&lane.device, &descriptor)
-                .contains(&Degradation::DeviceColorConversion);
+            let made = made_render_kinds(&lane.device, &descriptor);
+            let converts = made.contains(&Degradation::DeviceColorConversion);
+            assert_eq!(
+                made.contains(&Degradation::SrgbTexelDecode),
+                inputs,
+                "{pf:?} at {samples}x on {device}: the device's decode of the input attachment"
+            );
             // What the cases without the attachment stored, by their draws: where the device
             // converts, a later draw is Metal's map over the device's own bytes (the module docs).
             let mut stored: BTreeMap<usize, Vec<u8>> = BTreeMap::new();

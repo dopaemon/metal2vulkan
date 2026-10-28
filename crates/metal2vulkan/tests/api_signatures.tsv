@@ -3627,7 +3627,6 @@ field	metal2vulkan::cache::VariantKey.shader_stencil	pub shader_stencil: bool
 field	metal2vulkan::cache::VariantKey.shader_tests	pub shader_tests: bool
 field	metal2vulkan::cache::VariantKey.snapshot_textures	pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>
 field	metal2vulkan::cache::VariantKey.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
-field	metal2vulkan::cache::VariantKey.srgb_twins	pub srgb_twins: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::cache::VariantKey.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
@@ -4020,7 +4019,6 @@ field	metal2vulkan::pipeline::ColorGroup.width	pub width: u32
 field	metal2vulkan::pipeline::CombinedSampler.compare	pub compare: bool
 field	metal2vulkan::pipeline::CombinedSampler.cube_gradient	pub cube_gradient: bool
 field	metal2vulkan::pipeline::CombinedSampler.integer	pub integer: bool
-field	metal2vulkan::pipeline::CombinedSampler.raw	pub raw: bool
 field	metal2vulkan::pipeline::CombinedSampler.sampler	pub sampler: SamplerRef
 field	metal2vulkan::pipeline::CommandWrites.operations	pub operations: u32
 field	metal2vulkan::pipeline::CommandWrites.primitive_types	pub primitive_types: u8
@@ -4196,9 +4194,7 @@ field	metal2vulkan::pipeline::LoweringInputs.shader_stencil	pub shader_stencil: 
 field	metal2vulkan::pipeline::LoweringInputs.shader_tests	pub shader_tests: bool
 field	metal2vulkan::pipeline::LoweringInputs.signed_color_attachments	pub signed_color_attachments: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.snapshot_textures	pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>
-field	metal2vulkan::pipeline::LoweringInputs.srgb_fetches	pub srgb_fetches: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
-field	metal2vulkan::pipeline::LoweringInputs.srgb_twins	pub srgb_twins: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.stage_input	pub stage_input: Option<StageInputDescriptor>
 field	metal2vulkan::pipeline::LoweringInputs.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::pipeline::LoweringInputs.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
@@ -8903,10 +8899,8 @@ method	metal2vulkan::pipeline::ColorGroup::width_on	pub fn width_on(profile: &cr
 method	metal2vulkan::pipeline::CombinedSampler::from_heap_index	pub fn from_heap_index(sampler: SamplerRef, index: u32) -> CombinedSampler
 method	metal2vulkan::pipeline::CombinedSampler::heap_index	pub fn heap_index(&self) -> u32
 method	metal2vulkan::pipeline::CombinedSampler::new	pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler
-method	metal2vulkan::pipeline::CombinedSampler::sampler_binding_use	pub fn sampler_binding_use(self) -> CombinedSampler
 method	metal2vulkan::pipeline::CombinedSampler::sampler_use	pub fn sampler_use(&self) -> crate::metal::sampler::SamplerUse
 method	metal2vulkan::pipeline::CombinedSampler::with_cube_gradient	pub fn with_cube_gradient(self, cube_gradient: bool) -> CombinedSampler
-method	metal2vulkan::pipeline::CombinedSampler::with_raw	pub fn with_raw(self, raw: bool) -> CombinedSampler
 method	metal2vulkan::pipeline::CommandWrites::is_empty	pub const fn is_empty(self) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may	pub const fn may(self, bits: u32) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
@@ -13366,7 +13360,6 @@ variant	metal2vulkan::pipeline::BindingSource::ExtendedShadow	ExtendedShadow(u32
 variant	metal2vulkan::pipeline::BindingSource::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::BindingSource::HeapSampler	HeapSampler { stage: Stage, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::InputAttachment	InputAttachment(u32)
-variant	metal2vulkan::pipeline::BindingSource::RawTexture	RawTexture(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::Sampler	Sampler(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::SeparateSampler	SeparateSampler { stage: Stage, sampler: CombinedSampler }
 variant	metal2vulkan::pipeline::BindingSource::SeparateTexture	SeparateTexture { texture: SlotRef, sampler: CombinedSampler }
@@ -13572,7 +13565,6 @@ variant	metal2vulkan::pipeline::ResourceKind::ExtendedShadow	ExtendedShadow(u32)
 variant	metal2vulkan::pipeline::ResourceKind::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::ResourceKind::HeapSampler	HeapSampler(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::InputAttachment	InputAttachment(u32)
-variant	metal2vulkan::pipeline::ResourceKind::RawTexture	RawTexture
 variant	metal2vulkan::pipeline::ResourceKind::Sampler	Sampler
 variant	metal2vulkan::pipeline::ResourceKind::SeparateSampler	SeparateSampler(SamplerRef)
 variant	metal2vulkan::pipeline::ResourceKind::SeparateTexture	SeparateTexture(SamplerRef)
@@ -13642,7 +13634,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::ShadowStencil	ShadowStencil { forma
 variant	metal2vulkan::pipeline::RuntimeFact::SimdgroupEmulation	SimdgroupEmulation { bytes_per_simdgroup: u32, arena: Option<u32> }
 variant	metal2vulkan::pipeline::RuntimeFact::SparseTexture	SparseTexture { slot: SlotRef, sparse_arm: bool, tile_map: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::SparseTextureWrites	SparseTextureWrites { slot: SlotRef, atomic: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::SrgbDeviceDecode	SrgbDeviceDecode { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::SrgbTexture	SrgbTexture { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::RuntimeFact::StageInStride	StageInStride { layout: u32 }

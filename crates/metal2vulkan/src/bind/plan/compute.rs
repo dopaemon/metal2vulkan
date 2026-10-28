@@ -62,8 +62,7 @@ use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, mark_disjoint, plan_buffer, psb_variant,
-    record_specialized, srgb_twin_variant, srgb_variant, storage_view_variant, used_uses,
-    ycbcr_in_place_variant,
+    record_specialized, srgb_variant, storage_view_variant, used_uses, ycbcr_in_place_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -629,8 +628,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                     resources.combined(texture, sampler, b.immutable_sampler.as_ref())?
                 }
                 BindingSource::SeparateTexture { texture, sampler } => {
-                    let use_ = sampler.sampler_binding_use();
-                    let immutable = separate.get(&(texture.stage, use_)).ok_or_else(|| {
+                    let immutable = separate.get(&(texture.stage, sampler)).ok_or_else(|| {
                         internal(format!(
                             "separate texture {texture:?} without its sampler {sampler:?}"
                         ))
@@ -643,10 +641,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 }
                 // A sparse texture's tile map.
                 BindingSource::TileMap(slot) => resources.tile_map(slot),
-                // An 8-bit sRGB texture's raw view.
-                BindingSource::RawTexture(slot) => {
-                    resources.raw_texture(set.set, b.binding, b.ty, slot)?
-                }
                 // A tile function's attachment.
                 BindingSource::TileAttachment(color_index) => WriteSource::TileAttachment {
                     color_index,
@@ -823,7 +817,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         shape,
         &variant.cross_class,
     );
-    variant.srgb_twins = srgb_twin_variant(device.profile(), &variant.srgb_textures, shape);
     variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;

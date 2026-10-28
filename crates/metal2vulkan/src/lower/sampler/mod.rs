@@ -229,18 +229,13 @@ impl FamilyStrategy for SamplerStrategy {
 /// final: the texture slot index, the sampler, whether it samples with comparison, and whether it
 /// samples a cube with explicit gradients in the `Length` form through a sampler that may be
 /// anisotropic, on a device whose cube-gradient route is not measured ([`Lod::CubeGrad`], whose
-/// sampler is made isotropic for it: `metal::sampler::SamplerUse::cube_gradient`), and whether it
-/// samples the slot's raw view.
+/// sampler is made isotropic for it: `metal::sampler::SamplerUse::cube_gradient`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BindingKey {
     pub texture: u32,
     pub sampler: SamplerRef,
     pub compare: bool,
     pub cube_gradient: bool,
-    /// The binding pairs the sampler with a UNORM view of the slot's 8-bit sRGB image, whose
-    /// texels' raw codes the sample decodes as Metal does (`CombinedSampler::raw`,
-    /// `RuntimeFact::SrgbTexture`).
-    pub raw: bool,
 }
 
 /// One separate heap sampler use: heap group `group` sampled through `sampler`, with comparison or
@@ -642,10 +637,15 @@ pub struct Sampling {
     /// device's samples at explicit levels, answers ([`anisotropic`]): through a constexpr
     /// sampler always, through a runtime sampler slot where its word states anisotropy.
     pub anisotropic: Option<anisotropic::Anisotropic>,
-    /// The slot's own binding views the codes of an 8-bit sRGB texture held as its UNORM twin
-    /// (`LoweringInputs::srgb_twins`), where the access would keep the device's decode: the
-    /// device's sample there, filtered codes, decodes through Metal's table
-    /// (`texture::srgb_filtered_texel`), exactly where it read one texel.
+    /// The slot's binding views the codes of an 8-bit sRGB texture held as its UNORM twin
+    /// (`LoweringInputs::srgb_textures`), and the sample reads one texel's: its codes decode
+    /// exactly through Metal's table (`texture::srgb_raw_texel`), or a bicubic sample's taps do
+    /// (`texture::srgb_raw_tap`).
+    pub raw: bool,
+    /// The slot's binding views the codes of an 8-bit sRGB texture held as its UNORM twin
+    /// (`LoweringInputs::srgb_textures`), and the sample filters them: the device's sample there,
+    /// filtered codes, decodes through Metal's table (`texture::srgb_filtered_texel`), exactly
+    /// where it read one texel.
     pub srgb_codes: bool,
     /// A fragment function's depth comparison whose reference the pipeline's private
     /// `fragmentDepthCompareClampMask` clamps (`LoweringInputs::depth_compare_clamp_mask`): the
@@ -721,11 +721,6 @@ pub enum Unmapped {
 }
 
 impl Sampling {
-    /// The sample reads its slot's raw view ([`BindingKey::raw`]).
-    pub fn raw(&self) -> bool {
-        matches!(self.source, Source::Combined(key) if key.raw)
-    }
-
     /// The shape the arms of a switch-at-use share where it emulates once (SEMANTICS 1012,
     /// `sampler::shared_value`): this sampling with its texture slot and sampler taken out, where
     /// it is an emulation on a combined binding whose residency the function does not observe: a
@@ -997,7 +992,7 @@ impl Sampling {
         // raw decode; the bicubic routines round their `half` result themselves.
         let half = match (&self.op, self.texel) {
             (SampleOp::Bicubic(_), _) | (_, None) => 0,
-            _ if self.raw() => crate::lower::texture::SRGB_RAW_WORDS,
+            _ if self.raw => crate::lower::texture::SRGB_RAW_WORDS,
             _ if self.srgb_codes => crate::lower::texture::SRGB_FILTERED_WORDS,
             // A heap color texture's call reads the class its handle carries first.
             (_, Some(f)) if f.conv == crate::lower::texture::TexelConv::F16 => {
@@ -1347,8 +1342,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .ok_or_else(|| invariant("a sampled texture slot without a shape"))?;
         let texel = crate::lower::texture::image_class(cx.inputs, s);
         let sampler = CombinedSampler::new(key.sampler, key.compare, texel != TexelClass::Float)
-            .with_cube_gradient(key.cube_gradient)
-            .with_raw(key.raw);
+            .with_cube_gradient(key.cube_gradient);
         if let SamplerRef::Constexpr(words) = key.sampler {
             constexpr_desc(words, sampler.sampler_use(), cx.profile)?;
         }
@@ -1420,11 +1414,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let combined = count(decls.len()).saturating_add(count(heap_samplers.len()));
     let limit = cx.profile.fields().limits.max_per_stage_descriptor_samplers;
     let separate = combined > limit;
-    // A raw view's binding samples through its use's separate sampler.
-    let uses: BTreeSet<CombinedSampler> = decls
-        .values()
-        .map(|d| d.sampler.sampler_binding_use())
-        .collect();
+    let uses: BTreeSet<CombinedSampler> = decls.values().map(|d| d.sampler).collect();
     counts.samplers = if separate {
         count(uses.len()).saturating_add(count(heap_samplers.len()))
     } else {
@@ -1516,7 +1506,7 @@ pub fn declare(
         let image = c.image.declare(mb)?;
         let binding = if plan.families.sampler.separate {
             let g = mb.resource(c.symbol, StorageClass::UniformConstant, image)?;
-            let use_ = c.sampler.sampler_binding_use();
+            let use_ = c.sampler;
             let sampler = match separate.get(&use_) {
                 Some(s) => *s,
                 None => {

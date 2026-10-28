@@ -291,14 +291,15 @@ fn offset_base_axes(shape: &BindShape, slot: SlotRef) -> u64 {
     bound_texture(shape, slot).map_or(0, TextureShape::offset_base_axes)
 }
 
-/// The texture slots whose function decodes an 8-bit sRGB texel from its raw code
-/// (`RuntimeFact::SrgbTexture`) at which `shape` binds a texture of such a format whose codes
-/// `profile`'s device holds (`metal::texel_format::srgb_raw_on`: not an ASTC sRGB format it
-/// decodes itself): the plan's `VariantKey::srgb_textures`. So is each slot of `cross` that the
-/// variant reads in the float class (an integer slot), whose accesses there take `float` results,
-/// which the raw code serves as a float slot's: the variant's compile states `SrgbTexture` there.
-/// The variant's compile states the same facts, so its plan for the same shape states the same
-/// key.
+/// The texture slots whose function decodes an 8-bit sRGB texel (`RuntimeFact::SrgbTexture`) at
+/// which `shape` binds a texture of such a format that `profile`'s device holds as its UNORM twin
+/// (`metal::texel_format::srgb_twin_on`: a format it cannot sample), whose views read the codes:
+/// the plan's `VariantKey::srgb_textures`. So is each slot of `cross` that the variant reads in
+/// the float class (an integer slot), whose accesses there take `float` results, which the codes
+/// serve as a float slot's: the variant's compile states `SrgbTexture` there. A slot bound in an
+/// sRGB format the device samples reads the device's decode and joins nothing. Derived from the
+/// device's format features alone, as the runtime's image plan holds the twin; the variant's
+/// compile states the same facts, so its plan for the same shape states the same key.
 pub(crate) fn srgb_variant(
     profile: &DeviceProfile,
     dependencies: &[RuntimeDependency],
@@ -318,51 +319,23 @@ pub(crate) fn srgb_variant(
         .chain(read_float)
         .filter(|slot| {
             matches!(bound_texture(shape, *slot), Some(TextureShape::Texture { pixel_format, .. })
-                if metal::texel_format::srgb_raw_on(*pixel_format, profile))
+                if metal::texel_format::srgb_twin_on(*pixel_format, profile))
         })
-        .collect()
-}
-
-/// The slots of `srgb` (`VariantKey::srgb_textures`) at which `shape` binds a texture whose 8-bit
-/// sRGB format `profile`'s device cannot sample, which the runtime holds as the format's UNORM twin
-/// (`metal::format::srgb_raw_twin`), a format it can: the plan's `VariantKey::srgb_twins`. Its
-/// views read the codes, so the function decodes what the device samples there. Derived from the
-/// device's format features alone, as the runtime's image plan holds the twin.
-pub(crate) fn srgb_twin_variant(
-    profile: &DeviceProfile,
-    srgb: &std::collections::BTreeSet<SlotRef>,
-    shape: &BindShape,
-) -> std::collections::BTreeSet<SlotRef> {
-    use crate::device::requirements::FormatUsage;
-    let samples = |pf: metal::PixelFormat| {
-        metal::format::vk_format(pf, &[FormatUsage::SampledImage].into(), profile).is_ok()
-    };
-    srgb.iter()
-        .filter(|slot| {
-            matches!(bound_texture(shape, **slot), Some(TextureShape::Texture { pixel_format, .. })
-                if !samples(*pixel_format)
-                    && metal::format::srgb_raw_twin(*pixel_format).is_some_and(samples))
-        })
-        .copied()
         .collect()
 }
 
 /// The form each of the snapshot slots `slots` keeps its texels in (`VariantKey::snapshot_textures`,
-/// `SnapshotForm::of`): by the view the snapshot's copy fetches through, the bound texture's
-/// sampled view or, at a slot whose raw codes the variant reads (`srgb`, `slots::srgb_variant`),
-/// its raw view (`metal::texel_format::srgb_raw_view`), and the slot's declared sampled type.
-/// [`SnapshotForm::Bits`] at a slot the variant reads in another class (`cross`), or one whose
-/// sampled view the device has no format for. The variant's compile reads the same
+/// `SnapshotForm::of`): by the bound texture's sampled view, which the snapshot's copy fetches
+/// through, and the slot's declared sampled type. [`SnapshotForm::Bits`] at a slot the variant
+/// reads in another class (`cross`), or one whose sampled view the device has no format for (an
+/// 8-bit sRGB format held as its UNORM twin among them). The variant's compile reads the same
 /// key, so its plan for the same shape states the same forms.
 pub(crate) fn snapshot_forms(
     profile: &DeviceProfile,
     slots: &std::collections::BTreeSet<SlotRef>,
     interface: &BTreeMap<SlotRef, SlotInterface>,
     shape: &BindShape,
-    (srgb, cross): (
-        &std::collections::BTreeSet<SlotRef>,
-        &BTreeMap<SlotRef, SampledType>,
-    ),
+    cross: &BTreeMap<SlotRef, SampledType>,
 ) -> BTreeMap<SlotRef, SnapshotForm> {
     let form = |slot: SlotRef| {
         let Some(SlotInterface::Texture(t)) = interface.get(&slot) else {
@@ -379,11 +352,7 @@ pub(crate) fn snapshot_forms(
         let Ok(m) = metal::format::vk_format(*pixel_format, &usages, profile) else {
             return SnapshotForm::Bits;
         };
-        let view = match srgb.contains(&slot) {
-            true => metal::texel_format::srgb_raw_view(m.format).unwrap_or(m.format),
-            false => m.format,
-        };
-        SnapshotForm::of(view, t.sampled_type)
+        SnapshotForm::of(m.format, t.sampled_type)
     };
     slots.iter().map(|&slot| (slot, form(slot))).collect()
 }

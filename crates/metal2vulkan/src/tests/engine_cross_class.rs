@@ -126,7 +126,7 @@ enum Access {
 }
 
 /// The words of a nearest constexpr sampler of normalized coordinates, every axis clamped to
-/// its edge, no mip filter (`engine_srgb_raw`'s `sampler_words(0, 0, false)`).
+/// its edge, no mip filter (`engine_srgb_decode`'s `sampler_words(0, 0, false)`).
 fn nearest_words() -> u64 {
     const BASE: u64 = 0x007b_ff00_0008_0000;
     let edge = 1;
@@ -539,6 +539,12 @@ fn a_texture_of_another_class_joins_the_variant() {
             PixelFormat::RGBA8UnormSRGB,
             S::Float,
         ),
+        (
+            Access::Gather,
+            Ty::Uint,
+            PixelFormat::RG8UnormSRGB,
+            S::Float,
+        ),
     ];
     let mut planned = 0;
     for (access, ty, pf, class) in cases {
@@ -571,10 +577,11 @@ fn a_texture_of_another_class_joins_the_variant() {
                 BTreeMap::from([(TEXTURE, class)]),
                 "{what}"
             );
-            let srgb = pf == PixelFormat::RGBA8UnormSRGB;
+            // Only a format the device holds as its UNORM twin joins the sRGB variant.
+            let twin = crate::metal::texel_format::srgb_twin_on(pf, dev.profile());
             assert_eq!(
                 plan.variant.srgb_textures.contains(&TEXTURE),
-                srgb,
+                twin,
                 "{what}"
             );
             let key = plan.variant.lowering_inputs(Stage::Kernel);
@@ -589,25 +596,16 @@ fn a_texture_of_another_class_joins_the_variant() {
                 again.diagnostics
             );
             let view = view_format(&again).unwrap_or_else(|| panic!("{what}: no view"));
+            // Every access views the texture's own format, an sRGB one's decoding its codes; a
+            // format held as its UNORM twin, the twin's.
             let usages = [crate::device::FormatUsage::SampledImage].into();
-            let own = crate::metal::format::vk_format(pf, &usages, dev.profile())
+            let held = match twin {
+                true => crate::metal::format::srgb_raw_twin(pf).expect("a twin"),
+                false => pf,
+            };
+            let want = crate::metal::format::vk_format(held, &usages, dev.profile())
                 .expect("the format")
                 .format;
-            // Under the sRGB variant a gather reads the raw view and decodes each code through
-            // Metal's table where the device's sampler is not Metal's own, whose gather already
-            // decodes so; every other access here views the texture's own format.
-            let metal = dev
-                .profile()
-                .fields()
-                .enabled
-                .properties
-                .contains(&crate::device::requirements::VkProperty::MetalSampler);
-            let want = match (srgb, access) {
-                (true, Access::Gather) if !metal => {
-                    crate::metal::texel_format::srgb_raw_view(own).expect("a raw view")
-                }
-                _ => own,
-            };
             assert_eq!(view, want, "{what}");
             planned += 1;
             // A texture of the declared class leaves the variant.

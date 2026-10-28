@@ -22,10 +22,11 @@
 //! ([`Kind::fact`]: BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`, BC4 and BC5
 //! `DriverFact::ChannelBlockDecodeIsMetals`) every texel reads as Metal's (where the device does
 //! not sample through Metal's own texture unit, within its conversion of the codes, announced
-//! `device-texel-conversion`: one `f32` unit in the last place); elsewhere the texture announces
-//! `compressed-texel-decode` once ([`BLOCK_DECODES`]), and every texel reads within the largest
-//! difference that note states for its format ([`noted_bound`]). A BC6H or BC7 texture announces
-//! it where the driver lacks the format's fact
+//! `device-texel-conversion`: one `f32` unit in the last place, and an sRGB color channel the
+//! device's decode of its code, announced `srgb-texel-decode`, [`channel_holds`]); elsewhere the
+//! texture announces `compressed-texel-decode` once ([`BLOCK_DECODES`]), and every texel reads
+//! within the largest difference that note states for its format ([`noted_bound`]). A BC6H or
+//! BC7 texture announces it where the driver lacks the format's fact
 //! ([`bc6h_and_bc7_announce_where_their_decode_is_unmeasured`]). After every kind of write (a
 //! blit into a level, a CPU copy of a region inside an array's slice, a copy into a cube's face, an
 //! sRGB view, and a heap's textures, fresh and over the bytes a released one left) a texture
@@ -347,7 +348,7 @@ fn read_whole(device: &Device, state: &ComputePipelineState, texture: &Texture) 
 /// driver without the kind's fact: the largest difference `compressed-texel-decode` states for
 /// the family (NVIDIA's, ANV's, lavapipe's and RADV's), copied here so a run past it fails rather
 /// than being re-fitted. An sRGB form's color channel is bound in codes (`srgb`): its value is
-/// the step of a code at most that many codes from Metal's.
+/// the device's sRGB decode of a code at most that many codes from Metal's.
 fn noted_bound(kind: Kind, c: usize) -> f32 {
     match kind {
         Kind::Bc3 if c == 3 => 6.0 / 255.0,
@@ -357,18 +358,33 @@ fn noted_bound(kind: Kind, c: usize) -> f32 {
     }
 }
 
+/// Whether channel `got` holds as Metal's `want`, bit for bit where `exact`: an sRGB color channel
+/// (`srgb`) as the device's decode of its code (`srgb_decode_holds`,
+/// `PrecisionNote::SrgbTexelDecode`), another within the device's conversion of the codes
+/// (`converted_holds`, `PrecisionNote::DeviceTexelConversion`).
+fn channel_holds((got, want): (f32, f32), exact: bool, srgb: bool) -> bool {
+    match srgb {
+        true => super::srgb_decode_holds(got, want, exact),
+        false => converted_holds(got, want, exact),
+    }
+}
+
 /// Whether channel `c` of a texel of `kind` the device read as `got` lies within the note's bound
 /// ([`noted_bound`]) of Metal's `want`, whose code was `code` where it is an sRGB color channel
-/// (`srgb`): the step through Metal's table of a code at most the bound's codes from it (the
-/// device's decode of the unorm view's code, decoded through the table), else the value within
-/// the bound, one `f32` ulp beside.
+/// (`srgb`): the device's sRGB decode of a code at most the bound's codes from it
+/// ([`channel_holds`]), else the value within the bound, one `f32` ulp beside.
 fn within_note(kind: Kind, c: usize, srgb: Option<u32>, got: f32, want: f32) -> bool {
     let bound = noted_bound(kind, c);
     match srgb {
         Some(code) => {
             let codes = (bound * 255.0).round() as u32;
-            (code.saturating_sub(codes)..=(code + codes).min(255))
-                .any(|near| converted_holds(got, ratio(super::srgb_step(near) as i32, 4095), false))
+            (code.saturating_sub(codes)..=(code + codes).min(255)).any(|near| {
+                channel_holds(
+                    (got, ratio(super::srgb_step(near) as i32, 4095)),
+                    false,
+                    true,
+                )
+            })
         }
         None => (got - want).abs() <= bound + f32::EPSILON,
     }
@@ -420,12 +436,13 @@ fn bc1_to_bc5_texels_read_the_device_s_decode() {
                     let (x, y) = (t % 16, t / 16);
                     let want = metal_texel(kind, srgb, &blocks, x, y);
                     for c in 0..4 {
-                        if converted_holds(got[c], want[c], exact) {
+                        let srgb = srgb && c < 3;
+                        if channel_holds((got[c], want[c]), exact, srgb) {
                             continue;
                         }
                         differ += 1;
                         most = most.max((got[c] - want[c]).abs());
-                        let code = (srgb && c < 3).then(|| metal_code(kind, &blocks, x, y, c));
+                        let code = srgb.then(|| metal_code(kind, &blocks, x, y, c));
                         let holds = !measured && within_note(kind, c, code, got[c], want[c]);
                         if !holds && wrong.len() < 24 {
                             wrong.push(format!(

@@ -27,12 +27,13 @@
 //! **Metal's answers** (an Apple M3 Max under macOS 27.0.1, our own probe: 4096 random blocks of
 //! each format, every texel read as `float`, equal to this decode's in every channel): an 8-bit
 //! channel reads `c / 255`, an sRGB format's color channel the step of Metal's twelve-bit table
-//! (`lower::arith::srgb`, as BC1 to BC3's sRGB forms read, `metal::texel_format::srgb_raw`),
+//! (`lower::arith::srgb`, as BC1 to BC3's sRGB forms read, `metal::texel_format::srgb_coded`),
 //! alpha `c / 255`; an unsigned 11-bit channel reads `c / 2047` and a signed one `c / 1023`,
 //! correctly rounded to `f32` (not the 16-bit code the specification widens them to).
 //!
 //! **The twin's texels** ([`EtcTexels`]): `R8G8B8A8_UNORM` codes of the ETC2 formats and
-//! `EAC_RGBA8` either way (an sRGB form's codes too, for a raw view decoded by Metal's table). An 11-bit format's: [`EtcTexels::Compact`] holds the 16-bit
+//! `EAC_RGBA8` either way (an sRGB form's codes too, which the device decodes through the twin's
+//! `R8G8B8A8_SRGB` view). An 11-bit format's: [`EtcTexels::Compact`] holds the 16-bit
 //! normalized code nearest each value (`R16_UNORM`, `R16_SNORM` and their two-channel forms), at
 //! most half a 16-bit step off it; [`EtcTexels::Float`] holds the values exactly (`R32_SFLOAT`,
 //! `R32G32_SFLOAT`).

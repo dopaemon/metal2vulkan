@@ -78,7 +78,8 @@ impl Rng {
     }
 }
 
-fn state(device: &Device, kernel: &str) -> ComputePipelineState {
+/// `fpv_rgbx_textures`' kernel `kernel`, compiled for `device`.
+pub(super) fn state(device: &Device, kernel: &str) -> ComputePipelineState {
     let bitcode = llvm_assemble(&engine_dir().join("fpv_rgbx_textures.ll")).unwrap();
     let library = device.new_library_with_air(&bitcode).unwrap();
     let function = library.new_function_with_name(kernel).unwrap();
@@ -115,7 +116,13 @@ fn bytes_of(texture: &Texture, bytes: usize) -> Vec<u8> {
 
 /// Run `kernel` over every texel of `texture` with `data` at buffer 0 (and a nearest sampler
 /// where `sampled`), and return buffer 0's bytes.
-fn run(device: &Device, kernel: &str, texture: &Texture, data: &[u8], sampled: bool) -> Vec<u8> {
+pub(super) fn run(
+    device: &Device,
+    kernel: &str,
+    texture: &Texture,
+    data: &[u8],
+    sampled: bool,
+) -> Vec<u8> {
     let state = state(device, kernel);
     let data = buffer_with(device, data).unwrap();
     let width = buffer_with(device, &(SIDE as u32).to_le_bytes()).unwrap();

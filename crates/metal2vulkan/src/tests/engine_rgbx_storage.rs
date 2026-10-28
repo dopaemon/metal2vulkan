@@ -418,7 +418,7 @@ const SRGB: (vk::Format, StorageImageClass) =
 
 /// The `f32` bits a UNORM alias's image holds for code `c`: `c / 255` correctly rounded.
 fn unorm_bits(c: u32) -> u32 {
-    super::engine_srgb_raw::f32_bits(u64::from(c), 255)
+    super::engine_srgb_decode::f32_bits(u64::from(c), 255)
 }
 
 /// Metal's code of channel value `v` written to an 8-bit sRGB format, a color channel's
@@ -487,7 +487,7 @@ fn srgb_values(color: bool, half: bool) -> Vec<f32> {
 /// answered `[3e1c98af, 3c0373b5, 3e8645bb, 3f800000]`.
 #[test]
 fn an_srgb_storage_read_is_metals_table() {
-    use super::engine_srgb_raw::{f32_bits, half_bits as ratio_half};
+    use super::engine_srgb_decode::{f32_bits, half_bits as ratio_half};
     use crate::lower::arith::srgb::SRGB_DECODE_STEPS;
     let mut ran = 0;
     for texel in [Texel::Float, Texel::Half] {

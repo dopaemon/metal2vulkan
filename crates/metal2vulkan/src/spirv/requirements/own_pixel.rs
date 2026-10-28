@@ -34,8 +34,8 @@
 //!   pixel where the pass has no fragment shading rate or density map.
 //!
 //! The test is structural and exact, never a name: a slot qualifies only where every use of each
-//! of its bindings (the texture's own, a combined image sampler's or a separate image's of it, its
-//! raw view) is one of the operations above, a size, level or sample-count query, which reads no
+//! of its bindings (the texture's own, a combined image sampler's or a separate image's of it)
+//! is one of the operations above, a size, level or sample-count query, which reads no
 //! texel, or a load, `OpSampledImage`, `OpImage` or copy that carries the image on to those. A
 //! coordinate is traced through copies, bitcasts and conversions between integers of at least 16
 //! bits, extracts, shuffles and constructs, and the steps above. Anything else on the way (other
@@ -118,9 +118,9 @@ pub fn own_pixel_textures(m: &TypedModule, meter: &mut Meter) -> Result<Vec<u32>
             }
             GlobalKind::Resource(slot) => {
                 let texture = match slot.kind {
-                    ResourceKind::Texture
-                    | ResourceKind::RawTexture
-                    | ResourceKind::CombinedTextureSampler(_) => Some(slot.index),
+                    ResourceKind::Texture | ResourceKind::CombinedTextureSampler(_) => {
+                        Some(slot.index)
+                    }
                     ResourceKind::SeparateTexture(_) => slot.separate_texture_of().map(|(t, _)| t),
                     _ => None,
                 };

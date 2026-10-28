@@ -40,17 +40,17 @@
 //! in each foreign declared type, with its width and height, against the native slot's read (every
 //! lane, and the queries, the slot's; a read that went to the neutral would give zero texels and a
 //! 1 x 1 size). A sample through an argument buffer has no answer for such a member yet: it reads
-//! the neutral, announced the same way. One difference is announced, and printed on a
-//! `CROSS-CLASS-ANNOUNCED` line and counted apart: an 8-bit sRGB texture an argument buffer holds
-//! decodes on the device, where a slot decodes its raw codes through Metal's table, where the stage
-//! records `PrecisionNote::SrgbTexelDecode` and the device announced it (as `heap_extended_reads`
-//! allows the same texture's own-class read).
+//! the neutral, announced the same way. One difference may be announced, and is printed on a
+//! `CROSS-CLASS-ANNOUNCED` line and counted apart: an 8-bit sRGB texture's read is the device's
+//! decode, where the stage records `PrecisionNote::SrgbTexelDecode` and the device announced it
+//! (as `heap_extended_reads` allows the same texture's own-class read).
 //!
 //! The words of an 8-bit sRGB texture's gather are also checked against Metal's own answer, not
 //! only against the native slot's: Metal gathers an `RGBA8Unorm_sRGB` texture through a `float`,
 //! `int`, or `uint` slot as the table's decode of each footprint texel's code, the same bits
 //! through each (the probe's texture and positions, 240 of 240 words through each class on an M4
-//! and an M3).
+//! and an M3). The device decodes the texels: through Metal's own texture unit Metal's words,
+//! elsewhere the device's own, the same through each class, announced.
 
 use super::degrade_notices::on_device;
 use super::driver_deviations::half_nan;
@@ -786,12 +786,15 @@ fn metal_srgb_gather(bytes: &[u8], lane: [u32; 4]) -> [u32; 4] {
     ]
 }
 
-/// A gather of an `RGBA8Unorm_sRGB` texture's red component through a slot of each class is
-/// Metal's: each word the footprint texel's code decoded through Metal's table, the same bits
-/// through a `float`, an `int`, and a `uint` slot (our probe's texture and positions: 240 of 240
-/// words through each on an M4 and an M3). No access announces the device's decode.
+/// A gather of an `RGBA8Unorm_sRGB` texture's red component through a slot of each class is the
+/// device's decode of the footprint texels, the same bits through a `float`, an `int`, and a `uint`
+/// slot. Through Metal's own texture unit (`VkProperty::MetalSampler`) each word is Metal's, the
+/// footprint texel's code decoded through Metal's table (our probe's texture and positions: 240 of
+/// 240 words through each on an M4 and an M3), and nothing announces the device's decode;
+/// elsewhere the gathers announce `srgb-texel-decode`, and the words that differ from Metal's are
+/// counted.
 #[test]
-fn an_srgb_gather_through_each_class_is_metals_table_decode() {
+fn an_srgb_gather_through_each_class_is_the_devices_decode() {
     on_device(|device, messages| {
         let format = PixelFormat::RGBA8UnormSRGB;
         let (w, h) = (u64::from(W), u64::from(H));
@@ -805,9 +808,11 @@ fn an_srgb_gather_through_each_class_is_metals_table_decode() {
         let op = Op::Gather(Through::Constexpr(sampler_words(false)), 0);
         let _ = messages.take_notices();
         let mut differ = 0;
+        let mut through: Vec<Vec<[u32; 4]>> = Vec::new();
         for ty in [Ty::Float, Ty::Int, Ty::Uint] {
             let pipeline = pipeline_of(device, &kernel(op, ty));
             let got = dispatch(device, &pipeline, (&texture, None), &lanes);
+            through.push(got.clone());
             let wrong: Vec<usize> = (0..lanes.len()).filter(|&i| got[i] != want[i]).collect();
             println!(
                 "CROSS-CLASS-SRGB-GATHER {}: {ty:?}: {} words, {} differ from Metal's table{}",
@@ -834,11 +839,24 @@ fn an_srgb_gather_through_each_class_is_metals_table_decode() {
             .map(|n| n.degradation)
             .collect();
         let srgb = Degradation::from_precision_note(PrecisionNote::SrgbTexelDecode);
+        let metals = device
+            .compile_device()
+            .profile()
+            .enabled()
+            .properties
+            .contains(&metal2vulkan::device::VkProperty::MetalSampler);
         assert!(
-            !kinds.contains(&srgb),
+            through.iter().all(|got| *got == through[0]),
+            "sRGB gathers differ between the classes"
+        );
+        assert_eq!(
+            kinds.contains(&srgb),
+            !metals,
             "the device's decode announced: {kinds:?}"
         );
-        assert_eq!(differ, 0, "sRGB gathers differ from Metal's table decode");
+        if metals {
+            assert_eq!(differ, 0, "sRGB gathers differ from Metal's table decode");
+        }
     });
 }
 

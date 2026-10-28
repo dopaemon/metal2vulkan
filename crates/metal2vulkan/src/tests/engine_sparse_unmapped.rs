@@ -383,7 +383,6 @@ fn a_pixel_fetch_reads_metals_value_of_an_unmapped_texel() {
                     compare: false,
                     integer: false,
                     cube_gradient: false,
-                    raw: false,
                 }),
                 index: 0,
             };
@@ -616,7 +615,6 @@ fn an_access_that_does_not_read_its_residency_reads_metals_constant_lanes() {
                         compare: false,
                         integer: false,
                         cube_gradient: false,
-                        raw: false,
                     }),
                     index: 0,
                 }

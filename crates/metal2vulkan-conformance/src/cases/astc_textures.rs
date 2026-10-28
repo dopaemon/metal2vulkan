@@ -85,8 +85,10 @@
 //! code nearest Metal's 12-bit value, which the runtime announces as `decoded-texel-precision`
 //! where such a texture is made, and whose catalogue entry (docs/API.md) bounds it at **1/510**.
 //! That is the notice's own number, not a round one. The fourteen sRGB forms hold Metal's own 8-bit
-//! codes, which their slots decode through Metal's table, so they are exact and name **no tolerance
-//! at all**. An `_HDR` format names none, having no twin.
+//! codes, which their slots read through the twin's sRGB view, the device's own decode
+//! (`srgb-texel-decode`, a native note that loosens no value), so they name **no tolerance at
+//! all**: through Metal's own texture unit they are exact, and a value another device's decode
+//! moves is a `known-gaps.tsv` row of its venue. An `_HDR` format names none, having no twin.
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -440,7 +442,7 @@ impl AstcTextures {
 
     /// How far a compact texel of this format may be off Metal's value, where that is not zero:
     /// a linear format's half 8-bit step. `None` for an sRGB form, whose twin holds Metal's own
-    /// codes and whose slots decode them through Metal's table, so it names no tolerance, and
+    /// codes and whose slots read the device's decode of them, which loosens no value, and
     /// `None` for an HDR form, which has no twin to be compact about.
     fn compact_bound(&self) -> Option<f64> {
         self.decode()

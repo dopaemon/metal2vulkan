@@ -350,7 +350,13 @@ impl MipmapFilterChain {
     /// image of Vulkan format `image`: the image's own, or the UNORM twin of an 8-bit sRGB format
     /// (the same bytes, its codes undecoded). `None` where no fetch recovers the texels.
     pub fn fetch_format(image: Format) -> Option<Format> {
-        let view = crate::metal::texel_format::srgb_raw_view(image).unwrap_or(image);
+        let view = match image {
+            Format::R8_SRGB => Format::R8_UNORM,
+            Format::R8G8_SRGB => Format::R8G8_UNORM,
+            Format::R8G8B8A8_SRGB => Format::R8G8B8A8_UNORM,
+            Format::B8G8R8A8_SRGB => Format::B8G8R8A8_UNORM,
+            other => other,
+        };
         fetch::components(view).map(|_| view)
     }
 

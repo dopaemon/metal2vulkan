@@ -18,8 +18,8 @@
 //!   alike (the same codes), present its decoded twin (`texture/decoded_twin.rs`): Metal's decode
 //!   of the blocks, decoded after each write as an ASTC texture's twin is, on the GPU
 //!   (`bind::etc_decode_module`), or a host write's on the CPU. An 8-bit format's twin holds its
-//!   codes, exact (an sRGB form's slots read them raw and decode them through Metal's table,
-//!   `metal::texel_format::srgb_raw`); an 11-bit format's holds 16-bit normalized codes
+//!   codes, exact (an sRGB form's views decode them as `R8G8B8A8_SRGB`, the device's sRGB decode,
+//!   `metal::texel_format::srgb_coded`); an 11-bit format's holds 16-bit normalized codes
 //!   (`bind::EtcTexels::Compact`, announced `decoded-texel-precision`), or Metal's values exactly
 //!   where the device does not take those codes' format (`EtcTexels::Float`). Announced
 //!   `carried-decoded-twin`.

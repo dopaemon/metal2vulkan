@@ -811,13 +811,11 @@ fn the_version_377_member_round_trips() {
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
 /// `CombinedSampler::cube_gradient`, `RuntimeFact::InterlockedFramebufferFetch` and
 /// `GraphicsState::storage_attachments`, `SpecKey::TexelFormat`, `RuntimeFact::TexelFormat` and
-/// `SrgbTexture`, `VkProperty::MetalSampler`, `ResourceKind::RawTexture`,
-/// `BindingSource::RawTexture`, `CombinedSampler::raw` (on the same sampler as `cube_gradient`),
-/// and `PrecisionNote::HalfTexelConversion`, `HalfSampleFilter`, `SrgbTexelDecode`, and
-/// `FloatSampleFilter`, `HandleClass::Sampler { compare, integer, cube_gradient }` and
-/// `SyntheticBinding::SamplerTable`, `RuntimeFact::UlongAtomicView`, and
-/// `RuntimeFact::SrgbDeviceDecode`, each beside the others rather than only on its own side's
-/// fixtures.
+/// `SrgbTexture`, `VkProperty::MetalSampler`, and `PrecisionNote::HalfTexelConversion`,
+/// `HalfSampleFilter`, `SrgbTexelDecode`, and `FloatSampleFilter`,
+/// `HandleClass::Sampler { compare, integer, cube_gradient }` and
+/// `SyntheticBinding::SamplerTable`, and `RuntimeFact::UlongAtomicView`, each beside the others
+/// rather than only on its own side's fixtures.
 #[test]
 fn the_merged_members_round_trip_in_one_render_pipeline() {
     use crate::device::requirements::VkProperty;
@@ -834,15 +832,9 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         class: SlotClass::Texture,
         index: 3,
     };
-    let sampler = CombinedSampler::new(SamplerRef::Slot(1), false, false)
-        .with_cube_gradient(true)
-        .with_raw(true);
-    for kind in [
-        ResourceKind::RawTexture,
-        ResourceKind::CombinedTextureSampler(sampler),
-    ] {
-        assert_eq!(decode::<ResourceKind>(&encode(&kind)), Ok(kind));
-    }
+    let sampler = CombinedSampler::new(SamplerRef::Slot(1), false, false).with_cube_gradient(true);
+    let kind = ResourceKind::CombinedTextureSampler(sampler);
+    assert_eq!(decode::<ResourceKind>(&encode(&kind)), Ok(kind));
     let notes = [
         PrecisionNote::CubeGradientFootprint,
         PrecisionNote::HalfTexelConversion,
@@ -892,7 +884,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
                 count: 1,
                 stages: vk::ShaderStageFlags::FRAGMENT,
-                source: BindingSource::RawTexture(texture),
+                source: BindingSource::Texture(texture),
                 immutable_sampler: None,
                 flags: vk::DescriptorBindingFlags::empty(),
                 variables: 1,
@@ -970,10 +962,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         fact: RuntimeFact::SrgbTexture { slot: texture },
         mechanism: Mechanism::Variant,
     });
-    p.dependencies.push(RuntimeDependency {
-        fact: RuntimeFact::SrgbDeviceDecode { slot: texture },
-        mechanism: Mechanism::PlanTimeCheck,
-    });
     let ulong_view = RuntimeFact::UlongAtomicView { slot: texture };
     p.dependencies.push(RuntimeDependency {
         fact: ulong_view,
@@ -1001,11 +989,11 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
     assert!(matches!(
         bindings.map(|b| &b[0].source),
         Some(BindingSource::CombinedTextureSampler { sampler, .. })
-            if sampler.cube_gradient && sampler.raw
+            if sampler.cube_gradient
     ));
     assert_eq!(
         bindings.map(|b| &b[1].source),
-        Some(&BindingSource::RawTexture(texture))
+        Some(&BindingSource::Texture(texture))
     );
     assert!(matches!(
         bindings.map(|b| &b[2].source),
@@ -1025,7 +1013,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
     for fact in [
         RuntimeFact::TexelFormat { slot: texture },
         RuntimeFact::SrgbTexture { slot: texture },
-        RuntimeFact::SrgbDeviceDecode { slot: texture },
     ] {
         assert!(
             sealed.dependencies.iter().any(|d| d.fact == fact),
@@ -1087,35 +1074,22 @@ fn the_emulated_simdgroups_variant_round_trips() {
     assert_eq!(plan.variant, key);
 }
 
-/// The raw sRGB view's encodings round trip (a combined binding's `raw`, the `RawTexture` binding
-/// and resource, the `SrgbTexture` fact, and the `SrgbTexelDecode` note), and a kernel compiled
-/// under the `SrgbTexture` variant round trips as a function and as a pipeline, whose decoded plan
-/// for a shape binding an 8-bit sRGB texture at the slot states the variant, so a cached variant
-/// settles as the compiled one does.
+/// The `SrgbTexture` fact round trips, and a kernel compiled under the `SrgbTexture` variant (a
+/// slot bound to an 8-bit sRGB format the device holds as its UNORM twin) round trips as a
+/// function and as a pipeline, whose decoded plan for a shape binding such a texture at the slot
+/// states the variant, so a cached variant settles as the compiled one does; a shape binding an
+/// sRGB format the device samples states none.
 #[test]
 fn the_srgb_texture_variant_round_trips() {
     use crate::bind::{BindState, BoundTexture, StageTable, TextureFacts};
     use crate::cache::VariantKey;
     use crate::pipeline::artifact::PrecisionNote;
     use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::layout::BindingSource;
-    use crate::pipeline::sym::{CombinedSampler, ResourceKind, SamplerRef};
     let slot = SlotRef {
         stage: Stage::Kernel,
         class: SlotClass::Texture,
         index: 2,
     };
-    let raw =
-        CombinedSampler::new(SamplerRef::Constexpr([0x0008_0000, 0]), false, false).with_raw(true);
-    assert_eq!(decode::<CombinedSampler>(&encode(&raw)), Ok(raw));
-    for kind in [
-        ResourceKind::RawTexture,
-        ResourceKind::CombinedTextureSampler(raw),
-    ] {
-        assert_eq!(decode::<ResourceKind>(&encode(&kind)), Ok(kind));
-    }
-    let source = BindingSource::RawTexture(slot);
-    assert_eq!(decode::<BindingSource>(&encode(&source)), Ok(source));
     let fact = RuntimeFact::SrgbTexture { slot };
     assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
     let note = PrecisionNote::SrgbTexelDecode;
@@ -1151,31 +1125,32 @@ fn the_srgb_texture_variant_round_trips() {
             &Budget::standard(),
         )
         .expect("pipeline");
-    assert!(pipeline
-        .layout
-        .sets
-        .iter()
-        .flat_map(|s| &s.bindings)
-        .any(|b| b.source == source));
     let decoded = ComputePipeline::from_bytes(&pipeline.to_bytes(), &dev).expect("decoded");
     assert_eq!(decoded, pipeline);
     let mut table = StageTable::default();
-    let mut facts = TextureFacts::new(
-        metal::TextureType::Type3D,
-        metal::PixelFormat::RGBA8UnormSRGB,
-    );
-    facts.usage = metal::TextureUsage::SHADER_READ;
-    table.textures.insert(
-        2,
-        BoundTexture::Texture {
-            facts,
-            resource_id: None,
-        },
-    );
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    let plan = decoded.plan(&dev, &state.shape()).expect("plan");
-    assert_eq!(plan.variant.srgb_textures, key.srgb_textures);
+    // lavapipe samples no `RG8Unorm_sRGB`, which the runtime holds as `RG8Unorm`, and samples
+    // `RGBA8Unorm_sRGB` itself.
+    for (pf, twin) in [
+        (metal::PixelFormat::RG8UnormSRGB, true),
+        (metal::PixelFormat::RGBA8UnormSRGB, false),
+    ] {
+        let mut facts = TextureFacts::new(metal::TextureType::Type3D, pf);
+        facts.usage = metal::TextureUsage::SHADER_READ;
+        table.textures.insert(
+            2,
+            BoundTexture::Texture {
+                facts,
+                resource_id: None,
+            },
+        );
+        let mut state = BindState::default();
+        state.stages.insert(Stage::Kernel, table.clone());
+        let plan = decoded.plan(&dev, &state.shape()).expect("plan");
+        match twin {
+            true => assert_eq!(plan.variant.srgb_textures, key.srgb_textures, "{pf:?}"),
+            false => assert!(plan.variant.srgb_textures.is_empty(), "{pf:?}"),
+        }
+    }
 }
 
 /// The `CubicSampler` fact round trips, and a kernel compiled under the cubic-sampler variant round
@@ -1513,8 +1488,7 @@ fn the_separate_bindings_round_trip() {
 }
 
 /// A combined binding's symbol and a separate texture's, whose index packs its use above its
-/// texture slot, round-trip through the codec for every use, a raw view's included, at the slots'
-/// bounds.
+/// texture slot, round-trip through the codec for every use, at the slots' bounds.
 #[test]
 fn combined_and_separate_texture_symbols_round_trip() {
     use crate::pipeline::sym::{CombinedSampler, ResourceKind, ResourceSlot, SamplerRef};
@@ -1522,10 +1496,9 @@ fn combined_and_separate_texture_symbols_round_trip() {
         SamplerRef::Slot(3),
         SamplerRef::Constexpr([u64::MAX >> 1, 7]),
     ] {
-        for rank in 0..16u32 {
-            let c = CombinedSampler::new(sampler, rank & 8 != 0, rank & 4 != 0)
-                .with_cube_gradient(rank & 2 != 0)
-                .with_raw(rank & 1 != 0);
+        for rank in 0..8u32 {
+            let c = CombinedSampler::new(sampler, rank & 4 != 0, rank & 2 != 0)
+                .with_cube_gradient(rank & 1 != 0);
             for texture in [0, 127, (1 << 28) - 1] {
                 let combined = ResourceSlot {
                     stage: Stage::Fragment,

@@ -204,11 +204,6 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.srgb_textures).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
-    if !inputs.srgb_twins.is_empty() {
-        h.bytes(b"srgb-twins")
-            .bytes(format!("{:?}", inputs.srgb_twins).as_bytes());
-    }
-    // Appended only when set, as `storage_view_slots`.
     if !inputs.snapshot_textures.is_empty() {
         h.bytes(b"snapshot-textures")
             .bytes(format!("{:?}", inputs.snapshot_textures).as_bytes());
@@ -232,11 +227,6 @@ pub fn function_key(
     if !inputs.word_colors.is_empty() {
         h.bytes(b"word-colors")
             .bytes(format!("{:?}", inputs.word_colors).as_bytes());
-    }
-    // Appended only when set, as `storage_view_slots`.
-    if !inputs.srgb_fetches.is_empty() {
-        h.bytes(b"srgb-fetches")
-            .bytes(format!("{:?}", inputs.srgb_fetches).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
     if !inputs.rotated_colors.is_empty() {

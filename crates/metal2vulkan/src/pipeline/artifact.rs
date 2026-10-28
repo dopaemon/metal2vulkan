@@ -753,14 +753,14 @@ pub enum PrecisionNote {
     ///   color lane, `1/8192` an `_sRGB` color lane, `1/4080` alpha); 4,050 of the 3,317,760 lanes
     ///   measured (every one at most 0.013968 of a step from a tie), every other lane exact. No
     ///   model of Metal's datapath tried fits.
-    /// - An sRGB sum of an argument-buffer (heap) element, whose format is never known: Metal
-    ///   decodes each tap's code through its twelve-bit table and sums the steps exactly; the
-    ///   emulation sums the device's decoded values in `f32`, which Vulkan does not bound
-    ///   ([`PrecisionNote::SrgbTexelDecode`]). A texture slot bound in an 8-bit sRGB format reads
-    ///   the raw codes under its `SrgbTexture` variant and sums the steps exactly as Metal does,
-    ///   on the grids `1/4095` (color) and `1/(16 · 255)` (alpha), so only the first bullet's
-    ///   2D residue applies to it. The packed normalized formats and `Depth16Unorm` sum in `f32`
-    ///   (their exact rule is not measured).
+    /// - An sRGB sum: Metal decodes each tap's code through its twelve-bit table and sums the
+    ///   steps exactly; the emulation sums the device's decoded taps in `f32`, the device's decode
+    ///   being the only form where it samples the format ([`PrecisionNote::SrgbTexelDecode`]). A
+    ///   texture slot bound in an 8-bit sRGB format the device holds as its UNORM twin decodes the
+    ///   codes under its `SrgbTexture` variant and sums the steps exactly as Metal does, on the
+    ///   grids `1/4095` (color) and `1/(16 · 255)` (alpha), so only the first bullet's 2D residue
+    ///   applies to it. The packed normalized formats and `Depth16Unorm` sum in `f32` (their exact
+    ///   rule is not measured).
     ///
     /// The footprint, the fraction, the addressing of each tap, the filter each format selects,
     /// the weights, each format's clamp and rounding, and the non-finite results are Metal's, but
@@ -903,8 +903,8 @@ pub enum PrecisionNote {
     /// texel to `half` by the bound format: measured for the 32-bit float, half-float, and 8- and
     /// 16-bit normalized formats, which a texture slot converts exactly by its `TexelFormat`
     /// specialization (`metal::texel_format`); a read, nearest sample, or gather of a slot bound in
-    /// an 8-bit sRGB format decodes the raw code exactly instead, and a bicubic sample sums the
-    /// raw codes' steps exactly, under the slot's `SrgbTexture` variant,
+    /// an 8-bit sRGB format the device holds as its UNORM twin decodes the code exactly instead,
+    /// and a bicubic sample sums the codes' steps exactly, under the slot's `SrgbTexture` variant,
     /// and records nothing. A texture buffer converts by its bound format the same way (Metal reads
     /// a texture buffer's texels as a texture's: the P2a probe). A texture bound in another format
     /// (sRGB otherwise, packed, depth, and the rest) and a heap element keep the exact rounding of
@@ -949,27 +949,36 @@ pub enum PrecisionNote {
     HalfSampleFilter,
     /// The module reads, samples, or gathers a texture with a `half` or `float` result through
     /// the device's sRGB decode, or decodes the device's filter of its codes, where the texture may
-    /// be bound in an 8-bit sRGB format. Metal
-    /// decodes such a texel's color channels through its twelve-bit table (`k / 4095` for the
-    /// code's step `k`) and its alpha as `c / 255`, which the device's decode (Vulkan's transfer
-    /// function, within its precision rules) does not reproduce. A texture slot the shape binds in
-    /// such a format (`metal::texel_format::srgb_raw`) joins the plan's variant
-    /// (`RuntimeFact::SrgbTexture`), under which its reads, nearest samples (a constexpr sampler
-    /// with nearest filters, no mip filter or a nearest one, no anisotropy, and weighted-average
-    /// reduction), pixel-coordinate fetches, and gathers (a `float` one's where the device does not
-    /// sample through Metal's own sampler) decode the raw code exactly as Metal does, and its
-    /// bicubic samples sum the raw codes' steps exactly as Metal does. Recorded where an access
-    /// keeps the device's decode on a device that does not sample through Metal's own sampler:
-    /// under that variant, a filtered sample of the slot (a linear filter, a linear mip filter,
-    /// anisotropy, or a runtime sampler, whose filter is not known when the function compiles);
-    /// and any such access of an argument-buffer (heap) element, whose format is never known. On a device that does (`VkProperty::MetalSampler`: MoltenVK on
-    /// Apple's GPU) the device's decode is Metal's, and the module requires the property instead.
+    /// be bound in an 8-bit sRGB format (`metal::texel_format::srgb_coded`: the 8-bit sRGB formats
+    /// and the sRGB forms of BC1 to BC3, BC7, PVRTC, ETC2, EAC and ASTC). Metal decodes such a
+    /// texel's color channels through its twelve-bit table (`k / 4095` for the code's step `k`)
+    /// and its alpha as `c / 255`, and its filters sum the decoded steps. Wherever the device
+    /// samples the format, its decode is the only form: the slot's view is an sRGB view of the
+    /// image (an `R8G8B8A8_SRGB` view of a decoded twin's codes where the device lacks a
+    /// compressed format), and a read, sample, gather, bicubic tap or input-attachment read takes
+    /// the device's value, Vulkan's sRGB EOTF applied before filtering (the specification sets no
+    /// precision for it). Recorded under the bound format's class (`BicubicTexels::SRGB`, a test
+    /// of `SpecKey::BoundTexelFormat` the runtime reads at a draw or dispatch binding such a
+    /// texture), outright for an argument-buffer (heap) element, whose format is never known,
+    /// and at the pipeline for a `float` input attachment whose color attachment is an sRGB format
+    /// (`StageIo::decoded_fetches`). On a device that samples through Metal's own texture unit
+    /// (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU) the device's decode is Metal's, and
+    /// the module requires the property instead. Measured over every code of `RGBA8Unorm_sRGB`
+    /// (`runtime_lane::srgb_decode`): MoltenVK on an Apple M3 Max decodes each as Metal does, bit
+    /// for bit; lavapipe (LLVM 21.1.8, arm64) each color code within 5.25 table steps (0.00128, a
+    /// third of a code's `1/255`) of Metal's value, alpha within one `f32` ulp; other devices are
+    /// not measured.
+    ///
     /// Where the device cannot sample the bound format, whose texture it holds as the format's
-    /// UNORM twin (`LoweringInputs::srgb_twins`), such an access samples the twin's codes and
-    /// decodes the device's filtered value through the table: Metal's value where the filter reads
-    /// one texel (a nearest sampler's), Metal's sum where it blends two adjacent codes, otherwise
-    /// the decode of the codes' blend, where Metal blends the decoded texels; recorded on every
-    /// device under that variant. Validation derives no tolerance from it: the class is unbounded.
+    /// UNORM twin (`metal::texel_format::srgb_twin_on`: `R8Unorm_sRGB` and `RG8Unorm_sRGB` on
+    /// lavapipe, `RG8Unorm_sRGB` on ANV and NVIDIA among the committed profiles), the slot's
+    /// `SrgbTexture` variant decodes the twin's codes through the table: a read, a nearest sample,
+    /// a pixel-coordinate fetch, a gather and a bicubic tap exactly, recording nothing; a filtered
+    /// sample (a linear filter, a linear mip filter, anisotropy, or a runtime sampler) decodes the
+    /// device's filter of the codes, Metal's value where the filter reads one texel, Metal's sum
+    /// where it blends two adjacent codes, otherwise the decode of the codes' blend where Metal
+    /// blends the decoded texels, recorded on every device. Validation derives no tolerance from
+    /// it: the class is unbounded.
     SrgbTexelDecode,
     /// The module samples a texture with a `float` result through a filter that Metal's own
     /// sampler (`VkProperty::MetalSampler`, MoltenVK) answers otherwise than Metal filters the

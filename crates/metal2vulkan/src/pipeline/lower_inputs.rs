@@ -143,21 +143,17 @@ pub struct LoweringInputs {
     /// function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub framebuffer_fetch: Option<FramebufferFetchInputs>,
-    /// Texture slots bound in an 8-bit sRGB format whose raw codes the function reads
-    /// (`VariantKey::srgb_textures`, `RuntimeFact::SrgbTexture`): each such slot's reads, nearest
-    /// samples, and gathers whose result Metal decodes from the raw code read a UNORM view of the
-    /// same image (`ResourceKind::RawTexture`, `CombinedSampler::raw`) and decode it through
-    /// Metal's twelve-bit table. A slot of no such access is ignored.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub srgb_textures: BTreeSet<SlotRef>,
-    /// Slots of `srgb_textures` bound to a texture held as its 8-bit sRGB format's UNORM twin, a
-    /// format the device cannot sample (`VariantKey::srgb_twins`): each access the raw codes do
-    /// not serve exactly, which elsewhere keeps the device's decode, samples the twin through the
-    /// slot's own binding and decodes the device's filtered codes
-    /// (`PrecisionNote::SrgbTexelDecode`): exactly where the filter reads one texel. A slot of no
+    /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
+    /// holds as the format's UNORM twin, whose views read the codes (`VariantKey::srgb_textures`,
+    /// `RuntimeFact::SrgbTexture`): each `half` or `float` access of such a slot decodes what its
+    /// own binding reads through Metal's twelve-bit table. A read, a nearest sample, a
+    /// pixel-coordinate fetch and a gather (a `float` one's where the device does not sample
+    /// through Metal's own sampler) read one texel's codes and decode them exactly, and a bicubic
+    /// sample sums their steps exactly; any other access decodes the device's filter of the codes
+    /// (`PrecisionNote::SrgbTexelDecode`), exactly where the filter reads one texel. A slot of no
     /// such access is ignored.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub srgb_twins: BTreeSet<SlotRef>,
+    pub srgb_textures: BTreeSet<SlotRef>,
     /// Fragment texture slots of `StageInterface::snapshot_textures` the draw reads through a
     /// snapshot (`VariantKey::snapshot_textures`), each with its snapshot's form, drawn twice
     /// (`PushField::SnapshotPhase`). The entry opens with the ordered pixel interlock's critical
@@ -441,18 +437,6 @@ pub struct LoweringInputs {
     /// compiled under another map as `NeedsInput(ColorWrites)`. Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub word_colors: BTreeMap<u32, metal::format::WordAttachment>,
-    /// The color attachments the fragment function reads (`[[color(n)]]`) that its render
-    /// pipeline gives an 8-bit four-channel sRGB format (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB`),
-    /// by color index. Read through an input attachment, such an attachment's value is the
-    /// device's decode, which is not Metal's: the function snaps it back to its byte (Metal's
-    /// encode, which every byte's exact decode lands on) and decodes that byte by Metal's table
-    /// (`math::pack` and `math::unpack` of `unorm4x8_srgb`). The storage form decodes its bytes
-    /// itself and takes nothing from this. `Device::compile_render_pipeline` sets it for a
-    /// `Function` fragment stage from the pipeline's color attachments, and link refuses a
-    /// fragment compiled under another set than the pipeline's as `NeedsInput(ColorWrites)`.
-    /// Empty for any other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub srgb_fetches: BTreeSet<u32>,
     /// Color attachments of the pass the fragment function's render pipeline has no pixel
     /// format for, the pass's pixel format of each by color index
     /// (`VariantKey::zeroed_colors`): plain Metal stores zero bytes into each at every sample a

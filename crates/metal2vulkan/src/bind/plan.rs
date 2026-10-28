@@ -859,8 +859,8 @@ pub enum SamplerSource {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageViewDesc {
     pub view_type: vk::ImageViewType,
-    /// The view format: the texture's own, the storage alias the variant chose, or the UNORM format
-    /// of an 8-bit sRGB texture's channels, its raw view.
+    /// The view format: the texture's own (an 8-bit sRGB texture's UNORM twin where the device
+    /// holds one), or the storage alias the variant chose.
     pub format: vk::Format,
     pub aspect: vk::ImageAspectFlags,
     /// The layout the texture is in while the draw or dispatch runs. Every write of one slot's

@@ -1,14 +1,13 @@
-//! A texture read through a snapshot at a slot whose reads may take a raw view beside its image.
+//! A texture read through a snapshot at a slot whose reads may take any bound format.
 //!
 //! The copy that fills a snapshot (`lower::fragment`'s `snapshot`) fetches through one view, and
-//! the read the snapshot stands for must be the fetch through that same view: the slot's raw view
-//! where the slot's reads take the raw codes (an 8-bit sRGB texel's, whose view the binder names
-//! the snapshot's form by), else the slot's own image.
+//! the read the snapshot stands for must be the fetch through that same view: the slot's own image,
+//! whose bound view the binder names the snapshot's form by.
 //!
 //! - Every form the binder can name for a `texture2d<float, access::read>` slot — the bound
 //!   view's codes, or the fetched lanes' bits — translates and passes L3, under the fast default
-//!   and under `exact_answers`. An 8-bit sRGB texture, whose codes the reads do take, keeps its
-//!   raw view on both.
+//!   and under `exact_answers`. An 8-bit sRGB texture, whose view decodes its codes, keeps the
+//!   fetched lanes' bits.
 //! - The copy pairs the form with its fetch's lanes where the invariant lives: a form whose codes
 //!   those lanes do not hold is named, not left to the builder to refuse (a float code form over
 //!   integer lanes walks into `FClamp`, and an integer form over float lanes bitcasts the value).
@@ -174,8 +173,8 @@ fn state(pixel_format: Option<PixelFormat>) -> BindState {
 
 /// A `texture2d<float, access::read>` slot the draw reads through a snapshot translates under
 /// every form the binder names for it, on the fast default and under `exact_answers`. An 8-bit
-/// sRGB texture, whose raw codes the read does take, keeps its raw view on both, and no other
-/// texture takes one. Each variant passes L3 and binds the snapshot as a storage image.
+/// sRGB texture, whose view decodes its codes, keeps the fetched bits on both. Each variant passes
+/// L3 and binds the snapshot as a storage image.
 #[test]
 fn a_snapshot_slot_translates_under_every_form() {
     let Some(bc) = fixture("tob_renders") else {
@@ -193,7 +192,7 @@ fn a_snapshot_slot_translates_under_every_form() {
         (PixelFormat::RGBA16Float, SnapshotForm::Half),
         (PixelFormat::R16Float, SnapshotForm::Half),
         (PixelFormat::RGBA32Float, SnapshotForm::Bits),
-        (PixelFormat::RGBA8UnormSRGB, SnapshotForm::Unorm8),
+        (PixelFormat::RGBA8UnormSRGB, SnapshotForm::Bits),
     ];
     for stem in PROFILES {
         for (label, policy) in [
@@ -226,15 +225,6 @@ fn a_snapshot_slot_translates_under_every_form() {
                         .any(|b| b.source == BindingSource::SnapshotTexels(0)),
                     "{stem}/{label}/{pf:?}: no snapshot binding"
                 );
-                // The raw view beside the slot's image: an sRGB slot's, on both policies.
-                let raw = variant
-                    .layout
-                    .sets
-                    .iter()
-                    .flat_map(|s| &s.bindings)
-                    .any(|b| b.source == BindingSource::RawTexture(SLOT));
-                let srgb = pf == PixelFormat::RGBA8UnormSRGB;
-                assert_eq!(raw, srgb, "{stem}/{label}/{pf:?}: raw view");
                 for m in &variant.stages {
                     check_words_valid(&m.spirv, &variant.requirements, dev.profile())
                         .unwrap_or_else(|e| panic!("{stem}/{label}/{pf:?}: L3: {e}"));

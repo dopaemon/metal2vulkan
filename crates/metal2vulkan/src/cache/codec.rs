@@ -811,7 +811,7 @@ codec_struct! {
 codec_struct! {
     SlotRef { stage, class, index }
     ImageHandleClass { dim, arrayed, multisampled, sampled_type, depth_compare, access, format }
-    CombinedSampler { sampler, compare, integer, cube_gradient, raw }
+    CombinedSampler { sampler, compare, integer, cube_gradient }
     ResourceSlot { stage, kind, index }
 }
 
@@ -847,7 +847,6 @@ codec_enum! {
         Buffer, Texture, Sampler, Heap(f0), Synthetic(f0), InputAttachment(f0),
         CombinedTextureSampler(f0), HeapSampler(f0), AccelerationStructure(f0), TileAttachment(f0),
         TileMap, SeparateTexture(f0), SeparateSampler(f0),
-        RawTexture,
         ExtendedShadow(f0),
         SnapshotTexels(f0),
     }
@@ -1129,7 +1128,7 @@ codec_struct! {
         inputs, outputs, builtins, pulled, stage_in, multisampled, varyings_at_pixel,
         position_depth, coverage_loop, color_writes, rounded_colors, primitive_inputs,
         early_fragment_tests, extended_range_colors, unattached_colors, sample_mask,
-        rotated_colors, rotated_factors, rotated_blends, srgb_fetches, half_output_lanes,
+        rotated_colors, rotated_factors, rotated_blends, decoded_fetches, half_output_lanes,
         texture_write_rounding, uniform_outputs, uniform_inputs, instanced_attributes,
         half_blend_colors, half_fast_colors, float_blend_colors, zero_indices, color_group,
         word_colors, alpha_in_red_colors, alpha_test, depth_compares,
@@ -1239,7 +1238,6 @@ codec_enum! {
         FoldedGroups,
         ReplayBindings,
         AbsentArgumentRead { stage },
-        SrgbDeviceDecode { slot },
         ZeroedColor { color, format },
         DroppedColor { color },
         DepthClampRange,
@@ -1455,7 +1453,6 @@ codec_enum! {
         Synthetic { stage, binding }, Heap(f0), InputAttachment(f0), HeapSampler { stage, sampler },
         AccelerationStructure { slot, level }, TileAttachment(f0), TileMap(f0),
         SeparateTexture { texture, sampler }, SeparateSampler { stage, sampler },
-        RawTexture(f0),
         ExtendedShadow(f0),
         SnapshotTexels(f0),
     }

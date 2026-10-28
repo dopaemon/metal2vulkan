@@ -66,9 +66,7 @@ use crate::metal::sampler::{
     check_border_view, check_sampler, opaque_black_reads_transparent, vk_filtering,
     OpaqueBlackBorder, SamplerUse, SamplerWord,
 };
-use crate::metal::texel_format::{
-    reads_unswizzled, srgb_raw, srgb_raw_on, srgb_raw_view, texel_format, TexelFormat,
-};
+use crate::metal::texel_format::{reads_unswizzled, srgb_twin_on, texel_format, TexelFormat};
 use crate::metal::{PixelFormat, SamplerMipFilter, TextureSwizzleChannels, TextureType};
 use crate::pipeline::artifact::RuntimeDependency;
 use crate::pipeline::facts::RuntimeFact;
@@ -510,13 +508,6 @@ pub(crate) fn sampled_view(
     })
 }
 
-/// The raw view of sampled view `view` of an 8-bit sRGB texture: the UNORM format of the same
-/// channels (`metal::texel_format::srgb_raw_view`), its type, aspect, layout, components, and
-/// levels the view's own; `None` for a format without one.
-fn raw_view(view: ImageViewDesc) -> Option<ImageViewDesc> {
-    srgb_raw_view(view.format).map(|format| ImageViewDesc { format, ..view })
-}
-
 /// The view type of a declared image class (the binder's cube-as-2D-array view included).
 pub(crate) fn view_type(class: &ImageHandleClass) -> Result<vk::ImageViewType, BindError> {
     use vk::ImageViewType as V;
@@ -778,25 +769,6 @@ impl ResourcePlanner<'_> {
             .collect())
     }
 
-    /// The write of slot `slot`'s raw view, binding `(set, binding)` of type `ty`
-    /// (`BindingSource::RawTexture`): the bound 8-bit sRGB texture through a UNORM view of its own
-    /// channels ([`raw_view`]), or the slot's neutral where its own binding takes one. A bound
-    /// format without a raw view takes the neutral too: the plan's variant then leaves the slot out
-    /// (`slots::srgb_variant`), so the pipeline it binds is not the one compiled.
-    pub fn raw_texture(
-        &mut self,
-        set: u32,
-        binding: u32,
-        ty: vk::DescriptorType,
-        slot: SlotRef,
-    ) -> Result<WriteSource, BindError> {
-        if ty != vk::DescriptorType::SAMPLED_IMAGE {
-            return Err(internal(format!("a {ty:?} raw view of {slot:?}")));
-        }
-        let (write, _) = self.plain_texture(set, binding, ty, slot, true)?;
-        Ok(write)
-    }
-
     /// The level count of the texture the shape binds at `slot`.
     fn bound_levels(&self, slot: SlotRef) -> u32 {
         match self.texture_shape(slot) {
@@ -828,7 +800,7 @@ impl ResourcePlanner<'_> {
             return Ok(self.in_place_write(slot));
         }
         let levels_read = self.has_fact(RuntimeFact::StorageTextureLevels { slot });
-        let write = self.plain_texture(set, binding, ty, slot, false)?;
+        let write = self.plain_texture(set, binding, ty, slot)?;
         self.write_rounding(slot, &write.0)?;
         if levels_read {
             let levels = match write.0 {
@@ -880,15 +852,14 @@ impl ResourcePlanner<'_> {
         }
     }
 
-    /// `raw`: the binding reads the raw view ([`ResourcePlanner::texel_view`]; the neutral for a format
-    /// without one).
+    /// The write of slot `slot`'s texture binding `(set, binding)` of type `ty`, through the view
+    /// [`ResourcePlanner::texel_view`] gives a sampled one, and the neutral of its declared type.
     fn plain_texture(
         &mut self,
         set: u32,
         binding: u32,
         ty: vk::DescriptorType,
         slot: SlotRef,
-        raw: bool,
     ) -> Result<(WriteSource, NeutralResource), BindError> {
         let shape = self.texture_shape(slot).copied();
         let numeric = self.has_fact(RuntimeFact::StorageTextureNumericType { slot });
@@ -1185,10 +1156,10 @@ impl ResourcePlanner<'_> {
                     && extended.is_none()
                     && (t.access.read || t.access.sample)
                     && swizzled_packed(self.profile, pixel_format, swizzle);
-                let reads_srgb_raw = !storage
+                let decodes_srgb = !storage
                     && (t.access.read || t.access.sample)
                     && self.swizzles_decoded_srgb(slot, pixel_format, swizzle);
-                let shader_swizzle = (accessed || reads_extended || reads_packed || reads_srgb_raw)
+                let shader_swizzle = (accessed || reads_extended || reads_packed || decodes_srgb)
                     && !swizzle.is_default();
                 if shader_swizzle {
                     self.variant.swizzled_storage.insert(slot);
@@ -1220,7 +1191,7 @@ impl ResourcePlanner<'_> {
                         shader_swizzle,
                     }
                 } else {
-                    match self.texel_view(pixel_format, &class, raw)? {
+                    match self.texel_view(pixel_format, &class)? {
                         Some((view, _)) => ImageViewDesc {
                             shader_swizzle,
                             ..view
@@ -1243,22 +1214,17 @@ impl ResourcePlanner<'_> {
     }
 
     /// The view a binding of a texture slot reads a texture of `pf` through (declared `class`):
-    /// its sampled view, or for a binding of the raw view (`raw`) that
-    /// view, `None` for a format without one. Where the device cannot sample an 8-bit sRGB format,
-    /// whose sampled texture it holds as the format's UNORM twin (`metal::format::srgb_raw_twin`),
-    /// the twin's sampled view serves both bindings: the raw codes are the twin's texels, and the
-    /// slot's own binding is read for queries alone, or, where the function decodes texels through
-    /// the device's view (`RuntimeFact::SrgbDeviceDecode`), under the slot's
-    /// `VariantKey::srgb_twins`, whose function decodes what the device samples there. With the
-    /// view, the format whose sampled view it is (the twin's, where the twin serves).
+    /// its sampled view, an sRGB format's decoding its codes. Where the device cannot sample an
+    /// 8-bit sRGB format, whose sampled texture it holds as the format's UNORM twin
+    /// (`metal::format::srgb_raw_twin`), the twin's sampled view, which reads the codes, under the
+    /// slot's `VariantKey::srgb_textures`, whose function decodes them. With the view, the format
+    /// whose sampled view it is (the twin's, where the twin serves).
     fn texel_view(
         &self,
         pf: PixelFormat,
         class: &ImageHandleClass,
-        raw: bool,
     ) -> Result<Option<(ImageViewDesc, PixelFormat)>, BindError> {
         let missing = match self.sampled_view(pf, class) {
-            Ok(own) if raw => return Ok(raw_view(own).map(|view| (view, pf))),
             Ok(own) => return Ok(Some((own, pf))),
             Err(missing) => missing,
         };
@@ -1271,16 +1237,17 @@ impl ResourcePlanner<'_> {
         }
     }
 
-    /// Whether slot `slot`'s function decodes the raw codes of a texture of `pf` bound there with
-    /// `swizzle` by Metal's table (`RuntimeFact::SrgbTexture`, an 8-bit sRGB format) where the
-    /// swizzle moves a code between a color lane and alpha: a view's component mapping would move
-    /// it before the decode (a color code onto alpha, read as alpha's `c / 255`; alpha's code onto
-    /// a color lane, decoded through the table), where plain Metal swizzles the decoded texel. The
-    /// function then decodes the unswizzled texel and swizzles it, every access of the slot alike,
-    /// under `VariantKey::swizzled_storage`, and the slot's views take no swizzle. A swizzle among
-    /// the color lanes, or to a constant (0 and 1 decode to themselves), reads the same either way
-    /// and keeps the view's. A format whose codes the device does not hold (an ASTC sRGB format
-    /// it decodes itself, `srgb_raw_on`) is decoded by the device's view, swizzle and all.
+    /// Whether slot `slot`'s function decodes the codes of a texture of `pf` bound there with
+    /// `swizzle` through Metal's table (`RuntimeFact::SrgbTexture`, an 8-bit sRGB format the
+    /// device holds as its UNORM twin, `srgb_twin_on`) where the swizzle moves a code between a
+    /// color lane and alpha: a view's component mapping would move it before the decode (a color
+    /// code onto alpha, read as alpha's `c / 255`; alpha's code onto a color lane, decoded through
+    /// the table), where plain Metal swizzles the decoded texel. The function then decodes the
+    /// unswizzled texel and swizzles it, every access of the slot alike, under
+    /// `VariantKey::swizzled_storage`, and the slot's views take no swizzle. A swizzle among the
+    /// color lanes, or to a constant (0 and 1 decode to themselves), reads the same either way and
+    /// keeps the view's. A format the device samples is decoded by the device's sRGB view, which
+    /// decodes before its component mapping swizzles, swizzle and all.
     fn swizzles_decoded_srgb(
         &self,
         slot: SlotRef,
@@ -1291,15 +1258,9 @@ impl ResourcePlanner<'_> {
         let color = |s: S| matches!(s, S::Red | S::Green | S::Blue);
         let crosses =
             color(swizzle.alpha) || [swizzle.red, swizzle.green, swizzle.blue].contains(&S::Alpha);
-        crosses && self.has_fact(RuntimeFact::SrgbTexture { slot }) && srgb_raw_on(pf, self.profile)
-    }
-
-    /// Whether the device decodes the texels of `pf` itself, though Metal decodes them from raw
-    /// codes (`srgb_raw`, not `srgb_raw_on`): an ASTC sRGB format the device samples, whose
-    /// image's every view decodes its blocks. Its texels take no family there
-    /// ([`TexelFormat::OTHER`]) and no bicubic treatment, as a format outside the families.
-    fn decodes_srgb_itself(&self, pf: PixelFormat) -> bool {
-        srgb_raw(pf) && !srgb_raw_on(pf, self.profile)
+        crosses
+            && self.has_fact(RuntimeFact::SrgbTexture { slot })
+            && srgb_twin_on(pf, self.profile)
     }
 
     /// The runtime sampler `slot` for a use, with the shape's value checks
@@ -1492,9 +1453,7 @@ impl ResourcePlanner<'_> {
 
     /// The write of a combined image-sampler binding: the texture's own view type (a cube is a cube
     /// view) with the symbol's comparison, and the runtime sampler for the symbol's use or the
-    /// layout's immutable sampler (`immutable`). A raw binding (`CombinedSampler::raw`) views the
-    /// bound 8-bit sRGB texture as UNORM ([`raw_view`]), and binds the neutral where the bound
-    /// format has none (the plan's variant then leaves the slot out). A bound texture read with an
+    /// layout's immutable sampler (`immutable`). A bound texture read with an
     /// opaque-black border (the runtime sampler's shape, or the immutable sampler's clamp-to-border
     /// modes and color) must read it exactly through its view
     /// (`metal::sampler::check_border_view`). The immutable sampler's filters must be ones the
@@ -1669,7 +1628,7 @@ impl ResourcePlanner<'_> {
                 pixel_format,
                 swizzle,
                 ..
-            }) => match self.texel_view(pixel_format, &class, sampler.raw)? {
+            }) => match self.texel_view(pixel_format, &class)? {
                 Some((view, viewed)) => {
                     self.texture_use(texture, &t, false);
                     // A swizzled packed normalized texture's sampled view takes no swizzle where
@@ -1823,8 +1782,7 @@ impl ResourcePlanner<'_> {
     /// incompatibly, or bound in an extended-range format, whose texels the slot's variant this
     /// plan asks for samples itself, `VariantKey::extended_range`) takes `BicubicTexels::NEUTRAL`;
     /// another compatible format of no measured family is refused
-    /// `NotImplemented(SamplerBicubicFilter)`, and so is an ASTC sRGB format the device decodes
-    /// itself (`metal::texel_format::srgb_raw_on`).
+    /// `NotImplemented(SamplerBicubicFilter)`.
     pub fn bicubic_texels(&self, slot: SlotRef) -> Result<u64, BindError> {
         let t = *self.texture_slot(slot)?;
         let class = declared(
@@ -1838,7 +1796,6 @@ impl ResourcePlanner<'_> {
             _ if self.variant.extended_range.contains_key(&slot) => BicubicTexels::NEUTRAL,
             Some(s @ TextureShape::Texture { pixel_format, .. }) if compatible(s, &t, &class) => {
                 bicubic_texels(*pixel_format)
-                    .filter(|_| !self.decodes_srgb_itself(*pixel_format))
                     .ok_or(BindError::Unsupported(Unsupported::not_implemented(
                         Feature::SamplerBicubicFilter,
                     )))?
@@ -1874,12 +1831,9 @@ impl ResourcePlanner<'_> {
     /// function swizzles the converted texel (`VariantKey::swizzled_storage`: a storage slot's; an
     /// extended-range sampled one's; a packed normalized sampled one's on a device without Metal's
     /// own sampler, whose border texels are then the unswizzled texture's). A slot bound to nothing
-    /// takes [`TexelFormat::OTHER`]: a neutral reads zero, which every class converts alike. So
-    /// does one bound to a format the device decodes itself where Metal decodes raw codes (an ASTC
-    /// sRGB format the device samples, `metal::texel_format::srgb_raw_on`).
+    /// takes [`TexelFormat::OTHER`]: a neutral reads zero, which every class converts alike.
     pub fn texel_format(&self, slot: SlotRef) -> u64 {
         let class = match self.texture_shape(slot) {
-            Some(shape) if self.decodes_srgb_itself(shape.pixel_format()) => TexelFormat::OTHER.0,
             Some(shape) => {
                 let class = match texel_format(shape.pixel_format()) {
                     class if !class.has_channels() => class.0,

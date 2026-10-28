@@ -3617,8 +3617,7 @@ impl Heap {
 /// BC format, whose decode Vulkan leaves to the implementation: BC1 to BC3 (the sRGB forms too)
 /// `ColorBlockDecodeIsMetals`, BC4 and BC5 `ChannelBlockDecodeIsMetals` (NVIDIA's, ANV's and
 /// lavapipe's decode both otherwise, RADV's the second), BC6H `Bc6hBlockDecodeIsMetals` and BC7
-/// (its sRGB form through its unorm view and Metal's table, `metal::texel_format::srgb_raw`)
-/// `Bc7BlockDecodeIsMetals` (lavapipe's lies a `float` ulp off). A texture of the format without
+/// (its sRGB form too, whose codes the device's sRGB view decodes) `Bc7BlockDecodeIsMetals` (lavapipe's lies a `float` ulp off). A texture of the format without
 /// the fact announces `compressed-texel-decode` ([`Device::degrade_block_decode`]). Every other
 /// format is `None`.
 pub(super) fn block_decode_fact(pf: PixelFormat) -> Option<DriverFact> {

@@ -285,8 +285,9 @@ pub struct Read {
     pub alpha: bool,
     /// A Metal 4.1 read through a clamp-to-edge sampler ([`Edge`]).
     pub edge: Option<Edge>,
-    /// The read takes an 8-bit sRGB texel's raw code from its slot's raw view, decoded as Metal
-    /// decodes it (`emit::srgb_raw_texel`, `RuntimeFact::SrgbTexture`).
+    /// The read takes an 8-bit sRGB texel's codes from its slot's image, which holds the format's
+    /// UNORM twin (`LoweringInputs::srgb_textures`), and decodes them as Metal decodes them
+    /// (`emit::srgb_raw_texel`, `RuntimeFact::SrgbTexture`).
     pub raw: bool,
     /// The read, of a storage slot whose class is `SrgbEncode`, takes the codes of an 8-bit sRGB
     /// format from its UNORM alias and decodes them as Metal does, through the module's table
@@ -969,9 +970,6 @@ pub struct Declared {
     /// The tile map of each slot with a tile-map arm: a word view of its `ResourceKind::TileMap`
     /// binding.
     pub tile_maps: BTreeMap<u32, crate::memory::views::View>,
-    /// The raw view of each slot a read of which takes an 8-bit sRGB texel's raw code
-    /// (`ResourceKind::RawTexture`): its variable.
-    pub raw: BTreeMap<u32, GlobalId>,
     /// The `TexelFormat` specialization constant of each slot whose texels a read, gather, or
     /// sample converts to a `half` result by the bound format's class.
     pub half_format: BTreeMap<u32, ConstId>,
@@ -1138,20 +1136,6 @@ pub fn declare(
                 mb.volatile(g)?;
             }
             d.images.insert(*index, (g, image));
-            // The raw view, a sampled slot's, never level views: an 8-bit sRGB texture's codes
-            // through an image of the same type.
-            if s.raw {
-                let r = mb.resource(
-                    crate::pipeline::sym::ResourceSlot {
-                        stage: s.slot.stage,
-                        kind: crate::pipeline::sym::ResourceKind::RawTexture,
-                        index: s.slot.index,
-                    },
-                    crate::spirv::ir::StorageClass::UniformConstant,
-                    image,
-                )?;
-                d.raw.insert(*index, r);
-            }
         }
         if s.presence {
             let b = mb.ty(SType::Bool)?;
@@ -1555,7 +1539,7 @@ pub(crate) fn half_texels(
             vec![[NoteTest::equal(NoteOn::Unmeasured(index), 1, 1)].into()]
         }
         half::HalfFamilies::Every => {
-            let unmeasured = [unconverted_class(cx, index)?];
+            let unmeasured = [unconverted_class(cx, index)];
             let unpacked: NoteClause = [NoteTest::equal(
                 NoteOn::Texel(index),
                 crate::metal::texel_format::TexelFormat::PACKED_MASK,
@@ -1681,35 +1665,33 @@ pub(crate) fn unmeasured_class(index: u32) -> NoteClause {
 }
 
 /// The clause of texture slot `index` where its `half` conversion may not be Metal's
-/// ([`half_texels`]): [`unmeasured_class`], and where the slot may be bound in an 8-bit sRGB
-/// format (its variant, `LoweringInputs::srgb_textures`) on a device that samples through
-/// Metal's own texture unit (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU), also no `SRGB`
-/// bit, the module requiring the property there. That device's `f32` texel of such a format is
-/// Metal's `float` value: a step on `1/4095` (a color channel's table step, or a linear sum
-/// rounded onto its grid), `1/4080` (alpha's linear sum), or `1/255` (alpha's code), rounded to
-/// nearest even (`metal::texel_format`). The conversion's `OTHER` arm rounds that to `half` to
-/// nearest even, which is the step's own rounding to `half`, Metal's `half` value: on those grids
-/// no step lies near enough a tie between halves for the `f32` rounding to move it across
-/// (`metals_srgb_float_steps_round_to_their_half_steps`).
-fn unconverted_class(cx: &mut SelectCx<'_>, index: u32) -> Result<NoteClause, Error> {
+/// ([`half_texels`]): [`unmeasured_class`], and on a device that samples through Metal's own
+/// texture unit (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU) also no `SRGB` bit, the
+/// module requiring the property there. That device's `f32` texel of an 8-bit sRGB format, its
+/// own decode, is Metal's `float` value: a step on `1/4095` (a color channel's table step, or a
+/// linear sum rounded onto its grid), `1/4080` (alpha's linear sum), or `1/255` (alpha's code),
+/// rounded to nearest even (`metal::texel_format`). The conversion's `OTHER` arm rounds that to
+/// `half` to nearest even, which is the step's own rounding to `half`, Metal's `half` value: on
+/// those grids no step lies near enough a tie between halves for the `f32` rounding to move it
+/// across (`metals_srgb_float_steps_round_to_their_half_steps`).
+fn unconverted_class(cx: &mut SelectCx<'_>, index: u32) -> NoteClause {
     use crate::metal::bicubic::BicubicTexels as B;
-    let srgb = cx.inputs.srgb_textures.contains(&slot_of(cx, index)?.slot);
     let metal = cx
         .profile
         .fields()
         .enabled
         .properties
         .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    if !(srgb && metal) {
-        return Ok(unmeasured_class(index));
+    if !metal {
+        return unmeasured_class(index);
     }
     cx.families.sampler.metal_sampler = true;
-    Ok([NoteTest::equal(
+    [NoteTest::equal(
         NoteOn::Texel(index),
         B::LINEAR | B::HALF | B::EXACT | B::SRGB,
         0,
     )]
-    .into())
+    .into()
 }
 
 /// The address-mode map constexpr sampler `words` samples texture slot `index` under: the map
@@ -1729,43 +1711,50 @@ pub(crate) fn constexpr_address_map(
     Ok(cx.inputs.address_maps.get(&slot).copied())
 }
 
-/// How an access of a texture an 8-bit sRGB format may be bound to reads its texels under the
-/// slot's variant ([`srgb_texels`]).
+/// How an access of a texture held as an 8-bit sRGB format's UNORM twin decodes the codes its
+/// view reads ([`srgb_texels`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SrgbReach {
-    /// Through the device's decode alone: no form the raw codes serve.
-    Device,
-    /// From the raw codes alone, decoded or summed exactly as Metal does.
-    Raw,
+    /// The device's filter of the codes, decoded through Metal's table: Metal's value where the
+    /// filter reads one texel (`emit::srgb_filtered_texel`).
+    Filtered,
+    /// One texel's codes, decoded or summed exactly as Metal does.
+    Codes,
 }
 
-/// A read, sample, or gather of `image` (shape `shape`) with a `half` or `float` result, which
-/// an 8-bit sRGB format bound to it would decode (`metal::texel_format`). `reach` says where the
-/// module can answer as Metal does from the raw codes: a read, a nearest sample, a pixel-coordinate
-/// fetch, and a gather with a `half` result decode the code through Metal's twelve-bit table, and a
-/// bicubic sample sums the table steps exactly (the exact routines' `BicubicTexels::SRGB` grids);
-/// the caller decides. On a sampled color texture slot (not a texture
-/// buffer, a depth texture, or a storage slot) the module records `RuntimeFact::SrgbTexture`, and
-/// where the slot is one of `LoweringInputs::srgb_textures` (its variant: bound in such a format)
-/// an access the raw codes serve reads them, returning `true` and declaring Metal's table
-/// (`arith::srgb`, shared with `air.unpack`'s `unorm4x8_srgb`, whose census name it is charged to),
-/// and any other access keeps the device's decode, recording `PrecisionNote::SrgbTexelDecode` and
-/// `RuntimeFact::SrgbDeviceDecode` (a device that cannot sample the bound format has no view to
-/// decode it through, so the planner refuses the texture there). A heap element's format is not known, so a heap element's access records the note. On a
-/// device that decodes through Metal's own texture unit (`VkProperty::MetalSampler`: MoltenVK on
-/// Apple's GPU) the device's decode is Metal's, so the module requires the property there instead
-/// of the note.
+/// A read, sample, or gather of `image` (shape `shape`) with a `half` or `float` result, which an
+/// 8-bit sRGB format bound to it would decode (`metal::texel_format`). On a sampled color texture
+/// slot (not a texture buffer, a depth texture, or a storage slot) the module records
+/// `RuntimeFact::SrgbTexture`.
+///
+/// Where the slot is one of `LoweringInputs::srgb_textures` (its variant: bound to a format the
+/// device cannot sample, held as its UNORM twin, whose view reads the codes) the access decodes
+/// the codes through Metal's twelve-bit table, returning `true` and declaring the table
+/// (`arith::srgb`, shared with `air.unpack`'s `unorm4x8_srgb`, whose census name it is charged
+/// to): `reach` says how, the caller deciding. A read, a nearest sample, a pixel-coordinate
+/// fetch, a gather and a bicubic tap read one texel's codes and decode them exactly
+/// ([`SrgbReach::Codes`]); any other sample decodes the device's filter of the codes
+/// ([`SrgbReach::Filtered`]), recording `PrecisionNote::SrgbTexelDecode`.
+///
+/// Elsewhere the access reads the device's own decode through the slot's view, an sRGB format's
+/// sRGB view: the module records `PrecisionNote::SrgbTexelDecode` where the bound format's class
+/// is an sRGB one (`BicubicTexels::SRGB`, a test of the bound format that the runtime announces at
+/// a draw or dispatch binding such a texture), and outright for a heap element, whose format is
+/// never known. On a device that decodes through Metal's own texture unit
+/// (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU) the device's decode is Metal's, so the
+/// module requires the property there instead of the note.
 pub(crate) fn srgb_texels(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     shape: ImageShape,
     reach: SrgbReach,
+    m: &mut Meter,
 ) -> Result<bool, Error> {
     if shape.dim == ImageDim::Buffer || shape.depth {
         return Ok(false);
     }
     let ImageRef::Slot(index) = image else {
-        device_decode(cx);
+        device_decode(cx, None, m)?;
         return Ok(false);
     };
     let s = slot_of(cx, index)?;
@@ -1776,55 +1765,42 @@ pub(crate) fn srgb_texels(
     cx.facts
         .insert(crate::pipeline::facts::RuntimeFact::SrgbTexture { slot });
     if !cx.inputs.srgb_textures.contains(&slot) {
+        device_decode(cx, Some(index), m)?;
         return Ok(false);
     }
-    // A form the raw codes do not serve decodes through the device's view, which a device that
-    // cannot sample the bound format does not have: under the slot's twin variant it decodes the
-    // device's filtered codes instead, through Metal's table.
-    let device = reach == SrgbReach::Device;
-    if device {
-        cx.facts
-            .insert(crate::pipeline::facts::RuntimeFact::SrgbDeviceDecode { slot });
-        if !cx.inputs.srgb_twins.contains(&slot) {
-            device_decode(cx);
-            return Ok(false);
-        }
+    if reach == SrgbReach::Filtered {
         cx.precision.insert(PrecisionNote::SrgbTexelDecode);
     }
     cx.families
         .arith
         .srgb
         .get_or_insert(crate::air::intrinsics::PackDir::Unpack);
-    Ok(!device)
+    Ok(true)
 }
 
-/// Whether an access of `image` that keeps the device's decode of an 8-bit sRGB texture
-/// ([`srgb_texels`] with [`SrgbReach::Device`]) samples the bound format's UNORM
-/// twin instead (`LoweringInputs::srgb_twins`: a format the device cannot sample), whose view reads
-/// the codes, so the access decodes the device's filtered codes through Metal's table
-/// (`texture::srgb_filtered_texel`), Metal's value exactly where the filter reads one texel.
-pub(crate) fn srgb_twin(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
-    match image {
-        ImageRef::Slot(index) => Ok(cx.inputs.srgb_twins.contains(&slot_of(cx, index)?.slot)),
-        ImageRef::Heap { .. } => Ok(false),
-    }
-}
-
-/// An access that keeps the device's decode of a texture that may be bound in an 8-bit sRGB
-/// format ([`srgb_texels`]): `PrecisionNote::SrgbTexelDecode`, or on a device that decodes
-/// through Metal's own texture unit the requirement of `VkProperty::MetalSampler`.
-fn device_decode(cx: &mut SelectCx<'_>) {
+/// An access that reads the device's decode of a texture that may be bound in an 8-bit sRGB
+/// format ([`srgb_texels`]): `PrecisionNote::SrgbTexelDecode` where texture slot `index` is bound
+/// in such a format, or outright for a heap element (`None`); on a device that decodes through
+/// Metal's own texture unit, the requirement of `VkProperty::MetalSampler` instead.
+fn device_decode(cx: &mut SelectCx<'_>, index: Option<u32>, m: &mut Meter) -> Result<(), Error> {
+    use crate::metal::bicubic::BicubicTexels as B;
     let metal = cx
         .profile
         .fields()
         .enabled
         .properties
         .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    if metal {
-        cx.families.sampler.metal_sampler = true;
-    } else {
-        cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+    match (metal, index) {
+        (true, _) => cx.families.sampler.metal_sampler = true,
+        (false, Some(index)) => {
+            let srgb = NoteTest::equal(NoteOn::Bound(index), B::SRGB, B::SRGB);
+            cx.note_when(PrecisionNote::SrgbTexelDecode, vec![[srgb].into()], m)?;
+        }
+        (false, None) => {
+            cx.precision.insert(PrecisionNote::SrgbTexelDecode);
+        }
     }
+    Ok(())
 }
 
 /// The value id of an operand (constants included: emission materializes them).
@@ -3014,17 +2990,12 @@ fn select_read_as(
         }
         _ => false,
     };
-    // An 8-bit sRGB texel's raw code, under the slot's variant, decoded exactly; another `half`
+    // An 8-bit sRGB texel's codes, under the slot's twin variant, decoded exactly; another `half`
     // texel converts by the bound format's class, and its NaN is the device's decode.
     let raw = matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
-        && srgb_texels(cx, image, shape, SrgbReach::Raw)?;
-    if let (true, ImageRef::Slot(index)) = (raw, image) {
-        if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-            s.raw = true;
-        }
-    }
+        && srgb_texels(cx, image, shape, SrgbReach::Codes, m)?;
     // A storage slot's 8-bit sRGB codes, through its UNORM alias, decoded through Metal's table
-    // (the slot's planning declares it), as a raw view's are.
+    // (the slot's planning declares it), as a UNORM twin's are.
     let srgb_codes = storage
         && matches!(texel.conv, TexelConv::F16 | TexelConv::F32)
         && matches!(

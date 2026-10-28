@@ -1008,8 +1008,8 @@ pub enum DriverFact {
     TimestampsWaitForEveryQueue,
     /// The driver decodes each texel of a BC1 to BC3 texture (`BC1_RGBA`, `BC2_RGBA`,
     /// `BC3_RGBA`) to Metal's value, and each texel of their sRGB forms to Metal's code before
-    /// its sRGB step (which the translation takes through Metal's table,
-    /// `metal::texel_format::srgb_raw`): Vulkan leaves the decode's arithmetic to the
+    /// its sRGB step (which the device's sRGB view then decodes, `PrecisionNote::SrgbTexelDecode`):
+    /// Vulkan leaves the decode's arithmetic to the
     /// implementation. Metal's (an Apple M4, every texel of random blocks of the fourteen BC
     /// formats read): each endpoint widened by replicating its bits, the index's
     /// weight of 64 (BC7's: 21 and 43 for the thirds, 9 to 55 for BC3's alpha's sevenths, 13 to
@@ -1086,7 +1086,7 @@ pub enum DriverFact {
     /// the runtime makes it: the runtime has no decoded twin of BC6H.
     Bc6hBlockDecodeIsMetals,
     /// The driver decodes each texel of a BC7 texture (`BC7_RGBAUnorm`, and `BC7_RGBAUnorm_sRGB`
-    /// through its unorm view and Metal's table, `metal::texel_format::srgb_raw`) to Metal's
+    /// to Metal's code before its sRGB step, which the device's sRGB view then decodes) to Metal's
     /// value. lavapipe (Mesa 26.0.8) answers some a `float` ulp off. On a driver without it a
     /// texture of such a format announces `compressed-texel-decode` where the runtime makes it:
     /// the runtime has no decoded twin of BC7.

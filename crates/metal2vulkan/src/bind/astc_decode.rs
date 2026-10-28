@@ -27,9 +27,10 @@
 //! **The twin's texels** ([`AstcTexels`]): [`AstcTexels::Float`] holds each texel's value exactly
 //! (`R32G32B32A32_SFLOAT`); [`AstcTexels::Unorm8`] holds 8-bit codes (`R8G8B8A8_UNORM`): a linear
 //! channel the code nearest its value, at most `1/510` off it, and an sRGB format's channels the
-//! code `C >> 8` itself, which a function reads raw through the image's `R8G8B8A8_UNORM` view and
-//! decodes through Metal's table (`metal::texel_format::srgb_raw_on`), exactly. The runtime holds
-//! an sRGB format's twin in those codes whatever its policy.
+//! code `C >> 8` itself, which Metal decodes through its table (`metal::texel_format::srgb_coded`)
+//! and the device decodes through the image's `R8G8B8A8_SRGB` view
+//! (`PrecisionNote::SrgbTexelDecode`). The runtime holds an sRGB format's twin in those codes
+//! whatever its policy.
 //!
 //! **The GPU's decode** ([`astc_decode_module`]) is this decode in integer operations, each
 //! texel's from its block alone, writing the texels [`decode`](AstcDecode::decode) writes; its

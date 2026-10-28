@@ -605,15 +605,30 @@ fn framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one() {
     assert!(forms.iter().all(|&n| n > 0), "{forms:?}");
 }
 
+/// Whether module `words` holds a constant composite of 256 or more constituents: Metal's sRGB
+/// table (`lower::arith::srgb::declare`), which no other initializer of these fixtures reaches.
+pub(super) fn holds_srgb_table(words: &[u32]) -> bool {
+    const CONSTANT_COMPOSITE: u32 = 44;
+    let mut at = 5;
+    while let Some(&first) = words.get(at) {
+        let count = (first >> 16) as usize;
+        if first & 0xffff == CONSTANT_COMPOSITE && count >= 3 + 256 {
+            return true;
+        }
+        at += count.max(1);
+    }
+    false
+}
+
 /// On a device that reads a fetched color through an input attachment (both lavapipes), an
-/// `RGBA8Unorm_sRGB` or `BGRA8Unorm_sRGB` color the pipeline names (`LoweringInputs::srgb_fetches`)
-/// is read through Metal's decode: the module holds Metal's sRGB table (256 words of initializer)
-/// and the interface records the color; compiled without the input, the read is the device's, and
-/// the interface records nothing. The render pipeline compile names the color from its attachments,
-/// and a fragment compiled without the input is `NeedsInput(ColorWrites)` in that pipeline. Every
-/// module passes L3.
+/// `RGBA8Unorm_sRGB` or `BGRA8Unorm_sRGB` color reads the device's own decode through its input
+/// attachment: the render pipeline's fragment module is the one an `RGBA8Unorm` attachment's
+/// pipeline takes, word for word, holding no Metal sRGB table; the interface records the `float`
+/// colors the device decodes (`StageIo::decoded_fetches`), and the pipeline notes
+/// `PrecisionNote::SrgbTexelDecode` for the sRGB attachment alone. A fragment compiled alone links
+/// into the sRGB pipeline exactly as into the `RGBA8Unorm` one. Every module passes L3.
 #[test]
-fn an_srgb_input_attachment_is_read_through_metals_decode() {
+fn an_srgb_input_attachment_reads_the_devices_decode() {
     let (Some(bc), Some(io)) = (fixture("fragment_fetch"), fixture("stage_io")) else {
         return;
     };
@@ -622,31 +637,20 @@ fn an_srgb_input_attachment_is_read_through_metals_decode() {
         if !p.fields().fragment.rasterization_order_color_access {
             continue;
         }
-        let mut inputs = LoweringInputs::new();
-        inputs.srgb_fetches = std::collections::BTreeSet::from([0]);
-        let snapped =
-            compile_with(&bc, "fetch_blend", &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        link_and_validate(&snapped, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let plain = compile_with(&bc, "fetch_blend", &p, &LoweringInputs::new())
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(attachments(&snapped), [0, 1, 2], "{stem}");
+        link_and_validate(&plain, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert_eq!(attachments(&plain), [0, 1, 2], "{stem}");
         assert_eq!(
-            snapped.interface.io.srgb_fetches,
-            std::collections::BTreeSet::from([0]),
+            plain.interface.io.decoded_fetches,
+            std::collections::BTreeSet::from([0, 2]),
             "{stem}"
         );
-        assert!(plain.interface.io.srgb_fetches.is_empty(), "{stem}");
-        // Metal's table: 256 words of initializer, and the encode and decode around the read.
-        assert!(
-            snapped.module.words.len() > plain.module.words.len() + 256,
-            "{stem}: {} words against {}",
-            snapped.module.words.len(),
-            plain.module.words.len()
-        );
+        assert!(!holds_srgb_table(&plain.module.words), "{stem}");
         checked += 1;
     }
     assert!(checked > 0, "no profile reads through input attachments");
-    // The whole pipeline on `lavapipe`, and a fragment compiled without the input in it.
+    // The whole pipeline on `lavapipe`, and a fragment compiled alone in it.
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(path).expect("profile");
@@ -660,20 +664,38 @@ fn an_srgb_input_attachment_is_read_through_metals_decode() {
                 .expect("function"),
         )
     };
-    for pf in [PixelFormat::BGRA8UnormSRGB, PixelFormat::RGBA8UnormSRGB] {
+    let pipeline = |first: PixelFormat, fragment: StageSource| {
         let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
             &io,
             "stage_io_vertex_position",
         )));
-        d.fragment = Some(StageSource::Function(function(&bc, "fetch_blend")));
-        for (i, f) in [pf, PixelFormat::RGBA32Uint, PixelFormat::RG16Float]
+        d.fragment = Some(fragment);
+        for (i, f) in [first, PixelFormat::RGBA32Uint, PixelFormat::RG16Float]
             .into_iter()
             .enumerate()
         {
             d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(f));
         }
         dev.compile_render_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{pf:?}: {e}"));
+    };
+    let fragment = || StageSource::Function(function(&bc, "fetch_blend"));
+    let linear = pipeline(PixelFormat::RGBA8Unorm, fragment()).expect("RGBA8Unorm");
+    let linear_stage = &linear.stages[1];
+    assert!(!linear_stage
+        .precision_notes
+        .contains(&PrecisionNote::SrgbTexelDecode));
+    for pf in [PixelFormat::BGRA8UnormSRGB, PixelFormat::RGBA8UnormSRGB] {
+        let srgb = pipeline(pf, fragment()).unwrap_or_else(|e| panic!("{pf:?}: {e}"));
+        let stage = &srgb.stages[1];
+        assert!(!holds_srgb_table(&stage.spirv), "{pf:?}");
+        assert_eq!(stage.spirv, linear_stage.spirv, "{pf:?}");
+        assert!(
+            stage
+                .precision_notes
+                .contains(&PrecisionNote::SrgbTexelDecode),
+            "{pf:?}: {:?}",
+            stage.precision_notes
+        );
         let alone = dev
             .compile_function(
                 &function(&bc, "fetch_blend"),
@@ -681,12 +703,10 @@ fn an_srgb_input_attachment_is_read_through_metals_decode() {
                 &Budget::standard(),
             )
             .expect("the fragment alone");
-        d.fragment = Some(StageSource::Compiled(alone));
-        assert!(
-            matches!(
-                dev.compile_render_pipeline(&d, &Budget::standard()),
-                Err(Error::NeedsInput(RuntimeInput::ColorWrites))
-            ),
+        // The sRGB attachment asks the fragment for nothing the `RGBA8Unorm` one does not.
+        assert_eq!(
+            pipeline(pf, StageSource::Compiled(alone.clone())).map(|_| ()),
+            pipeline(PixelFormat::RGBA8Unorm, StageSource::Compiled(alone)).map(|_| ()),
             "{pf:?}"
         );
     }

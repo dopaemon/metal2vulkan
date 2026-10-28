@@ -895,7 +895,7 @@ fn from_image(
         StorageImageClass::Identity => x,
         StorageImageClass::SwizzleBgra => swizzle_bgra(fb, x)?,
         // An 8-bit sRGB format's codes, through its UNORM alias: decoded as Metal decodes them,
-        // through its twelve-bit table, as a raw view's are (alpha 1 for an RGBX format's).
+        // through its twelve-bit table, as a UNORM twin's are (alpha 1 for an RGBX format's).
         StorageImageClass::SrgbEncode => {
             let x = match decl.x_channel {
                 true => x_channel_read(fb, decl, x)?,
@@ -939,7 +939,7 @@ fn from_image(
     }
 }
 
-/// The held texel (`form`, a `half` or `float` result) of raw view texel `x` (a `vec4` of `f32`:
+/// The held texel (`form`, a `half` or `float` result) of texel `x` of codes (a `vec4` of `f32`:
 /// each lane an 8-bit code `c` as a UNORM view reads it, `c / 255` correctly rounded) of an 8-bit
 /// sRGB texture, as Metal reads it (`metal::texel_format`): `c` recovered by rounding `x · 255` to
 /// nearest (within `2^-16` of `c`), a color lane's step `k` of Metal's twelve-bit table and its
@@ -1040,7 +1040,7 @@ pub(crate) fn srgb_filtered_texel(
     }
 }
 
-/// The steps of raw view texel `x` ([`srgb_raw_texel`]): per lane the code `c` recovered by
+/// The steps of texel `x` of codes ([`srgb_raw_texel`]): per lane the code `c` recovered by
 /// rounding `x · 255` to nearest, a color lane's table step `k` with its grid 4095, an alpha
 /// lane's `c` with 255, as a `uvec4` of numerators and one of denominators.
 fn srgb_raw_steps(
@@ -1106,7 +1106,7 @@ fn srgb_ratio(
     }
 }
 
-/// Raw view texel `x` (a `vec4` of `f32`, codes `c / 255` as in [`srgb_raw_texel`]) of an 8-bit
+/// Texel `x` of codes (a `vec4` of `f32`, `c / 255` as in [`srgb_raw_texel`]) of an 8-bit
 /// sRGB texture as a filter's tap on the grids of `BicubicTexels::SRGB`: each color lane the
 /// step `k` of its code over 4095 (`ConvertUToF(k) / 4095`, within an ulp of `k / 4095`, so the
 /// exact routines' `RoundEven(x · 4095)` recovers `k`), alpha's `c / 255` as it is (`16 c` on
@@ -1144,7 +1144,7 @@ pub(crate) fn srgb_raw_tap(
 }
 
 /// The words [`srgb_raw_tap`] emits, at most: per color lane the recovery, the step, and the
-/// quotient, and the texel's assembly (`the_raw_estimate_bounds_its_emission`).
+/// quotient, and the texel's assembly (`the_srgb_estimate_bounds_its_emission`).
 pub(crate) const SRGB_TAP_WORDS: u32 = 160;
 
 /// The color lanes of an sRGB texel ([`srgb_raw_texel`]): red, green, and blue.
@@ -1156,7 +1156,7 @@ pub(crate) const SRGB_RAW_WORDS: u32 = 520;
 
 /// The words [`srgb_filtered_texel`] emits, at most: [`srgb_raw_texel`]'s, the codes' scale, test
 /// and interpolation (two table steps per color lane), a `half` result's rounding, and the
-/// selection (`the_raw_estimate_bounds_its_emission`).
+/// selection (`the_srgb_estimate_bounds_its_emission`).
 pub(crate) const SRGB_FILTERED_WORDS: u32 = SRGB_RAW_WORDS + 400;
 
 /// The conversion of a slot's `half` texels by the bound format's class: the module's routine and
@@ -2535,21 +2535,6 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
         within,
         flagged,
     } = image_in(cx, fb, &r.image, view, r.heap_class)?;
-    // An 8-bit sRGB texel's raw code, from the slot's raw view of the same image type.
-    let raw = match (r.raw, r.image) {
-        (true, ImageRef::Slot(index)) => match cx.decl.families.texture.raw.get(&index) {
-            Some(g) => Some(*g),
-            None => return Err(cx.fail(format!("texture slot {index} has no raw view"))),
-        },
-        _ => None,
-    };
-    let img = match raw {
-        Some(g) => {
-            let ptr = fb.module().global_value(g)?;
-            fb.load(ptr, MemAccess::default())?
-        }
-        None => img,
-    };
     let plain = match (volume, r.edge) {
         (true, _) => Some(u32s(fb, coord_len(&decl), 0)?),
         (false, None) => Some(coordinate(cx, fb, &decl, &r.at)?),
@@ -2656,8 +2641,7 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
     };
     // A slot the draw reads through a snapshot (`LoweringInputs::snapshot_textures`): its
     // interface fact admits only the plain fetch of a level the snapshot's copy makes, through the
-    // image the copy fetches from (`snapshot_fetches_raw`: the slot's raw view where its reads
-    // take an 8-bit sRGB texel's raw codes, else its image).
+    // slot's image, which the copy fetches from.
     let snapshot = match r.image {
         ImageRef::Slot(index) => {
             let plain = sampled
@@ -2665,8 +2649,7 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
                 && sample.is_none()
                 && r.edge.is_none()
                 && !r.level_views
-                && within.is_none()
-                && r.raw == crate::lower::fragment::snapshot_fetches_raw(cx, index);
+                && within.is_none();
             crate::lower::fragment::snapshot_prepare(cx, fb, index, img, plain)?
         }
         ImageRef::Heap { .. } => None,
@@ -2781,9 +2764,11 @@ fn read(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, r: &Read) -> BResult<
         }
         _ => texel,
     };
-    let texel = match raw {
-        Some(_) => srgb_raw_texel(cx, fb, r.texel, texel, SRGB_TEXEL)?,
-        None => {
+    // An 8-bit sRGB texture held as its UNORM twin: the codes the slot's image reads, decoded
+    // through Metal's table.
+    let texel = match r.raw {
+        true => srgb_raw_texel(cx, fb, r.texel, texel, SRGB_TEXEL)?,
+        false => {
             let half = half_class(cx, &r.image, r.texel);
             from_image(cx, fb, &decl, r.texel, texel, half)?
         }

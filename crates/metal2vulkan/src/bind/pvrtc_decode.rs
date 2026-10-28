@@ -29,10 +29,10 @@
 //!   table (`k / 4095` for `lower::arith::srgb`'s step `k`).
 //!
 //! **The twin's texels** are the codes, in `R8G8B8A8_UNORM` ([`PvrtcDecode::texel_format`]),
-//! exact: a linear format's read is the code's `c / 255`, and an sRGB format's slot reads them raw
-//! through that view and decodes its color through Metal's table
-//! (`metal::texel_format::srgb_raw`), as for `RGBA8Unorm_sRGB`. A format's linear and sRGB forms
-//! decode to the same codes, so one twin serves the views of both.
+//! exact: a linear format's read is the code's `c / 255`, and an sRGB format's slot reads them
+//! through the twin's `R8G8B8A8_SRGB` view, the device's decode (`PrecisionNote::SrgbTexelDecode`),
+//! as for `RGBA8Unorm_sRGB`. A format's linear and sRGB forms decode to the same codes, so one twin
+//! serves the views of both.
 //!
 //! **The module** ([`pvrtc_decode_module`], one per device and block shape: 2 or 4 bits a pixel,
 //! RGB or RGBA). `BlockDecodeModule`'s entry point, local size and bindings: the shape

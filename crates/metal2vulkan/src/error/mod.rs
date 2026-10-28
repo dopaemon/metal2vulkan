@@ -567,9 +567,11 @@ pub enum DriverDeviation {
     /// way; unmeasured, a NaN Metal answers records `PrecisionNote::NativeNanEncoding`.
     MetalCanonicalNans,
     /// The device samples, filters and converts texels through Metal's own sampler
-    /// (`VkProperty::MetalSampler`). Unmeasured, every sample, gather and comparison is the
-    /// device's own sampler's all the same (`VkProperty::DeviceSampling`), recorded as
-    /// `PrecisionNote::DeviceSampling`.
+    /// (`VkProperty::MetalSampler`), an 8-bit sRGB texel's decode included. Unmeasured, every
+    /// sample, gather and comparison is the device's own sampler's all the same
+    /// (`VkProperty::DeviceSampling`), recorded as `PrecisionNote::DeviceSampling`, and every
+    /// read, sample, gather and input-attachment read of an sRGB texel the device's own decode,
+    /// recorded as `PrecisionNote::SrgbTexelDecode`.
     MetalSampler,
     /// How the driver hands a vertex or fragment function's cube sample's explicit gradients to
     /// the GPU under macOS 27 (the graphics route, `CubeGradientRoute::AppleProjected`): through

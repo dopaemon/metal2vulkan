@@ -427,10 +427,6 @@ pub enum ResourceKind {
     /// constexpr sampler is the binding's immutable sampler. `ResourceSlot::index` is the use
     /// ([`ResourceSlot::separate_sampler`]), as a heap sampler's is.
     SeparateSampler(SamplerRef),
-    /// The raw view of the texture bound at the stage's texture slot `ResourceSlot::index`: a
-    /// sampled image viewing the same image in the UNORM format of its channels, from which a
-    /// function reads the raw codes of an 8-bit sRGB texture (`RuntimeFact::SrgbTexture`).
-    RawTexture,
     /// The `half` shadow of extended-range color attachment `n` (`ResourceSlot::index` too) for
     /// the draw's render pass instance (`VariantKey::extended_shadows`): an `RGBA16_SFLOAT` 2D
     /// storage image of the attachment's extent holding Metal's tile value of each texel, which
@@ -485,7 +481,7 @@ impl SamplerRef {
 /// How a combined image sampler samples: its sampler, and the use facts that change or check the
 /// `VkSampler` (`metal::sampler::SamplerUse`): depth comparison, which is static in AIR, whether
 /// the texture is an integer one (integer border colors), whether it samples a cube with explicit
-/// gradients (no anisotropy), and whether it samples the texture's raw view.
+/// gradients (no anisotropy).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -501,23 +497,17 @@ pub struct CombinedSampler {
     /// for it (`metal::sampler::SamplerUse::cube_gradient`). Elsewhere a sampler's footprint
     /// follows its anisotropy.
     pub cube_gradient: bool,
-    /// The binding samples the texture's raw view, the UNORM format of its channels, from which
-    /// the function reads an 8-bit sRGB texture's raw codes (`RuntimeFact::SrgbTexture`):
-    /// another binding than the one of the texture's own view through the same sampler.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub raw: bool,
 }
 
 impl CombinedSampler {
     /// Sampler `sampler` used with `compare` on a texture that is `integer` or not, without
-    /// explicit cube gradients, through the texture's own view.
+    /// explicit cube gradients.
     pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler {
         CombinedSampler {
             sampler,
             compare,
             integer,
             cube_gradient: false,
-            raw: false,
         }
     }
 
@@ -527,11 +517,6 @@ impl CombinedSampler {
             cube_gradient,
             ..self
         }
-    }
-
-    /// The same use through the texture's raw view when `raw` ([`CombinedSampler::raw`]).
-    pub fn with_raw(self, raw: bool) -> CombinedSampler {
-        CombinedSampler { raw, ..self }
     }
 
     /// The use as a heap sampler symbol's index, or a separate sampler's: bit 0 comparison, bit 1
@@ -550,27 +535,18 @@ impl CombinedSampler {
     }
 
     /// The use's rank in a separate texture symbol's index: comparison, then an integer texel, then
-    /// explicit cube gradients, then the raw view, from the most significant bit down, so the ranks
-    /// order as the uses' fields do in `CombinedSampler`'s derived order.
+    /// explicit cube gradients, from the most significant bit down, so the ranks order as the
+    /// uses' fields do in `CombinedSampler`'s derived order.
     fn use_rank(&self) -> u32 {
-        (u32::from(self.compare) << 3)
-            | (u32::from(self.integer) << 2)
-            | (u32::from(self.cube_gradient) << 1)
-            | u32::from(self.raw)
+        (u32::from(self.compare) << 2)
+            | (u32::from(self.integer) << 1)
+            | u32::from(self.cube_gradient)
     }
 
     /// Sampler `sampler` with the use of rank `rank` ([`CombinedSampler::use_rank`]).
     fn from_use_rank(sampler: SamplerRef, rank: u32) -> CombinedSampler {
-        CombinedSampler::new(sampler, rank & 8 != 0, rank & 4 != 0)
-            .with_cube_gradient(rank & 2 != 0)
-            .with_raw(rank & 1 != 0)
-    }
-
-    /// The use a separate sampler binding serves: this one through the texture's own view. A raw
-    /// view is another sampled image of the same texture, sampled through the same sampler, so a
-    /// raw separate texture shares its use's separate sampler.
-    pub fn sampler_binding_use(self) -> CombinedSampler {
-        self.with_raw(false)
+        CombinedSampler::new(sampler, rank & 4 != 0, rank & 2 != 0)
+            .with_cube_gradient(rank & 1 != 0)
     }
 
     /// The use the binder (and link, for a constexpr sampler) builds the `VkSampler` for.
@@ -1200,12 +1176,10 @@ mod tests {
         );
     }
 
-    /// A separate texture's symbol round-trips its texture slot, sampler, and use, the raw view
-    /// included, and the symbols order as the `CombinedTextureSampler` symbols they stand for (by
-    /// sampler, use, and slot), so link numbers the bindings of both forms alike. A raw view's
-    /// texture and its own view's are two symbols, sampled through one separate sampler. A slot
-    /// past the index's 28 bits has no symbol; canonicalization refuses every slot past Metal's 128
-    /// entries first.
+    /// A separate texture's symbol round-trips its texture slot, sampler, and use, and the symbols
+    /// order as the `CombinedTextureSampler` symbols they stand for (by sampler, use, and slot), so
+    /// link numbers the bindings of both forms alike. A slot past the index's 28 bits has no
+    /// symbol; canonicalization refuses every slot past Metal's 128 entries first.
     #[test]
     fn separate_texture_symbols_round_trip_in_the_combined_order() {
         let mut pairs = Vec::new();
@@ -1217,19 +1191,13 @@ mod tests {
         ] {
             for compare in [false, true] {
                 for integer in [false, true] {
-                    for (cube_gradient, raw) in
-                        [(false, false), (false, true), (true, false), (true, true)]
-                    {
+                    for cube_gradient in [false, true] {
                         let c = CombinedSampler::new(sampler, compare, integer)
-                            .with_cube_gradient(cube_gradient)
-                            .with_raw(raw);
-                        // A raw view samples through its use's separate sampler.
-                        let own = c.sampler_binding_use();
-                        assert!(!own.raw && own.with_raw(raw) == c);
+                            .with_cube_gradient(cube_gradient);
                         assert_eq!(
-                            ResourceSlot::separate_sampler(Stage::Fragment, own)
+                            ResourceSlot::separate_sampler(Stage::Fragment, c)
                                 .separate_sampler_use(),
-                            Some(own)
+                            Some(c)
                         );
                         for texture in [0, 1, 127, (1 << 28) - 1] {
                             let s = ResourceSlot::separate_texture(Stage::Fragment, texture, c)

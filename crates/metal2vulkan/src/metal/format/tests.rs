@@ -961,7 +961,7 @@ fn compressed_extension_formats_follow_exposure() {
         ]];
         // A PVRTC format's decoded twin, whose codes' format this floor does not list.
         if crate::bind::PvrtcDecode::of(pf).is_some() {
-            let codes = match crate::metal::texel_format::srgb_raw(pf) {
+            let codes = match crate::metal::texel_format::srgb_coded(pf) {
                 true => vk::Format::R8G8B8A8_SRGB,
                 false => vk::Format::R8G8B8A8_UNORM,
             };
@@ -3178,10 +3178,10 @@ fn the_srgb_straggler_has_no_vulkan_image_and_keeps_its_footprint() {
     let argb = direct_format(PixelFormat::ARGB8Unorm).expect("ARGB8Unorm is held");
     assert_eq!(argb, vk::Format::R8G8B8A8_UNORM);
     assert_eq!(
-        crate::metal::texel_format::srgb_raw_view(vk::Format::R8G8B8A8_SRGB),
-        Some(argb),
+        vk::Format::R8G8B8A8_SRGB.block().map(|b| b.class),
+        argb.block().map(|b| b.class)
     );
-    assert!(!crate::metal::texel_format::srgb_raw(pf));
+    assert!(!crate::metal::texel_format::srgb_coded(pf));
 }
 
 /// `BGRA4Unorm`'s colour-attachment conversion, measured on an Apple M3 Max under macOS 27.0.1

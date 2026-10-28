@@ -293,17 +293,14 @@ pub enum RuntimeFact {
     /// 8-bit sRGB slot's raw read, a fetched gather and a NaN texel's rule (the NaN switch) read
     /// it too.
     TexelFormat { slot: SlotRef },
-    /// The function reads, samples, or gathers the texture bound to the slot in a form whose
-    /// result Metal takes from the raw code of an 8-bit sRGB texel, decoded through its
-    /// twelve-bit table (a read, a nearest sample, or a pixel-coordinate fetch with a `half` or
-    /// `float` result, and a gather with a `half` result; `metal::texel_format`), which the
-    /// device's decode does not reproduce. Bound in such a format
-    /// (`metal::texel_format::srgb_raw`), the slot joins the plan's variant
-    /// (`VariantKey::srgb_textures`, `LoweringInputs::srgb_textures`), under which the function
-    /// reads those texels through a UNORM view of the same image: the slot's
-    /// `ResourceKind::RawTexture` binding and its combined bindings with
-    /// `CombinedSampler::raw`. Bound in any other format, or unbound, the slot leaves the variant,
-    /// and the function reads the texture's own view.
+    /// The function reads, samples, or gathers the texture bound to the slot with a `half` or
+    /// `float` result, which an 8-bit sRGB format bound there would decode. Bound in such a
+    /// format that the device cannot sample, which the runtime holds as the format's UNORM twin
+    /// (`metal::format::srgb_raw_twin`, `metal::texel_format::srgb_twin_on`), the slot joins the
+    /// plan's variant (`VariantKey::srgb_textures`, `LoweringInputs::srgb_textures`), under which
+    /// the function decodes the codes its own binding reads through Metal's twelve-bit table.
+    /// Bound in any other format, or unbound, the slot leaves the variant, and the function reads
+    /// the device's decode through the texture's own view.
     SrgbTexture { slot: SlotRef },
     /// A `ulong` atomic (`atomic_{min,max}`) updates the `ulong` texture bound to the slot, so the
     /// slot is declared as an `R64ui` storage image: the binder views the bound `RG32Uint` texture
@@ -430,15 +427,6 @@ pub enum RuntimeFact {
     /// after the command buffer reports its execution as failed, since none of its results is then
     /// Metal's. A run that never reaches such a read is Metal's exactly. Nothing binds it.
     AbsentArgumentRead { stage: Stage },
-    /// Under its `SrgbTexture` variant (`LoweringInputs::srgb_textures`), the function still
-    /// decodes texels of the 8-bit sRGB texture bound to the slot through the device's sampled
-    /// view, in a form the raw codes do not serve (a `float` gather on Metal's own sampler, a
-    /// linear mip filter, a runtime sampler's sample; `PrecisionNote::SrgbTexelDecode`). Where the
-    /// device cannot sample the bound sRGB format, whose texture it holds as the format's UNORM
-    /// twin, the slot's own binding takes the twin's view, and the plan's variant names the slot
-    /// in `VariantKey::srgb_twins`, under which the function decodes what the device samples
-    /// there; without the fact that binding serves queries alone.
-    SrgbDeviceDecode { slot: SlotRef },
     /// The fragment function was compiled under `VariantKey::zeroed_colors`
     /// (`LoweringInputs::zeroed_colors`): it writes zero to color attachment `color`, of pixel
     /// format `format`, which its Metal pipeline lacks and the pass has, as plain Metal stores

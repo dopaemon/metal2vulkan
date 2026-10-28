@@ -1647,8 +1647,8 @@ degradations! {
         /// driver not named is unmeasured, and validation derives no tolerance from them.
         CompressedTexelDecode = "compressed-texel-decode", Precision,
             "a read, sample or gather of its texels answers the device's decode of its blocks \
-             (an sRGB form's code through Metal's table), where Metal interpolates with 6-bit \
-             weights: a BC1 to BC3 channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX \
+             (an sRGB form's code through the device's sRGB decode), where Metal interpolates \
+             with 6-bit weights: a BC1 to BC3 channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX \
              3090 and RTX 5080 Laptop GPU; BC3's alpha 6/255) and lavapipe, 1/255 on ANV; a BC4 \
              or BC5 channel up to 7.3/255 (signed 0.064) on NVIDIA, 1.3/255 (signed 0.013) on \
              ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV (Mesa 26.2.4, the Radeon \
@@ -1696,8 +1696,8 @@ degradations! {
         /// twin's R8G8B8A8 texels hold as the nearest 8-bit code (at most 1/510 off Metal's value).
         /// It reads an EAC 11-bit channel as `c / 2047` (signed `c / 1023`), which the twin holds
         /// as the nearest 16-bit normalized code (at most half a 16-bit step off). (An ASTC sRGB
-        /// texture's twin holds Metal's own 8-bit codes, which its slots decode through Metal's
-        /// table: exact.)
+        /// texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's
+        /// sRGB view, the device's decode: `srgb-texel-decode`.)
         DecodedTexelPrecision = "decoded-texel-precision", Precision,
             "a read, sample or gather of its texels answers the nearest 8-bit code to Metal's \
              12-bit value, at most 1/510 off it; an EAC 11-bit texture's, the nearest 16-bit \

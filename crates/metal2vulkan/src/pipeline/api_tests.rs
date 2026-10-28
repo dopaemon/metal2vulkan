@@ -196,7 +196,6 @@ mod serde_round_trips {
             dropped_vertex_layer: true,
             storage_view_slots: BTreeSet::from([buffer(3)]),
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
-            srgb_twins: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 7)]),
             flat_grid: true,
             replay_bindings: true,
@@ -324,7 +323,6 @@ mod serde_round_trips {
                 amplified: true,
             }),
             srgb_textures: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),
-            srgb_twins: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),
             snapshot_textures: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 3),
                 crate::pipeline::SnapshotForm::Half,
@@ -398,7 +396,6 @@ mod serde_round_trips {
                 crate::metal::format::WordAttachment::layout(metal::PixelFormat::ABGR4Unorm)
                     .expect("a word layout"),
             )]),
-            srgb_fetches: BTreeSet::from([0, 2]),
             zeroed_colors: BTreeMap::from([(2, metal::PixelFormat::RGBA32Sint)]),
             dropped_colors: BTreeSet::from([3]),
             kept_imageblock_bytes: Some(12),
