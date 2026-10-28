@@ -1,10 +1,12 @@
 //! A render state announces what the device's fixed-function vertex input converts for its vertex
 //! descriptor, at a draw that binds it, while one translation of its vertex function serves every
-//! format: a normalized attribute's `device-vertex-conversion`, a narrow float's read as `float`
-//! `device-nan-encoding`, and a 32-bit float attribute's neither. The translator decides the notes
-//! where it links the state's pipeline (`pipeline::link::vertex::fixed_function_notes`) and puts
-//! them on its vertex stage, whose module names no part of the format; so the states differ in
-//! their notes and not in their function's compile key (`WorkCounts::functions_translated`).
+//! format: a normalized attribute's `device-vertex-conversion` (none on a device whose profile
+//! takes `DriverDeviation::MetalNormalizedVertexFetch`, whose conversion is Metal's: MoltenVK on
+//! the Apple M3 Max's macOS 27 identity), a narrow float's read as `float` `device-nan-encoding`,
+//! and a 32-bit float attribute's neither. The translator decides the notes where it links the
+//! state's pipeline (`pipeline::link::vertex::fixed_function_notes`) and puts them on its vertex
+//! stage, whose module names no part of the format; so the states differ in their notes and not
+//! in their function's compile key (`WorkCounts::functions_translated`).
 //!
 //! Each draw fetches one record of `0x7f` bytes and stores the attribute's four words, printed:
 //! `UChar4Normalized` reads 127/255 (Metal's `0x3EFEFEFF`; a driver that multiplies by the
@@ -23,6 +25,7 @@ use crate::{
     MessageSink, PipelineOptions, RenderPassDescriptor, RenderPipelineState, ResourceOptions,
     ShaderCacheOptions,
 };
+use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::metal::{PrimitiveType, VertexFormat};
 use metal2vulkan::pipeline::{
     RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
@@ -131,24 +134,31 @@ fn draw(
 
 /// States over one vertex function whose vertex descriptors differ only in the format of the
 /// attribute fixed-function input fetches translate the function once, and each announces at its
-/// draw exactly the conversions its format takes.
+/// draw exactly the conversions its format takes on the device: a normalized format's but where
+/// the device's conversion is measured to be Metal's.
 #[test]
 fn a_state_announces_its_formats_conversions_from_one_translation() {
     let scratch = Scratch::new("vertex-conversion-notices");
     let heard = Heard::default();
     let device = device(&scratch.0, &heard);
     let library = library(&device, "engine/dsx_int_attributes.ll");
+    let measured = device
+        .compile_device()
+        .profile()
+        .takes_driver_deviation(DriverDeviation::MetalNormalizedVertexFetch);
+    eprintln!(
+        "VERTEX-CONVERSION: {} takes the measured normalized conversion: {measured}",
+        device.name()
+    );
+    let normalized = match measured {
+        true => vec![],
+        false => vec![Degradation::DeviceVertexConversion],
+    };
     let cases = [
-        (
-            VertexFormat::UChar4Normalized,
-            vec![Degradation::DeviceVertexConversion],
-        ),
+        (VertexFormat::UChar4Normalized, normalized.clone()),
         (VertexFormat::Half4, vec![Degradation::DeviceNanEncoding]),
         (VertexFormat::Float4, vec![]),
-        (
-            VertexFormat::Short2Normalized,
-            vec![Degradation::DeviceVertexConversion],
-        ),
+        (VertexFormat::Short2Normalized, normalized),
     ];
     // The first creation translates the function; every later one must find it compiled.
     let first = state(&device, &library, cases[0].0);

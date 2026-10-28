@@ -831,6 +831,16 @@ pub enum VkProperty {
     /// module whose depth comparisons the device makes requires it on a device without the
     /// extension in place of recording `PrecisionNote::RestrictedDepthRange`.
     DepthImageKeepsValuesOutsideUnitRange,
+    /// The device's fixed-function vertex input converts a normalized format's codes to Metal's
+    /// `float` at every code (the driver's measured deviation
+    /// [`DriverDeviation::MetalNormalizedVertexFetch`](crate::error::DriverDeviation::MetalNormalizedVertexFetch)).
+    /// No Vulkan query reports it: Vulkan states the correctly rounded quotient and lets a driver
+    /// compute it otherwise. A render pipeline whose fixed-function vertex input converts such a
+    /// format for an attribute that records no
+    /// [`PrecisionNote::DeviceVertexConversion`](crate::pipeline::PrecisionNote::DeviceVertexConversion)
+    /// requires it, where no module does (the format is the pipeline's vertex input state);
+    /// without it, the pipeline's vertex stage records that note.
+    MetalNormalizedVertexFetch,
 }
 
 /// One depth or stencil resolve mode (`VkResolveModeFlagBits`), named by
@@ -1191,7 +1201,8 @@ pub enum StageCreateFlag {
 /// `requiredSubgroupSizeStages`, and the size within `minSubgroupSize` and `maxSubgroupSize`; a
 /// stage that needs full subgroups adds [`StageCreateFlag::RequireFullSubgroups`]. A pipeline's
 /// requirements are the union of its stages', plus, for a render pipeline, what its fixed-function
-/// state needs (dynamic states, blending, multisampling, sample counts, multiview).
+/// state needs (dynamic states, blending, multisampling, sample counts, multiview, the measured
+/// conversions of its vertex input).
 ///
 /// The SPIR-V capabilities `StorageImageReadWithoutFormat` and `StorageImageWriteWithoutFormat`
 /// are listed without a feature: Vulkan enables each by `shaderStorageImage{Read,Write}WithoutFormat`,

@@ -1540,20 +1540,33 @@ pub enum PrecisionNote {
     /// `Int1010102Normalized`, `UInt1010102Normalized`) that fixed-function vertex input fetches
     /// is the device's conversion of its codes, through the format's own Vulkan `UNORM` or `SNORM`
     /// vertex format. Metal's fetch answers `c / (2^b - 1)` unsigned and
-    /// `max(c / (2^(b-1) - 1), -1)` signed, correctly rounded; Vulkan states the same conversion
-    /// and a driver may compute it otherwise (by the reciprocal). Recorded on a render pipeline's
-    /// vertex stage where its vertex descriptor gives such a format to an attribute fixed-function
-    /// input fetches (`pipeline::link::vertex`), whatever width the function declares the
-    /// attribute with (a `half` attribute reads the device's `float` value rounded to `half`). A
-    /// function compiled alone records nothing: its module is the same for every format the device
-    /// fetches. A pulled attribute's decode divides in the shader and records nothing either.
-    /// **Recorded bound:** within one `f32` ulp of Metal's quotient where measured: llvmpipe (Mesa
-    /// 26.2.4) multiplies by the reciprocal and reads some 8-bit unsigned codes one ulp high (127
-    /// as `0x3EFEFF00` where Metal reads `0x3EFEFEFF`), its 16-bit and packed normalized formats
-    /// Metal's; RADV's unsigned formats are Metal's; MoltenVK on an Apple M3 Max answered Metal's
-    /// at every site measured, and records the note as every device does, since no measured
-    /// property states its conversion. The signed formats off MoltenVK are unmeasured.
-    /// Validation derives no tolerance from it.
+    /// `max(c / (2^(b-1) - 1), -1)` signed, correctly rounded, but an `Int1010102Normalized`
+    /// 10-bit field's, the code times `float(1 / 511)` rounded to `float`, and to a `half`
+    /// attribute the quotient rounded once to `half` (measured at every code on an Apple M3 Max,
+    /// macOS 27.0.1); Vulkan states the correctly rounded quotient and a driver may compute it
+    /// otherwise (by the reciprocal). Recorded on a render pipeline's vertex stage where its vertex
+    /// descriptor gives such a format to an attribute fixed-function input fetches
+    /// (`pipeline::link::vertex`), whatever width the function declares the attribute with (a
+    /// `half` attribute reads the device's `float` value rounded to `half`), on every profile but
+    /// one that takes `DriverDeviation::MetalNormalizedVertexFetch` (MoltenVK on Apple's GPUs of
+    /// the Apple M3 Max's macOS 27 identity), whose `float` is measured to be Metal's at every
+    /// code: there such an attribute records nothing and the pipeline requires
+    /// `VkProperty::MetalNormalizedVertexFetch`, but for a 16-bit format read as `half`, which
+    /// rounds twice. A function compiled alone records nothing: its module is the same for every
+    /// format the device fetches. A pulled attribute's decode divides in the shader and records
+    /// nothing either.
+    /// **Recorded bound:** within one `f32` ulp of Metal's `float` where measured, but a signed
+    /// code past -1 on lavapipe per instance. llvmpipe multiplies by the reciprocal: read at every
+    /// code (Mesa 26.0.8 on LLVM 21.1.8, arm64), every normalized format is within one ulp of
+    /// Metal's per vertex (some 8-bit unsigned codes one ulp high, 127 as `0x3EFEFF00` where Metal
+    /// reads `0x3EFEFEFF`; some 16-bit, signed and `UInt1010102Normalized` codes one ulp low;
+    /// `Int1010102Normalized` Metal's), and per instance the most negative code of an 8- or 16-bit
+    /// signed format reads unclamped, `-2^(b-1) / (2^(b-1) - 1)` (-128 as -1.0079, -32768 as
+    /// -1.00003), where Metal reads -1. RADV's unsigned formats are Metal's at the sites measured,
+    /// its signed ones unmeasured. A 16-bit format read as `half` within one `half` ulp of Metal's,
+    /// on a device whose `float` is Metal's: its `float` quotient rounded to `half` again differs
+    /// at codes 65455 and 65519 unsigned, 32759 and -32759 signed. Validation derives no tolerance
+    /// from it.
     DeviceVertexConversion,
     /// Native half rounding (a conversion): the module rounds a `half` result it computes in
     /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by

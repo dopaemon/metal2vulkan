@@ -40,7 +40,7 @@
 //!   stage's imageblock ([`imageblock`]) and interlocked framebuffer fetch ([`fetch`]), and the
 //!   precision notes of the formats fixed-function vertex input converts for the vertex stage
 //!   (`vertex::fixed_function_notes`), which the module, shared by every such format, cannot
-//!   record. A mesh
+//!   record, with the measured properties a conversion relies on in place of a note. A mesh
 //!   render pipeline has an object stage when it has an object function, its mesh stage, and a
 //!   fragment stage exactly when it rasterizes; its `GraphicsState` is a render pipeline's with the
 //!   mesh stage in the vertex stage's place, and it has no vertex input. An emulated mesh
@@ -67,6 +67,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::cache::VariantKey;
 use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkLimit;
+use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
 use crate::error::{
     Capability, DescriptorError, Error, Feature, InternalError, InternalKind, Unsupported,
@@ -273,6 +274,12 @@ pub struct Linked {
     /// vertex stage's notes. Empty but for a render pipeline whose vertex input converts a
     /// format otherwise than Metal's fetch may.
     pub vertex_notes: Vec<PrecisionNote>,
+    /// The measured properties the vertex stage's fixed-function attributes rely on in place of a
+    /// note under this pipeline's vertex descriptor (`vertex::fixed_function_notes`): the compile
+    /// API adds them to the pipeline's requirements. Empty but for a render pipeline whose vertex
+    /// input converts a normalized format on a profile measured to convert it as Metal does
+    /// (`VkProperty::MetalNormalizedVertexFetch`).
+    pub vertex_properties: BTreeSet<VkProperty>,
     pub interface: PipelineInterface,
     /// `Some` exactly for a render pipeline.
     pub graphics: Option<GraphicsState>,
@@ -386,7 +393,7 @@ pub fn link(
         g.check_limits(&table.locations, p)?;
     }
     let interface = pipeline_interface(&ifaces);
-    let mut vertex_notes = Vec::new();
+    let mut vertex_notes = vertex::FixedFunctionNotes::default();
     let (vertex_input, graphics) = match inputs {
         LinkInputs::Render(r) => {
             let vs = ifaces.first().ok_or_else(|| missing_stage(Stage::Vertex))?;
@@ -410,7 +417,8 @@ pub fn link(
                         &table.locations,
                         p,
                     )?;
-                    vertex_notes = vertex::fixed_function_notes(vs, r.vertex_descriptor.as_ref())?;
+                    vertex_notes =
+                        vertex::fixed_function_notes(vs, r.vertex_descriptor.as_ref(), p)?;
                     vi
                 }
             };
@@ -466,7 +474,8 @@ pub fn link(
         table,
         layout,
         vertex_input,
-        vertex_notes,
+        vertex_notes: vertex_notes.notes,
+        vertex_properties: vertex_notes.properties,
         interface,
         graphics,
         specialization,

@@ -336,6 +336,10 @@ impl DeviceProfile {
             DriverDeviation::MetalFullQuads => {
                 f.enabled.properties.contains(&VkProperty::MetalFullQuads)
             }
+            DriverDeviation::MetalNormalizedVertexFetch => f
+                .enabled
+                .properties
+                .contains(&VkProperty::MetalNormalizedVertexFetch),
         }
     }
 

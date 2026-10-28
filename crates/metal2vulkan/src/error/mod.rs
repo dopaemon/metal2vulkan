@@ -796,6 +796,21 @@ pub enum DriverDeviation {
     /// requires the property in place of the feature. Unmeasured, such a function needs the
     /// feature.
     MetalFullQuads,
+    /// The device's fixed-function vertex input converts the codes of a normalized format (the
+    /// 8- and 16-bit `Normalized` formats of either sign, `UChar4Normalized_BGRA`,
+    /// `Int1010102Normalized`, `UInt1010102Normalized`, through their `UNORM` and `SNORM` vertex
+    /// formats) to Metal's `float`, at every code (`VkProperty::MetalNormalizedVertexFetch`): the
+    /// code over its maximum correctly rounded, `c / (2^b - 1)` unsigned and
+    /// `max(c / (2^(b-1) - 1), -1)` signed, but an `Int1010102Normalized` 10-bit field's, which
+    /// Metal reads as the code times `float(1 / 511)` rounded to `float` (one `f32` ulp toward
+    /// zero at 96 of the 1,024 codes). Vulkan states the correctly rounded quotient and lets a
+    /// driver compute it otherwise. Where the profile takes it, a render pipeline whose vertex
+    /// descriptor gives such a format to an attribute fixed-function input fetches records no
+    /// `PrecisionNote::DeviceVertexConversion` for it and requires the property, but for a
+    /// 16-bit format the function reads as `half`: Metal rounds the code's quotient to `half`
+    /// once, where the module rounds the device's `float` to `half`, so that attribute records
+    /// the note on every profile. Unmeasured, every such attribute records the note.
+    MetalNormalizedVertexFetch,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a
