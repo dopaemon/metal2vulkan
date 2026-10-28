@@ -937,6 +937,100 @@ fn a_half_color_output_records_its_precision() {
     }
 }
 
+/// The element widths of the `Output` variables `words` declare, in declaration order: a float's
+/// width, a vector's element's, an integer's.
+fn output_widths(words: &[u32]) -> Vec<u32> {
+    let mut widths = BTreeMap::new();
+    let mut pointees = BTreeMap::new();
+    let mut found = Vec::new();
+    let mut i = 5;
+    while let Some(&w) = words.get(i) {
+        let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
+        let at = |k: usize| words.get(i + k).copied().unwrap_or(0);
+        match op {
+            // OpTypeInt, OpTypeFloat: result, width.
+            21 | 22 => {
+                widths.insert(at(1), at(2));
+            }
+            // OpTypeVector: result, element.
+            23 => {
+                if let Some(&e) = widths.get(&at(2)) {
+                    widths.insert(at(1), e);
+                }
+            }
+            // OpTypePointer: result, storage class (`Output` is 3), pointee.
+            32 if at(2) == 3 => {
+                pointees.insert(at(1), at(3));
+            }
+            // OpVariable: type, result, storage class.
+            59 if at(3) == 3 => {
+                if let Some(w) = pointees.get(&at(1)).and_then(|t| widths.get(t)) {
+                    found.push(*w);
+                }
+            }
+            _ => {}
+        }
+        if len == 0 {
+            break;
+        }
+        i += len;
+    }
+    found
+}
+
+/// A `half` color output (`stage_io_fragment_point`'s `half4` to color 0) is declared with 16-bit
+/// float lanes on a profile that enables `storageInputOutput16` and `shaderFloat16`
+/// (`StageIo::half_outputs`), so the device receives the `half` the function returns as a `half`,
+/// and the module requires `StorageInputOutput16`; on a profile without it (lavapipe) the output is
+/// 32-bit, the `half` widened, as is a `float` output (`stage_io_fragment`) everywhere and a
+/// `half` one to an attachment held with its channels rotated. Each module passes L3.
+#[test]
+fn a_half_color_output_is_declared_16_bit_where_the_device_enables_it() {
+    use crate::device::requirements::VkFeature;
+    use crate::lower::select::LowerInputs;
+    use crate::pipeline::testing::compile_with;
+    let Some(bc) = fixture() else { return };
+    let color = VaryingKey::color(0, 0);
+    let mut seen = [false; 2];
+    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+        let p = prof(stem);
+        let leaf = p.fields().leaf;
+        let sixteen = leaf.input_output_16bit && leaf.float16;
+        seen[usize::from(sixteen)] = true;
+        let half = compile(&bc, "stage_io_fragment_point", &p).expect("half");
+        let words = validate(&half, &alone(&half, &p), &p);
+        let io16 = half
+            .requirements
+            .features
+            .contains(&VkFeature::StorageInputOutput16);
+        match sixteen {
+            true => {
+                assert_eq!(
+                    half.interface.io.half_outputs,
+                    std::slice::from_ref(&color),
+                    "{stem}"
+                );
+                assert_eq!(output_widths(&words), [16], "{stem}");
+                assert!(io16, "{stem}: {:?}", half.requirements.features);
+            }
+            false => {
+                assert!(half.interface.io.half_outputs.is_empty(), "{stem}");
+                assert_eq!(output_widths(&words), [32], "{stem}");
+                assert!(!io16, "{stem}");
+            }
+        }
+        let float = compile(&bc, "stage_io_fragment", &p).expect("float");
+        assert!(float.interface.io.half_outputs.is_empty(), "{stem}");
+        let words = validate(&float, &alone(&float, &p), &p);
+        assert!(output_widths(&words).iter().all(|w| *w == 32), "{stem}");
+        let mut inputs = LowerInputs::new();
+        inputs.rotated_colors.insert(0);
+        let rotated = compile_with(&bc, "stage_io_fragment_point", &p, &inputs).expect("rotated");
+        assert!(rotated.interface.io.half_outputs.is_empty(), "{stem}");
+    }
+    assert_eq!(seen, [true, true], "both kinds of profile are exercised");
+}
+
 /// A `half` color output of a module without fast math (the `stage_io` fixture stating
 /// `fast_math_disable`) lists its attachment (`StageIo::half_blend_colors`), and the pipeline's
 /// stage records `PrecisionNote::HalfOutputPrecision` only where that attachment blends

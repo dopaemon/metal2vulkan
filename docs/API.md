@@ -3043,7 +3043,10 @@ bound.
   is opaque to the blend and its form fits every measured state, the function's blend is Metal's
   and records nothing; so does the blend of a fetched 8-bit unorm attachment it computes there
   (every factor, operation, write mask and blend color it builds), which Metal reads the output
-  into clamped, folding none of it.
+  into clamped, folding none of it. On a device that enables `storageInputOutput16` the output
+  reaches the device as a 16-bit `half` (`StageIo::half_outputs`); MoltenVK 1.4.2 on an Apple M3
+  Max then stores Metal's codes for a loaded `half4` under every blend measured (21, into 16- and
+  32-bit float formats).
 - `metal2vulkan-degrade-device-sampling` (precision). `PrecisionNote::DeviceSampling`: Native device
   sampling: the module hands a sample, gather, comparison or level query to the device's own
   sampler on a device whose sampler is not Metal's (the module requires

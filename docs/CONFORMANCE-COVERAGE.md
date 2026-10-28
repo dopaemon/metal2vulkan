@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1129 |
+| ledger rows (a case whose gap is recorded) | 1077 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2228,58 +2228,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
 | `half-texel-nans-rgba16f` | Metal's `texture2d<half>` never widens, so a 16-bit float texel's NaN comes back as its own code -- sign, payload and signalling bit kept -- and ours answers th… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-r16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rg16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
-| `half-output-blends-rgba16f` | The device's blend of a fast-math `half` output (`rt6_samples`'s `half4` fill) into a 16-bit float attachment. Metal's compiler folds the blend into the fragmen… |
 | `format-footprints-astc-4x2-and-8x4` | The runtime answers Metal's heap footprint for ASTC's 4x2 and 8x4 footprints, which is arithmetic over a descriptor, but holds no image of any of them, so `newT… |
 | `format-footprints-plain-stragglers` | Plain Metal makes a texture of `ARGB8Unorm_sRGB` in all eight non-multisample texture types and takes a host `replaceRegion:`/`getBytes:` round trip through eac… |
 | `format-footprints-one-plane-ycbcr` | The runtime answers Metal's heap footprint for Apple's nine one-plane YCbCr formats, which is arithmetic over a descriptor, but holds no image of any of them, s… |
