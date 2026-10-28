@@ -301,14 +301,6 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
-- **A pulled `Int1010102Normalized` attribute's 10-bit fields are the correctly rounded
-  quotient `c / 511`, where Metal's fetch multiplies the code by `float(1 / 511)` in `float`:**
-  one `f32` ulp farther from zero at 96 of the 1,024 codes (48 of each sign; measured at every
-  code on the Apple M3 Max under macOS 27.0.1, per vertex and per instance). The shader's decode
-  (`lower::stage_io::fetch`) serves every attribute fixed-function input does not fetch: Metal's
-  constant step on MoltenVK, a device without buffer robustness, the indexed capture form, and a
-  kernel's stage input, whose Metal answer is unmeasured. Not announced.
-
 - **A shadowed texture over an IOSurface plane's bytes is copied in whole for every command
   buffer that samples it**, where it is a shadow: one that only samples or reads is an image in
   place where its class's check passed (`in_place.rs`), so this holds for a plane that renders or

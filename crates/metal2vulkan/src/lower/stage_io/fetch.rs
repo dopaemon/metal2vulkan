@@ -665,7 +665,10 @@ fn field(fb: &mut FunctionBuilder<'_>, w: SValue, at: u32, width: u32) -> BResul
 /// `max(c / (2^(b-1) - 1), -1)`, each correctly rounded. The quotient is
 /// [`exact_division::div_exact`]'s integer sequence, not a device division, which may be an ULP
 /// off; a signed field divides its magnitude clamped to the scale (the most negative code is
-/// `-1` exactly) and takes the code's sign, as `air.unpack`'s SNORM formats do.
+/// `-1` exactly) and takes the code's sign, as `air.unpack`'s SNORM formats do. A signed 10-bit
+/// field (`Int1010102Normalized`'s three) is Metal's product instead: the clamped magnitude times
+/// `float(1/511)`, one rounding, which lies an ULP toward zero of the quotient at 96 of the 1,024
+/// codes (`runtime_lane::normalized_vertex_fetch` measures Metal's fetch so).
 fn normalized(fb: &mut FunctionBuilder<'_>, c: SValue, bits: u8, signed: bool) -> BResult<SValue> {
     let u = u32_scalar();
     if !signed {
@@ -683,7 +686,14 @@ fn normalized(fb: &mut FunctionBuilder<'_>, c: SValue, bits: u8, signed: bool) -
     let mag = fb.select(neg, minus, v)?;
     let dk = k32(fb, d)?;
     let mag = fb.glsl(GlslOp::UMin, &[mag, dk])?;
-    let q = exact_division::div_exact(fb, u, mag, d)?;
+    let q = if bits == 10 {
+        let ft = ops::ty(fb, f32_scalar())?;
+        let m = fb.convert(ConvOp::ConvertUToF, mag, ft)?;
+        let r = ops::splat(fb, f32_scalar(), u64::from((1.0f32 / 511.0).to_bits()))?;
+        fb.binary_with(BinOp::FMul, m, r, Contraction::Forbidden)?
+    } else {
+        exact_division::div_exact(fb, u, mag, d)?
+    };
     let nq = fb.unary(UnOp::FNegate, q)?;
     fb.select(neg, nq, q)
 }
@@ -1031,7 +1041,15 @@ pub(crate) fn reference(encoding: Encoding, bytes: &[u8]) -> [f64; 4] {
         Encoding::Rgb10A2 { signed } => {
             let w = word(0);
             for (o, (at, width)) in out.iter_mut().zip([(0, 10), (10, 10), (20, 10), (30, 2)]) {
-                *o = norm((w >> at) & ((1 << width) - 1), width, signed);
+                let c = (w >> at) & ((1 << width) - 1);
+                *o = if signed && width == 10 {
+                    // Metal's product: the clamped magnitude times `float(1/511)`.
+                    let v = sx(c, width);
+                    let q = (v.unsigned_abs().min(511) as f32) * (1.0f32 / 511.0);
+                    f64::from(if v < 0 { -q } else { q })
+                } else {
+                    norm(c, width, signed)
+                };
             }
         }
         Encoding::Rg11B10Float => {

@@ -2946,9 +2946,13 @@ bound.
   either sign, `UChar4Normalized_BGRA`, `Int1010102Normalized`, `UInt1010102Normalized`) to an
   attribute that fixed-function vertex input fetches, so the attribute is the device's `UNORM` or
   `SNORM` conversion of its codes, where Metal's fetch answers the code over its maximum correctly
-  rounded: within one `f32` ulp where measured (lavapipe reads some 8-bit unsigned codes one ulp
-  high). Recorded on the pipeline's vertex stage, on every device; one module serves every format
-  the device fetches.
+  rounded (an `Int1010102Normalized` 10-bit field times `float(1/511)`): within one `f32` ulp
+  where measured (lavapipe reads some 8-bit unsigned codes one ulp high), but lavapipe's
+  per-instance fetch, which reads the most negative code of an 8- or 16-bit signed format
+  unclamped (-128/127, -32768/32767) where Metal reads -1. Recorded on the pipeline's vertex stage
+  on every device but one whose profile takes `DriverDeviation::MetalNormalizedVertexFetch`
+  (MoltenVK on the Apple M3 Max's macOS 27 identity), where only a 16-bit format read as `half`
+  records it; one module serves every format the device fetches.
 - `metal2vulkan-degrade-native-half-conversion` (precision). `PrecisionNote::NativeHalfConversion`:
   Native half rounding (a conversion): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's

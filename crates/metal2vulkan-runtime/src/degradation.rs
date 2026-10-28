@@ -2095,10 +2095,15 @@ degradations! {
         /// normalized vertex attribute's codes (the 8- and 16-bit normalized formats of either
         /// sign, `UChar4Normalized_BGRA`, `Int1010102Normalized`, `UInt1010102Normalized`)
         /// through its `UNORM` or `SNORM` vertex format, where Metal's fetch answers the code over
-        /// its maximum correctly rounded. Recorded bound: within one `f32` ulp where measured
-        /// (lavapipe's reciprocal product reads some 8-bit unsigned codes one ulp high; its 16-bit
-        /// and packed formats, RADV's unsigned ones and MoltenVK's on an Apple M3 Max Metal's);
-        /// the signed formats off MoltenVK are unmeasured.
+        /// its maximum correctly rounded (an `Int1010102Normalized` 10-bit field times
+        /// `float(1/511)`). Not recorded for a `float` attribute on a profile that takes
+        /// `DriverDeviation::MetalNormalizedVertexFetch` (MoltenVK on the Apple M3 Max's macOS 27
+        /// identity, measured Metal's at every code). Recorded bound: within one `f32` ulp where
+        /// measured (lavapipe's reciprocal product reads some 8-bit unsigned codes one ulp high;
+        /// RADV's unsigned formats are Metal's), but lavapipe's per-instance fetch reads the most
+        /// negative code of an 8- or 16-bit signed format unclamped (-128/127, -32768/32767) where
+        /// Metal reads -1; a 16-bit format read as `half`, one `half` ulp at four codes; the signed
+        /// formats on RADV, ANV and NVIDIA are unmeasured.
         DeviceVertexConversion = "device-vertex-conversion";
         /// Class: native half rounding. The device's own conversion of a `float` to 16 bits
         /// rounds the pipeline's `half` results, on a device with `shaderFloat16` whose float

@@ -687,10 +687,12 @@ fn every_normalized_byte_is_correctly_rounded() {
     }
 }
 
-/// Every 10-bit and 2-bit code of the packed 10:10:10:2 formats decodes to the correctly rounded
-/// quotient, signed codes (the most negative one `-1`) and unsigned.
+/// Every 10-bit and 2-bit code of the packed 10:10:10:2 formats decodes as Metal's fetch does:
+/// the correctly rounded quotient, signed codes (the most negative one `-1`) and unsigned, but a
+/// signed 10-bit field, which is its clamped magnitude times `float(1/511)` (an ULP toward zero
+/// of the quotient at 96 of the 1,024 codes).
 #[test]
-fn every_ten_and_two_bit_code_is_correctly_rounded() {
+fn every_ten_and_two_bit_code_decodes_as_metals() {
     let n = 1024u32.div_ceil(3);
     let words: Vec<u32> = (0..n)
         .map(|i| {
@@ -709,7 +711,12 @@ fn every_ten_and_two_bit_code_is_correctly_rounded() {
             let got = run(&m, &data, [i as u32, 0, 4, 0], 4);
             let want = [(0, 10u32), (10, 10), (20, 10), (30, 2)].map(|(at, bits)| {
                 let c = (w >> at) & ((1 << bits) - 1);
-                if signed {
+                if signed && bits == 10 {
+                    let s = 32 - bits;
+                    let c = ((c << s) as i32) >> s;
+                    let q = (c.unsigned_abs().min(511) as f32) * (1.0f32 / 511.0);
+                    f64::from(if c < 0 { -q } else { q })
+                } else if signed {
                     let s = 32 - bits;
                     let c = i64::from(((c << s) as i32) >> s);
                     exact_quotient(c, (1 << (bits - 1)) - 1)
@@ -721,6 +728,16 @@ fn every_ten_and_two_bit_code_is_correctly_rounded() {
             check_lanes(&format!("{format:?} element {i}"), float(4), &got, want);
         }
     }
+    let off = (-512i64..512)
+        .filter(|&c| {
+            let q = (c.unsigned_abs().min(511) as f32) * (1.0f32 / 511.0);
+            f64::from(if c < 0 { -q } else { q }) != exact_quotient(c, 511)
+        })
+        .count();
+    assert_eq!(
+        off, 96,
+        "the codes where Metal's product is not the quotient"
+    );
 }
 
 /// A `half` field's widening to a `float` or `half` parameter, and a `FloatRG11B10` field's (a
