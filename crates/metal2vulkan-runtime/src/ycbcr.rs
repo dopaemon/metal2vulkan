@@ -48,8 +48,8 @@
 //!   `ycbcr_device_samples`). A render shadow's load stays Metal's arithmetic, which the store
 //!   inverts (**Passes** below). Metal's fixed-point conversion converts every other texture, and
 //!   every texture of a device without the conversion or with a defect in it (MoltenVK's 4:2:0
-//!   and 4:2:2 formats, `RuntimeDriverDefect::TwoPlaneChromaMisplaced`; lavapipe's 10-bit ones,
-//!   `RuntimeDriverDefect::TenBitCodesReadAsWords`).
+//!   and 4:2:2 formats, `RuntimeDriverDefect::TwoPlaneChromaMisplaced`; lavapipe's and RADV's
+//!   10-bit ones, `RuntimeDriverDefect::TenBitCodesReadAsWords`).
 //! - **When it converts.** Before an encoder's first command that uses the texture, and again
 //!   after a command of the encoder that writes the planes' bytes (through the buffer, a texture
 //!   over the planes such as a decoder's `R8Unorm` and `RG8Unorm` ones, or a blit): a use of the
@@ -78,9 +78,12 @@
 //!   `R8G8_UINT` of 8-bit codes and `R16G16_UINT` of 10-bit ones, and the function fetches the codes
 //!   and converts and filters them as Metal does, exactly; the draw or dispatch reads those bytes
 //!   alone, and converts no image (`WorkCounts::ycbcr_textures_in_place`, `ycbcr_planes_bound`).
-//!   The planes in place form no image of a multi-planar format (their rows are the surface's),
-//!   so the function converts them as Metal does on a device that converts the format itself
-//!   too, where the texture's image holds the device's conversion.
+//!   Where the device converts the 4:2:0 format as a linear image with Metal's reconstruction and
+//!   the planes lie as that image's would, in memory the runtime allocated, they are also such an
+//!   image (`texture/ycbcr_planes.rs`), and a slot whose every sample the device's sampler takes
+//!   samples it through the device's conversion instead (`WorkCounts::ycbcr_planes_images`,
+//!   `ycbcr_planes_images_bound`); elsewhere the function converts them as Metal does, on a device
+//!   that converts the format itself too, where the texture's image holds the device's conversion.
 //!   A read, a gather or any other use binds the image, converted as above. A discrete, virtual or
 //!   other GPU keeps the image alone (`ycbcr_images_kept_device`): it reads the host's planes
 //!   across its bus at every pass, where the image lies in its own memory. Both forms are Metal's

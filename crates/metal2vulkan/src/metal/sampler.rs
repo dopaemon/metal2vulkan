@@ -390,6 +390,7 @@ pub fn vk_sampler(
         border_color,
         reduction: vk::SamplerReductionMode::WEIGHTED_AVERAGE,
         border_components: None,
+        ycbcr: None,
     })
 }
 

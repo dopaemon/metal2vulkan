@@ -730,6 +730,7 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
     let fact = |samplers| RuntimeFact::YCbCrInPlace {
         slot: TEXTURE,
         samplers,
+        device: true,
     };
     let reads = [
         (
@@ -772,7 +773,9 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
             let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(false))
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let stated = plan.facts.iter().find_map(|f| match f {
-                RuntimeFact::YCbCrInPlace { slot, samplers } if *slot == TEXTURE => Some(*samplers),
+                RuntimeFact::YCbCrInPlace { slot, samplers, .. } if *slot == TEXTURE => {
+                    Some(*samplers)
+                }
                 _ => None,
             });
             assert_eq!(stated, samplers.filter(|_| takes), "{what}");
@@ -782,5 +785,122 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
                 assert!(variant.facts.contains(&fact(s)), "{what}, in place");
             }
         }
+    }
+}
+
+/// Under the planes-image variant (`LoweringInputs::ycbcr_planes_sampled`) the slot is one
+/// combined image sampler of the device's conversion (`ResourceKind::YCbCrPlanes`), every sample
+/// is the device's `OpImageSampleExplicitLod` at level 0 with no offset operand
+/// (`VUID-RuntimeSpirv-ConstOffset-10718`), and the module is valid, through a constexpr sampler
+/// (nearest and linear, normalized and pixel coordinates, with a texel offset on edge axes) and a
+/// runtime one. A sample through a border mode, or with an offset on an axis that repeats, states
+/// the in-place fact without `device`, so no plan takes the variant for it.
+#[test]
+fn a_planes_image_slot_samples_through_the_device_s_conversion() {
+    use crate::pipeline::interface::StageDescriptor;
+    use crate::vk;
+    let codes = ycbcr_format(PixelFormat::YCBCR84202P)
+        .and_then(YCbCrCodes::of)
+        .expect("codes");
+    let planes = YCbCrPlanes::new(
+        [8, 4],
+        [0, 16],
+        [64, 16],
+        (YCbCrRange::Video, YCbCrMatrix::Bt709),
+        codes,
+    );
+    let sampler = YCbCrInPlace::of(&planes).expect("in place").sampler();
+    let device_inputs = || {
+        let mut i = inputs(true);
+        i.ycbcr_planes_sampled.insert(TEXTURE, sampler);
+        i
+    };
+    let nearest = sampler_words(0, 0, 1, false, 0);
+    let device_state = |plan: &Plan| {
+        plan.facts.iter().find_map(|f| match f {
+            RuntimeFact::YCbCrInPlace { slot, device, .. } if *slot == TEXTURE => Some(*device),
+            _ => None,
+        })
+    };
+    let taken = [
+        ("device linear", Some(linear(1, false, 0)), (0, 0)),
+        ("device nearest", Some(nearest), (0, 0)),
+        ("device pixel", Some(linear(1, true, 0)), (0, 0)),
+        ("device offset", Some(linear(1, false, 0)), (1, -2)),
+        ("device runtime", None, (0, 0)),
+    ];
+    for (name, sampler_words, offset) in taken {
+        for half in [false, true] {
+            let form = Form::Plain { offset };
+            let Some(bc) = assemble(name, &kernel_of(sampler_words, form, !half)) else {
+                return;
+            };
+            for (stem, p) in [("lavapipe", lavapipe()), ("moltenvk-m3", m3())] {
+                let what = format!("{name} half={half} on {stem}");
+                let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(true))
+                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                assert_eq!(device_state(&plan), Some(true), "{what}");
+                let a = compile_with(&bc, "k", &p, &device_inputs())
+                    .unwrap_or_else(|e| panic!("{what}, planes image: {e}"));
+                let want = StageDescriptor::new(
+                    ResourceSlot {
+                        stage: Stage::Kernel,
+                        kind: ResourceKind::YCbCrPlanes(sampler),
+                        index: 0,
+                    },
+                    vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                    1,
+                );
+                assert!(
+                    a.interface.descriptors.contains(&want),
+                    "{what}: {:?}",
+                    a.interface.descriptors
+                );
+                assert!(
+                    a.facts.iter().any(|f| matches!(
+                        f,
+                        RuntimeFact::YCbCrInPlace { slot, device: true, .. } if *slot == TEXTURE
+                    )),
+                    "{what}: the variant states the same fact"
+                );
+                let (_, words) =
+                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                // Every sample: `OpImageSampleExplicitLod` (88) whose operands are `Lod` (0x2)
+                // alone.
+                let mut samples = 0;
+                let mut at = 5;
+                while let Some(&first) = words.get(at) {
+                    let (count, op) = ((first >> 16) as usize, first & 0xffff);
+                    assert!(count > 0, "{what}: a zero-length instruction");
+                    if op == 88 {
+                        samples += 1;
+                        assert_eq!(words.get(at + 5), Some(&0x2), "{what}: operands");
+                        assert_eq!(count, 7, "{what}: the Lod operand alone");
+                    }
+                    assert!(
+                        !(87..=94).contains(&op) || op == 88,
+                        "{what}: another sample opcode {op}"
+                    );
+                    at += count;
+                }
+                assert_eq!(samples, 1, "{what}");
+            }
+        }
+    }
+    // Through a border mode, or with an offset on an axis that repeats: no device sample.
+    let kept = [
+        ("device border", Some(linear(0, false, 0)), (0, 0)),
+        ("device repeat offset", Some(linear(2, false, 0)), (1, 0)),
+    ];
+    for (name, sampler_words, offset) in kept {
+        let Some(bc) = assemble(
+            name,
+            &kernel_of(sampler_words, Form::Plain { offset }, false),
+        ) else {
+            return;
+        };
+        let (plan, _) = typed_module_with(&bc, "k", &lavapipe(), &inputs(true))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(device_state(&plan), Some(false), "{name}");
     }
 }

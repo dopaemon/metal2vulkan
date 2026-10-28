@@ -420,6 +420,12 @@ pub enum ResourceKind {
     /// `R32G32B32A32_UINT` 2D storage image covering the draw's render area, each texel the bits
     /// of the four values a fetch of the texture's level 0 there returned.
     SnapshotTexels(u32),
+    /// The planes of the two-plane YCbCr texture bound at the stage's texture slot
+    /// `ResourceSlot::index`, held as an image of the multi-planar format that the device's own
+    /// sampler Y′CbCr conversion samples (`LoweringInputs::ycbcr_planes_sampled`): a combined
+    /// image sampler whose immutable sampler is the device's conversion of this
+    /// (`vk::SamplerDesc::ycbcr`), whose image the consumer views with the same conversion.
+    YCbCrPlanes(crate::bind::YCbCrPlanesSampler),
 }
 
 /// What a bound acceleration structure holds: the binder binds a top-level structure, so a

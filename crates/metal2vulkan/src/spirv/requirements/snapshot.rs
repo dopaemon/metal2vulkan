@@ -116,7 +116,9 @@ fn reach(m: &TypedModule, own: &[u32], n: usize) -> Result<Vec<u32>, Error> {
     for g in m.globals() {
         if let GlobalKind::Resource(slot) = &g.kind {
             let texture = match slot.kind {
-                ResourceKind::Texture | ResourceKind::CombinedTextureSampler(_) => Some(slot.index),
+                ResourceKind::Texture
+                | ResourceKind::CombinedTextureSampler(_)
+                | ResourceKind::YCbCrPlanes(_) => Some(slot.index),
                 ResourceKind::SeparateTexture(_) => slot.separate_texture_of().map(|(t, _)| t),
                 _ => None,
             };
@@ -336,7 +338,9 @@ fn copies_alone(m: &TypedModule, slots: &[u32], n: usize) -> Result<bool, Error>
     for g in m.globals() {
         if let GlobalKind::Resource(slot) = &g.kind {
             let texture = match slot.kind {
-                ResourceKind::Texture | ResourceKind::CombinedTextureSampler(_) => Some(slot.index),
+                ResourceKind::Texture
+                | ResourceKind::CombinedTextureSampler(_)
+                | ResourceKind::YCbCrPlanes(_) => Some(slot.index),
                 ResourceKind::SeparateTexture(_) => slot.separate_texture_of().map(|(t, _)| t),
                 _ => None,
             };

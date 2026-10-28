@@ -149,6 +149,11 @@ pub(super) enum OwnedModule {
     /// conversion's sampler, made with the first kernel of it and released with the device
     /// (`ycbcr_device.rs`). One per sampler and output a texture of the device reads through.
     YCbCrSample(YCbCrSampler, YCbCrCodes),
+    /// `bind::chroma_sample_module`: a 4:2:2 texture's pairs' image sampled through the device's
+    /// own Y′CbCr conversion into a band of its decoded twin's texels
+    /// (`texture/decoded_twin.rs`); its layout bakes the conversion's sampler, as
+    /// [`YCbCrSample`](Self::YCbCrSample)'s does. One per sampler (a format, two at most).
+    ChromaSample(YCbCrSampler),
     /// `bind::ycbcr_refresh_module`: a YCbCr texture's planes compared with the copy its last
     /// conversion read, the changed words stored over it, and the conversion's indirect group
     /// count written where any changed (`ycbcr.rs`).
@@ -192,8 +197,8 @@ impl OwnedModule {
             OwnedModule::MipmapFilter(kernel) => u32::from(kernel.fetches()),
             OwnedModule::ShadowCopyBack(_) | OwnedModule::ShadowMergeImage(_) => 1,
             OwnedModule::ShadowMergeKeptImage(_) => 2,
-            // The combined image sampler of the planes' image.
-            OwnedModule::YCbCrSample(..) => 1,
+            // The combined image sampler of the planes' (or pairs') image.
+            OwnedModule::YCbCrSample(..) | OwnedModule::ChromaSample(_) => 1,
             _ => 0,
         }
     }
@@ -409,6 +414,11 @@ impl OwnedModule {
                 let push_bytes = metal2vulkan::bind::YCbCrSampleModule::PUSH_BYTES;
                 Ok((module.spirv.to_vec(), 0, push_bytes))
             }
+            OwnedModule::ChromaSample(_) => {
+                let module = metal2vulkan::bind::chroma_sample_module(device.compile_device())
+                    .map_err(Error::Compile)?;
+                Ok((module.spirv.to_vec(), 2, 0))
+            }
             OwnedModule::RotateTexels => {
                 let module = metal2vulkan::bind::rotate_texels_module(device.compile_device())
                     .map_err(Error::Compile)?;
@@ -544,8 +554,10 @@ pub(super) struct OwnedKernels {
     ycbcr_refresh: Option<OwnedKernel>,
     ycbcr_converts: HashMap<(YCbCrConversion, bool), OwnedKernel>,
     ycbcr_samples: HashMap<(YCbCrSampler, YCbCrCodes), OwnedKernel>,
-    /// The conversions and samplers the YCbCr sample kernels' layouts bake, made with the first
-    /// kernel of each and released with the device.
+    chroma_samples: HashMap<YCbCrSampler, OwnedKernel>,
+    /// The conversions and samplers the YCbCr and 4:2:2 sample kernels' layouts bake, made with
+    /// the first kernel of each (or the first planes image or layout of a planes sampler,
+    /// [`Device::made_ycbcr_conversion`]) and released with the device.
     ycbcr_samplers: HashMap<YCbCrSampler, (vk::SamplerYcbcrConversion, vk::Sampler)>,
     two_plane_texels: Option<OwnedKernel>,
     plane_bytes_copy: Option<OwnedKernel>,
@@ -602,6 +614,7 @@ impl OwnedKernels {
         .chain(self.index_rewrite_runs.values().copied())
         .chain(self.ycbcr_converts.values().copied())
         .chain(self.ycbcr_samples.values().copied())
+        .chain(self.chroma_samples.values().copied())
         .chain(self.extended_shadow_loads.values().copied())
         .chain(self.twin_decodes.values().copied())
         .chain(self.tessellation_scans.values().copied())
@@ -652,6 +665,7 @@ impl OwnedKernels {
             OwnedModule::YCbCrSample(sampler, codes) => {
                 self.ycbcr_samples.get(&(sampler, codes)).copied()
             }
+            OwnedModule::ChromaSample(sampler) => self.chroma_samples.get(&sampler).copied(),
             OwnedModule::ExtendedShadowLoad(form) => self.extended_shadow_loads.get(&form).copied(),
             OwnedModule::TwinDecode(decode) => self.twin_decodes.get(&decode).copied(),
             OwnedModule::TessellationScan(kernel) => self.tessellation_scans.get(&kernel).copied(),
@@ -688,6 +702,9 @@ impl OwnedKernels {
             }
             OwnedModule::YCbCrSample(sampler, codes) => {
                 self.ycbcr_samples.insert((sampler, codes), kernel);
+            }
+            OwnedModule::ChromaSample(sampler) => {
+                self.chroma_samples.insert(sampler, kernel);
             }
             OwnedModule::ExtendedShadowLoad(form) => {
                 self.extended_shadow_loads.insert(form, kernel);
@@ -739,6 +756,7 @@ impl OwnedKernels {
             | OwnedModule::IndexRewriteRun(_)
             | OwnedModule::YCbCrConvert(..)
             | OwnedModule::YCbCrSample(..)
+            | OwnedModule::ChromaSample(_)
             | OwnedModule::ExtendedShadowLoad(_)
             | OwnedModule::TwinDecode(_)
             | OwnedModule::TessellationScan(_) => return None,
@@ -781,6 +799,20 @@ impl Device {
         made.map(|&(conversion, _)| conversion)
     }
 
+    /// The device's Y′CbCr conversion of `sampler` ([`OwnedKernels::ycbcr_sampler`]), made on
+    /// first use: a planes image's view (`texture/ycbcr_planes.rs`) and every immutable sampler
+    /// of it a pipeline's layout bakes (`pipeline/objects.rs`'s `sampler_set`) are made with this
+    /// one conversion, so each sampler's `VkSamplerYcbcrConversionInfo` is identically defined to
+    /// the view's (`VUID-VkWriteDescriptorSet-descriptorType-02738`).
+    pub(super) fn made_ycbcr_conversion(
+        &self,
+        sampler: YCbCrSampler,
+    ) -> Result<vk::SamplerYcbcrConversion, Error> {
+        let mut kernels = lock(&self.shared().owned_kernels);
+        let (conversion, _) = kernels.ycbcr_sampler(self, sampler)?;
+        Ok(conversion)
+    }
+
     /// The kernel of `which`, made on first use.
     pub(super) fn owned_kernel(&self, which: OwnedModule) -> Result<OwnedKernel, Error> {
         // A making's turn before the lock (`budget::helper_turn`): none where it is made.
@@ -794,7 +826,7 @@ impl Device {
         let (spirv, buffers, push_bytes) = which.build(self)?;
         let bindings = (which.images(), which.storage_images(), buffers);
         let baked = match which {
-            OwnedModule::YCbCrSample(sampler, ..) => {
+            OwnedModule::YCbCrSample(sampler, ..) | OwnedModule::ChromaSample(sampler) => {
                 let (_, made) = kernels.ycbcr_sampler(self, sampler)?;
                 Some((made, sampler.descriptors))
             }

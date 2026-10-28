@@ -688,16 +688,19 @@ fn binding_source(slot: ResourceSlot) -> BindingSource {
         },
         ResourceKind::ExtendedShadow(color) => BindingSource::ExtendedShadow(color),
         ResourceKind::SnapshotTexels(texture) => BindingSource::SnapshotTexels(texture),
+        ResourceKind::YCbCrPlanes(_) => BindingSource::YCbCrPlanes(metal(SlotClass::Texture)),
     }
 }
 
 /// The immutable sampler of binding `slot`: a combined image sampler's, heap sampler's, or
-/// separate sampler's constexpr sampler, made for its use.
+/// separate sampler's constexpr sampler, made for its use; a planes image's device conversion
+/// (`ResourceKind::YCbCrPlanes`).
 fn immutable_sampler(
     slot: ResourceSlot,
     p: &DeviceProfile,
 ) -> Result<Option<vk::SamplerDesc>, Error> {
     let c = match slot.kind {
+        ResourceKind::YCbCrPlanes(sampler) => return Ok(Some(vk::SamplerDesc::ycbcr(sampler))),
         ResourceKind::CombinedTextureSampler(c) => c,
         ResourceKind::HeapSampler(sampler) | ResourceKind::SeparateSampler(sampler) => {
             CombinedSampler::from_heap_index(sampler, slot.index)
@@ -818,8 +821,12 @@ fn layout(
                 )));
             }
             // A combined image sampler is exactly a `CombinedTextureSampler` symbol, which names
-            // its texture slot and its sampler.
-            let combined = matches!(d.slot.kind, ResourceKind::CombinedTextureSampler(_));
+            // its texture slot and its sampler, or a planes image's (`YCbCrPlanes`), which names
+            // its texture slot and the conversion its immutable sampler bakes.
+            let combined = matches!(
+                d.slot.kind,
+                ResourceKind::CombinedTextureSampler(_) | ResourceKind::YCbCrPlanes(_)
+            );
             if combined != (d.ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER) {
                 return Err(Error::Internal(InternalError::new(
                     InternalKind::Invariant,

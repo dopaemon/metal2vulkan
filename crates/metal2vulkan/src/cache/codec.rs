@@ -21,6 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use crate::bind::YCbCrPlanesSampler;
 use crate::device::profile::Independence;
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, Requirements, ResolveMode, SpirvCapability,
@@ -794,9 +795,10 @@ codec_struct! {
     SamplerDesc {
         mag_filter, min_filter, mipmap_mode, address_mode_u, address_mode_v, address_mode_w,
         mip_lod_bias, max_anisotropy, compare, min_lod, max_lod, border_color, reduction,
-        border_components,
+        border_components, ycbcr,
     }
     ComponentMapping { r, g, b, a }
+    YCbCrPlanesSampler { conversion }
 }
 
 // ---- Link symbols (`pipeline::sym`) ----
@@ -848,6 +850,7 @@ codec_enum! {
         TileMap, SeparateTexture(f0), SeparateSampler(f0),
         ExtendedShadow(f0),
         SnapshotTexels(f0),
+        YCbCrPlanes(f0),
     }
     AccelerationStructureLevel { Primitive, Instance }
     SamplerRef { Slot(f0), Constexpr(f0) }
@@ -1261,7 +1264,7 @@ codec_enum! {
         MergedDraws,
         QuadPrimitiveIds,
         PrivateList,
-        YCbCrInPlace { slot, samplers },
+        YCbCrInPlace { slot, samplers, device },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {
@@ -1450,6 +1453,7 @@ codec_enum! {
         SeparateTexture { texture, sampler }, SeparateSampler { stage, sampler },
         ExtendedShadow(f0),
         SnapshotTexels(f0),
+        YCbCrPlanes(f0),
     }
     VertexStride { Static(f0), PerBind }
 }

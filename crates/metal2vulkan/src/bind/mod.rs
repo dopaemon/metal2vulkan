@@ -103,7 +103,9 @@
 //! ([`PvrtcDecode`]), which [`pvrtc_decode_module`] writes; an ETC2 or EAC texture on a device
 //! without the formats through a twin of its codes or an 11-bit format's values ([`EtcDecode`], in
 //! the texels [`EtcTexels`] names), which [`etc_decode_module`] writes; a 4:2:2 texture through a
-//! twin of its texels' codes ([`ChromaDecode`]), which [`chroma_decode_module`] writes.
+//! twin of its texels' codes ([`ChromaDecode`]), which [`chroma_decode_module`] writes, or, where
+//! the device converts the format itself, [`chroma_sample_module`] samples through the device's
+//! own Y′CbCr conversion ([`ChromaSampleModule`]).
 //! [`sampler_desc`] gives the Vulkan sampler a plan's sampler write needs, [`heap_classes`] the
 //! classes of the handle heap's arrays on a profile, [`FunctionTableWords`] the words of a
 //! visible-function table's buffer, and [`FunctionTableSnapshot`] the one buffer of a command's
@@ -186,7 +188,9 @@ pub use argument_buffer::{
 };
 pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
 pub use block_decode::BlockDecodeModule;
-pub use chroma_decode::{chroma_decode_module, ChromaDecode};
+pub use chroma_decode::{
+    chroma_decode_module, chroma_sample_module, ChromaDecode, ChromaSampleModule,
+};
 pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
     ResolveSource, SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS,
@@ -327,7 +331,7 @@ pub use ycbcr_convert::{
     ycbcr_convert_floats_module, ycbcr_convert_module, ycbcr_read, ycbcr_texel, YCbCrCodes,
     YCbCrConversion, YCbCrConvertModule, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,
 };
-pub use ycbcr_in_place::YCbCrInPlace;
+pub use ycbcr_in_place::{YCbCrInPlace, YCbCrPlanesSampler};
 pub use ycbcr_refresh::{ycbcr_refresh_module, YCbCrRefreshModule};
 pub use ycbcr_sample::{ycbcr_sample_module, YCbCrSampleModule};
 pub use ycbcr_write::{ycbcr_store, ycbcr_write, ycbcr_write_module, YCbCrWriteModule};

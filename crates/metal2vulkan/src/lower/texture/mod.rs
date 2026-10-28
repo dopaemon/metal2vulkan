@@ -1120,11 +1120,20 @@ pub fn declare(
                 }
                 None => image,
             };
-            let g = mb.resource(
-                crate::pipeline::sym::ResourceSlot::metal(s.slot),
-                crate::spirv::ir::StorageClass::UniformConstant,
-                ty,
-            )?;
+            // A planes image's slot is the combined image sampler of the device's conversion
+            // (`ResourceKind::YCbCrPlanes`).
+            let (ty, symbol) = match decl.planes_sampler {
+                Some(sampler) => (
+                    mb.ty(SType::SampledImage { image: ty })?,
+                    crate::pipeline::sym::ResourceSlot {
+                        stage: s.slot.stage,
+                        kind: crate::pipeline::sym::ResourceKind::YCbCrPlanes(sampler),
+                        index: s.slot.index,
+                    },
+                ),
+                None => (ty, crate::pipeline::sym::ResourceSlot::metal(s.slot)),
+            };
+            let g = mb.resource(symbol, crate::spirv::ir::StorageClass::UniformConstant, ty)?;
             if s.volatile && volatile_decorated(plan) {
                 mb.volatile(g)?;
             }

@@ -30,6 +30,7 @@ use crate::generated_commands::INDIRECT_BINDABLE;
 use crate::heap_sets::{self, HeapSet};
 use crate::release;
 use crate::shader_cache::driver::Making;
+use crate::ycbcr_device::YCbCrSampler;
 use crate::Device;
 use ash::vk;
 use metal2vulkan::bind::{DispatchRegion, DynamicViewsModule};
@@ -125,6 +126,22 @@ pub(crate) fn sampler_set(
         return Ok((Arc::new(empty), false));
     }
     let shared = device.shared();
+    // The device's Y′CbCr conversion of each sampler of a planes image (`texture/ycbcr_planes.rs`),
+    // the one its view is made with, so the two are identically defined: made before the sets'
+    // lock, as it takes the owned kernels' own.
+    let conversions = descs
+        .iter()
+        .map(|desc| {
+            desc.ycbcr
+                .map(|sampler| {
+                    let ycbcr = YCbCrSampler::planes(device, sampler).ok_or_else(|| {
+                        internal("a layout bakes a planes sampler the device does not convert")
+                    })?;
+                    device.made_ycbcr_conversion(ycbcr)
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     let program = program_call();
     // The lock is held across the creation, so two of the program's calls never make two sets of
     // the same samplers.
@@ -133,11 +150,16 @@ pub(crate) fn sampler_set(
         let mut set = SamplerSet {
             samplers: Vec::with_capacity(descs.len()),
         };
-        for desc in &descs {
+        for (desc, conversion) in descs.iter().zip(&conversions) {
+            let mut chained = vk::SamplerYcbcrConversionInfo::default();
             let mut reduction = vk::SamplerReductionModeCreateInfo::default();
             let mut border = vk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
-            let info =
+            let mut info =
                 metal2vulkan::ash_interop::sampler_create_info(desc, &mut reduction, &mut border);
+            if let Some(conversion) = *conversion {
+                chained = chained.conversion(conversion);
+                info = info.push_next(&mut chained);
+            }
             // SAFETY: `info` and its chain are live for the call. Counted against the device's
             // limit (`DeviceShared::create_sampler`).
             match unsafe { shared.create_sampler(&info) } {
@@ -570,7 +592,7 @@ impl VariantObjects {
     ) -> Result<VariantObjects, Error> {
         let push_set_zero = pushes_set_zero(device, layout, stages, pipeline);
         let dynamic = dynamic_bindings(device, layout, push_set_zero);
-        let set_needs = needs_of(layout, push_set_zero, &dynamic)?;
+        let set_needs = needs_of(device, layout, push_set_zero, &dynamic)?;
         // One sampler per binding that bakes one, in the layout's order: the live set of the same
         // samplers where it holds one, else one made now (`sampler_set`).
         let descs: Vec<metal2vulkan::vk::SamplerDesc> = layout
@@ -658,7 +680,7 @@ impl VariantObjects {
     ) -> Result<(VariantObjects, Vec<(Place, RawPipeline)>), Error> {
         let push_set_zero = pushes_set_zero(device, layout, stages, pipeline);
         let dynamic = dynamic_bindings(device, layout, push_set_zero);
-        let set_needs = needs_of(layout, push_set_zero, &dynamic)?;
+        let set_needs = needs_of(device, layout, push_set_zero, &dynamic)?;
         let shared = device.shared();
         let back = lock(&shared.kept).take(shared, compiled);
         // The kept variants' queue applied (an evicted instance's modules let go): the device's
@@ -1261,6 +1283,7 @@ fn set_zero_shape(layout: &PipelineLayout, push_set_zero: bool, dynamic: &[u32])
 /// where it is pushed (`push_set_zero`), and set 0's bindings numbered in `dynamic` of their
 /// dynamic types.
 fn needs_of(
+    device: &Device,
     layout: &PipelineLayout,
     push_set_zero: bool,
     dynamic: &[u32],
@@ -1274,7 +1297,9 @@ fn needs_of(
                 counts: Vec::new(),
                 flags: vk::DescriptorPoolCreateFlags::empty(),
             }),
-            (false, 0) => needs_typed(set, dynamic),
+            (false, 0) => needs_typed(set, dynamic, |sampler| {
+                device.shared().ycbcr_formats.planes_descriptors(sampler)
+            }),
             _ => set_needs(set),
         })
         .collect()
@@ -1575,11 +1600,18 @@ fn immutable_pushes(
 /// descriptor type, since a set takes every binding's whole count; and `UPDATE_AFTER_BIND` when
 /// the set layout is `UPDATE_AFTER_BIND_POOL`.
 pub(crate) fn set_needs(set: &DescriptorSetLayout) -> Result<SetNeeds, Error> {
-    needs_typed(set, &[])
+    needs_typed(set, &[], |_| 1)
 }
 
-/// [`set_needs`] of `set` with its bindings numbered in `dynamic` of their dynamic types.
-fn needs_typed(set: &DescriptorSetLayout, dynamic: &[u32]) -> Result<SetNeeds, Error> {
+/// [`set_needs`] of `set` with its bindings numbered in `dynamic` of their dynamic types, a
+/// combined image sampler binding whose immutable sampler is a planes image's Y′CbCr conversion
+/// (`SamplerDesc::ycbcr`) taking `planes` of its sampler descriptors for each of its count
+/// (`combinedImageSamplerDescriptorCount`, `ycbcr_device.rs`).
+fn needs_typed(
+    set: &DescriptorSetLayout,
+    dynamic: &[u32],
+    planes: impl Fn(metal2vulkan::bind::YCbCrPlanesSampler) -> u32,
+) -> Result<SetNeeds, Error> {
     let mut counts: std::collections::BTreeMap<i32, u32> = std::collections::BTreeMap::new();
     let mut flags = vk::DescriptorPoolCreateFlags::empty();
     let set_flags: vk::DescriptorSetLayoutCreateFlags = set.flags.into();
@@ -1592,9 +1624,15 @@ fn needs_typed(set: &DescriptorSetLayout, dynamic: &[u32]) -> Result<SetNeeds, E
             true => crate::binding::dynamic_type(ty),
             false => ty,
         };
+        let each = match binding.immutable_sampler.and_then(|desc| desc.ycbcr) {
+            Some(sampler) => planes(sampler),
+            None => 1,
+        };
         let count = counts.entry(ty.as_raw()).or_default();
-        *count = count
-            .checked_add(binding.count)
+        *count = binding
+            .count
+            .checked_mul(each)
+            .and_then(|taken| count.checked_add(taken))
             .ok_or_else(|| internal("the layout's descriptor count overflows"))?;
     }
     Ok(SetNeeds {

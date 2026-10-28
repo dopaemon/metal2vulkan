@@ -126,6 +126,9 @@ pub(crate) struct Counters {
     ycbcr_textures_in_place: AtomicU64,
     ycbcr_images_kept: [AtomicU64; 7],
     ycbcr_planes_bound: AtomicU64,
+    ycbcr_planes_images: AtomicU64,
+    ycbcr_planes_images_kept: [AtomicU64; 3],
+    ycbcr_planes_images_bound: AtomicU64,
     ycbcr_device_conversions: AtomicU64,
     ycbcr_device_samples: AtomicU64,
     attachment_clears_recorded: AtomicU64,
@@ -208,6 +211,8 @@ pub(crate) struct Counters {
     uncached_host_images: AtomicU64,
     cpu_block_decodes: AtomicU64,
     block_decode_passes: AtomicU64,
+    chroma_device_twins: AtomicU64,
+    chroma_device_decodes: AtomicU64,
     second_twins: AtomicU64,
     second_twin_checks: AtomicU64,
     second_twin_decodes: AtomicU64,
@@ -665,6 +670,30 @@ impl Counters {
     /// (`binding.rs`).
     pub(crate) fn ycbcr_planes_bound(&self) {
         self.ycbcr_planes_bound.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A two-plane YCbCr texture's planes read in place were made an image the device's
+    /// conversion samples (`texture/ycbcr_planes.rs`).
+    pub(crate) fn ycbcr_planes_image(&self) {
+        self.ycbcr_planes_images.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A two-plane YCbCr texture's planes read in place were made no image the device's
+    /// conversion samples, for `kept` (`texture/ycbcr_planes.rs`).
+    pub(crate) fn ycbcr_planes_image_kept(&self, kept: crate::texture::KeptTexels) {
+        let at = crate::texture::KeptTexels::ALL
+            .iter()
+            .position(|k| *k == kept)
+            .unwrap_or(0);
+        if let Some(counter) = self.ycbcr_planes_images_kept.get(at) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A binding of a two-plane YCbCr texture's planes image was written (`binding.rs`).
+    pub(crate) fn ycbcr_planes_image_bound(&self) {
+        self.ycbcr_planes_images_bound
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A YCbCr texture's conversion, or a render shadow's load, was made to sample its planes'
@@ -1479,6 +1508,18 @@ impl Counters {
     /// A GPU decode pass into a decoded twin was made (`Image::decode_pass`).
     pub(crate) fn block_decode_pass(&self) {
         self.block_decode_passes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A 4:2:2 texture's decoded twin was made to hold the device's own Y′CbCr conversion of its
+    /// pairs (`ycbcr_device::PairsSampling`).
+    pub(crate) fn chroma_device_twin(&self) {
+        self.chroma_device_twins.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A GPU decode pass into a 4:2:2 texture's decoded twin through the device's own Y′CbCr
+    /// conversion was made (`Image::decode_pass`).
+    pub(crate) fn chroma_device_decode(&self) {
+        self.chroma_device_decodes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// An ASTC carrier's second decoded twin was made (`Image::make_second_twin`).
@@ -3215,6 +3256,24 @@ pub struct WorkCounts {
     pub ycbcr_images_kept_view: u64,
     /// Bindings of two-plane YCbCr textures' planes read in place written into descriptor sets.
     pub ycbcr_planes_bound: u64,
+    /// Two-plane YCbCr textures whose planes read in place are also an image the device's own
+    /// sampler Y′CbCr conversion samples, a linear image of the multi-planar 4:2:0 format over
+    /// their bytes (`texture/ycbcr_planes.rs`): a slot whose every sample the device's sampler
+    /// takes samples it through the device's conversion.
+    pub ycbcr_planes_images: u64,
+    /// Two-plane YCbCr textures whose planes read in place take no such image because the device
+    /// does not convert the format with Metal's reconstruction as a linear image of their size (no
+    /// such format features, a driver defect in it, an odd size or one past its limits).
+    pub ycbcr_planes_images_kept_conversion: u64,
+    /// Two-plane YCbCr textures whose planes read in place take no such image because the planes
+    /// lie in memory no such image is made over: fresh pages, a no-copy buffer's pages, the
+    /// caller's `VkBuffer`.
+    pub ycbcr_planes_images_kept_memory: u64,
+    /// Two-plane YCbCr textures whose planes read in place take no such image because the driver's
+    /// image lays the planes out otherwise than the surface, or does not fit their buffer there.
+    pub ycbcr_planes_images_kept_layout: u64,
+    /// Bindings of two-plane YCbCr textures' planes images written into descriptor sets.
+    pub ycbcr_planes_images_bound: u64,
     /// Two-plane YCbCr textures' conversions, and render shadows' loads, made to sample the
     /// planes' image through the device's own Y′CbCr conversion where it converts their format
     /// (`ycbcr_device.rs`), in place of Metal's arithmetic.
@@ -3767,6 +3826,13 @@ pub struct WorkCounts {
     /// a blit's or a copy's into a carried texture, a heap texture's start, a write through
     /// submissions. None for a twin that takes CPU copies, whose texels only the CPU decodes.
     pub block_decode_passes: u64,
+    /// 4:2:2 textures' decoded twins made to hold the device's own Y′CbCr conversion of their
+    /// pairs, where it converts their format with Metal's reconstruction (`ycbcr_device.rs`), in
+    /// place of Metal's decode: their writes all decode through GPU passes.
+    pub chroma_device_twins: u64,
+    /// GPU decode passes into such twins made (among `block_decode_passes`), each band's pairs
+    /// sampled through the device's conversion.
+    pub chroma_device_decodes: u64,
     /// ASTC textures' second decoded twins made (`texture/decoded_twin.rs`): one at a texture's
     /// first view in its other colour space (an `_sRGB` texture's as its LDR form, or the other
     /// way), which reads Metal's decode of the blocks in that form.
@@ -4845,6 +4911,14 @@ impl Device {
             ycbcr_images_kept_reach: counters.ycbcr_images_kept[5].load(Ordering::Relaxed),
             ycbcr_images_kept_view: counters.ycbcr_images_kept[6].load(Ordering::Relaxed),
             ycbcr_planes_bound: counters.ycbcr_planes_bound.load(Ordering::Relaxed),
+            ycbcr_planes_images: counters.ycbcr_planes_images.load(Ordering::Relaxed),
+            ycbcr_planes_images_kept_conversion: counters.ycbcr_planes_images_kept[0]
+                .load(Ordering::Relaxed),
+            ycbcr_planes_images_kept_memory: counters.ycbcr_planes_images_kept[1]
+                .load(Ordering::Relaxed),
+            ycbcr_planes_images_kept_layout: counters.ycbcr_planes_images_kept[2]
+                .load(Ordering::Relaxed),
+            ycbcr_planes_images_bound: counters.ycbcr_planes_images_bound.load(Ordering::Relaxed),
             ycbcr_device_conversions: counters.ycbcr_device_conversions.load(Ordering::Relaxed),
             ycbcr_device_samples: counters.ycbcr_device_samples.load(Ordering::Relaxed),
             attachment_clears_recorded: counters.attachment_clears_recorded.load(Ordering::Relaxed),
@@ -5011,6 +5085,8 @@ impl Device {
             uncached_host_images: counters.uncached_host_images.load(Ordering::Relaxed),
             cpu_block_decodes: counters.cpu_block_decodes.load(Ordering::Relaxed),
             block_decode_passes: counters.block_decode_passes.load(Ordering::Relaxed),
+            chroma_device_twins: counters.chroma_device_twins.load(Ordering::Relaxed),
+            chroma_device_decodes: counters.chroma_device_decodes.load(Ordering::Relaxed),
             second_twins: counters.second_twins.load(Ordering::Relaxed),
             second_twin_checks: counters.second_twin_checks.load(Ordering::Relaxed),
             second_twin_decodes: counters.second_twin_decodes.load(Ordering::Relaxed),

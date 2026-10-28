@@ -309,7 +309,7 @@ use crate::bind::plan::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, large_view_candidates, mark_disjoint,
     plan_buffer, psb_variant, range_variant, record_specialized, snapshot_forms, srgb_variant,
-    storage_view_variant, used_uses, ycbcr_in_place_variant,
+    storage_view_variant, used_uses, ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use crate::bind::plan::{
     AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorSite, FactorTemplate,
@@ -2113,6 +2113,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 }
                 // A texture's snapshot, which the draw reads the texture through.
                 BindingSource::SnapshotTexels(slot) => WriteSource::SnapshotTexels { slot },
+                // A two-plane YCbCr texture's planes image, through the device's conversion.
+                BindingSource::YCbCrPlanes(slot) => resources.planes_image_write(slot)?,
             };
             descriptors.push(DescriptorWrite {
                 set: set.set,
@@ -2445,6 +2447,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.cross_class = cross_variant(&p.dependencies, &p.interface.slots, shape);
     variant.srgb_textures = srgb_variant(profile, &p.dependencies, shape, &variant.cross_class);
     variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
+    variant.ycbcr_planes_sampled =
+        ycbcr_planes_sampled_variant(&p.dependencies, shape, &variant.ycbcr_in_place);
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;
     variant.anisotropic_samplers = anisotropic_variant(&p.dependencies, shape);

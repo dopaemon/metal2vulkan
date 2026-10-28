@@ -1769,6 +1769,17 @@ fn image_descriptor(
             // An element past the listed states: no handle names it.
             None => vk::DescriptorImageInfo::default().sampler(device.neutral_sampler(*compare)?),
         },
+        // The planes of a two-plane YCbCr texture as the image the device's conversion samples
+        // (`texture/ycbcr_planes.rs`), its sampler the layout's immutable one of that conversion.
+        WriteSource::YCbCrPlanesImage { slot }
+            if ty == vk::DescriptorType::COMBINED_IMAGE_SAMPLER =>
+        {
+            let texture = slot_texture(tables, *slot)
+                .ok_or_else(|| internal("the plan binds an unbound texture slot's planes image"))?;
+            let view = texture.planes_image_view()?;
+            device.shared().counts.ycbcr_planes_image_bound();
+            image(view)
+        }
         _ => return Err(unexpected(&write.source)),
     })
 }

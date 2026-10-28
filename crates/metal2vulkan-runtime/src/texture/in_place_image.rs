@@ -671,7 +671,7 @@ fn placed(
 
 /// The memory requirements of `raw`, a live image of the device of `raw_device`, and whether it
 /// requires a dedicated allocation.
-fn requirements_of(
+pub(super) fn requirements_of(
     raw_device: &crate::device::functions::Vk,
     raw: vk::Image,
 ) -> (vk::MemoryRequirements, bool) {

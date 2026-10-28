@@ -63,6 +63,7 @@ use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, mark_disjoint, plan_buffer, psb_variant,
     record_specialized, srgb_variant, storage_view_variant, used_uses, ycbcr_in_place_variant,
+    ycbcr_planes_sampled_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -636,6 +637,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 }
                 // A sparse texture's tile map.
                 BindingSource::TileMap(slot) => resources.tile_map(slot),
+                // A two-plane YCbCr texture's planes image, through the device's conversion.
+                BindingSource::YCbCrPlanes(slot) => resources.planes_image_write(slot)?,
                 // A tile function's attachment.
                 BindingSource::TileAttachment(color_index) => WriteSource::TileAttachment {
                     color_index,
@@ -813,6 +816,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         &variant.cross_class,
     );
     variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
+    variant.ycbcr_planes_sampled =
+        ycbcr_planes_sampled_variant(&p.dependencies, shape, &variant.ycbcr_in_place);
     variant.address_maps = address_map_variant(&p.dependencies, shape);
     variant.cubic_samplers = cubic_variant(&p.dependencies, shape)?;
     variant.anisotropic_samplers = anisotropic_variant(&p.dependencies, shape);

@@ -166,6 +166,22 @@ mod serde_round_trips {
         assert_eq!(&back, value, "{json}");
     }
 
+    /// A planes image's conversion: an 8-bit 4:2:0 surface's, full range, BT.709.
+    fn planes_sampler() -> crate::bind::YCbCrPlanesSampler {
+        use crate::bind::{YCbCrCodes, YCbCrInPlace, YCbCrMatrix, YCbCrPlanes, YCbCrRange};
+        let codes = metal::format::ycbcr_format(metal::PixelFormat::YCBCR84202P)
+            .and_then(YCbCrCodes::of)
+            .expect("codes");
+        let planes = YCbCrPlanes::new(
+            [8, 4],
+            [0, 16],
+            [64, 16],
+            (YCbCrRange::Full, YCbCrMatrix::Bt709),
+            codes,
+        );
+        YCbCrInPlace::of(&planes).expect("in place").sampler()
+    }
+
     fn buffer(index: u32) -> SlotRef {
         slot(Stage::Fragment, SlotClass::Buffer, index)
     }
@@ -197,6 +213,10 @@ mod serde_round_trips {
             storage_view_slots: BTreeSet::from([buffer(3)]),
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 7)]),
+            ycbcr_planes_sampled: BTreeMap::from([(
+                slot(Stage::Kernel, SlotClass::Texture, 7),
+                planes_sampler(),
+            )]),
             flat_grid: true,
             replay_bindings: true,
             merged_draws: true,
@@ -327,6 +347,10 @@ mod serde_round_trips {
                 crate::pipeline::SnapshotForm::Half,
             )]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 9)]),
+            ycbcr_planes_sampled: BTreeMap::from([(
+                slot(Stage::Fragment, SlotClass::Texture, 9),
+                planes_sampler(),
+            )]),
             viewport_index_varying: true,
             // An emulated post-tessellation vertex function's state.
             tessellation: Some(crate::pipeline::TessellationDescriptor {

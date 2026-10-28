@@ -1373,7 +1373,9 @@ degradations! {
         /// random planes, every texel: within 0.04/2048 of Vulkan's conversion past the `half`
         /// its image stores, and of Metal's within 6/2048 where the result lies in `[0, 1]`;
         /// outside it by what Metal's clamp takes off). Announced where the texture is made,
-        /// naming its layout.
+        /// naming its layout. So do the samples of a texture whose planes are read in place
+        /// through the device's conversion of a linear image of them (`texture/ycbcr_planes.rs`),
+        /// the device's filter of the codes too: announced where the image is made.
         ///
         /// And a pipeline stage's filtered sample of a texture slot bound to a two-plane YCbCr
         /// texture, on a device that samples through Metal's own sampler (MoltenVK,
@@ -1702,9 +1704,12 @@ degradations! {
         /// EAC one's 8-bit codes, exact, decoded after each write into it (a PVRTC
         /// texture's whole levels). An ASTC texture's first view in its other colour space gives
         /// it a second twin of that form's decode. Also a texture of a 4:2:2 format (`GBGR422`,
-        /// `BGRG422`) on every device, whose Vulkan formats reconstruct chroma by the
-        /// implementation's rules: its texels' bytes lie in an `R8G8_UNORM` carrier, and its twin
-        /// holds Metal's texels as 8-bit codes, exact, decoded in whole rows.
+        /// `BGRG422`) on every device, whose Vulkan formats are viewed only through a sampler
+        /// Y′CbCr conversion: its texels' bytes lie in an `R8G8_UNORM` carrier, and its twin holds
+        /// its texels as 8-bit codes, decoded in whole rows: the device's own conversion of its
+        /// pairs where it converts the format with Metal's reconstruction
+        /// (`decoded-texel-precision`; every decode then a GPU pass, its CPU copies through
+        /// submissions), else Metal's texels, exact.
         CarriedDecodedTwin = "carried-decoded-twin", Performance,
             "a carrier image of its blocks, at most about 1 byte a texel (a 4:2:2 texture's 2), \
              and a decoded twin of 4 bytes a texel (R8G8B8A8; an EAC 11-bit texture's \
@@ -1720,11 +1725,21 @@ degradations! {
         /// It reads an EAC 11-bit channel as `c / 2047` (signed `c / 1023`), which the twin holds
         /// as the nearest 16-bit normalized code (at most half a 16-bit step off). (An ASTC sRGB
         /// texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's
-        /// sRGB view, the device's decode: `srgb-texel-decode`.)
+        /// sRGB view, the device's decode: `srgb-texel-decode`.) And a 4:2:2 texture's twin where
+        /// the device converts its format with Metal's reconstruction (`ycbcr_device.rs`): it
+        /// holds the device's own sampler Y′CbCr conversion of the pairs (the identity model, the
+        /// chroma at the midpoint through a linear filter: 3 parts the texel's pair and 1 the pair
+        /// beside it, Metal's weights, at the device's precision), each channel as the nearest
+        /// 8-bit code with ties to even, where Metal's `(3 c + n + 2) >> 2` rounds its ties up:
+        /// within a code of Metal's where the device's sum is within half a code of the exact one
+        /// (MoltenVK 1.4.2 samples through Metal's own `GBGR422` and `BGRG422` texture unit).
+        /// Announced where such a texture is made.
         DecodedTexelPrecision = "decoded-texel-precision", Precision,
             "a read, sample or gather of its texels answers the nearest 8-bit code to Metal's \
              12-bit value, at most 1/510 off it; an EAC 11-bit texture's, the nearest 16-bit \
-             normalized code to Metal's 11-bit value, at most half a 16-bit step off it";
+             normalized code to Metal's 11-bit value, at most half a 16-bit step off it; a 4:2:2 \
+             texture's, where the device converts its format, the nearest 8-bit code to the \
+             device's own Y′CbCr conversion of its pairs, not Metal's decode";
         /// A command queue made for presenting
         /// ([`Device::new_command_queue_for_presenting`](crate::Device::new_command_queue_for_presenting))
         /// on a device that reserved no `VkQueue` for presenting: its queue family has no queue

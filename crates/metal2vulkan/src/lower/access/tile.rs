@@ -1051,6 +1051,7 @@ fn image_decl(s: &TileSlot) -> ImageDecl {
         extended: None,
         x_channel: false,
         in_place: false,
+        planes_sampler: None,
     }
 }
 

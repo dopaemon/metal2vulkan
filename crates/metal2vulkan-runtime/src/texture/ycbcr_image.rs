@@ -16,8 +16,13 @@
 //! cannot be viewed so, the texture keeps its image alone, counted by the reason
 //! (`WorkCounts::ycbcr_images_kept_*`): the device, the layout, a swizzle, the planes' first byte
 //! off `minTexelBufferOffsetAlignment`, more elements than `maxTexelBufferElements`, planes past
-//! their buffer, or a format the device views no uniform texel buffer of.
+//! their buffer, or a format the device views no uniform texel buffer of. Where the device
+//! converts the planes' 4:2:0 format as a linear image with Metal's reconstruction, the planes
+//! are also an image of it over their bytes (`ycbcr_planes.rs`), which a slot whose every sample
+//! the device's sampler takes samples through the device's conversion instead of the texel
+//! buffer.
 
+use super::ycbcr_planes::PlanesImage;
 use super::{image_error, IdUse, Image, Storage, Texture};
 use crate::address_map::AddressModeMap;
 use crate::binding_view::VkView;
@@ -138,11 +143,12 @@ fn over_read(read: [TextureSwizzle; 3], swizzle: TextureSwizzleChannels) -> Text
 }
 
 /// A two-plane YCbCr texture's planes as a function reads them in place (the module docs): their
-/// words, and their first byte in the texels' buffer.
-#[derive(Clone, Copy, Debug)]
+/// words, their first byte in the texels' buffer, and their image the device's conversion samples
+/// where it has one (`ycbcr_planes.rs`).
 pub(crate) struct PlanesInPlace {
     pub(super) words: YCbCrInPlace,
     start: u64,
+    pub(super) image: Option<Arc<PlanesImage>>,
 }
 
 /// Why a two-plane YCbCr texture keeps its image alone, its planes read in place by no function
@@ -221,6 +227,7 @@ impl Device {
         Ok(PlanesInPlace {
             words,
             start: span.start,
+            image: None,
         })
     }
 
@@ -247,11 +254,18 @@ impl Device {
         let texels = Arc::new(texels);
         let mut record = ViewRecord::of_descriptor(layout, &descriptor);
         if !codes_alone(layout.pixel_format, planes) {
-            let in_place = self.planes_in_place(&texels, &descriptor, (planes, &span));
+            let mut in_place = self.planes_in_place(&texels, &descriptor, (planes, &span));
             let counts = &self.shared().counts;
             match &in_place {
                 Ok(_) => counts.ycbcr_texture_in_place(),
                 Err(kept) => counts.ycbcr_image_kept(*kept),
+            }
+            // Its planes as an image the device's conversion samples, where it has one.
+            if let Ok(p) = &mut in_place {
+                match self.planes_image(&texels, (planes, &p.words), p.start)? {
+                    Ok(image) => p.image = Some(image),
+                    Err(kept) => counts.ycbcr_planes_image_kept(kept),
+                }
             }
             let storage =
                 self.converted_storage(call, texels, &descriptor, layout, (planes, span))?;
@@ -389,7 +403,7 @@ impl Texture {
     /// The uniform texel buffer view of the texture's planes read in place (the module docs), made
     /// at its first bind and kept with the texels. Internal for a texture whose planes are not.
     pub(crate) fn planes_view(&self) -> Result<vk::BufferView, Error> {
-        let (Some(p), Some(texels)) = (self.0.planes_in_place, self.buffer_texels()) else {
+        let (Some(p), Some(texels)) = (&self.0.planes_in_place, self.buffer_texels()) else {
             return Err(internal(
                 "a planes view of a texture without planes in place",
             ));
@@ -398,10 +412,28 @@ impl Texture {
         texels.view_of(p.words.format(), false, (at, p.words.view_bytes()))
     }
 
+    /// The view of the texture's planes as an image the device's conversion samples
+    /// (`ycbcr_planes.rs`), which a slot that samples them through it binds. Internal for a
+    /// texture whose planes take no such image.
+    pub(crate) fn planes_image_view(&self) -> Result<vk::ImageView, Error> {
+        match self
+            .0
+            .planes_in_place
+            .as_ref()
+            .and_then(|p| p.image.as_ref())
+        {
+            Some(image) => Ok(image.view),
+            None => Err(internal(
+                "a planes image view of a texture whose planes take no image",
+            )),
+        }
+    }
+
     /// A read by `read` of the bytes of the texture's planes read in place, which a binding of
-    /// them makes (the module docs). Internal for a texture whose planes are not.
+    /// them makes, through their texel buffer or their image (the module docs). Internal for a
+    /// texture whose planes are not.
     pub(crate) fn planes_use(&self, read: Access) -> Result<Use<ResourceKey>, Error> {
-        let (Some(p), Some(texels)) = (self.0.planes_in_place, self.buffer_texels()) else {
+        let (Some(p), Some(texels)) = (&self.0.planes_in_place, self.buffer_texels()) else {
             return Err(internal(
                 "a planes use of a texture without planes in place",
             ));

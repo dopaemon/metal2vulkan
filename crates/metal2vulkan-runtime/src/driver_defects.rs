@@ -437,6 +437,13 @@ pub(super) struct Affected {
 ///   wherever the word's low bits put it below the code's value. Measured on 26.0.8 (LLVM
 ///   21.1.8): known broken through 26.0.8. Nothing is refused: a 10-bit two-plane texture converts
 ///   through Metal's arithmetic there (`ycbcr_device.rs`).
+/// - Mesa's RADV (`MESA_RADV`): the same read. A bare Vulkan probe of a linear
+///   `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` image on a Radeon 780M read luma code 1023 (low
+///   bits 0) as 0.999039 through the identity model. Measured on 26.2.4 (linear tiling; the
+///   optimal tiling's conversion of the format was not measured): known broken through 26.2.4.
+///   Nothing is refused: a 10-bit two-plane texture converts through Metal's arithmetic there, and
+///   its planes read in place through the texel buffer (`ycbcr_device.rs`,
+///   `texture/ycbcr_planes.rs`).
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -563,6 +570,11 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::TenBitCodesReadAsWords,
         driver: DriverId::MESA_LLVMPIPE,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::TenBitCodesReadAsWords,
+        driver: DriverId::MESA_RADV,
         clean: &[],
     },
 ];

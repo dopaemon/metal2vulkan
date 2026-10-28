@@ -616,6 +616,13 @@ pub enum WriteSource {
     /// `YCbCrInPlace::view_bytes`. Only a slot under its in-place variant binds it
     /// (`VariantKey::ycbcr_in_place`).
     YCbCrInPlace { slot: SlotRef },
+    /// The planes of the two-plane YCbCr texture bound at `slot`, held as an image the device's
+    /// own sampler Y′CbCr conversion samples (`TextureShape::Texture::ycbcr_planes_sampler`): a
+    /// combined image sampler whose image is that image viewed with the conversion
+    /// (`bind::YCbCrPlanesSampler`) and whose sampler is the binding's immutable one, in
+    /// `GENERAL`. Only a slot under its planes-image variant binds it
+    /// (`VariantKey::ycbcr_planes_sampled`, `BindingSource::YCbCrPlanes`).
+    YCbCrPlanesImage { slot: SlotRef },
     /// The texture buffer bound at `slot`, as a texel buffer view.
     TexelBuffer {
         slot: SlotRef,
@@ -1052,7 +1059,8 @@ pub enum AccessClass {
     Indirect,
     Attachment,
     /// A two-plane YCbCr texture's planes, read in place through the slot's uniform texel buffer
-    /// (`WriteSource::YCbCrInPlace`): a read of the planes' bytes, not of the texture's image.
+    /// (`WriteSource::YCbCrInPlace`) or the image of them the device's conversion samples
+    /// (`WriteSource::YCbCrPlanesImage`): a read of the planes' bytes, not of the texture's image.
     YCbCrPlanes,
 }
 

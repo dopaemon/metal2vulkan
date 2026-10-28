@@ -23,6 +23,17 @@
 //! the conversion of the surface's range and matrix, each channel a step of `1 / 2048`, alpha 1.
 //! A sample is Metal's filter of those texels on that grid (`lower::sampler::in_place`), exact,
 //! as the image's emulated filter is.
+//!
+//! **Through the device's sampler.** Where the consumer also holds the planes as an image of the
+//! multi-planar 4:2:0 format over their own bytes, which the device's sampler Y′CbCr conversion
+//! reads with Metal's reconstruction (the chroma at the midpoint through a linear chroma filter),
+//! the texture states it ([`YCbCrInPlace::with_planes_image`]), and a slot whose every sample the
+//! device's sampler takes (`RuntimeFact::YCbCrInPlace`'s `device`: no border address mode, no
+//! texel offset placed by a parent's size) samples that image instead
+//! (`VariantKey::ycbcr_planes_sampled`): its binding a combined image sampler whose immutable
+//! sampler bakes the conversion ([`YCbCrPlanesSampler`], `ResourceKind::YCbCrPlanes`), each sample
+//! the device's at level 0, a nearest one at the centre of the luma texel Metal reads. Its answer
+//! is the device's conversion and filter of the codes, not Metal's.
 
 use super::ycbcr_convert::{YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange};
 use crate::metal::format::ChromaSubsampling;
@@ -47,6 +58,10 @@ pub struct YCbCrInPlace {
     /// The bytes the texel buffer views, from the planes' first byte: the end of the last row of
     /// codes either plane holds, rounded up to a whole element.
     bytes: u64,
+    /// The consumer holds the planes as an image the device's conversion samples
+    /// ([`with_planes_image`](Self::with_planes_image)).
+    #[cfg_attr(feature = "serde", serde(default))]
+    planes_image: bool,
 }
 
 impl YCbCrInPlace {
@@ -116,7 +131,36 @@ impl YCbCrInPlace {
         words[Self::CHROMA_AT] = chroma_at / element;
         words[Self::CHROMA_ROW] = chroma_row / element;
         words[Self::CONVERSION] = conversion_word(codes.bits, planes.range, planes.matrix);
-        Some(YCbCrInPlace { words, bytes })
+        Some(YCbCrInPlace {
+            words,
+            bytes,
+            planes_image: false,
+        })
+    }
+
+    /// The form of the same planes where the consumer also holds them as an image of
+    /// [`sampler`](Self::sampler)'s format over their bytes, which the device's sampler Y′CbCr
+    /// conversion of it reads (the module docs): a slot whose every sample the device's sampler
+    /// takes samples that image (`VariantKey::ycbcr_planes_sampled`).
+    pub fn with_planes_image(self) -> YCbCrInPlace {
+        YCbCrInPlace {
+            planes_image: true,
+            ..self
+        }
+    }
+
+    /// The device's conversion of the planes as an image ([`YCbCrPlanesSampler`]): their codes'
+    /// bits, range and matrix.
+    pub fn sampler(&self) -> YCbCrPlanesSampler {
+        YCbCrPlanesSampler {
+            conversion: self.words[Self::CONVERSION],
+        }
+    }
+
+    /// [`sampler`](Self::sampler), where the consumer holds the planes as an image it samples
+    /// ([`with_planes_image`](Self::with_planes_image)); `None` where it does not.
+    pub fn planes_sampler(&self) -> Option<YCbCrPlanesSampler> {
+        self.planes_image.then(|| self.sampler())
     }
 
     /// The words of the slot's push field.
@@ -154,6 +198,55 @@ impl YCbCrInPlace {
     /// The elements the texel buffer holds (`maxTexelBufferElements` bounds them).
     pub fn elements(&self) -> u64 {
         self.bytes / self.element_bytes()
+    }
+}
+
+/// The device's own sampler Y′CbCr conversion of a two-plane YCbCr texture's planes held as an
+/// image of the multi-planar 4:2:0 format over their bytes (the module docs, **Through the
+/// device's sampler**): the codes' bits, the surface's range and matrix, Metal's reconstruction
+/// (the chroma at the midpoint through a linear chroma filter) and a linear filter. A slot that
+/// samples such a texture through it is a combined image sampler whose immutable sampler is the
+/// device's conversion of this (`ResourceKind::YCbCrPlanes`, `vk::SamplerDesc::ycbcr`); the
+/// consumer makes the image's view with the same conversion.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct YCbCrPlanesSampler {
+    /// The conversion word ([`YCbCrInPlace::CONVERSION`]).
+    pub(crate) conversion: u32,
+}
+
+impl YCbCrPlanesSampler {
+    /// The codes' bits: 8 or 10.
+    pub fn bits(self) -> u32 {
+        self.conversion & 0xff
+    }
+
+    /// The surface's range.
+    pub fn range(self) -> YCbCrRange {
+        match self.conversion >> 8 & 1 {
+            1 => YCbCrRange::Full,
+            _ => YCbCrRange::Video,
+        }
+    }
+
+    /// The surface's matrix.
+    pub fn matrix(self) -> YCbCrMatrix {
+        match self.conversion >> 9 & 3 {
+            1 => YCbCrMatrix::Bt709,
+            2 => YCbCrMatrix::Bt2020,
+            _ => YCbCrMatrix::Bt601,
+        }
+    }
+
+    /// The multi-planar format of the planes' image: `G8_B8R8_2PLANE_420_UNORM` of 8-bit codes,
+    /// `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` of 10-bit ones (the high 10 bits of each
+    /// little-endian 16-bit word, as the planes hold them).
+    pub fn format(self) -> vk::Format {
+        match self.bits() {
+            8 => vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            _ => vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+        }
     }
 }
 
@@ -239,5 +332,47 @@ mod tests {
         // The conversion's row of zeros is no chroma plane.
         let zero = planes(PixelFormat::YCBCR84202P, [0, 16], [96, 0]);
         assert_eq!(YCbCrInPlace::of(&zero), None);
+    }
+
+    /// The planes' image's conversion is the codes' bits, range and matrix, of the format of
+    /// their bits; a texture states it only once the consumer holds the image.
+    #[test]
+    fn the_planes_sampler_is_the_conversion_word() {
+        let p8 =
+            YCbCrInPlace::of(&planes(PixelFormat::YCBCR84202P, [0, 16], [96, 16])).expect("8-bit");
+        assert_eq!(p8.planes_sampler(), None);
+        let held = p8.with_planes_image();
+        assert_eq!(held.words(), p8.words());
+        let s = held.planes_sampler().expect("held");
+        assert_eq!(s, p8.sampler());
+        assert_eq!(
+            (s.bits(), s.range(), s.matrix(), s.format()),
+            (
+                8,
+                YCbCrRange::Full,
+                YCbCrMatrix::Bt709,
+                vk::Format::G8_B8R8_2PLANE_420_UNORM
+            )
+        );
+        let codes = ycbcr_format(PixelFormat::YCBCR104202P)
+            .and_then(YCbCrCodes::of)
+            .expect("codes");
+        let p10 = YCbCrPlanes::new(
+            [8, 4],
+            [0, 16],
+            [64, 16],
+            (YCbCrRange::Video, YCbCrMatrix::Bt2020),
+            codes,
+        );
+        let s = YCbCrInPlace::of(&p10).expect("10-bit").sampler();
+        assert_eq!(
+            (s.bits(), s.range(), s.matrix(), s.format()),
+            (
+                10,
+                YCbCrRange::Video,
+                YCbCrMatrix::Bt2020,
+                vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+            )
+        );
     }
 }

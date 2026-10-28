@@ -102,6 +102,10 @@ pub struct InPlaceReads {
     pub blocked: bool,
     /// The runtime sampler slots the slot's samples read, bit `n` `[[sampler(n)]]`.
     pub samplers: u32,
+    /// A sample the device's own sampler Y′CbCr conversion does not take
+    /// (`LoweringInputs::ycbcr_planes_sampled`): one through a constexpr sampler that addresses a
+    /// border, or one that places a texel offset by a parent's size.
+    pub device_blocked: bool,
 }
 
 /// The `OpTypeImage` a slot is declared as, and the conversion a storage image's class needs.
@@ -133,6 +137,11 @@ pub struct ImageDecl {
     /// (`LoweringInputs::ycbcr_in_place`): the image is the planes' uniform texel buffer of
     /// unsigned codes (`sampler::in_place`), the texture's size its push field's.
     pub in_place: bool,
+    /// The slot's variant samples those planes as an image through the device's own sampler
+    /// Y′CbCr conversion (`LoweringInputs::ycbcr_planes_sampled`): the slot is a combined image
+    /// sampler of a sampled 2D `float` image (`ResourceKind::YCbCrPlanes`), whose immutable
+    /// sampler bakes the conversion; `in_place` holds, so its size is still the push field's.
+    pub planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,
 }
 
 impl ImageDecl {
@@ -555,6 +564,7 @@ fn declare_heap(
         extended: None,
         x_channel: false,
         in_place: false,
+        planes_sampler: None,
     };
     Ok((class, decl))
 }
@@ -1001,6 +1011,33 @@ fn declare_slot(
 ) -> Result<ImageDecl, Error> {
     let images = &cx.profile.fields().images;
     let storage = s.storage();
+    // A slot that samples its texture's planes as an image through the device's own sampler
+    // Y′CbCr conversion is a combined image sampler of a 2D `float` image, with the field of the
+    // planes' words for its size (`sampler::in_place`).
+    if let Some(&sampler) = cx.inputs.ycbcr_planes_sampled.get(&s.slot) {
+        if !cx.inputs.ycbcr_in_place.contains(&s.slot) {
+            return Err(cx.invariant("a planes image's slot outside its in-place variant"));
+        }
+        push.push(PushField::YCbCrInPlace(s.slot));
+        counts.sampled_images = counts.sampled_images.saturating_add(1);
+        counts.samplers = counts.samplers.saturating_add(1);
+        return Ok(ImageDecl {
+            dim: Dim::D2,
+            arrayed: false,
+            multisampled: false,
+            depth: false,
+            usage: ImageUsage::Sampled,
+            format: crate::spv::ImageFormat::Unknown,
+            texel: TexelClass::Float,
+            cube_as_array: false,
+            class: StorageImageClass::Identity,
+            level_views: None,
+            extended: None,
+            x_channel: false,
+            in_place: true,
+            planes_sampler: Some(sampler),
+        });
+    }
     // A slot under its in-place variant is the uniform texel buffer of its texture's planes, of
     // unsigned codes, with the field of their words (`sampler::in_place`).
     if cx.inputs.ycbcr_in_place.contains(&s.slot) {
@@ -1020,6 +1057,7 @@ fn declare_slot(
             extended: None,
             x_channel: false,
             in_place: true,
+            planes_sampler: None,
         });
     }
     // A slot bound in an extended-range format holds its raw texels in an unsigned integer
@@ -1149,6 +1187,7 @@ fn declare_slot(
         extended,
         x_channel,
         in_place: false,
+        planes_sampler: None,
     })
 }
 
@@ -1250,10 +1289,16 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 cx.invariant("an in-place texture slot whose accesses the form does not read")
             );
         }
+        if s.in_place.device_blocked && cx.inputs.ycbcr_planes_sampled.contains_key(&s.slot) {
+            return Err(cx.invariant(
+                "a planes image's texture slot with a sample the device's sampler does not take",
+            ));
+        }
         if reads {
             facts.push(RuntimeFact::YCbCrInPlace {
                 slot: s.slot,
                 samplers: s.in_place.samplers,
+                device: !s.in_place.device_blocked,
             });
         }
     }

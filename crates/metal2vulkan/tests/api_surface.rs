@@ -658,6 +658,8 @@ surface! {
         enum EtcTexels N;
         fn chroma_decode_module;
         enum ChromaDecode N;
+        fn chroma_sample_module;
+        struct ChromaSampleModule N;
         fn mesh_scan_module;
         fn mesh_object_arguments_module;
         struct MeshScanModule N;
@@ -705,6 +707,7 @@ surface! {
         struct YCbCrConvertModule N;
         struct YCbCrPlanes N;
         struct YCbCrInPlace N;
+        struct YCbCrPlanesSampler N;
         struct YCbCrConversion N;
         struct YCbCrCodes N;
         enum YCbCrOutput N;

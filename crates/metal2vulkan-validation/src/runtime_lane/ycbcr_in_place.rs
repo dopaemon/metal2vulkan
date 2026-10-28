@@ -16,9 +16,12 @@
 //! little-endian word whose low 6 bits are noise, which Metal does not read.
 
 use super::degrade_notices::{counts, on_device, on_device_with};
+use super::ycbcr_device_reads::{assert_device_reads, vulkan_read};
 use super::{buffer_with, read_buffer, ycbcr_textures};
 use crate::air_library::AirLibrary;
-use metal2vulkan::bind::{ycbcr_read, SamplerDescriptor, YCbCrCodes, YCbCrMatrix, YCbCrRange};
+use metal2vulkan::bind::{
+    ycbcr_read, SamplerDescriptor, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrRange,
+};
 use metal2vulkan::device::DevicePolicy;
 use metal2vulkan::metal::format::ycbcr_format;
 use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
@@ -84,6 +87,30 @@ const SURFACES: [Surface; 4] = [
         size: [40, 24],
         row: 96,
         chroma_at: 96 * 24,
+    },
+];
+
+/// Surfaces whose rows lie 256 bytes apart, the pitch a driver's linear image of their width
+/// takes (`texture/ycbcr_planes.rs` takes the image only where its planes lie as the surface's):
+/// 8-bit `420v` and 10-bit `x420`, 40 x 24.
+const PLANES_SURFACES: [Surface; 2] = [
+    Surface {
+        format: PixelFormat::YCBCR84202P,
+        ostype: *b"420v",
+        matrix: None,
+        conversion: (YCbCrRange::Video, YCbCrMatrix::Bt601),
+        size: [40, 24],
+        row: 256,
+        chroma_at: 256 * 24,
+    },
+    Surface {
+        format: PixelFormat::YCBCR104202P,
+        ostype: *b"x420",
+        matrix: Some(SurfaceYCbCrMatrix::Itu2020),
+        conversion: (YCbCrRange::Video, YCbCrMatrix::Bt2020),
+        size: [40, 24],
+        row: 256,
+        chroma_at: 256 * 24,
     },
 ];
 
@@ -156,6 +183,32 @@ impl Surface {
     /// luma code at its place, the four nearest chroma pairs weighted 9/3/3/1 and rounded to a
     /// code, converted (`metal2vulkan::bind::ycbcr_read`).
     pub(super) fn model(&self, bytes: &[u8]) -> Vec<[u16; 3]> {
+        self.sums(bytes)
+            .into_iter()
+            .map(|(luma, sums)| {
+                let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
+                ycbcr_read(self.codes(), self.conversion, [luma, cb, cr])
+            })
+            .collect()
+    }
+
+    /// Each texel's red, green and blue through the device's conversion of `bytes`, row by row:
+    /// Vulkan's of the luma code and the chroma sums over 16, unrounded
+    /// (`ycbcr_device_reads::vulkan_read`), which is Vulkan's midpoint reconstruction through a
+    /// linear chroma filter at a luma texel's centre.
+    fn device_model(&self, bytes: &[u8]) -> Vec<[f64; 3]> {
+        self.sums(bytes)
+            .into_iter()
+            .map(|(luma, sums)| {
+                let [cb, cr] = sums.map(|s| f64::from(s) / 16.0);
+                vulkan_read(self.codes(), self.conversion, [f64::from(luma), cb, cr])
+            })
+            .collect()
+    }
+
+    /// Each texel's luma code and its four nearest chroma pairs' Cb and Cr codes weighted
+    /// 9/3/3/1, in sixteenths, row by row.
+    fn sums(&self, bytes: &[u8]) -> Vec<(u16, [u32; 2])> {
         let taps = |q: u64, n: u64| -> [(u64, u32); 2] {
             let c = q / 2;
             if q % 2 == 1 {
@@ -177,9 +230,8 @@ impl Surface {
                         sums[1] += wx * wy * u32::from(self.code(bytes, at + self.unit()));
                     }
                 }
-                let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
                 let luma = self.code(bytes, y * self.row + x * self.unit());
-                out.push(ycbcr_read(self.codes(), self.conversion, [luma, cb, cr]));
+                out.push((luma, sums));
             }
         }
         out
@@ -274,6 +326,38 @@ pub(super) fn texels(
     (texture, size): (&Texture, [u64; 2]),
     sampler: Option<&SamplerState>,
 ) -> Vec<[u16; 3]> {
+    on_grid(&raw_texels(device, state, (texture, size), sampler))
+}
+
+/// The `v` of `v / 2048` of each channel of the `float4`s `raw`, checked to be on the grid, alpha
+/// 1.
+fn on_grid(raw: &[u8]) -> Vec<[u16; 3]> {
+    raw.as_chunks::<16>()
+        .0
+        .iter()
+        .map(|t| {
+            let c = |i: usize| f32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
+            assert_eq!(c(3), 1.0, "alpha 1");
+            std::array::from_fn(|i| {
+                let v = c(i) * 2048.0;
+                assert!(
+                    v == v.round() && (0.0..=2048.0).contains(&v),
+                    "{v} off the grid"
+                );
+                v as u16
+            })
+        })
+        .collect()
+}
+
+/// The `float4`s `state` writes of `texture` of `size` through `sampler`, one thread a texel, in a
+/// command buffer of its own, as their bytes.
+fn raw_texels(
+    device: &Device,
+    state: &ComputePipelineState,
+    (texture, size): (&Texture, [u64; 2]),
+    sampler: Option<&SamplerState>,
+) -> Vec<u8> {
     let [w, h] = size;
     let out = device
         .new_buffer(16 * w * h, ResourceOptions::shared())
@@ -294,24 +378,7 @@ pub(super) fn texels(
     command_buffer.commit().unwrap();
     command_buffer.wait_until_completed_for(WAIT).unwrap();
     assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-    let bytes = read_buffer(&out, 0, 16 * w * h).unwrap();
-    bytes
-        .as_chunks::<16>()
-        .0
-        .iter()
-        .map(|t| {
-            let c = |i: usize| f32::from_le_bytes(t[4 * i..4 * i + 4].try_into().unwrap());
-            assert_eq!(c(3), 1.0, "alpha 1");
-            std::array::from_fn(|i| {
-                let v = c(i) * 2048.0;
-                assert!(
-                    v == v.round() && (0.0..=2048.0).contains(&v),
-                    "{v} off the grid"
-                );
-                v as u16
-            })
-        })
-        .collect()
+    read_buffer(&out, 0, 16 * w * h).unwrap()
 }
 
 /// The counts of the YCbCr paths between two readings: textures made reading their planes in
@@ -523,6 +590,90 @@ fn a_ycbcr_texture_the_form_does_not_read_keeps_its_image() {
             after.ycbcr_images_kept_swizzle - before.ycbcr_images_kept_swizzle,
             1,
             "a swizzle"
+        );
+    });
+}
+
+/// The planes images made between two readings, then the textures kept from one by each reason:
+/// the device's conversion, the memory, the layout (`WorkCounts::ycbcr_planes_images*`).
+fn planes_images(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
+    [
+        after.ycbcr_planes_images - before.ycbcr_planes_images,
+        after.ycbcr_planes_images_kept_conversion - before.ycbcr_planes_images_kept_conversion,
+        after.ycbcr_planes_images_kept_memory - before.ycbcr_planes_images_kept_memory,
+        after.ycbcr_planes_images_kept_layout - before.ycbcr_planes_images_kept_layout,
+    ]
+}
+
+/// A texture whose planes are read in place is also an image the device's own sampler Y′CbCr
+/// conversion samples where the device converts the 4:2:0 format as a linear image with Metal's
+/// reconstruction (`WorkCounts::ycbcr_planes_images`, the runtime's `texture/ycbcr_planes.rs`),
+/// and is counted by why where it is not: each such texture once. Through the image a nearest
+/// sample of each texel is the device's conversion, Vulkan's of the luma code and Metal's
+/// chroma sums unrounded within the device's bound, announced (`ycbcr-filter-not-exact`);
+/// without it, Metal's texel through the texel buffer, unannounced.
+#[test]
+fn a_ycbcr_texture_s_planes_image_samples_through_the_device_s_conversion() {
+    on_device(|device, messages| {
+        if !reads_in_place(device) {
+            eprintln!("{}: reads no planes in place", device.name());
+            return;
+        }
+        let kernels = Kernels::new(device);
+        let nearest = sampler(device, SamplerMinMagFilter::Nearest);
+        let mut images = 0;
+        for (seed, surface) in (11..).zip(PLANES_SURFACES) {
+            let what = format!("{:?} {:?}", surface.format, surface.conversion);
+            let bytes = surface.bytes(seed);
+            let buffer = buffer_with(device, &bytes).unwrap();
+            let before = device.work_counts();
+            let texture = surface.texture(&buffer, 0).unwrap();
+            let after = device.work_counts();
+            let made = planes_images(&before, &after);
+            eprintln!(
+                "YCBCR-PLANES-IMAGE {} {what}: image, or kept for the conversion, the memory, \
+                 the layout: {made:?}",
+                device.name()
+            );
+            assert_eq!(
+                after.ycbcr_textures_in_place - before.ycbcr_textures_in_place,
+                1,
+                "{what}: in place"
+            );
+            assert_eq!(made.iter().sum::<u64>(), 1, "{what}: one answer, {made:?}");
+            images += made[0];
+            let before = device.work_counts();
+            let raw = raw_texels(
+                device,
+                &kernels.sample,
+                (&texture, surface.size),
+                Some(&nearest),
+            );
+            let after = device.work_counts();
+            let bound = (
+                after.ycbcr_planes_images_bound - before.ycbcr_planes_images_bound,
+                after.ycbcr_planes_bound - before.ycbcr_planes_bound,
+            );
+            match made[0] {
+                1 => {
+                    assert_eq!(bound, (1, 0), "{what}: the planes image bound");
+                    let want = surface.device_model(&bytes);
+                    assert_device_reads(&raw, &want, (YCbCrOutput::Converted, false), &what);
+                }
+                _ => {
+                    assert_eq!(bound, (0, 1), "{what}: the texel buffer bound");
+                    assert!(
+                        on_grid(&raw) == surface.model(&bytes),
+                        "{what}: Metal's texels"
+                    );
+                }
+            }
+        }
+        let notices = counts(&messages.take_notices());
+        assert_eq!(
+            notices.contains_key(&Degradation::YCbCrFilterNotExact),
+            images > 0,
+            "{notices:?}"
         );
     });
 }

@@ -180,7 +180,9 @@ mod usage_shadow;
 mod view_shadow;
 pub(super) mod wrapped;
 mod ycbcr_image;
+mod ycbcr_planes;
 pub(crate) use ycbcr_image::{KeptImage, PlanesInPlace};
+pub(crate) use ycbcr_planes::KeptTexels;
 
 pub(crate) use attached_reads::feedback_candidate;
 pub use shared::SharedTextureHandle;
@@ -4578,7 +4580,10 @@ impl Texture {
         let mut facts = texture_facts(&record);
         facts.sparse = self.is_sparse();
         // A two-plane YCbCr texture whose planes a function may read in place.
-        facts.ycbcr_in_place = self.0.planes_in_place.map(|p| p.words);
+        facts.ycbcr_in_place = self.0.planes_in_place.as_ref().map(|p| match p.image {
+            Some(_) => p.words.with_planes_image(),
+            None => p.words,
+        });
         facts
     }
 

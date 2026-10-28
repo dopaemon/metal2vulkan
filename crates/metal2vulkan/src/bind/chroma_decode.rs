@@ -15,16 +15,57 @@
 //! it does any 8-bit format's texture, which is how Metal samples them.
 //!
 //! A texel's codes read its row's pairs alone, so a decode is of whole rows.
+//!
+//! **The device's own conversion.** Where the device converts the format itself (a sampler
+//! Y′CbCr conversion of `G8B8G8R8_422_UNORM` or `B8G8R8G8_422_UNORM`, [`ChromaDecode::format`],
+//! whose chroma lies at Metal's midpoint through a linear chroma filter), the consumer copies the
+//! pairs into an image of that format and one dispatch of [`chroma_sample_module`] samples it
+//! through a sampler of that conversion (the identity model, full range) at each texel's centre,
+//! writing the twin's codes as [`chroma_decode_module`] writes Metal's: Vulkan's implicit
+//! reconstruction weighs the pair's chroma 3 and the pair beside it 1 at a texel's centre, clamped
+//! to the edge at the row's ends, as Metal does, at the device's precision; each channel is
+//! stored as `roundEven(clamp(c, 0, 1) · 255)`, where Metal's sum rounds its ties up.
+//!
+//! **The sample module** (one per device; the sampler, its conversion and the pairs' format are
+//! the consumer's layout's). One `GLCompute` entry `main` with local size
+//! ([`ChromaSampleModule::LOCAL_SIZE`], [`ChromaSampleModule::LOCAL_SIZE`], 1), no push
+//! constants, and in set 0:
+//!
+//! | Binding | Resource |
+//! |---|---|
+//! | [`ChromaSampleModule::PAIRS_BINDING`] | the pairs' image, a 2D combined image sampler through a sampler of the device's Y′CbCr conversion (immutable, as Vulkan requires), sampled at level 0 |
+//! | [`ChromaSampleModule::SHAPE_BINDING`] | a storage buffer of [`ChromaSampleModule::SHAPE_WORDS`] words ([`ChromaSampleModule::shape`]) |
+//! | [`ChromaSampleModule::TEXELS_BINDING`] | the band's texels, a storage buffer of words, written tight as a copy into the twin reads them |
+//!
+//! The shape's words, in order: the band's width and rows, its first row in the pairs' image,
+//! and the image's width and height. Invocation `(x, y)` inside the band samples `((x + 0.5) /
+//! W, (first + y + 0.5) / H)` and writes word `y · width + x`: red (Cr) lowest, then green (Y),
+//! blue (Cb) and alpha 255. One outside it writes nothing. The consumer dispatches `⌈width / 8⌉ x
+//! ⌈rows / 8⌉` workgroups.
+//!
+//! **Synchronization** (consumer): the pairs' copy into the image and the shape's write
+//! (`TRANSFER_WRITE`) → `SHADER_SAMPLED_READ` and `SHADER_STORAGE_READ` in `COMPUTE_SHADER` before
+//! the dispatch; its texel writes (`SHADER_STORAGE_WRITE`) → `TRANSFER_READ` before the texels are
+//! copied into the twin.
 
 use super::block_decode::{decode_module, BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
 use super::ycbcr_convert::{scalar, words_buffer};
+use crate::budget::{Budget, Meter};
+use crate::device::requirements::Requirements;
 use crate::device::Device;
-use crate::error::Error;
+use crate::error::{Error, InternalError, InternalKind};
 use crate::metal::PixelFormat;
+use crate::pipeline::sym::{
+    CombinedSampler, ResourceKind, ResourceSlot, SamplerRef, Stage, Symbol,
+};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::error::BResult;
-use crate::spirv::ir::{BinOp, ExecMode, ExecModel, IoDir, MemAccess, Type, TypedModule};
+use crate::spirv::ir::{
+    BinOp, ConvOp, Dim, ExecMode, ExecModel, GlslOp, ImageOperands, ImageType, ImageUsage, IoDir,
+    MemAccess, StorageClass, Type, TypedModule,
+};
 use crate::vk::Format;
+use std::sync::Arc;
 
 /// The 4:2:2 decode module of `device` for `decode`'s pairs: one invocation per texel on the block
 /// decode's bindings and shape ([`BlockDecodeModule`]), built with the typed builder, checked by
@@ -80,6 +121,15 @@ impl ChromaDecode {
     /// The Metal format of the twin's texels.
     pub fn texel_pixel_format(self) -> PixelFormat {
         PixelFormat::RGBA8Unorm
+    }
+
+    /// Vulkan's format of the pairs, which a sampler Y′CbCr conversion reads (the module docs):
+    /// `G8B8G8R8_422_UNORM` (`G0 B G1 R`) or `B8G8R8G8_422_UNORM` (`B G0 R G1`).
+    pub fn format(self) -> Format {
+        match self {
+            ChromaDecode::Gbgr => Format::G8B8G8R8_422_UNORM,
+            ChromaDecode::Bgrg => Format::B8G8R8G8_422_UNORM,
+        }
     }
 
     /// The byte of a pair (its 4 bytes as a little-endian word, byte `k` at bits `8k`) holding
@@ -247,6 +297,193 @@ fn typed_module(decode: ChromaDecode) -> BResult<TypedModule> {
         vec![ExecMode::LocalSize {
             x: BlockDecodeModule::LOCAL_SIZE,
             y: BlockDecodeModule::LOCAL_SIZE,
+            z: 1,
+        }],
+    )?;
+    b.finalize()
+}
+
+/// The crate-owned 4:2:2 sample module of one device (the module docs), validated like any
+/// output.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChromaSampleModule {
+    /// SPIR-V 1.5 words, entry point `main`, bindings numbered as below in set 0.
+    pub spirv: Arc<[u32]>,
+    /// What the module needs from the device (within every Vulkan 1.2 device).
+    pub requirements: Requirements,
+}
+
+impl ChromaSampleModule {
+    /// Descriptor set of every binding.
+    pub const SET: u32 = 0;
+    /// The pairs' image through the device's Y′CbCr conversion: a combined image sampler.
+    pub const PAIRS_BINDING: u32 = 0;
+    /// The band's shape: a storage buffer of [`SHAPE_WORDS`](Self::SHAPE_WORDS) words.
+    pub const SHAPE_BINDING: u32 = 1;
+    /// The band's texels: a storage buffer, written.
+    pub const TEXELS_BINDING: u32 = 2;
+    /// The words of a shape.
+    pub const SHAPE_WORDS: u32 = 5;
+    /// Invocations of one workgroup along x, and along y: one texel each.
+    pub const LOCAL_SIZE: u32 = 8;
+
+    /// The shape's bytes of a band of `size` texels (its width and rows) from row `first` of a
+    /// pairs' image of `extent` (the module docs).
+    pub fn shape(
+        size: [u32; 2],
+        first: u32,
+        extent: [u32; 2],
+    ) -> [u8; Self::SHAPE_WORDS as usize * 4] {
+        let words = [size[0], size[1], first, extent[0], extent[1]];
+        let mut bytes = [0; Self::SHAPE_WORDS as usize * 4];
+        for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+/// The binding symbol of the pairs' combined image sampler in the sample module.
+const PAIRS: ResourceSlot = ResourceSlot {
+    stage: Stage::Kernel,
+    kind: ResourceKind::CombinedTextureSampler(CombinedSampler {
+        sampler: SamplerRef::Slot(0),
+        compare: false,
+        integer: false,
+    }),
+    index: 0,
+};
+
+/// The fixed binding numbers of the sample module's symbols.
+fn sample_binding_of(sym: &Symbol) -> Option<u32> {
+    match sym {
+        Symbol::DescriptorSet(_) => Some(ChromaSampleModule::SET),
+        Symbol::Binding(s) if *s == PAIRS => Some(ChromaSampleModule::PAIRS_BINDING),
+        Symbol::Binding(s) if *s == SHAPE => Some(ChromaSampleModule::SHAPE_BINDING),
+        Symbol::Binding(s) if *s == TEXELS => Some(ChromaSampleModule::TEXELS_BINDING),
+        _ => None,
+    }
+}
+
+/// The 4:2:2 sample module of `device` (the module docs): built with the typed builder, checked
+/// by the owned verifier against the device's profile (requirements included), serialized, and
+/// numbered with the fixed bindings of [`ChromaSampleModule`]. The sampler and the pairs' image
+/// are the consumer's, so one module samples both formats.
+pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error> {
+    let profile = device.profile();
+    let m = sample_typed_module()?;
+    let mut meter = Meter::new(&Budget::default());
+    crate::spirv::verify::verify(&m, profile, &mut meter)?;
+    let r = crate::spirv::serialize::serialize(m)?;
+    profile.check(&r.requirements).map_err(|c| {
+        Error::Internal(InternalError::new(
+            InternalKind::RequirementsExceedProfile,
+            format!("the 4:2:2 sample module needs {c:?}"),
+        ))
+    })?;
+    let words = crate::spirv::serialize::relocate(&r, &sample_binding_of)?;
+    Ok(ChromaSampleModule {
+        spirv: words.into(),
+        requirements: r.requirements,
+    })
+}
+
+/// The sample module as a typed module, before serialization (the module docs).
+fn sample_typed_module() -> BResult<TypedModule> {
+    let mut b = crate::spirv::builder::ModuleBuilder::new();
+    let u32_ = b.ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let f32_ = b.ty(Type::Float { width: 32 })?;
+    let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
+    let vec2 = b.ty(Type::Vector { elem: f32_, len: 2 })?;
+    let pairs_ty = b.ty(Type::Image(ImageType {
+        sampled_type: f32_,
+        dim: Dim::D2,
+        depth: false,
+        arrayed: false,
+        multisampled: false,
+        usage: ImageUsage::Sampled,
+        format: crate::spv::ImageFormat::Unknown,
+    }))?;
+    let combined_ty = b.ty(Type::SampledImage { image: pairs_ty })?;
+    let pairs = b.resource(PAIRS, StorageClass::UniformConstant, combined_ty)?;
+    let shape = words_buffer(&mut b, SHAPE, u32_)?;
+    let texels = words_buffer(&mut b, TEXELS, u32_)?;
+    let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
+    let void = b.ty(Type::Void)?;
+    let mut f = b.function(void)?;
+    let zero = scalar(&mut f, u32_, 0)?;
+    let invocation = f.module().global_value(invocation)?;
+    let invocation = f.load(invocation, MemAccess::default())?;
+    let x = f.composite_extract(invocation, &[0])?;
+    let y = f.composite_extract(invocation, &[1])?;
+    let shape = f.module().global_value(shape)?;
+    let mut field = |index: u32| -> BResult<_> {
+        let index = scalar(&mut f, u32_, u64::from(index))?;
+        let p = f.access_chain(shape, &[zero, index])?;
+        f.load(p, MemAccess::default())
+    };
+    let (width, rows, first) = (field(0)?, field(1)?, field(2)?);
+    let (across, down) = (field(3)?, field(4)?);
+    let in_x = f.binary(BinOp::ULessThan, x, width)?;
+    let in_y = f.binary(BinOp::ULessThan, y, rows)?;
+    let inside = f.binary(BinOp::LogicalAnd, in_x, in_y)?;
+    let pairs = f.module().global_value(pairs)?;
+    let texels = f.module().global_value(texels)?;
+    let sampled: ArmFn<'_, ()> = Box::new(move |f, _| {
+        let float = |f: &mut crate::spirv::builder::FunctionBuilder<'_>, v: f32| {
+            scalar(f, f32_, u64::from(v.to_bits()))
+        };
+        // The centre of texel `(x, first + y)` of the pairs' image, normalized.
+        let half = float(f, 0.5)?;
+        let row = f.binary(BinOp::IAdd, first, y)?;
+        let mut coord = Vec::with_capacity(2);
+        for (at, extent) in [(x, across), (row, down)] {
+            let at = f.convert(ConvOp::ConvertUToF, at, f32_)?;
+            let at = f.binary(BinOp::FAdd, at, half)?;
+            let extent = f.convert(ConvOp::ConvertUToF, extent, f32_)?;
+            coord.push(f.binary(BinOp::FDiv, at, extent)?);
+        }
+        let coord = f.composite_construct(vec2, &coord)?;
+        let combined = f.load(pairs, MemAccess::default())?;
+        let lod = float(f, 0.0)?;
+        let ops = ImageOperands {
+            lod: Some(lod),
+            ..ImageOperands::default()
+        };
+        let sample = f.sample(combined, coord, None, false, &ops)?;
+        // Red (Cr), green (Y) and blue (Cb), each rounded to a code, red lowest, alpha 255.
+        let (low, one) = (float(f, 0.0)?, float(f, 1.0)?);
+        let largest = float(f, 255.0)?;
+        let mut word = scalar(f, u32_, 0xff << 24)?;
+        for c in 0..3 {
+            let v = f.composite_extract(sample, &[c])?;
+            let v = f.glsl(GlslOp::FClamp, &[v, low, one])?;
+            let v = f.binary(BinOp::FMul, v, largest)?;
+            let v = f.glsl(GlslOp::RoundEven, &[v])?;
+            let v = f.convert(ConvOp::ConvertFToU, v, u32_)?;
+            let shift = scalar(f, u32_, u64::from(8 * c))?;
+            let v = f.binary(BinOp::ShiftLeftLogical, v, shift)?;
+            word = f.binary(BinOp::BitwiseOr, word, v)?;
+        }
+        let t = f.binary(BinOp::IMul, y, width)?;
+        let t = f.binary(BinOp::IAdd, t, x)?;
+        let ptr = f.access_chain(texels, &[zero, t])?;
+        f.store(ptr, word, MemAccess::default())?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    f.if_(&mut (), inside, sampled, None)?;
+    f.ret(None)?;
+    let id = f.finish()?;
+    b.entry(
+        ExecModel::GLCompute,
+        id,
+        vec![ExecMode::LocalSize {
+            x: ChromaSampleModule::LOCAL_SIZE,
+            y: ChromaSampleModule::LOCAL_SIZE,
             z: 1,
         }],
     )?;

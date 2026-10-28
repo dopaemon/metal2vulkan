@@ -1112,7 +1112,7 @@ impl TextureFacts {
     /// storage slot's level views and pushed level count, its swizzle, its address-mode map, its
     /// [`offset_base_axes`](Self::offset_base_axes), and whether its planes are read in place
     /// ([`ycbcr_in_place`](Self::ycbcr_in_place), whose words the slot's push field carries, not
-    /// the shape). Its array length only changes the view's subresource range, which is every
+    /// the shape) and through which device conversion where they are held as an image. Its array length only changes the view's subresource range, which is every
     /// layer.
     ///
     /// The level count is stated whatever the usage: plain Metal writes a texture made without
@@ -1132,6 +1132,7 @@ impl TextureFacts {
             address_modes: self.address_modes,
             offset_base_axes: self.offset_base_axes(),
             ycbcr_in_place: self.ycbcr_in_place.is_some(),
+            ycbcr_planes_sampler: self.ycbcr_in_place.and_then(|p| p.planes_sampler()),
         }
     }
 }
@@ -1956,6 +1957,12 @@ pub enum TextureShape {
         /// (`VariantKey::ycbcr_in_place`).
         #[cfg_attr(feature = "serde", serde(default))]
         ycbcr_in_place: bool,
+        /// The device's conversion of the texture's planes, where the consumer holds them as an
+        /// image it samples ([`YCbCrInPlace::planes_sampler`](crate::bind::YCbCrInPlace)): a slot
+        /// whose every sample the device's sampler takes samples that image
+        /// (`VariantKey::ycbcr_planes_sampled`).
+        #[cfg_attr(feature = "serde", serde(default))]
+        ycbcr_planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,
     },
     Buffer {
         pixel_format: metal::PixelFormat,

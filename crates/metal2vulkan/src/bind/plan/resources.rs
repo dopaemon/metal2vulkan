@@ -677,6 +677,34 @@ impl ResourcePlanner<'_> {
         }
     }
 
+    /// The write of `slot`'s binding under its planes-image variant (`BindingSource::YCbCrPlanes`,
+    /// `VariantKey::ycbcr_planes_sampled`): the image of the planes of the two-plane YCbCr texture
+    /// the shape binds there, viewed with the device's conversion of `TextureShape::Texture::
+    /// ycbcr_planes_sampler`, a read of the planes' bytes. The plan takes the variant only where
+    /// the shape binds such a texture there (`slots::ycbcr_planes_sampled_variant`), so any other
+    /// is the binder's defect.
+    pub(crate) fn planes_image_write(&mut self, slot: SlotRef) -> Result<WriteSource, BindError> {
+        match self.texture_shape(slot) {
+            Some(TextureShape::Texture {
+                ycbcr_planes_sampler: Some(_),
+                ..
+            }) => {
+                self.uses.push(ResourceUse {
+                    resource: UseTarget::Slot(slot),
+                    access: AccessSet::READ,
+                    class: AccessClass::YCbCrPlanes,
+                    stages: (self.stage_flags)(slot.stage),
+                    range: None,
+                });
+                Ok(WriteSource::YCbCrPlanesImage { slot })
+            }
+            _ => Err(internal(format!(
+                "a planes image's binding of {slot:?}, which binds no texture whose planes are \
+                 held as an image"
+            ))),
+        }
+    }
+
     fn texture_use(&mut self, slot: SlotRef, t: &TextureSlot, storage: bool) {
         self.uses.push(ResourceUse {
             resource: UseTarget::Slot(slot),

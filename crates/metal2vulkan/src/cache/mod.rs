@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1910;
+pub const SEMANTICS_VERSION: u32 = 1911;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -70,7 +70,7 @@ pub const SEMANTICS_VERSION: u32 = 1910;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 476;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 477;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 476;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1682;
+pub const RUNTIME_VERSION: u32 = 1683;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -211,6 +211,18 @@ pub struct VariantKey {
     /// (`bind::YCbCrInPlace`). The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub ycbcr_in_place: BTreeSet<SlotRef>,
+    /// Slots of [`ycbcr_in_place`](Self::ycbcr_in_place) whose function's every sample the
+    /// device's own sampler Y′CbCr conversion takes, at which the shape binds a texture whose
+    /// planes are also held as an image it samples, each with that conversion
+    /// (`TextureShape::Texture::ycbcr_planes_sampler`, `RuntimeFact::YCbCrInPlace`'s `device`):
+    /// each such slot binds that image through an immutable sampler of the conversion, and its
+    /// samples are the device's (`bind::YCbCrPlanesSampler`). The plan of a pipeline compiled
+    /// under it states it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, with = "crate::pipeline::serde_pairs")
+    )]
+    pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>,
     /// Texture slots a constexpr sampler samples, each with the address-mode map of the texture
     /// the shape binds there where it is not the identity: every slot of a
     /// `RuntimeFact::ConstexprSampled` the shape binds such a texture at. The function's constexpr
@@ -517,6 +529,7 @@ impl VariantKey {
             && self.srgb_textures.is_empty()
             && self.snapshot_textures.is_empty()
             && self.ycbcr_in_place.is_empty()
+            && self.ycbcr_planes_sampled.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
             && !self.replay_bindings
@@ -627,6 +640,12 @@ impl VariantKey {
             .iter()
             .filter(|s| s.stage == stage)
             .copied()
+            .collect();
+        out.ycbcr_planes_sampled = self
+            .ycbcr_planes_sampled
+            .iter()
+            .filter(|(s, _)| s.stage == stage)
+            .map(|(s, sampler)| (*s, *sampler))
             .collect();
         out.address_maps = self
             .address_maps

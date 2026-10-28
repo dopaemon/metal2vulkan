@@ -1,4 +1,4 @@
-use super::{typed_module, ChromaDecode};
+use super::{sample_typed_module, typed_module, ChromaDecode, ChromaSampleModule};
 use crate::bind::block_decode::{BlockDecodeModule, BLOCKS, SHAPE, TEXELS};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::{assert_valid, committed_profiles};
@@ -94,6 +94,24 @@ fn the_chroma_decode_kernels_are_valid_on_every_committed_profile() {
             assert_valid(typed_module(decode).expect("module"), p);
         }
     }
+    // The device's own conversion's sample kernel, one for both formats.
+    for (_, p) in &profiles {
+        assert_valid(sample_typed_module().expect("sample module"), p);
+    }
+}
+
+/// The sample module's shape: the band's width and rows, its first row, and the image's extent,
+/// each a little-endian word; Vulkan's formats of the pairs, in either order.
+#[test]
+fn the_chroma_sample_shape_and_formats() {
+    let shape = ChromaSampleModule::shape([16, 3], 5, [16, 12]);
+    let words: Vec<u32> = (shape.as_chunks::<4>().0.iter())
+        .map(|w| u32::from_le_bytes(*w))
+        .collect();
+    assert_eq!(words, [16, 3, 5, 16, 12]);
+    use crate::vk::Format;
+    assert_eq!(ChromaDecode::Gbgr.format(), Format::G8B8G8R8_422_UNORM);
+    assert_eq!(ChromaDecode::Bgrg.format(), Format::B8G8R8G8_422_UNORM);
 }
 
 /// The kernel's texels of a region `size` of `decode`'s `pairs`; the texel buffer's bytes past the

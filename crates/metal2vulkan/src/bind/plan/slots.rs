@@ -395,7 +395,7 @@ pub(crate) fn ycbcr_in_place_variant(
     dependencies
         .iter()
         .filter_map(|d| match d.fact {
-            RuntimeFact::YCbCrInPlace { slot, samplers } => Some((slot, samplers)),
+            RuntimeFact::YCbCrInPlace { slot, samplers, .. } => Some((slot, samplers)),
             _ => None,
         })
         .filter(|&(slot, samplers)| {
@@ -416,6 +416,62 @@ pub(crate) fn ycbcr_in_place_variant(
         })
         .map(|(slot, _)| slot)
         .collect()
+}
+
+/// The slots of `in_place` (the plan's `VariantKey::ycbcr_in_place`) whose function's every sample
+/// the device's own sampler Y′CbCr conversion takes (`RuntimeFact::YCbCrInPlace`'s `device`), at
+/// which `shape` binds a texture whose planes are also held as an image it samples
+/// (`TextureShape::Texture::ycbcr_planes_sampler`), and each runtime sampler the function samples
+/// the slot through addresses no border on either plane axis ([`planes_word`]), each with that
+/// conversion: the plan's `VariantKey::ycbcr_planes_sampled`. The variant's compile states the
+/// same facts, so its plan for the same shape states the same key.
+pub(crate) fn ycbcr_planes_sampled_variant(
+    dependencies: &[RuntimeDependency],
+    shape: &BindShape,
+    in_place: &std::collections::BTreeSet<SlotRef>,
+) -> BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler> {
+    dependencies
+        .iter()
+        .filter_map(|d| match d.fact {
+            RuntimeFact::YCbCrInPlace {
+                slot,
+                samplers,
+                device: true,
+            } if in_place.contains(&slot) => Some((slot, samplers)),
+            _ => None,
+        })
+        .filter_map(|(slot, samplers)| {
+            let sampler = match bound_texture(shape, slot) {
+                Some(&TextureShape::Texture {
+                    ycbcr_planes_sampler: Some(sampler),
+                    ..
+                }) => sampler,
+                _ => return None,
+            };
+            let stage = shape.stages.get(&slot.stage);
+            let mut words = (0..32).filter(|n| samplers >> n & 1 != 0).map(|n| {
+                stage
+                    .and_then(|s| s.samplers.get(&n))
+                    .map_or(0, |s| s.word.0)
+            });
+            words.all(planes_word).then_some((slot, sampler))
+        })
+        .collect()
+}
+
+/// Whether a runtime sampler of word `word` samples a two-plane YCbCr texture in a way the device's
+/// own sampler Y′CbCr conversion of its planes' image takes: no clamp-to-zero or border color on
+/// the `s` or `t` axis, which a 4:2:0 texture reads as the border where that sampler clamps to the
+/// edge (every other mode a 4:2:0 texture samples as clamp-to-edge). Its filter and coordinate
+/// space are the function's to apply.
+pub(crate) fn planes_word(word: u32) -> bool {
+    use crate::metal::sampler::SamplerWord;
+    use crate::metal::SamplerAddressMode as M;
+    let border = [M::ClampToZero.as_raw(), M::ClampToBorderColor.as_raw()];
+    (0..2).all(|axis| {
+        let mode = (word & SamplerWord::ADDRESS[axis]) >> SamplerWord::ADDRESS_SHIFT[axis];
+        !border.contains(&mode)
+    })
 }
 
 /// Whether a runtime sampler of word `word` samples a two-plane YCbCr texture in a way its

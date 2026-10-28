@@ -45,7 +45,8 @@ const TEN_BIT_WORDS: RuntimeDriverDefect = RuntimeDriverDefect::TenBitCodesReadA
 /// colour copies, the depth/stencil resolve of the first layer and level, the explicit plane's
 /// rows past its height, the baked samplers lost after a copy and the 10-bit codes its Y′CbCr
 /// conversion reads as words;
-/// RADV the multisampled copies that convert float NaNs, and the implicit
+/// RADV the multisampled copies that convert float NaNs, the 10-bit codes its Y′CbCr conversion
+/// reads as words, and the implicit
 /// preprocessing after an execution set on every GPU but the 780M (Phoenix's and Hawk Point's),
 /// measured clean; ANV
 /// the compressed image's short size, the occlusion count per color output and the pushed
@@ -88,9 +89,9 @@ fn the_committed_profiles_drivers_have_their_defects() {
             }
             // The 780M, under Phoenix's `deviceID` and Hawk Point's.
             Some(DriverId::MESA_RADV) if matches!(desc.device_id, 0x15bf | 0x1900) => {
-                vec![NAN_COPIES]
+                vec![NAN_COPIES, TEN_BIT_WORDS]
             }
-            Some(DriverId::MESA_RADV) => vec![NAN_COPIES, PREPROCESS],
+            Some(DriverId::MESA_RADV) => vec![NAN_COPIES, PREPROCESS, TEN_BIT_WORDS],
             Some(DriverId::INTEL_OPEN_SOURCE_MESA) => vec![COMPRESSION, COUNTS, STALE_PUSHES],
             Some(DriverId::NVIDIA_PROPRIETARY) if desc.device_id == 0x2c19 => Vec::new(),
             Some(DriverId::NVIDIA_PROPRIETARY) => vec![STENCIL_COPIES],
@@ -183,12 +184,12 @@ fn hawk_points_780m_is_phoenixs_gpu() {
     assert_eq!(properties.driver_defects, measured.driver_defects);
     assert_eq!(
         of(&hawk_point).into_iter().collect::<Vec<_>>(),
-        [NAN_COPIES]
+        [NAN_COPIES, TEN_BIT_WORDS]
     );
     hawk_point.driver_version += 1;
     assert_eq!(
         of(&hawk_point).into_iter().collect::<Vec<_>>(),
-        [NAN_COPIES]
+        [NAN_COPIES, TEN_BIT_WORDS]
     );
     let mut neighbour = phoenix;
     neighbour.device_id = 0x1901;

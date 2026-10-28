@@ -89,6 +89,16 @@
 //! write of part of a row decodes its rows as the carrier then holds them, read back first). A new
 //! one's zero pairs read opaque black: the twin starts cleared to it.
 //!
+//! **4:2:2 through the device's own conversion.** Where the device converts the pairs' format
+//! itself with Metal's reconstruction (`ycbcr_device.rs`, [`YCbCrSampler::pairs`]), the twin holds
+//! the device's conversion of the pairs instead (announced `decoded-texel-precision`; counted
+//! `WorkCounts::chroma_device_twins`): each decode pass's band, its pairs copied out of the
+//! carrier into the scratch, is copied into the texture's pairs' image ([`PairsSampling`]) and
+//! sampled through the conversion into the band's texels (`bind::chroma_sample_module`), which are
+//! copied into the twin. Every write's decode is such a pass: the carrier's CPU copies go through
+//! submissions there (no host or staging copies), each followed by its pass, so no texel of the
+//! twin is the CPU's (Metal's) decode.
+//!
 //! **Cost**, announced once per device (`carried-decoded-twin`, performance): the carrier and the
 //! twin's memory, and a decode pass after each write. A `VkImage` handed out (`Texture::vk_image`)
 //! is the carrier: what the caller writes into it outside the runtime's calls leaves the twin as
@@ -108,7 +118,7 @@ use super::super::error::{internal, Error};
 use super::super::etc;
 use super::super::exit_guard::{self, Call};
 use super::super::image_plan::ImagePlan;
-use super::super::owned_kernel::{OwnedModule, OwnedSets};
+use super::super::owned_kernel::{OwnedModule, OwnedSet, OwnedSets};
 use super::super::pvrtc;
 use super::super::resource::Identity;
 use super::super::resource::ResourceKey;
@@ -116,6 +126,7 @@ use super::super::texture_descriptor::{TextureDescriptor, TextureLayout};
 use super::super::tracker::{Access, Barrier, Use, UseRange};
 use super::super::trails::Trail;
 use super::super::values::{HazardTrackingMode, ResourceOptions};
+use super::super::ycbcr_device::{PairsSampling, YCbCrSampler};
 use super::super::{Buffer, Device};
 use super::first_move::{FirstMove, Pattern, Patterned, TexelCopy};
 use super::twin_decode::{self, Job};
@@ -313,6 +324,9 @@ pub(super) struct Decoded {
     /// The layout and descriptor of the texture it was made for, by which an ASTC carrier's
     /// second twin is made ([`Image::make_second_twin`]).
     made_for: (TextureLayout, TextureDescriptor),
+    /// A 4:2:2 twin's pairs' image, where it holds the device's own conversion of its pairs (the
+    /// module docs); `None` where it holds Metal's decode.
+    pairs: Option<PairsSampling>,
 }
 
 impl Decoded {
@@ -507,6 +521,22 @@ impl Device {
             self.degrade_block_decode(layout);
             return Ok(image);
         };
+        // A 4:2:2 twin holds the device's own conversion of the pairs where it converts their
+        // format with Metal's reconstruction (the module docs). Every decode is then a GPU pass:
+        // the carrier's CPU copies go through submissions, each followed by its pass.
+        let pairs = match decode {
+            TwinDecode::Chroma(chroma) => {
+                let [width, height, _] = layout.extent;
+                YCbCrSampler::pairs(self, chroma, [width, height])
+                    .map(|sampler| PairsSampling::new(self, sampler, [width, height]))
+                    .transpose()?
+            }
+            _ => None,
+        };
+        if pairs.is_some() {
+            image.host_copies = false;
+            image.staging_copies = false;
+        }
         // A twin starts, and takes the CPU's decodes, as the carrier's CPU copies go: on the
         // host or the staging queue where they do (then made as a `Shared` or `Managed`
         // texture's image is), else through submissions.
@@ -570,6 +600,7 @@ impl Device {
             decode,
             started_on_the_cpu: routed && fresh,
             made_for: (*layout, *descriptor),
+            pairs,
         };
         self.degrade_carried_twin(layout, &decoded, placed(&image));
         image.decoded = Some(Box::new(decoded));
@@ -594,8 +625,15 @@ impl Device {
             let placed =
                 |bytes: Option<u64>| bytes.map_or_else(String::new, |n| format!(", {n} placed"));
             let held = match decoded.decode {
-                TwinDecode::Chroma(_) => "Vulkan's 4:2:2 formats reconstruct chroma by the \
-                                          implementation's rules"
+                TwinDecode::Chroma(_) if decoded.pairs.is_some() => {
+                    "Vulkan views a 4:2:2 format only through a sampler Y′CbCr conversion, which \
+                     no pipeline's layout bakes, so its twin holds the device's conversion of its \
+                     pairs"
+                        .to_owned()
+                }
+                TwinDecode::Chroma(_) => "the device does not convert its 4:2:2 format with \
+                                          Metal's reconstruction (its chroma at the midpoint \
+                                          through a linear filter)"
                     .to_owned(),
                 _ => format!("the device has no {:?} format", layout.pixel_format),
             };
@@ -610,6 +648,12 @@ impl Device {
             (object(), why)
         });
         let why = match decoded.decode {
+            TwinDecode::Chroma(_) if decoded.pairs.is_some() => {
+                "its decoded twin holds the device's own Y′CbCr conversion of its pairs (Vulkan's \
+                 midpoint reconstruction through a linear chroma filter, at the device's \
+                 precision), each channel as the nearest 8-bit code with ties to even, where \
+                 Metal's 3:1 sum of the codes rounds its ties up"
+            }
             TwinDecode::Astc(decode, AstcTexels::Unorm8) if !decode.srgb => {
                 "its decoded twin holds each channel as the 8-bit code nearest Metal's 12-bit \
                  value, at most 1/510 off it"
@@ -1184,10 +1228,17 @@ impl Image {
             let [w, h, _] = r.size.map(u64::from);
             (w * h * u64::from(r.size[2]) * u64::from(r.layers) * texel).next_multiple_of(4)
         };
-        let plans: Vec<BandPlan> = steps
+        let mut plans: Vec<BandPlan> = steps
             .iter()
             .map(|step| self.band_plan(decode, step))
             .collect();
+        // A 4:2:2 twin of the device's conversion: each band's rows sampled out of the pairs'
+        // image (the module docs), its own shape and workgroups.
+        if let Some(pairs) = &decoded.pairs {
+            for (plan, step) in plans.iter_mut().zip(&steps) {
+                (plan.shape, plan.groups) = pairs.step(step.origin[1], step.size[1]);
+            }
+        }
         // Each step's blocks at the scratch's start and its texels at the alignment after them:
         // at most `most` bytes together (`bands`), so within `most` and the alignment.
         let layouts: Vec<(u64, u64, u64)> = (steps.iter().zip(&plans))
@@ -1235,18 +1286,42 @@ impl Image {
                 std::ptr::copy_nonoverlapping(plan.shape.as_ptr(), to, plan.shape.len());
             }
         }
-        let kernel = device.owned_kernel(OwnedModule::TwinDecode(decode))?;
-        let ranges: Vec<Vec<(vk::Buffer, u64, u64)>> = (layouts.iter())
-            .zip(0u64..)
-            .map(|(&(blocks, texels_at, texels), at)| {
-                vec![
-                    (raw_shapes, shapes_base + at * slot, shape_bytes),
-                    (raw_scratch, base, blocks),
-                    (raw_scratch, base + texels_at, texels),
-                ]
-            })
-            .collect();
-        let sets = OwnedSets::write(device, &kernel, &ranges)?;
+        let (kernel, sets) = match &decoded.pairs {
+            None => {
+                let kernel = device.owned_kernel(OwnedModule::TwinDecode(decode))?;
+                let ranges: Vec<Vec<(vk::Buffer, u64, u64)>> = (layouts.iter())
+                    .zip(0u64..)
+                    .map(|(&(blocks, texels_at, texels), at)| {
+                        vec![
+                            (raw_shapes, shapes_base + at * slot, shape_bytes),
+                            (raw_scratch, base, blocks),
+                            (raw_scratch, base + texels_at, texels),
+                        ]
+                    })
+                    .collect();
+                (kernel, OwnedSets::write(device, &kernel, &ranges)?)
+            }
+            // The pairs' image, then the shape and the texels (`bind::ChromaSampleModule`).
+            Some(pairs) => {
+                let owned: Vec<OwnedSet> = (layouts.iter())
+                    .zip(0u64..)
+                    .map(|(&(_, texels_at, texels), at)| OwnedSet {
+                        images: vec![pairs.view],
+                        storage_images: Vec::new(),
+                        buffers: vec![
+                            (raw_shapes, shapes_base + at * slot, shape_bytes),
+                            (raw_scratch, base + texels_at, texels),
+                        ],
+                    })
+                    .collect();
+                let kernels = vec![pairs.kernel; owned.len()];
+                device.shared().counts.chroma_device_decode();
+                (
+                    pairs.kernel,
+                    OwnedSets::write_each(device, &kernels, &owned)?,
+                )
+            }
+        };
         let steps = steps
             .iter()
             .zip(&plans)
@@ -1257,6 +1332,12 @@ impl Image {
                     buffer_offset: base,
                     ..buffer_image_copy(&plan.blocks)
                 },
+                // The band's pairs, tight rows of the texture's width out of the scratch, into
+                // the same rows of the pairs' image.
+                pairs: decoded.pairs.as_ref().map(|_| vk::BufferImageCopy {
+                    buffer_offset: base,
+                    ..buffer_image_copy(&plan.blocks)
+                }),
                 texels: vk::BufferImageCopy {
                     buffer_offset: base + texels_at,
                     ..buffer_image_copy(region)
@@ -1269,6 +1350,10 @@ impl Image {
         Ok(Some(DecodePass {
             image: self.raw.get(),
             twin: decoded.image.raw.get(),
+            pairs: decoded
+                .pairs
+                .as_ref()
+                .map_or(vk::Image::null(), |pairs| pairs.image),
             scratch: raw_scratch,
             pipeline: kernel.pipeline,
             layout: kernel.layout,
@@ -1335,6 +1420,7 @@ impl Image {
             decode,
             started_on_the_cpu: false,
             made_for: (layout, own),
+            pairs: None,
         };
         let mut viewed = layout;
         viewed.pixel_format = pf;
@@ -1495,10 +1581,12 @@ struct BandPlan {
     groups: [u32; 3],
 }
 
-/// One band of a decode pass: its blocks copied out of the image, its set, its workgroups and its
-/// texels copied into the twin.
+/// One band of a decode pass: its blocks copied out of the image, a 4:2:2 twin's of the device's
+/// conversion copied on into the pairs' image, its set, its workgroups and its texels copied into
+/// the twin.
 struct Step {
     blocks: vk::BufferImageCopy,
+    pairs: Option<vk::BufferImageCopy>,
     texels: vk::BufferImageCopy,
     set: vk::DescriptorSet,
     groups: [u32; 3],
@@ -1628,6 +1716,8 @@ pub(crate) enum PassScratch {
 pub(crate) struct DecodePass {
     image: vk::Image,
     twin: vk::Image,
+    /// A 4:2:2 twin's pairs' image, where it holds the device's conversion; null elsewhere.
+    pairs: vk::Image,
     scratch: vk::Buffer,
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
@@ -1659,6 +1749,38 @@ impl DecodePass {
                 let blocks = std::slice::from_ref(&step.blocks);
                 device.cmd_copy_image_to_buffer(raw, self.image, general, self.scratch, blocks);
                 Barrier::everything().record(device, raw);
+                if let Some(pairs) = &step.pairs {
+                    // The pairs' image's earlier texels dropped (a step samples only the rows
+                    // it copies), the band's pairs copied in, then sampled.
+                    let whole = vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    };
+                    let into = vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_READ)
+                        .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(general)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(self.pairs)
+                        .subresource_range(whole);
+                    device.cmd_pipeline_barrier(
+                        raw,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[into],
+                    );
+                    let pairs = std::slice::from_ref(pairs);
+                    device.cmd_copy_buffer_to_image(raw, self.scratch, self.pairs, general, pairs);
+                    Barrier::everything().record(device, raw);
+                }
                 let set = std::slice::from_ref(&step.set);
                 device.cmd_bind_descriptor_sets(raw, compute, self.layout, 0, set, &[]);
                 let [x, y, z] = step.groups;

@@ -800,7 +800,19 @@ for dependency in &pipeline.dependencies {
   over the planes' bytes (`WriteSource::YCbCrInPlace`, in `YCbCrInPlace::format`), its push field
   (`PushField::YCbCrInPlace`) holds `YCbCrInPlace::words`, and the function converts and filters
   the codes as Metal does, exactly. Any other slot, and any texture without the fact, binds the
-  texture's image of converted texels.
+  texture's image of converted texels. Where the consumer also holds the planes as a linear image
+  of their multi-planar 4:2:0 format over their bytes, which the device's sampler Y′CbCr
+  conversion reads with Metal's reconstruction, it states so (`YCbCrInPlace::with_planes_image`,
+  its conversion `YCbCrInPlace::sampler`, a `YCbCrPlanesSampler`). A slot whose every sample the
+  device's sampler takes (the fact's `device`: no border address mode, no texel offset placed by a
+  parent's size; a runtime sampler's word without a border mode) then takes the planes variant
+  (`VariantKey::ycbcr_planes_sampled`): the slot is a combined image sampler of the image
+  (`ResourceKind::YCbCrPlanes`, `BindingSource::YCbCrPlanes`, written from
+  `WriteSource::YCbCrPlanesImage`) whose immutable sampler is `SamplerDesc::ycbcr` of the
+  conversion. The consumer chains its `VkSamplerYcbcrConversionInfo` into that sampler and makes
+  the image's view with an identically defined conversion, and sizes a pool for the format's
+  `combinedImageSamplerDescriptorCount` descriptors at the binding. Each sample is the device's,
+  at level 0, its conversion and filter of the codes rather than Metal's.
 - `interface.reaches_command_buffers` and `interface.texture_writing_stages` say, provably, which
   pipelines may touch an indirect command buffer and which stages may write a texture.
   `interface.command_writes` (`CommandWrites`) says what its functions may write into the
@@ -2129,8 +2141,11 @@ bound.
   unpacked 8- or 10-bit codes of a 4:2:0, 4:2:2 or 4:4:4 layout over plane 0, a 4:4:4 one read as
   codes aside, on a device that reports the format's conversion features, Metal's midpoint chroma
   through a linear chroma filter among them for a 4:2:0 or 4:2:2 one, and has no defect in it:
-  MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's 10-bit ones aside) reads the device's conversion
-  of its planes, announced where the texture is made; and a pipeline stage's filtered sample of a
+  MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's and RADV's 10-bit ones aside) reads the device's conversion
+  of its planes, announced where the texture is made; so do the samples of a texture whose planes
+  are read in place through the device's conversion of a linear image of them (where the device's
+  linear tiling of the 4:2:0 format has Metal's reconstruction), the device's filter of the codes
+  too, announced where the image is made; and a pipeline stage's filtered sample of a
   texture slot bound to a two-plane YCbCr texture, through Metal's own sampler (MoltenVK), does not
   take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
   `FloatSampleFilter` under the slot's bound format. Cost: where the device converts the planes'
@@ -2352,10 +2367,12 @@ bound.
   colors come from the blocks around it). An ASTC texture's first view in its other colour
   space (its sRGB form as LDR, or the other way) gives it a second twin of that form's decode, kept
   in step by GPU passes its command buffers' submissions record. Also a texture of a 4:2:2 format
-  (`GBGR422`, `BGRG422`) on every device, whose Vulkan formats reconstruct chroma by the
-  implementation's rules: its texels' bytes lie in an `R8G8_UNORM` carrier, and its twin holds
-  Metal's texels as 8-bit codes, exact (each texel's own green, its red and blue interpolated with
-  the pair beside it), decoded in whole rows. Cost: a carrier image of its
+  (`GBGR422`, `BGRG422`) on every device, whose Vulkan formats are viewed only through a sampler
+  Y′CbCr conversion: its texels' bytes lie in an `R8G8_UNORM` carrier, and its twin holds its
+  texels as 8-bit codes (each texel's own green, its red and blue interpolated with the pair beside
+  it), decoded in whole rows: the device's own conversion of its pairs where it converts the format
+  with Metal's reconstruction (`decoded-texel-precision`; every decode then a GPU pass, its CPU
+  copies through submissions), else Metal's texels, exact. Cost: a carrier image of its
   blocks, at most about 1 byte a texel (a 4:2:2 texture's 2), and a decoded twin of 4 bytes a texel
   (R8G8B8A8; an EAC 11-bit texture's 16-bit codes, 2 bytes a channel, or its floats, 4 bytes a
   channel, where the device does not take those codes), two for an ASTC texture viewed in both
@@ -2364,12 +2381,18 @@ bound.
   device's decode thread, where its CPU copies go on the host or the staging queue.
 - `metal2vulkan-degrade-decoded-texel-precision` (precision). `DecodedTexelPrecision`: A texture
   with an ASTC LDR decoded twin of 8-bit codes, or an EAC 11-bit one (`R11`, `RG11`) of 16-bit
-  normalized codes. Cost: a read, sample or gather of its
+  normalized codes; or a 4:2:2 texture (`GBGR422`, `BGRG422`) whose twin holds the device's own
+  sampler Y′CbCr conversion of its pairs, where the device converts `G8B8G8R8_422_UNORM` or
+  `B8G8R8G8_422_UNORM` with Metal's reconstruction (the chroma at the midpoint through a linear
+  filter: MoltenVK). Cost: a read, sample or gather of its
   texels answers the nearest 8-bit code to Metal's 12-bit value, at most 1/510 off it; an EAC 11-bit
   texture's, the nearest 16-bit normalized code to Metal's 11-bit value, at most half a 16-bit step
-  off it (Metal reads an EAC 11-bit channel as `c / 2047`, signed `c / 1023`). An ASTC sRGB
-  texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's sRGB view,
-  the device's decode (`srgb-texel-decode`).
+  off it; a 4:2:2 texture's, where the device converts its format, the nearest 8-bit code to the
+  device's own Y′CbCr conversion of its pairs, not Metal's decode (Metal reads an EAC 11-bit
+  channel as `c / 2047`, signed `c / 1023`; a 4:2:2 chroma channel as `(3 c + n + 2) >> 2` of its
+  pair's code and the code beside, whose ties the device's nearest code takes to even). An ASTC
+  sRGB texture's twin holds Metal's own 8-bit codes, which its slots read through the twin's sRGB
+  view, the device's decode (`srgb-texel-decode`).
 - `metal2vulkan-degrade-shared-present-queue` (performance). `SharedPresentQueue`: A command queue
   made for presenting (`Device::new_command_queue_for_presenting`) on a device that reserved no
   `VkQueue` for presenting: its queue family has no queue past the ones the round robin takes

@@ -156,7 +156,11 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::QuadPrimitiveIds,
         RuntimeFact::RotatedWeights,
         RuntimeFact::PrivateList,
-        RuntimeFact::YCbCrInPlace { slot, samplers: 1 },
+        RuntimeFact::YCbCrInPlace {
+            slot,
+            samplers: 1,
+            device: true,
+        },
         RuntimeFact::MeshLastFirst,
         RuntimeFact::AbsentArgumentRead {
             stage: Stage::Fragment,

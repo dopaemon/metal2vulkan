@@ -1223,6 +1223,7 @@ fn sampler_create_info_chains_reduction_only_when_needed() {
         border_color: vk::BorderColor::FLOAT_OPAQUE_WHITE,
         reduction: vk::SamplerReductionMode::WEIGHTED_AVERAGE,
         border_components: None,
+        ycbcr: None,
     };
     let mut reduction = avk::SamplerReductionModeCreateInfo::default();
     let mut border = avk::SamplerBorderColorComponentMappingCreateInfoEXT::default();
@@ -1268,6 +1269,7 @@ fn sampler_create_info_chains_reduction_only_when_needed() {
     let mapped = vk::SamplerDesc {
         border_color: vk::BorderColor::FLOAT_OPAQUE_BLACK,
         border_components: Some(argb),
+        ycbcr: None,
         ..desc
     };
     let mut reduction = avk::SamplerReductionModeCreateInfo::default();

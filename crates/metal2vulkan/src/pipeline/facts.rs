@@ -727,8 +727,17 @@ pub enum RuntimeFact {
     /// which the slot's one binding is the planes' texel buffer (`WriteSource::YCbCrInPlace`) and
     /// every access of it reads the codes and converts them as Metal does, its words in the slot's
     /// push field (`PushField::YCbCrInPlace`). Elsewhere the slot binds the texture's image as
-    /// before.
-    YCbCrInPlace { slot: SlotRef, samplers: u32 },
+    /// before. `device`: every sample of the slot is one the device's own sampler Y′CbCr
+    /// conversion takes (none addresses a border through a constexpr sampler or places a texel
+    /// offset by a parent's size): where the bound texture's planes are also held as an image it
+    /// samples (`TextureShape::Texture::ycbcr_planes_sampler`) and each runtime sampler addresses
+    /// no border on either axis, the slot samples that image instead
+    /// (`VariantKey::ycbcr_planes_sampled`, `bind::YCbCrPlanesSampler`).
+    YCbCrInPlace {
+        slot: SlotRef,
+        samplers: u32,
+        device: bool,
+    },
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

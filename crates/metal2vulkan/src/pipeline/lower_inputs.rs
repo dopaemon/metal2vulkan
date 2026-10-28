@@ -175,6 +175,17 @@ pub struct LoweringInputs {
     /// planes in place (`ProfileFields::ycbcr_in_place`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub ycbcr_in_place: BTreeSet<SlotRef>,
+    /// Slots of [`ycbcr_in_place`](Self::ycbcr_in_place) bound to a texture whose planes are also
+    /// held as an image the device's own sampler Y′CbCr conversion samples, each with that
+    /// conversion (`VariantKey::ycbcr_planes_sampled`): each is declared as a combined image
+    /// sampler whose immutable sampler is the conversion (`ResourceKind::YCbCrPlanes`), and its
+    /// samples are the device's at level 0 (`bind::YCbCrPlanesSampler`); its size queries read the
+    /// push field as the in-place form's do.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, with = "crate::pipeline::serde_pairs")
+    )]
+    pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>,
     /// The fragment function's render pipeline has a vertex function that writes
     /// `[[viewport_array_index]]`. That function stores `ViewportIndex` as 0 for an index at or
     /// past the draw's viewport count, where Metal draws through viewport 0 and its fragment

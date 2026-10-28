@@ -15,8 +15,8 @@
 //!   `MIDPOINT_CHROMA_SAMPLES`, for a 4:2:0 or 4:2:2 format; either for a 4:4:4 one, which
 //!   reconstructs nothing), a 4:4:4 format also Vulkan 1.3 or `VK_EXT_ycbcr_2plane_444_formats`,
 //!   and its driver has no defect in it (`RuntimeDriverDefect::TwoPlaneChromaMisplaced`, MoltenVK,
-//!   for the subsampled formats; `RuntimeDriverDefect::TenBitCodesReadAsWords`, lavapipe, for the
-//!   10-bit ones). A 4:4:4 format read as codes (`RGB8_444_2P`, `RGB10_444_2P`) converts
+//!   for the subsampled formats; `RuntimeDriverDefect::TenBitCodesReadAsWords`, lavapipe and RADV,
+//!   for the 10-bit ones). A 4:4:4 format read as codes (`RGB8_444_2P`, `RGB10_444_2P`) converts
 //!   nothing there (the identity model, which ignores the range, and no chroma to reconstruct),
 //!   so it reads its codes through ours, without a planes' image. Every other texture, and every
 //!   texture of another device, converts through Metal's arithmetic as before
@@ -62,6 +62,24 @@
 //!   takes off. MoltenVK 1.4.2 converts no two-plane format here: its 4:2:0 and 4:2:2
 //!   reconstruction is misplaced (`TwoPlaneChromaMisplaced`), and it reports no 4:4:4 two-plane
 //!   format.
+//! - **4:2:2 pairs** (`GBGR422`, `BGRG422`, `chroma_pairs.rs`). The device converts a 4:2:2
+//!   texture's pairs itself where its optimal tiling of `G8B8G8R8_422_UNORM` or
+//!   `B8G8R8G8_422_UNORM` reports `SAMPLED_IMAGE`, `TRANSFER_DST` and Metal's reconstruction
+//!   (`MIDPOINT_CHROMA_SAMPLES` through a linear chroma filter, as above): the texture's decoded
+//!   twin then holds the device's conversion of its pairs (the identity model, full range),
+//!   sampled once per texel by each decode pass ([`PairsSampling`], `bind::chroma_sample_module`),
+//!   where elsewhere it holds Metal's (`bind::chroma_decode_module`). MoltenVK 1.4.2 converts both
+//!   (its single-plane 4:2:2 reconstruction is Vulkan's, `TwoPlaneChromaMisplaced`); lavapipe
+//!   filters their chroma nearest alone (no `SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER`) and
+//!   RADV has neither format, so their twins hold Metal's decode.
+//! - **Planes images** (`texture/ycbcr_planes.rs`). A texture whose planes a function reads in
+//!   place is also a linear image of its 4:2:0 format over their bytes where the device's linear
+//!   tiling of `G8_B8R8_2PLANE_420_UNORM` or `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` reports
+//!   `SAMPLED_IMAGE` and Metal's reconstruction (as above) and its driver has no defect in the
+//!   format ([`YCbCrSampler::planes`]): the conversion is the surface's matrix and range, and the
+//!   view and every immutable sampler of it in a pipeline's layout share one conversion object
+//!   ([`Device::made_ycbcr_conversion`]). A pool sets aside `combinedImageSamplerDescriptorCount`
+//!   descriptors for each such binding ([`YCbCrFormats::planes_descriptors`]).
 
 use super::device::lock;
 use super::error::{vulkan, Error};
@@ -71,7 +89,10 @@ use super::Device;
 use crate::device::functions::Vk;
 use crate::{creation, release};
 use ash::vk;
-use metal2vulkan::bind::{YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange, YCbCrSampleModule};
+use metal2vulkan::bind::{
+    ChromaDecode, ChromaSampleModule, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrPlanesSampler,
+    YCbCrRange, YCbCrSampleModule,
+};
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::format::ChromaSubsampling;
 
@@ -109,6 +130,12 @@ const FORMATS: [(vk::Format, u32, ChromaSubsampling); 6] = [
     ),
 ];
 
+/// The 4:2:2 formats of a single plane the device is asked to convert (the module docs).
+const PAIR_FORMATS: [vk::Format; 2] = [
+    vk::Format::G8B8G8R8_422_UNORM,
+    vk::Format::B8G8R8G8_422_UNORM,
+];
+
 /// One format the device converts: its optimal tiling's features, the largest image of it the
 /// device makes, and the descriptors a combined image sampler of it takes.
 #[derive(Clone, Copy)]
@@ -124,7 +151,17 @@ struct Converts {
 #[derive(Clone, Default)]
 pub(super) struct YCbCrFormats {
     converts: Vec<Converts>,
+    /// The 4:2:0 formats it converts as a linear image that is sampled, with Metal's
+    /// reconstruction: the planes images a function samples in place
+    /// (`texture/ycbcr_planes.rs`).
+    linear: Vec<Converts>,
 }
+
+/// The 4:2:0 formats a planes image is of (`texture/ycbcr_planes.rs`).
+const PLANES_FORMATS: [vk::Format; 2] = [
+    vk::Format::G8_B8R8_2PLANE_420_UNORM,
+    vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+];
 
 impl YCbCrFormats {
     /// The formats `physical` converts, as an image that is sampled and copied into; the
@@ -141,12 +178,17 @@ impl YCbCrFormats {
         four_four_four: bool,
     ) -> YCbCrFormats {
         let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+        let pairs = PAIR_FORMATS
+            .iter()
+            .map(|&format| (format, 8, ChromaSubsampling::Chroma422));
         let converts = FORMATS
             .iter()
-            .filter(|&&(_, _, subsampling)| {
+            .copied()
+            .filter(|&(_, _, subsampling)| {
                 four_four_four || subsampling != ChromaSubsampling::Chroma444
             })
-            .filter_map(|&(format, _, subsampling)| {
+            .chain(pairs)
+            .filter_map(|(format, _, subsampling)| {
                 // SAFETY: the caller's.
                 let properties =
                     unsafe { instance.get_physical_device_format_properties(physical, format) };
@@ -189,7 +231,42 @@ impl YCbCrFormats {
                 })
             })
             .collect();
-        YCbCrFormats { converts }
+        // As a linear image that is sampled: its linear tiling's features and limits.
+        let linear = PLANES_FORMATS
+            .iter()
+            .filter_map(|&format| {
+                // SAFETY: the caller's.
+                let properties =
+                    unsafe { instance.get_physical_device_format_properties(physical, format) };
+                let features = properties.linear_tiling_features;
+                if !features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+                    || !features.contains(vk::FormatFeatureFlags::MIDPOINT_CHROMA_SAMPLES)
+                    || !linear_chroma(features)
+                {
+                    return None;
+                }
+                let info = vk::PhysicalDeviceImageFormatInfo2::default()
+                    .format(format)
+                    .ty(vk::ImageType::TYPE_2D)
+                    .tiling(vk::ImageTiling::LINEAR)
+                    .usage(vk::ImageUsageFlags::SAMPLED);
+                let mut ycbcr = vk::SamplerYcbcrConversionImageFormatProperties::default();
+                let mut out = vk::ImageFormatProperties2::default().push_next(&mut ycbcr);
+                // SAFETY: the caller's; the chain lives for the call.
+                unsafe {
+                    instance.get_physical_device_image_format_properties2(physical, &info, &mut out)
+                }
+                .ok()?;
+                let extent = out.image_format_properties.max_extent;
+                Some(Converts {
+                    format,
+                    features,
+                    extent: [extent.width, extent.height],
+                    descriptors: ycbcr.combined_image_sampler_descriptor_count.max(1),
+                })
+            })
+            .collect();
+        YCbCrFormats { converts, linear }
     }
 
     /// A conversion of the first format the device converts, which its priming makes and
@@ -210,6 +287,22 @@ impl YCbCrFormats {
     /// The format's entry, where the device converts it.
     fn of_format(&self, format: vk::Format) -> Option<Converts> {
         self.converts.iter().copied().find(|c| c.format == format)
+    }
+
+    /// `format` as a linear image the device samples, where it converts it so.
+    fn linear_of(&self, format: vk::Format) -> Option<Converts> {
+        self.linear.iter().copied().find(|c| c.format == format)
+    }
+
+    /// The descriptors a combined image sampler of a planes image of `sampler` takes from a pool
+    /// (`combinedImageSamplerDescriptorCount`): Vulkan's "each combined image sampler descriptor
+    /// binding with a layout that includes at least one immutable Y′CBCR conversion sampler will
+    /// internally use a number of descriptors equal to the maximum
+    /// combinedImageSamplerDescriptorCount of the formats", 1 where the device converts no such
+    /// image.
+    pub(super) fn planes_descriptors(&self, sampler: YCbCrPlanesSampler) -> u32 {
+        self.linear_of(sampler.format().into())
+            .map_or(1, |c| c.descriptors)
     }
 }
 
@@ -361,6 +454,98 @@ impl YCbCrSampler {
             filter: match separate {
                 true => vk::Filter::NEAREST,
                 false => chroma_filter,
+            },
+            descriptors: converts.descriptors,
+        })
+    }
+
+    /// The device's conversion of a planes image of `sampler` (`texture/ycbcr_planes.rs`): its
+    /// 4:2:0 format as a linear image the device samples with Metal's reconstruction (the module
+    /// docs), the surface's matrix and range, and a linear filter, which every immutable sampler of
+    /// it in a pipeline's layout bakes; `None` where the device does not convert the format so (a
+    /// defect in it among the reasons).
+    pub(super) fn planes(device: &Device, sampler: YCbCrPlanesSampler) -> Option<YCbCrSampler> {
+        let format: vk::Format = sampler.format().into();
+        let converts = device.shared().ycbcr_formats.linear_of(format)?;
+        let defects = &device.properties().driver_defects;
+        if defects.contains(&RuntimeDriverDefect::TwoPlaneChromaMisplaced)
+            || (sampler.bits() == 10
+                && defects.contains(&RuntimeDriverDefect::TenBitCodesReadAsWords))
+        {
+            return None;
+        }
+        let model = match sampler.matrix() {
+            YCbCrMatrix::Bt601 => vk::SamplerYcbcrModelConversion::YCBCR_601,
+            YCbCrMatrix::Bt709 => vk::SamplerYcbcrModelConversion::YCBCR_709,
+            YCbCrMatrix::Bt2020 => vk::SamplerYcbcrModelConversion::YCBCR_2020,
+            _ => return None,
+        };
+        let range = match sampler.range() {
+            YCbCrRange::Video => vk::SamplerYcbcrRange::ITU_NARROW,
+            YCbCrRange::Full => vk::SamplerYcbcrRange::ITU_FULL,
+            _ => return None,
+        };
+        Some(YCbCrSampler {
+            format,
+            model,
+            range,
+            location: vk::ChromaLocation::MIDPOINT,
+            chroma_filter: vk::Filter::LINEAR,
+            // The chroma's filter, as Vulkan requires without a separate reconstruction filter
+            // (`VUID-VkSamplerCreateInfo-minFilter-01645`), and the filter a linear sample takes.
+            filter: vk::Filter::LINEAR,
+            descriptors: converts.descriptors,
+        })
+    }
+
+    /// Whether a planes image of [`planes`](Self::planes)'s format may be `[width, height]`: a
+    /// 4:2:0 image's width and height are even ("If format has a _420 suffix, extent.width must
+    /// be a multiple of 2", `VUID-VkImageCreateInfo-format-04712`, and its height,
+    /// `-04713`), within the format's linear limits.
+    pub(super) fn holds_planes(&self, device: &Device, [width, height]: [u32; 2]) -> bool {
+        let Some(converts) = device.shared().ycbcr_formats.linear_of(self.format) else {
+            return false;
+        };
+        width > 0
+            && height > 0
+            && width.is_multiple_of(2)
+            && height.is_multiple_of(2)
+            && width <= converts.extent[0]
+            && height <= converts.extent[1]
+    }
+
+    /// The device's conversion of a 4:2:2 texture's pairs of `decode` over an image of `extent`,
+    /// where it converts them with Metal's reconstruction (the module docs): its midpoint through
+    /// a linear chroma filter, the identity model at full range (its channels are the codes);
+    /// `None` where Metal's decode holds them.
+    pub(super) fn pairs(
+        device: &Device,
+        decode: ChromaDecode,
+        extent: [u32; 2],
+    ) -> Option<YCbCrSampler> {
+        let format: vk::Format = decode.format().into();
+        let converts = device.shared().ycbcr_formats.of_format(format)?;
+        // A 4:2:2 image's width is even (`VUID-VkImageCreateInfo-format-04712`).
+        if !extent[0].is_multiple_of(2)
+            || extent[0] > converts.extent[0]
+            || extent[1] > converts.extent[1]
+        {
+            return None;
+        }
+        // Its midpoint and linear chroma filter: `YCbCrFormats::of` holds no subsampled format
+        // without them.
+        let separate = converts.features.contains(
+            vk::FormatFeatureFlags::SAMPLED_IMAGE_YCBCR_CONVERSION_SEPARATE_RECONSTRUCTION_FILTER,
+        );
+        Some(YCbCrSampler {
+            format,
+            model: vk::SamplerYcbcrModelConversion::RGB_IDENTITY,
+            range: vk::SamplerYcbcrRange::ITU_FULL,
+            location: vk::ChromaLocation::MIDPOINT,
+            chroma_filter: vk::Filter::LINEAR,
+            filter: match separate {
+                true => vk::Filter::NEAREST,
+                false => vk::Filter::LINEAR,
             },
             descriptors: converts.descriptors,
         })
@@ -708,6 +893,154 @@ impl YCbCrDeviceSampling {
 }
 
 impl Drop for YCbCrDeviceSampling {
+    fn drop(&mut self) {
+        let shared = self.device.shared();
+        let raw = shared.vk();
+        // SAFETY: no pending command uses them (the type's docs).
+        unsafe {
+            release::object(raw, self.view);
+            release::object(raw, self.image);
+        }
+        lock(&shared.memory).free(raw, &self.placement);
+    }
+}
+
+/// The pairs' image of a 4:2:2 texture whose decoded twin holds the device's own conversion of
+/// its pairs (the module docs, `texture/decoded_twin.rs`): an optimal image of the pairs' format
+/// of the texture's extent, which each decode pass's step copies the band's pairs into and
+/// samples through the device's conversion into the band's texels (`bind::chroma_sample_module`).
+/// Its objects are released with it; no pending command uses them then (the texture's command
+/// buffers hold the texture, and its twin with it, until they complete).
+pub(crate) struct PairsSampling {
+    device: Device,
+    pub(crate) image: vk::Image,
+    placement: Placement,
+    pub(crate) view: vk::ImageView,
+    pub(crate) kernel: OwnedKernel,
+    pub(crate) extent: [u32; 2],
+}
+
+impl PairsSampling {
+    /// The pairs' image of a texture of `extent` (an even width) through `sampler`
+    /// ([`YCbCrSampler::pairs`]), on `device`. Refused as the image, its memory, the kernel and
+    /// the view are refused.
+    pub(crate) fn new(
+        device: &Device,
+        sampler: YCbCrSampler,
+        extent: [u32; 2],
+    ) -> Result<PairsSampling, Error> {
+        let shared = device.shared();
+        let raw = shared.vk();
+        let [width, height] = extent;
+        let info = shared.sharing().image(
+            vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(sampler.format)
+                .extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+                .initial_layout(vk::ImageLayout::UNDEFINED),
+        );
+        // SAFETY: the device converts the format as an optimal image that is sampled and
+        // copied into, of this extent (`YCbCrSampler::pairs`).
+        let image = unsafe { creation::image(raw, &info) }?;
+        // SAFETY: `image` is a live image of this device.
+        let requirements = unsafe { raw.get_image_memory_requirements(image) };
+        let requirements = shared.textures.placement().place(requirements);
+        let placement = match crate::memory::allocate_image(
+            &shared.memory,
+            raw,
+            &requirements,
+            MemoryClass::Private,
+        ) {
+            Ok(placement) => placement,
+            Err(error) => {
+                // SAFETY: the image is unused.
+                unsafe { release::object(raw, image) };
+                return Err(error);
+            }
+        };
+        let unwind = || {
+            lock(&shared.memory).free(raw, &placement);
+            // SAFETY: the image is unused.
+            unsafe { release::object(raw, image) };
+        };
+        // SAFETY: the placement meets the image's requirements and is not bound elsewhere.
+        if let Err(error) =
+            unsafe { creation::bind_image(raw, image, placement.memory, placement.offset) }
+        {
+            unwind();
+            return Err(vulkan(error));
+        }
+        let kernel = match device.owned_kernel(OwnedModule::ChromaSample(sampler)) {
+            Ok(kernel) => kernel,
+            Err(error) => {
+                unwind();
+                return Err(error);
+            }
+        };
+        let Some(conversion) = device.ycbcr_conversion(sampler) else {
+            unwind();
+            return Err(super::error::internal(
+                "a 4:2:2 sample kernel without its conversion",
+            ));
+        };
+        let mut chained = vk::SamplerYcbcrConversionInfo::default().conversion(conversion);
+        let info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(sampler.format)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .push_next(&mut chained);
+        // SAFETY: the image is live and bound; the conversion is of its format.
+        let view = match unsafe { creation::image_view(raw, &info) } {
+            Ok(view) => view,
+            Err(error) => {
+                unwind();
+                return Err(vulkan(error));
+            }
+        };
+        shared.counts.chroma_device_twin();
+        Ok(PairsSampling {
+            device: device.clone(),
+            image,
+            placement,
+            view,
+            kernel,
+            extent,
+        })
+    }
+
+    /// The shape of a step that samples `rows` rows from row `first` of the image
+    /// (`ChromaSampleModule::shape`), and its workgroups.
+    pub(crate) fn step(
+        &self,
+        first: u32,
+        rows: u32,
+    ) -> ([u8; ChromaSampleModule::SHAPE_WORDS as usize * 4], [u32; 3]) {
+        let [width, _] = self.extent;
+        let local = ChromaSampleModule::LOCAL_SIZE;
+        (
+            ChromaSampleModule::shape([width, rows], first, self.extent),
+            [width.div_ceil(local), rows.div_ceil(local), 1],
+        )
+    }
+}
+
+impl Drop for PairsSampling {
     fn drop(&mut self) {
         let shared = self.device.shared();
         let raw = shared.vk();

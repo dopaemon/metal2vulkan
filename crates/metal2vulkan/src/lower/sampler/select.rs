@@ -1071,6 +1071,7 @@ fn select_in_place(
         return Err(cx.invariant("an unplanned texture slot"));
     };
     s.in_place.samplers |= samplers;
+    s.in_place.device_blocked |= !device_takes(&sample);
     if !variant {
         return Ok(None);
     }
@@ -1096,6 +1097,23 @@ fn select_in_place(
             .insert(super::bicubic::routines::Routine::Quad);
     }
     Ok(Some(sample))
+}
+
+/// Whether the device's own sampler Y′CbCr conversion of a planes image takes in-place sample `s`
+/// (`LoweringInputs::ycbcr_planes_sampled`, `super::in_place`'s **The device's sampler**): a
+/// constexpr sampler that addresses no border on either plane axis (a 4:2:0 texture samples every
+/// other mode as clamp-to-edge, as that sampler does), or a runtime sampler, whose bound word the
+/// binder holds to the same (`bind::plan::slots::planes_word`); and no texel offset Metal places
+/// by a parent's size.
+fn device_takes(s: &super::in_place::Sample) -> bool {
+    use super::bicubic::TapAddress;
+    let border = match &s.state {
+        super::extended::State::Constant { address, .. } => {
+            address.iter().any(|m| matches!(m, TapAddress::Border))
+        }
+        super::extended::State::Slot { .. } => false,
+    };
+    !border && !s.offset_base
 }
 
 /// Sampling call `call` of texture slot `index` through `sampler` as the in-place form reads it

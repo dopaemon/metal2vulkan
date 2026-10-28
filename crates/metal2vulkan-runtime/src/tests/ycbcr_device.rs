@@ -12,16 +12,25 @@
 //! (`ycbcr-filter-not-exact`). Its distance from Metal's reads (`metal2vulkan::bind::ycbcr_read`
 //! after Metal's chroma filter) is printed, the note's measured bound. Everywhere else every
 //! texel is Metal's read exactly, and nothing is counted or announced.
+//!
+//! A 4:2:2 texture (`GBGR422`, `BGRG422`) likewise: where the device converts its pairs' format
+//! (`YCbCrSampler::pairs`), its decoded twin holds the device's conversion of the pairs, each
+//! channel the nearest code to Vulkan's midpoint reconstruction through a linear chroma filter
+//! (`3 c + n` over 4 of the texel's pair `c` and the pair beside it `n`), counted
+//! (`WorkCounts::chroma_device_twins`, `chroma_device_decodes`) and announced
+//! (`decoded-texel-precision`); elsewhere it holds Metal's decode exactly.
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::shadow::ShadowSource;
 use crate::ycbcr_device::YCbCrSampler;
 use crate::{
     Buffer, ComputePipelineState, Degradation, DegradeNotice, Device, DeviceKind, DeviceOptions,
-    IoSurfacePlane, IoSurfaceYCbCr, MessageSink, PipelineOptions, ResourceOptions,
+    IoSurfacePlane, IoSurfaceYCbCr, MessageSink, PipelineOptions, Region, ResourceOptions,
     ShaderCacheOptions, Size, SurfaceYCbCrMatrix, Texture, TextureDescriptor,
 };
-use metal2vulkan::bind::{ycbcr_read, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrRange};
+use metal2vulkan::bind::{
+    ycbcr_read, ChromaDecode, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrRange,
+};
 use metal2vulkan::error::RuntimeDriverDefect;
 use metal2vulkan::metal::format::{ycbcr_format, ChromaSubsampling};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -96,7 +105,12 @@ fn device(cache: &Path, heard: &Heard) -> Device {
                 heard.lock().unwrap().push(notice.clone());
             }
         })),
-        announce_each: [Degradation::YCbCrFilterNotExact].into_iter().collect(),
+        announce_each: [
+            Degradation::YCbCrFilterNotExact,
+            Degradation::DecodedTexelPrecision,
+        ]
+        .into_iter()
+        .collect(),
         ..DeviceOptions::default()
     };
     Device::system_default_with(&options).unwrap()
@@ -559,4 +573,151 @@ fn a_ycbcr_texture_reads_the_devices_conversion_where_it_converts_the_format() {
         }
     }
     println!("{taken} textures took the device's conversion");
+}
+
+/// The largest distance of a 4:2:2 twin's chroma channel, in codes, from Vulkan's
+/// reconstruction `(3 c + n) / 4` the device's conversion may take: half a code (the twin holds
+/// the nearest code) and a quarter for the device's precision.
+const PAIRS_BOUND: f64 = 0.75;
+
+/// Every texel `state` reads of a 4:2:2 `texture` of `w x h`, `[r, g, b]` in rows.
+fn read_pairs(
+    device: &Device,
+    state: &ComputePipelineState,
+    texture: &Texture,
+    (w, h): (u64, u64),
+) -> Vec<[f32; 3]> {
+    let case = Case {
+        pf: PixelFormat::YCBCR84222P,
+        ostype: b"422v",
+        size: [w, h],
+        matrix: None,
+    };
+    read(device, state, &case, texture)
+}
+
+/// Each 4:2:2 texture whose format the device converts holds the device's conversion of its pairs
+/// in its twin at every texel: its green its own code, its red and blue within [`PAIRS_BOUND`] of
+/// Vulkan's midpoint reconstruction, counted and announced; every other reads Metal's decode
+/// exactly, unannounced. The texture is written on the CPU, whole and in part of two rows.
+#[test]
+fn a_four_two_two_twin_holds_the_devices_conversion_where_it_converts_the_format() {
+    let scratch = Scratch::new("ycbcr-device-pairs");
+    let heard: Heard = Arc::default();
+    let device = device(&scratch.0, &heard);
+    let state = read_state(&device);
+    let (w, h) = (40u64, 24u64);
+    let mut taken = 0;
+    for (k, pf) in [PixelFormat::GBGR422, PixelFormat::BGRG422]
+        .into_iter()
+        .enumerate()
+    {
+        let decode = ChromaDecode::of(pf).unwrap();
+        let form = YCbCrSampler::pairs(&device, decode, [w as u32, h as u32]);
+        heard.lock().unwrap().clear();
+        let before = device.work_counts();
+        let mut descriptor = TextureDescriptor::texture_2d(pf, w, h, false);
+        descriptor.usage = TextureUsage::SHADER_READ;
+        descriptor.resource_options = ResourceOptions::shared();
+        let texture = device.new_texture(&descriptor).unwrap();
+        let mut random = 0x422_u64 + k as u64;
+        let mut bytes: Vec<u8> = (0..2 * w * h)
+            .map(|_| {
+                random = random
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (random >> 56) as u8
+            })
+            .collect();
+        texture
+            .replace_region(Region::new_2d(0, 0, w, h), 0, 0, &bytes, 2 * w, 0)
+            .unwrap();
+        // 6 texels from x 3 on rows 5 and 6: their pairs' red and blue change beside them.
+        let patch: Vec<u8> = (0..24u32).map(|i| (i * 37 + 11) as u8).collect();
+        texture
+            .replace_region(Region::new_2d(3, 5, 6, 2), 0, 0, &patch, 12, 0)
+            .unwrap();
+        for row in 0..2u64 {
+            let at = ((5 + row) * 2 * w + 2 * 3) as usize;
+            bytes[at..at + 12].copy_from_slice(&patch[12 * row as usize..][..12]);
+        }
+        let texels = read_pairs(&device, &state, &texture, (w, h));
+        let after = device.work_counts();
+        let metal = decode.decode(&bytes, [w as u32, h as u32, 1]);
+        let pair =
+            |x: u64, y: u64, byte: u64| f64::from(bytes[(y * 2 * w + (x / 2) * 4 + byte) as usize]);
+        let (red, blue) = match decode {
+            ChromaDecode::Gbgr => (3, 1),
+            _ => (2, 0),
+        };
+        let (mut far, mut off_metal) = (0.0f64, 0);
+        for y in 0..h {
+            for x in 0..w {
+                let got = texels[(y * w + x) as usize].map(|v| f64::from(v) * 255.0);
+                let want = &metal[((y * w + x) * 4) as usize..][..4];
+                match form {
+                    Some(_) => {
+                        assert!(
+                            (got[1] - f64::from(want[1])).abs() < 1e-3,
+                            "{pf:?} texel ({x}, {y}): green {} against its code {}",
+                            got[1],
+                            want[1]
+                        );
+                        // The pair beside: before an even texel, after an odd one, its own at
+                        // the row's ends.
+                        let beside = match x % 2 {
+                            0 => x.saturating_sub(2),
+                            _ => (x + 2).min(w - 1),
+                        };
+                        for (c, byte) in [(0, red), (2, blue)] {
+                            let spec = (3.0 * pair(x, y, byte) + pair(beside, y, byte)) / 4.0;
+                            far = far.max((got[c] - spec).abs());
+                            off_metal += usize::from((got[c] - f64::from(want[c])).abs() > 1e-3);
+                        }
+                    }
+                    None => {
+                        for c in 0..3 {
+                            assert!(
+                                (got[c] - f64::from(want[c])).abs() < 1e-3,
+                                "{pf:?} texel ({x}, {y}) channel {c}: {} against Metal's {}",
+                                got[c],
+                                want[c]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let twins = after.chroma_device_twins - before.chroma_device_twins;
+        let decodes = after.chroma_device_decodes - before.chroma_device_decodes;
+        let announced = heard
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|notice| notice.degradation == Degradation::DecodedTexelPrecision)
+            .count();
+        match form {
+            Some(_) => {
+                taken += 1;
+                println!(
+                    "{pf:?} {w}x{h}: chroma within {far:.4} codes of Vulkan's; {off_metal} of {} \
+                     chroma channels a code off Metal's",
+                    2 * w * h
+                );
+                assert!(far <= PAIRS_BOUND, "{pf:?}: {far} codes from Vulkan's");
+                assert_eq!(twins, 1, "{pf:?}: counted");
+                assert!(decodes >= 2, "{pf:?}: each write a pass, {decodes}");
+                assert_eq!(
+                    after.cpu_block_decodes, before.cpu_block_decodes,
+                    "{pf:?}: no CPU decode"
+                );
+                assert_eq!(announced, 1, "{pf:?}: announced");
+            }
+            None => {
+                assert_eq!((twins, decodes), (0, 0), "{pf:?}: Metal's decode");
+                assert_eq!(announced, 0, "{pf:?}: exact, unannounced");
+            }
+        }
+    }
+    println!("{taken} 4:2:2 textures took the device's conversion");
 }

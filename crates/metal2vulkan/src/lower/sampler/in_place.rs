@@ -22,6 +22,18 @@
 //! sampler's modes arrive mapped (`LoweringInputs::address_maps`), and a runtime sampler's word is
 //! mapped here ([`mapped_word`]). A border tap reads the border color through the format's
 //! channels, alpha 1.
+//!
+//! **The device's sampler** (`LoweringInputs::ycbcr_planes_sampled`): where the consumer holds
+//! the planes as an image of the multi-planar 4:2:0 format over their bytes and every sample of the
+//! slot is one the device's own sampler Y′CbCr conversion takes (no border address mode, no texel
+//! offset placed by a parent's size), the slot is a combined image sampler whose immutable sampler
+//! is that conversion (`ResourceKind::YCbCrPlanes`), and a sample is the device's sample of the
+//! image at level 0: a linear one at Metal's coordinate (normalized from pixels by the push field's
+//! size, its texel offset moved in texels), a nearest one at the centre of the luma texel Metal
+//! reads, clamped to the edge (where the device's linear filter of its conversion reads that
+//! texel's luma and Metal's 9/3/3/1 chroma weights). The answer is the device's conversion and
+//! filter, not Metal's integer arithmetic. No `ConstOffset` or `Offset` reaches the sample
+//! (`VUID-RuntimeSpirv-ConstOffset-10718`), and the size queries read the push field as above.
 
 use crate::air::ir::ValueId;
 use crate::lower::emit::EmitCx;
@@ -435,6 +447,122 @@ fn mapped_word(fb: &mut FunctionBuilder<'_>, t: &T, word: SValue) -> BResult<SVa
     Ok(w)
 }
 
+/// The texel of in-place sample `s` through the device's own sampler Y′CbCr conversion
+/// (`LoweringInputs::ycbcr_planes_sampled`, the module docs' **The device's sampler**), in the open
+/// block: the slot's combined image `sampled` sampled at level 0, a linear sample at Metal's
+/// coordinate (its texel offset moved in texels), a nearest one at the centre of the luma texel
+/// Metal reads (clamped to the edge, as a 4:2:0 texture addresses every mode but a border one).
+fn device_sample(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Sample,
+    slot: SlotRef,
+    (coord, sampled): (SValue, SValue),
+) -> BResult<SValue> {
+    let t = T::new(fb)?;
+    let w = words(cx, fb, slot)?;
+    let vec2 = fb.module().ty(SType::Vector {
+        elem: t.f32_,
+        len: 2,
+    })?;
+    let size = fb.composite_construct(t.uvec2, &w.size)?;
+    let size = fb.convert(ConvOp::ConvertUToF, size, vec2)?;
+    // Whether the sampler reads pixel coordinates and filters linearly: a constexpr sampler's
+    // state, or a runtime sampler's word.
+    let (pixel, linear) = match &s.state {
+        State::Constant { linear, pixel, .. } => (Known::Fixed(*pixel), Known::Fixed(*linear)),
+        State::Slot { sampler } => {
+            let word = super::emit::sampler_word(cx, fb, Pixel::Spec(*sampler))?;
+            let bit = t.u(fb, crate::metal::sampler::SamplerWord::PIXEL_COORDINATES)?;
+            let set = fb.binary(BinOp::BitwiseAnd, word, bit)?;
+            let pixel = fb.binary(BinOp::IEqual, set, bit)?;
+            let tys = Tys::new(fb)?;
+            let linear = super::extended::word_linear(fb, &tys, word)?;
+            (Known::Run(pixel), Known::Run(linear))
+        }
+    };
+    // The coordinate in texels, and normalized.
+    let texels = fb.binary(BinOp::FMul, coord, size)?;
+    let (mut texels, mut normal) = match pixel {
+        Known::Fixed(true) => (coord, fb.binary(BinOp::FDiv, coord, size)?),
+        Known::Fixed(false) => (texels, coord),
+        Known::Run(pixel) => {
+            let normal = fb.binary(BinOp::FDiv, coord, size)?;
+            let b2 = bvec2(fb)?;
+            let pixel2 = fb.composite_construct(b2, &[pixel, pixel])?;
+            (
+                fb.select(pixel2, coord, texels)?,
+                fb.select(pixel2, normal, coord)?,
+            )
+        }
+    };
+    if let Some(offset) = s.offset.as_deref() {
+        let lanes: Vec<SValue> = offset
+            .iter()
+            .map(|&k| t.f(fb, k as f32))
+            .collect::<BResult<_>>()?;
+        let k = fb.composite_construct(vec2, &lanes)?;
+        texels = fb.binary(BinOp::FAdd, texels, k)?;
+        let moved = fb.binary(BinOp::FDiv, k, size)?;
+        normal = fb.binary(BinOp::FAdd, normal, moved)?;
+    }
+    // A nearest sample's luma texel, clamped to the edge, at its centre.
+    let nearest = |fb: &mut FunctionBuilder<'_>| -> BResult<SValue> {
+        let floor = fb.glsl(GlslOp::Floor, &[texels])?;
+        let zero = t.f(fb, 0.0)?;
+        let zero = fb.composite_construct(vec2, &[zero, zero])?;
+        let one = t.f(fb, 1.0)?;
+        let one = fb.composite_construct(vec2, &[one, one])?;
+        let last = fb.binary(BinOp::FSub, size, one)?;
+        let texel = fb.glsl(GlslOp::FClamp, &[floor, zero, last])?;
+        let half = t.f(fb, 0.5)?;
+        let half = fb.composite_construct(vec2, &[half, half])?;
+        let centre = fb.binary(BinOp::FAdd, texel, half)?;
+        fb.binary(BinOp::FDiv, centre, size)
+    };
+    let at = match linear {
+        Known::Fixed(true) => normal,
+        Known::Fixed(false) => nearest(fb)?,
+        Known::Run(linear) => {
+            let centre = nearest(fb)?;
+            let b2 = bvec2(fb)?;
+            let linear2 = fb.composite_construct(b2, &[linear, linear])?;
+            fb.select(linear2, normal, centre)?
+        }
+    };
+    let lod = t.f(fb, 0.0)?;
+    let ops = ImageOperands {
+        lod: Some(lod),
+        ..ImageOperands::default()
+    };
+    let x = fb.sample(sampled, at, None, false, &ops)?;
+    // A `half` result is held widened, rounded to a `half` as every sampled texel's is
+    // (`texture::held_texel`).
+    match s.half {
+        false => Ok(x),
+        true => {
+            let half = crate::lower::arith::Form {
+                held: crate::lower::arith::Held::Float(crate::lower::arith::FloatFmt::Half),
+                lanes: 4,
+            };
+            crate::lower::arith::narrow::round_texel(fb, half, x)
+        }
+    }
+}
+
+/// A value fixed as the module is made, or known only as it runs.
+#[derive(Clone, Copy)]
+enum Known {
+    Fixed(bool),
+    Run(SValue),
+}
+
+/// The `bvec2` type.
+fn bvec2(fb: &mut FunctionBuilder<'_>) -> BResult<TypeId> {
+    let b = fb.module().ty(SType::Bool)?;
+    fb.module().ty(SType::Vector { elem: b, len: 2 })
+}
+
 /// The texel of in-place sample `s` in the open block, with its status word 0 (module docs).
 pub(crate) fn emit(
     cx: &mut EmitCx<'_>,
@@ -453,6 +581,10 @@ pub(crate) fn emit(
     else {
         return Err(cx.fail(format!("texture slot {} is not planned", s.texture)));
     };
+    if decl.planes_sampler.is_some() {
+        let x = device_sample(cx, fb, s, slot, (coord, img))?;
+        return crate::lower::texture::with_word(cx, fb, &s.result, x, None);
+    }
     let (planes, size) = prepare(cx, fb, slot)?;
     let t = Tys::new(fb)?;
     let tt = T::new(fb)?;
