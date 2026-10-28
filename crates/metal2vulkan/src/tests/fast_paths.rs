@@ -127,6 +127,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             RestrictedDepthRange,
             DeviceSignedZeroInfNan,
             DeviceInterpolation,
+            DeviceAlphaCoverage,
             HalfOutputFastMathBlend,
             UnmeasuredFetchBlend,
             ReductionOrder,

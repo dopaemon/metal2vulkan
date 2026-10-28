@@ -226,6 +226,9 @@ impl UlpTable {
 /// - `CoverageReadsRoundedAlpha`: unbounded: a fragment whose alpha lies near a coverage
 ///   threshold may cover one sample more or fewer than Metal's, which moves every channel a
 ///   resolve or a later blend reads there.
+/// - `DeviceAlphaCoverage`: unbounded: the device's alpha to coverage may cover other samples
+///   than Metal's, a whole fragment stored or dropped at one sample, which moves every channel a
+///   resolve or a later blend reads there.
 /// - `RotatedBlendRounding`: unbounded: an `ARGB8Unorm` attachment blended in none of the measured
 ///   forms may store a channel one code apart from Metal's, which moves every later word that reads
 ///   it.
@@ -303,6 +306,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::FragmentSimdgroupGrouping
         | N::BlendedWriteRounding
         | N::CoverageReadsRoundedAlpha
+        | N::DeviceAlphaCoverage
         | N::RotatedBlendRounding
         | N::HalfOutputPrecision
         | N::ExtendedRangeBlendSource

@@ -1030,7 +1030,7 @@ codec_enum! {
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,
         MetalFullQuads, ProvokingVertexModePerPipeline, DepthImageKeepsValuesOutsideUnitRange,
-        MetalNormalizedVertexFetch,
+        MetalNormalizedVertexFetch, MetalAlphaCoverage,
     }
     VkLimit {
         MaxComputeWorkGroupSize(f0), MaxComputeWorkGroupCount(f0), MaxComputeWorkGroupInvocations,
@@ -1447,6 +1447,7 @@ codec_enum! {
         CoverageReadsRoundedAlpha,
         UnmeasuredFetchBlend,
         DeviceVertexConversion,
+        DeviceAlphaCoverage,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

@@ -396,6 +396,19 @@ pub(crate) fn among<F: Copy + Ord>(
 /// codes of `UCharNormalized`, 512 of the 65,536 of `UShortNormalized`), and per instance the most
 /// negative code of an 8- or 16-bit signed format unclamped (-128/127, where Metal reads -1).
 ///
+/// `MetalAlphaCoverage`: MoltenVK hands `alphaToCoverageEnable` to Metal's own
+/// `alphaToCoverageEnabled` (`MVKPipeline.mm` line 2025 at 1.4.2), so Metal covers. The gate lane
+/// `runtime_lane::alpha_coverage` draws 639 alphas a sample count, each over its own 4x4 block,
+/// through MoltenVK 1.4.2 on the M3 Max (macOS 27.0.1, 2026-10-28) at 1, 2 and 4 samples, against
+/// plain Metal's reading of the same draws on the same chip (the probe
+/// `metal2vulkan-conformance/probes/alpha_coverage_sweep.m`): every one of the 30,672 pixels
+/// Metal's. One row per GPU, as measured. Measured not to have it, so not listed: lavapipe, Mesa
+/// 26.0.8 on LLVM 21.1.8, arm64 (the linux-gate container, the same lane), whose 2x2 ordered
+/// dither covers at one sample where Metal's covers above an alpha of 1/2 (2,560 of the 10,224
+/// pixels a sample apart there, and 96 of 10,224 at four samples); and NVIDIA's 615.71.09 on the
+/// RTX 5080 Laptop GPU, which stores a fragment of alpha 1/2 at one sample (the conformance case
+/// `a2c-on-1-alpha-50`).
+///
 /// Another driver has none of them, as Vulkan states, and a listed driver on another vendor's GPU
 /// (or another GPU than a row's) is unmeasured: the profile then takes each one's route without
 /// it, which the deviation's docs name (`derive.rs`).
@@ -602,6 +615,10 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalNormalizedVertexFetch)
+    },
+    Measured {
+        device: Some(APPLE9),
+        ..moltenvk_on_apple(DriverDeviation::MetalAlphaCoverage)
     },
 ];
 

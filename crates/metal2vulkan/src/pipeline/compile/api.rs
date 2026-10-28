@@ -1087,6 +1087,10 @@ fn graphics_requirements(
     requirements
         .properties
         .extend(linked.vertex_properties.iter().copied());
+    // The measured coverage its fixed-function alpha to coverage relies on in place of a note.
+    requirements
+        .properties
+        .extend(linked.fragment_properties.iter().copied());
     // The portability subset's features it relies on, named only where the device has them: where
     // the subset withholds one, link refused or pulled what it would allow (and the binder pulls a
     // per-bind stride that does not cover its attributes), and a device without the subset
@@ -1485,6 +1489,13 @@ fn stage_module(c: &CompiledFunction, linked: &Linked, i: usize) -> Result<Stage
     // pipeline's vertex descriptor, which no module of it records.
     if a.interface.stage == Stage::Vertex && !linked.vertex_notes.is_empty() {
         precision_notes.extend(&linked.vertex_notes);
+        precision_notes.sort_unstable();
+        precision_notes.dedup();
+    }
+    // The fragment stage's notes of what the device's fixed-function fragment operations answer
+    // for this pipeline's graphics state (its alpha to coverage), which no module of it records.
+    if a.interface.stage == Stage::Fragment && !linked.fragment_notes.is_empty() {
+        precision_notes.extend(&linked.fragment_notes);
         precision_notes.sort_unstable();
         precision_notes.dedup();
     }

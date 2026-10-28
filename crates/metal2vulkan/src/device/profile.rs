@@ -336,6 +336,10 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalNormalizedVertexFetch),
+            DriverDeviation::MetalAlphaCoverage => f
+                .enabled
+                .properties
+                .contains(&VkProperty::MetalAlphaCoverage),
         }
     }
 

@@ -338,9 +338,10 @@ fn fetch_of(r: &Resolved<'_>) -> VertexFetch {
     }
 }
 
-/// What the device's conversions of vertex stage `vs`'s fixed-function attributes give a render
-/// pipeline: the precision notes its vertex stage records and the measured properties it relies
-/// on in their place ([`fixed_function_notes`]).
+/// What the device's fixed-function operations give a render pipeline: the precision notes one of
+/// its stages records and the measured properties it relies on in their place. The conversions of
+/// its vertex stage's fixed-function attributes ([`fixed_function_notes`]) and its alpha to
+/// coverage (`graphics::coverage_notes`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FixedFunctionNotes {
     /// The notes, sorted, each once.

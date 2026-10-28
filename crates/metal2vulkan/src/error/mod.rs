@@ -813,6 +813,14 @@ pub enum DriverDeviation {
     /// once, where the module rounds the device's `float` to `half`, so that attribute records
     /// the note on every profile. Unmeasured, every such attribute records the note.
     MetalNormalizedVertexFetch,
+    /// The device's alpha to coverage covers Metal's samples at every pixel
+    /// (`VkProperty::MetalAlphaCoverage`): the driver hands `alphaToCoverageEnable` to Metal's own
+    /// `alphaToCoverageEnabled`, whose coverage of an alpha depends on the pixel's place in a 2x2
+    /// ordered dither at two and four samples. Vulkan specifies no algorithm for converting the
+    /// alpha to a coverage mask. Where the profile takes it, a render pipeline that covers by
+    /// alpha records no `PrecisionNote::DeviceAlphaCoverage` and requires the property.
+    /// Unmeasured, such a pipeline's fragment stage records the note.
+    MetalAlphaCoverage,
 }
 
 /// A defect of a device's driver in a command the runtime records for itself, never in a

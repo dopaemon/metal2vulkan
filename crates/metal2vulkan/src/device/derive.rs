@@ -807,6 +807,9 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     if deviations.contains(&DriverDeviation::MetalNormalizedVertexFetch) {
         properties.insert(VkProperty::MetalNormalizedVertexFetch);
     }
+    if deviations.contains(&DriverDeviation::MetalAlphaCoverage) {
+        properties.insert(VkProperty::MetalAlphaCoverage);
+    }
     if desc
         .driver_facts()
         .contains(&crate::device::DriverFact::DepthImageKeepsValuesOutsideUnitRange)

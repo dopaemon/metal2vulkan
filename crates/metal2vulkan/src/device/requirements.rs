@@ -834,6 +834,15 @@ pub enum VkProperty {
     /// requires it, where no module does (the format is the pipeline's vertex input state);
     /// without it, the pipeline's vertex stage records that note.
     MetalNormalizedVertexFetch,
+    /// The device's alpha to coverage covers the samples Metal's does at every pixel (the
+    /// driver's measured deviation
+    /// [`DriverDeviation::MetalAlphaCoverage`](crate::error::DriverDeviation::MetalAlphaCoverage)).
+    /// No Vulkan query reports it: Vulkan specifies no algorithm for converting the alpha to a
+    /// coverage mask. A render pipeline that covers by alpha and records no
+    /// [`PrecisionNote::DeviceAlphaCoverage`](crate::pipeline::PrecisionNote::DeviceAlphaCoverage)
+    /// requires it, where no module does (the coverage is the pipeline's multisample state);
+    /// without it, the pipeline's fragment stage records that note.
+    MetalAlphaCoverage,
 }
 
 /// One depth or stencil resolve mode (`VkResolveModeFlagBits`), named by

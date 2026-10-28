@@ -4927,6 +4927,7 @@ macro-member	metal2vulkan-runtime::Degradation::DecodedTexelPrecision	DecodedTex
 macro-member	metal2vulkan-runtime::Degradation::DepthBiasPastOne	DepthBiasPastOne = "depth-bias-past-one", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DepthDenormals	DepthDenormals = "depth-denormals", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DetachedStorageKeepsWrites	DetachedStorageKeepsWrites = "detached-storage-keeps-writes", Precision,
+macro-member	metal2vulkan-runtime::Degradation::DeviceAlphaCoverage	DeviceAlphaCoverage = "device-alpha-coverage";
 macro-member	metal2vulkan-runtime::Degradation::DeviceAnisotropicFilter	DeviceAnisotropicFilter = "device-anisotropic-filter";
 macro-member	metal2vulkan-runtime::Degradation::DeviceArithmetic	DeviceArithmetic = "device-arithmetic";
 macro-member	metal2vulkan-runtime::Degradation::DeviceColorConversion	DeviceColorConversion = "device-color-conversion";
@@ -12794,6 +12795,7 @@ variant	metal2vulkan::device::VkProperty::FramebufferStencilSampleCount	Framebuf
 variant	metal2vulkan::device::VkProperty::IndependentResolve	IndependentResolve
 variant	metal2vulkan::device::VkProperty::IndependentResolveNone	IndependentResolveNone
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	InterpolateAtOffsetCentered
+variant	metal2vulkan::device::VkProperty::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::device::VkProperty::MetalCenterVaryings	MetalCenterVaryings
 variant	metal2vulkan::device::VkProperty::MetalColorWrites	MetalColorWrites
 variant	metal2vulkan::device::VkProperty::MetalDepth16BiasedStores	MetalDepth16BiasedStores
@@ -12947,6 +12949,7 @@ variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { st
 variant	metal2vulkan::error::DriverDeviation::CenterFragCoordDepth	CenterFragCoordDepth
 variant	metal2vulkan::error::DriverDeviation::CubeGradientRoute	CubeGradientRoute
 variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	GraphicsCubeGradientTangents
+variant	metal2vulkan::error::DriverDeviation::MetalAlphaCoverage	MetalAlphaCoverage
 variant	metal2vulkan::error::DriverDeviation::MetalCanonicalNans	MetalCanonicalNans
 variant	metal2vulkan::error::DriverDeviation::MetalCenterVaryings	MetalCenterVaryings
 variant	metal2vulkan::error::DriverDeviation::MetalColorWrites	MetalColorWrites
@@ -13426,6 +13429,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::ColorAttachmentGroups	ColorAttach
 variant	metal2vulkan::pipeline::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
 variant	metal2vulkan::pipeline::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan::pipeline::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceAlphaCoverage	DeviceAlphaCoverage
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceAnisotropicFilter	DeviceAnisotropicFilter
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceArithmetic	DeviceArithmetic
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceColorConversion	DeviceColorConversion

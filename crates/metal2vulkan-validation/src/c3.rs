@@ -742,7 +742,8 @@ pub struct SlotRow {
 ///   attachment 0's alpha (`CoverageReadsRoundedAlpha`): the coverage reads the rounded alpha
 ///   where Metal's reads it before rounding, so a fragment near a coverage threshold may cover
 ///   another sample, and the stored samples are ordinary data later words use. Open until Metal's
-///   coverage pattern is computed in the function.
+///   coverage pattern is computed in the function, on a device whose coverage is Metal's
+///   (elsewhere the device's coverage is its native answer, `DeviceAlphaCoverage`).
 /// - An `ARGB8Unorm` attachment blended in none of the measured forms
 ///   (`RotatedBlendRounding`): Apple's blend computes a factor pair apart in its color and alpha
 ///   arithmetic, which the rotation swaps for Metal's alpha and blue, and the stored code is
@@ -756,7 +757,9 @@ pub struct SlotRow {
 /// A varying the device interpolates (`DeviceInterpolation`) is not deferred: every fragment
 /// function that reads one records it on every device but MoltenVK's, so a row-level deferral
 /// would hold any mismatch of such a function open as the interpolation's, a coverage or a
-/// rate-map difference among them. Its differences stay mismatches for review.
+/// rate-map difference among them. Its differences stay mismatches for review. Nor is the
+/// device's alpha-to-coverage (`DeviceAlphaCoverage`): the device's native answer, which no exact
+/// path replaces, recorded by every pipeline that covers by alpha off MoltenVK.
 ///
 /// Row-level only. A note whose difference can be attributed word by word (a NaN encoding, a
 /// denormal, a `half` rounding) belongs in a per-word judgement of a reading's differing words,
@@ -876,7 +879,8 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              nearest-even half alpha, and its coverage reads that rounded alpha where Metal's \
              reads the alpha before rounding: a fragment whose alpha lies within half a half step \
              of a coverage threshold may cover one sample more or fewer (2 of 16,384 alphas on an \
-             Apple M3 Max); exact path: Metal's coverage pattern computed in the function"
+             Apple M3 Max); exact path: Metal's coverage pattern computed in the function, \
+             where the device covers as Metal does"
         }
         PrecisionNote::RotatedBlendRounding => {
             "an ARGB8Unorm attachment blended in none of the measured forms may store a channel \

@@ -391,7 +391,9 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 ///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
 ///   two-plane texture on MoltenVK (`half-sample-filter`, `float-sample-filter`,
 ///   `ycbcr-filter-not-exact`);
-/// - **resolves**: `device-rounded-resolve`.
+/// - **resolves**: `device-rounded-resolve`;
+/// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
+///   alpha-to-coverage (`device-alpha-coverage`).
 ///
 /// **What is not here**, and stays each case's to declare: a note of what the device **lacks**
 /// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
@@ -441,6 +443,7 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::FloatSampleFilter,
         D::YCbCrFilterNotExact,
         D::DeviceRoundedResolve,
+        D::DeviceAlphaCoverage,
     ]
 };
 

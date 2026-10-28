@@ -39,7 +39,9 @@ pub struct GraphicsState {
     pub rasterization_samples: vk::SampleCountFlags,
     /// The descriptor's `alphaToCoverageEnabled`, kept only where the fragment function has a
     /// four-component float first output at attachment 0 whose alpha it reads: without one Metal
-    /// leaves the coverage as rasterized, and Vulkan requires that output.
+    /// leaves the coverage as rasterized, and Vulkan requires that output. The device covers by
+    /// its own algorithm: where it is not measured to cover as Metal does, the fragment stage
+    /// records `PrecisionNote::DeviceAlphaCoverage`.
     pub alpha_to_coverage: bool,
     /// The descriptor's `alphaToOneEnabled`, as
     /// `VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`: both replace the fragment's

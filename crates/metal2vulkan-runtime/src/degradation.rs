@@ -2258,6 +2258,18 @@ degradations! {
         /// whose alpha lies within half a `half` step of a coverage threshold may cover one
         /// sample more or fewer.
         CoverageReadsRoundedAlpha = "coverage-reads-rounded-alpha";
+        /// Class: native device coverage. A render pipeline covers by alpha on a device not
+        /// measured to cover as Metal does (every device but MoltenVK on Apple's GPUs of the Apple M3
+        /// Max's macOS 27 identity): the device
+        /// converts the alpha to its coverage mask by its own algorithm, which Vulkan does not
+        /// specify, where Metal covers a pixel at one sample above an alpha of 1/2 and at two and
+        /// four samples `ceil(alpha * n - t)` samples by a 2x2 ordered dither `t` (an Apple M3
+        /// Max). Recorded bound: on lavapipe every pixel within one sample of Metal's and Metal's
+        /// where `alpha * n` is an integer; at one sample a whole fragment stored or dropped
+        /// where its alpha lies between its own dither threshold and 1/2, at four samples one
+        /// sample apart only within an `f32` ulp of a threshold. Unmeasured elsewhere (NVIDIA
+        /// stores a fragment of alpha 1/2 at one sample).
+        DeviceAlphaCoverage = "device-alpha-coverage";
         /// The blend of a color attachment the fragment function reads, computed by the shader in
         /// the pixel interlock's storage form, of a format whose Metal blend arithmetic is not
         /// built (a 32-bit float, 16-bit normalized, 8-bit signed normalized, 10-bit, packed

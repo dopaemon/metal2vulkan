@@ -18,6 +18,7 @@ mod engine_agx;
 mod engine_air_2_1;
 mod engine_air_2_2;
 mod engine_air_2_9;
+mod engine_alpha_coverage;
 mod engine_amplification;
 mod engine_arena;
 mod engine_argument_tables;

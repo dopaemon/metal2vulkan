@@ -72,6 +72,7 @@ fn every_precision_note_has_its_table_row() {
         (N::FragmentSimdgroupGrouping, Allowance::Unbounded),
         (N::BlendedWriteRounding, Allowance::Unbounded),
         (N::CoverageReadsRoundedAlpha, Allowance::Unbounded),
+        (N::DeviceAlphaCoverage, Allowance::Unbounded),
         (N::RotatedBlendRounding, Allowance::Unbounded),
         (N::ComputedSampleDepth, Allowance::Unbounded),
     ];

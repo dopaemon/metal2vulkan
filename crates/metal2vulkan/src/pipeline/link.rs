@@ -280,6 +280,16 @@ pub struct Linked {
     /// input converts a normalized format on a profile measured to convert it as Metal does
     /// (`VkProperty::MetalNormalizedVertexFetch`).
     pub vertex_properties: BTreeSet<VkProperty>,
+    /// The precision notes of the pipeline's fixed-function fragment operations under its graphics
+    /// state (`graphics::coverage_notes`), sorted: the compile API adds them to the fragment
+    /// stage's notes. Empty but for a render pipeline that covers by alpha on a profile not
+    /// measured to cover as Metal does (`PrecisionNote::DeviceAlphaCoverage`).
+    pub fragment_notes: Vec<PrecisionNote>,
+    /// The measured properties the pipeline's fixed-function fragment operations rely on in place
+    /// of a note (`graphics::coverage_notes`): the compile API adds them to the pipeline's
+    /// requirements. Empty but for a render pipeline that covers by alpha on a profile measured to
+    /// cover as Metal does (`VkProperty::MetalAlphaCoverage`).
+    pub fragment_properties: BTreeSet<VkProperty>,
     pub interface: PipelineInterface,
     /// `Some` exactly for a render pipeline.
     pub graphics: Option<GraphicsState>,
@@ -456,6 +466,10 @@ pub fn link(
         }
         LinkInputs::Standalone | LinkInputs::Compute => (VertexInputState::default(), None),
     };
+    let fragment_notes = graphics
+        .as_ref()
+        .map(|g| graphics::coverage_notes(g, p))
+        .unwrap_or_default();
     // Totality: every relocation of every stage resolves. A miss is a link bug.
     for a in stages {
         if let Some((sym, _)) = a
@@ -476,6 +490,8 @@ pub fn link(
         vertex_input,
         vertex_notes: vertex_notes.notes,
         vertex_properties: vertex_notes.properties,
+        fragment_notes: fragment_notes.notes,
+        fragment_properties: fragment_notes.properties,
         interface,
         graphics,
         specialization,

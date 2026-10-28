@@ -2257,8 +2257,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
 | `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
 | `primitive-type-restart-indices` | Metal rasterizes a line by the diamond-exit rule and this driver's Bresenham mode breaks one tie the other way. The line of vertices 0 and 1 runs exactly throug… |
-| `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers `floor(alpha * rasterSampleCount)` samples, so at ONE sample an alpha of 0.5 covers NO sample and the destination survives the … |
-| `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers `floor(alpha * rasterSampleCount)` samples, so at ONE sample an alpha of 0.5 covers NO sample and the destination survives the … |
+| `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers a pixel at ONE sample only above an alpha of 1/2, so an alpha of 0.5 covers NO sample and the destination survives the draw unt… |
+| `a2c-on-1-alpha-50` | Metal's alpha-to-coverage covers a pixel at ONE sample only above an alpha of 1/2, so an alpha of 0.5 covers NO sample and the destination survives the draw unt… |
 | `a2one-off-1-blend-source-alpha` | Metal's stored code and ours differ by one at this site, in a draw whose blend reads the source alpha with `alphaToOneEnabled` set and clear. Alpha-to-one itsel… |
 | `a2one-on-1-blend-source-alpha` | Metal's stored code and ours differ by one at this site, in a draw whose blend reads the source alpha with `alphaToOneEnabled` set and clear. Alpha-to-one itsel… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site over the case's 8,192 texels, and the row's count and bound are this run's. The two formats of the … |

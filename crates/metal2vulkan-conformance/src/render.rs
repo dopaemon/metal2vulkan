@@ -955,11 +955,13 @@ pub struct RenderPipelineSpec<'a> {
     /// ordinary vertex function states.
     pub tessellation: Option<TessellationState>,
     /// `alphaToCoverageEnabled`: the fragment's alpha at attachment 0 narrows the coverage the
-    /// rasterizer gave the pixel, to `floor(alpha * rasterSampleCount)` of its samples on this M3
-    /// Max. Metal reads the alpha **before** the attachment's write mask, and ANDs the result with
-    /// a sample mask the fragment writes; a first output with no alpha component leaves the
-    /// coverage as rasterized. [`super::cases::alpha_coverage_pairs`] is where each of those is
-    /// measured.
+    /// rasterizer gave the pixel, to `floor(alpha * rasterSampleCount)` or `ceil(...)` of its
+    /// samples on this M3 Max, by the pixel's place in a 2x2 ordered dither (at one sample, one
+    /// above an alpha of 1/2). Metal reads the alpha **before** the attachment's write mask, and
+    /// ANDs the result with a sample mask the fragment writes; a first output with no alpha
+    /// component leaves the coverage as rasterized. [`super::cases::alpha_coverage_pairs`] is
+    /// where each of those is measured, and the validation lane `runtime_lane::alpha_coverage`
+    /// the dither.
     pub alpha_to_coverage: bool,
     /// `alphaToOneEnabled`: the fragment's alpha becomes 1 before the blend reads it and before it
     /// is stored, which the attachment's write mask can still stop from being stored.

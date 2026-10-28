@@ -150,7 +150,13 @@
 //!   values in this section refer only to the alpha component of the fragment shader output that
 //!   has a `Location` and `Index` decoration of zero"), reads Metal's alpha;
 //!   over an `ARGB8Unorm` one, whose image's alpha is Metal's blue, it is
-//!   `NotImplemented(Format)`.
+//!   `NotImplemented(Format)`. Which samples the alpha covers is the device's own answer: Metal's
+//!   coverage of an alpha depends on the pixel's place in a 2x2 ordered dither at two and four
+//!   samples (`PrecisionNote::DeviceAlphaCoverage` states it), and Vulkan specifies no algorithm
+//!   for converting the alpha to a coverage mask, so a pipeline that keeps alpha to coverage records
+//!   `PrecisionNote::DeviceAlphaCoverage` on its fragment stage, or, on a profile measured to cover
+//!   as Metal does (`DriverDeviation::MetalAlphaCoverage`), requires
+//!   `VkProperty::MetalAlphaCoverage` in its place ([`coverage_notes`]).
 //! - **Alpha to one** is `VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`
 //!   (`GraphicsState::alpha_to_one`), the exact counterpart of Metal's `alphaToOneEnabled`: both
 //!   replace the fragment's alpha with one before the blend reads it and before the write mask
@@ -176,7 +182,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::device::requirements::{FormatUsage, VkFeature, VkLimit, VkProperty};
 use crate::device::{DeviceProfile, DriverWorkaround};
 use crate::error::{
-    Attachment, Capability, DescriptorError, Error, Feature, RuntimeInput, Unsupported,
+    Attachment, Capability, DescriptorError, DriverDeviation, Error, Feature, RuntimeInput,
+    Unsupported,
 };
 use crate::metal;
 use crate::metal::format::{
@@ -186,11 +193,13 @@ use crate::metal::state::{
     blend_factors, check_constant_alpha, color_write_mask, constant_alpha_withheld,
 };
 use crate::metal::PrimitiveTopologyClass;
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::color_writes;
 use crate::pipeline::graphics::{
     ColorAttachmentState, GraphicsState, InputAttachmentUse, TessellationState,
 };
 use crate::pipeline::interface::StageInterface;
+use crate::pipeline::link::vertex::FixedFunctionNotes;
 use crate::pipeline::link::RenderLinkInputs;
 use crate::pipeline::rotated_blend::{alpha_in_red_blend, rotated_blend, RotatedBlend};
 use crate::pipeline::stage_io::{
@@ -935,6 +944,25 @@ fn sample_invocations(
         return Err(refused());
     }
     Ok(sample_shading)
+}
+
+/// What the device's alpha to coverage gives a render pipeline whose graphics state is `g` on `p`
+/// (see the module docs): where it covers by alpha (`GraphicsState::alpha_to_coverage`), the
+/// device converts the alpha to a coverage mask by its own algorithm, which Vulkan does not
+/// specify, so the fragment stage records `PrecisionNote::DeviceAlphaCoverage`; but where `p`
+/// takes `DriverDeviation::MetalAlphaCoverage`, the device covers Metal's samples, and the
+/// pipeline requires `VkProperty::MetalAlphaCoverage` in place of the note. Nothing where the
+/// pipeline does not cover by alpha.
+pub(crate) fn coverage_notes(g: &GraphicsState, p: &DeviceProfile) -> FixedFunctionNotes {
+    let mut out = FixedFunctionNotes::default();
+    if g.alpha_to_coverage {
+        if p.takes_driver_deviation(DriverDeviation::MetalAlphaCoverage) {
+            out.properties.insert(VkProperty::MetalAlphaCoverage);
+        } else {
+            out.notes.push(PrecisionNote::DeviceAlphaCoverage);
+        }
+    }
+    out
 }
 
 /// Whether the pipeline's alpha to coverage stays enabled (see the module docs): only over a

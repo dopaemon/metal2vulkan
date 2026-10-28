@@ -1851,12 +1851,50 @@ pub enum PrecisionNote {
     /// separates, so the function rounds the alpha and the coverage reads the rounded one. The
     /// stored alpha is Metal's; a fragment whose alpha lies within half a `half` step of a
     /// coverage threshold may cover one sample more or fewer (2 of the 16,384 alphas on the
-    /// M3 Max, each just past the midpoint between two halves). The exact path, Metal's coverage
-    /// computed in the function, needs Metal's coverage pattern, which is not modelled.
+    /// M3 Max, each just past the midpoint between two halves). That bound is of the rounding
+    /// alone: which samples an alpha covers is the device's own mapping, recorded as
+    /// [`PrecisionNote::DeviceAlphaCoverage`] where it is not measured to be Metal's. The exact
+    /// path, Metal's coverage computed in the function, is open only where the device covers as
+    /// Metal does (MoltenVK), and needs Metal's coverage pattern, which is not modelled.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, deferred in C3 until an exact path exists.
     CoverageReadsRoundedAlpha,
+    /// Native device coverage: a render pipeline covers by alpha (`alphaToCoverageEnabled`, kept
+    /// where its fragment function writes a four-component float to attachment 0,
+    /// `GraphicsState::alpha_to_coverage`) on a device not measured to cover as Metal does
+    /// (without
+    /// [`DriverDeviation::MetalAlphaCoverage`](crate::error::DriverDeviation::MetalAlphaCoverage),
+    /// which only MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27 identity takes: there
+    /// Metal covers). The device converts the
+    /// alpha to its coverage mask by its own algorithm. Metal's, measured over 639 alphas a sample
+    /// count on an Apple M3 Max under macOS 27.0.1 (`runtime_lane::alpha_coverage`), covers a pixel
+    /// at one sample where its alpha is above 1/2, and at two and four samples
+    /// `ceil(alpha * n - t)` of its `n` samples, `t` a 2x2 ordered dither of the pixel's window
+    /// coordinates (1/8 and 5/8 at even and odd `x` of an even row, 7/8 and 3/8 of an odd one),
+    /// either count within an `f32` ulp of a threshold. Vulkan fixes no algorithm ("No specific
+    /// algorithm is specified for converting the alpha value to a temporary coverage mask. It is
+    /// intended that the number of 1's in this value be proportional to the alpha value (clamped
+    /// to \[0,1\]), with all 1's corresponding to a value of 1.0 and all 0's corresponding to 0.0.
+    /// The algorithm may be different at different framebuffer coordinates."), so a pixel may
+    /// cover other samples than Metal's: at one sample, a whole fragment stored or dropped.
+    /// Recorded on the fragment stage.
+    ///
+    /// **Recorded bound,** over that sweep against Metal's reading, pixel by pixel: on lavapipe
+    /// (Mesa 26.0.8 on LLVM 21.1.8, arm64), which takes the same dither at one sample as at four,
+    /// every pixel covers `floor(alpha * n)` or `ceil(alpha * n)` samples, as Metal's does, so it
+    /// lies within one sample of Metal's, and is Metal's where `alpha * n` is an integer. At one
+    /// sample a pixel whose alpha lies between its dither threshold and 1/2 is stored where Metal
+    /// drops it, or dropped where Metal stores it (2,560 of the 10,224 pixels); at four samples a
+    /// pixel is one sample apart only where `alpha * 4` lies within an `f32` ulp of a threshold
+    /// (96 of 10,224). NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU stores the fragment at one
+    /// sample at an alpha of 1/2, where Metal drops it (the conformance case `a2c-on-1-alpha-50`);
+    /// beyond that row, and on every other device, the count is unmeasured, and Vulkan bounds it
+    /// by nothing but its intent above.
+    ///
+    /// Validation derives no tolerance and no explanation from it: a difference stays a
+    /// mismatch for review.
+    DeviceAlphaCoverage,
     /// A fragment function reads a color attachment the pipeline blends, in the interlocked
     /// storage form (`lower::fragment::fetch`, on a device that orders framebuffer fetch only
     /// through the pixel interlock), of a format whose blend arithmetic of Metal's the translation

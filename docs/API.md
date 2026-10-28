@@ -2907,7 +2907,25 @@ bound.
   rounding, which no device separates, so the function rounds the alpha and the coverage reads the
   rounded one. The stored alpha is Metal's; a fragment whose alpha lies within half a `half` step
   of a coverage threshold may cover one sample more or fewer (2 of 16,384 alphas on an Apple M3
-  Max).
+  Max). Which samples an alpha covers is the device's own (`device-alpha-coverage`).
+- `metal2vulkan-degrade-device-alpha-coverage` (precision). `PrecisionNote::DeviceAlphaCoverage`:
+  A render pipeline covers by alpha (`alphaToCoverageEnabled`, over a four-component float first
+  output at attachment 0) on a device not measured to cover as Metal does
+  (`DriverDeviation::MetalAlphaCoverage`, which MoltenVK takes on the Apple M3 Max's macOS 27
+  identity: Metal covers there). The device converts the alpha to its coverage mask by its own
+  algorithm, which Vulkan does not specify ("It is intended that the number of 1's in this value be
+  proportional to the alpha value", and "The algorithm may be different at different framebuffer
+  coordinates"). Metal, measured over 639 alphas a sample count on an Apple M3 Max under macOS
+  27.0.1, covers a pixel at one sample above an alpha of 1/2, and at two and four samples
+  `ceil(alpha * n - t)` samples, `t` a 2x2 ordered dither of the pixel's window coordinates (1/8,
+  5/8; 7/8, 3/8), either count within an `f32` ulp of a threshold. Recorded bound, pixel by pixel
+  against Metal's reading: on lavapipe (Mesa 26.0.8, arm64) every pixel covers `floor(alpha * n)`
+  or `ceil(alpha * n)` samples, so within one sample of Metal's and Metal's where `alpha * n` is an
+  integer; at one sample, where lavapipe dithers too, a whole fragment is stored or dropped where
+  its alpha lies between its own threshold and 1/2 (2,560 of the sweep's 10,224 pixels); at four
+  samples a pixel is one sample apart only within an `f32` ulp of a threshold (96 of 10,224). An
+  NVIDIA RTX 5080 Laptop GPU stores a fragment of alpha 1/2 at one sample, where Metal drops it;
+  every other device and count is unmeasured.
 - `metal2vulkan-degrade-rotated-blend-rounding` (precision). `PrecisionNote::RotatedBlendRounding`:
   A fragment function writes an attachment held with its channels rotated (`ARGB8Unorm`) whose blend
   is none of the measured forms (`RotatedBlendForm::Unmeasured`), or the premultiplied form through
