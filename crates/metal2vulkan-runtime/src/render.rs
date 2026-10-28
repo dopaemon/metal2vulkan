@@ -4245,7 +4245,7 @@ impl RenderLowering {
             core.command_buffer(),
             &mut layout.colors,
             executes,
-            |index| taken.contains(index),
+            |index| viewed.contains(index),
         )?;
         linear_attachment::settle(core.command_buffer(), &mut layout.colors, other, |index| {
             taken.contains(index)

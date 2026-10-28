@@ -25,6 +25,7 @@ use super::program::{
 use super::run::{run, HostPages};
 use super::runtime::RuntimeSeq;
 use super::{fingerprint, metal_gap, NAME, SEEDS};
+use crate::runtime_lane::sync_coverage::{blind_to_kernel_writes, layer_sees_kernel_writes};
 use metal2vulkan_runtime::DebugMessage;
 use std::time::{Duration, Instant};
 
@@ -339,9 +340,14 @@ fn two_encoders(read: u64) -> Program {
 /// whatever the lane's switch says: a read of the word the earlier encoder wrote is a hazard
 /// between commands that share a byte, which fails; a read of the next word, in the same 16 bytes
 /// of the descriptors the runtime binds (`hazards`), is one the layer's range alone makes, which
-/// is explained as untracked memory and fails nothing.
+/// is explained as untracked memory and fails nothing. Both hazards are a kernel's read after a
+/// kernel's write: where the layer sees no kernel's write
+/// (`runtime_lane::sync_coverage::layer_sees_kernel_writes`, asked first), neither run may report
+/// anything at all, and the line `LAYER-BLIND-KERNEL-WRITES` names what was not checked.
 #[test]
 fn a_hazard_fails_when_its_commands_share_a_byte_and_else_is_explained() {
+    const TEST: &str = "a_hazard_fails_when_its_commands_share_a_byte_and_else_is_explained";
+    let sees = layer_sees_kernel_writes();
     let run = |read| {
         let program = two_encoders(read);
         let (_, sorted) = on_device(0, &program, RuntimeSeq::open_synchronized().unwrap()).unwrap();
@@ -362,6 +368,22 @@ fn a_hazard_fails_when_its_commands_share_a_byte_and_else_is_explained() {
         "explained: {:?}",
         shared.explained
     );
+    if !sees {
+        let apart = run(260);
+        assert!(
+            apart.explained.is_empty(),
+            "explained: {:?}",
+            apart.explained
+        );
+        let failing: Vec<DebugMessage> =
+            (shared.failing.into_iter()).chain(apart.failing).collect();
+        return blind_to_kernel_writes(
+            TEST,
+            "the failing read after write of commands sharing a byte, nor the explained one of \
+             commands sharing a descriptor's range alone",
+            &failing,
+        );
+    }
     assert!(
         shared
             .failing

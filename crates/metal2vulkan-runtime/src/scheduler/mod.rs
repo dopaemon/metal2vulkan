@@ -99,7 +99,9 @@
 //!   completes meanwhile. Each waking is counted by what woke the thread, and each sleep
 //!   (`WorkCounts::scheduler_sleeps` and kin).
 //! - **Waits for a signal to land itself** ([`Nudge`]). Where the heads wait only for event
-//!   values that submitted GPU signals reach (no gate, none reached yet), the thread sleeps in one
+//!   values that submitted GPU signals reach (no gate, none reached yet; a shared event's too,
+//!   whose wait is held on the host rather than handed to a `VkQueue`, `event_timeline.rs`:
+//!   [`landing_waits`]), the thread sleeps in one
 //!   `vkWaitSemaphores` for any of those values, or for the device's nudge semaphore to reach its
 //!   next value, instead of on its condition variable: the signal wakes it from the driver, with
 //!   no completion turn and no waker between, and it observes the values itself
@@ -413,7 +415,7 @@ impl SchedulerShared {
             return false;
         }
         for (event, value) in &list.events {
-            let Some(WaitFor::Index(index)) = event.wait(*value) else {
+            let Some(WaitFor::Index(index)) = event.landing(*value) else {
                 return false;
             };
             wait.events.push((Arc::clone(event), *value));
@@ -1735,12 +1737,12 @@ fn check_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits:
         if !held.checked || !otherwise_ready || !due {
             return !due && goes(held);
         }
-        match event_waits(held) {
+        match landing_waits(held) {
             None => return false,
             Some(waits) if !waits.is_empty() && !held.buffer.device().is_lost() => {
                 awaits.events(&held.waits);
                 fence(Ordering::SeqCst);
-                if event_waits(held).is_some_and(|waits| !waits.is_empty()) {
+                if landing_waits(held).is_some_and(|waits| !waits.is_empty()) {
                     (held.buffer.device().shared().counts).head_awaiting_check_signals();
                     landing = true;
                     return false;
@@ -1879,6 +1881,22 @@ fn events_reachable(held: &Held) -> bool {
     held.waits
         .iter()
         .all(|(event, value)| event.wait(*value).is_some())
+}
+
+/// The waits of `held`, a line's head whose checks wait for its events' values to land, for the
+/// signal indices of the submitted GPU signals that reach the values not yet reached, a shared
+/// event's whose wait is held on the host included (`EventShared::landing`): what the scheduler's
+/// thread may wait for on the GPU itself (the module docs). `None` while a value is reached by
+/// neither a submitted signal nor the host.
+fn landing_waits(held: &Held) -> Option<Vec<(vk::Semaphore, u64)>> {
+    let mut waits = Vec::new();
+    for (event, value) in &held.waits {
+        match event.landing(*value)? {
+            WaitFor::Reached => {}
+            WaitFor::Index(index) => waits.push((event.semaphore(), index)),
+        }
+    }
+    Some(waits)
 }
 
 /// The Vulkan waits of `held` for its events' signal indices, when every value it waits for is

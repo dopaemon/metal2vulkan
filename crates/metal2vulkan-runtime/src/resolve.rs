@@ -687,20 +687,25 @@ fn samples_read_after(color: &ColorTarget) -> bool {
 /// pass, as Metal's does, while the resolve still reads the samples the pass rendered.
 ///
 /// In place where the pass executes render commands (`executes`, whose commands record later) or a
-/// draw took a view of the attachment's image (`taken`, as `kept_bytes::settle` asks it: a
-/// framebuffer fetch in place, its sample planes, a view of another format, its extended-range
-/// shadow), where it already renders through a stand-in (whose copy back Metal's store action
-/// decides alike, `attachment_stand_in.rs`), where its texture keeps no texels (memoryless), and
-/// where the device copies no image of the format: there the pass stores the samples it rendered,
-/// Metal's answer where its tiler overflows, which `dont-care-store` announces
-/// (`Device::degrade_pass`). A pass whose color attachments are multisampled has no linear one
-/// (no texture over a buffer is multisampled), so none of this moves what
-/// `VK_NV_linear_color_attachment`'s rule binds (`linear_attachment.rs`).
+/// draw took a view of the attachment's image (`viewed`, as `kept_bytes::settle` asks it of the
+/// attachment it renders apart: a framebuffer fetch in place, its sample planes, a view of another
+/// format, its extended-range shadow), where it already renders through a stand-in (whose copy
+/// back Metal's store action decides alike, `attachment_stand_in.rs`), where its texture keeps no
+/// texels (memoryless), and where the device copies no image of the format: there the pass stores
+/// the samples it rendered, Metal's answer where its tiler overflows, which `dont-care-store`
+/// announces (`Device::degrade_pass`). On a device whose framebuffer fetch reads input
+/// attachments (`PassLayout::fetch_inputs`), whose subpass names every color as an input
+/// attachment too, a color is viewed only where a draw read it so: the input reference takes the
+/// framebuffer's view, the kept image's, as the color reference does. The linear rule's `taken`
+/// counts every color of a pass there (`render.rs`), which would keep no samples on such a device
+/// at all. A pass whose color attachments are multisampled has no linear one (no texture over a
+/// buffer is multisampled), so none of this moves what `VK_NV_linear_color_attachment`'s rule
+/// binds (`linear_attachment.rs`).
 pub(super) fn keep_samples(
     maker: &CommandBuffer,
     colors: &mut [Option<ColorTarget>],
     executes: bool,
-    taken: impl Fn(usize) -> bool,
+    viewed: impl Fn(usize) -> bool,
 ) -> Result<(), Error> {
     if executes {
         return Ok(());
@@ -713,7 +718,7 @@ pub(super) fn keep_samples(
         if !samples_read_after(color)
             || color.stand_in.is_some()
             || color.memoryless
-            || taken(index)
+            || viewed(index)
         {
             continue;
         }

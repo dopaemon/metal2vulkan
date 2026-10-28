@@ -52,7 +52,8 @@ struct Pending<Q> {
 pub(super) enum WaitFor {
     /// The value was reached (on the semaphore, or by the host's floor): no Vulkan wait.
     Reached,
-    /// A Vulkan wait for the semaphore to reach this index, a submitted GPU signal's.
+    /// A wait for the semaphore to reach this index, a submitted GPU signal's: a batch's on its
+    /// `VkQueue` ([`EventTimeline::wait`]), or the host's ([`EventTimeline::landing`]).
     Index(u64),
 }
 
@@ -153,11 +154,20 @@ impl<Q: Copy + Eq> EventTimeline<Q> {
     /// submitted signal and no host set reaches it yet, or the host may set it and it is not
     /// reached, which no Vulkan wait would answer to (the module docs).
     pub(super) fn wait(&self, value: u64) -> Option<WaitFor> {
+        match self.landing(value) {
+            Some(WaitFor::Index(_)) if self.settable => None,
+            landing => landing,
+        }
+    }
+
+    /// How the host waits for `value` to land: reached, or the index of the submitted GPU signal
+    /// that reaches it, whether or not the host may set it, so a wait [`EventTimeline::wait`]
+    /// holds on the host is one too; `None` while no submitted signal and no host set reaches it.
+    /// The host waits for the semaphore's index (the scheduler's thread, `scheduler/mod.rs`), and
+    /// a set meanwhile wakes it as any host signal does: no batch is handed that index.
+    pub(super) fn landing(&self, value: u64) -> Option<WaitFor> {
         if value <= self.value() {
             return Some(WaitFor::Reached);
-        }
-        if self.settable {
-            return None;
         }
         self.pending
             .iter()

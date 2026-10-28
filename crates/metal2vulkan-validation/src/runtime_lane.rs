@@ -784,7 +784,7 @@ mod surface_texture_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod swizzled_storage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod sync_coverage;
+pub(crate) mod sync_coverage;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod teardown_holders;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1246,8 +1246,13 @@ fn dynamic_input_assembly(device: &Device) -> bool {
 ///   what its shaders could: the index bounds pass's idle draw in `draw_bases`, `patches`' draws
 ///   of no patches), and it does not model a fragment shader interlock's critical sections; layer
 ///   1.4.341 also drops every write-after-write of a bound descriptor it finds while recording.
+///   It traces no store through an `OpSelect` of two storage-buffer pointers to its descriptor
+///   (1.4.341 and 1.4.363 alike), the form every store through a descriptor view takes on a
+///   device with variable pointers (`lower::access::sink`), so it sees no kernel's write of a
+///   bound buffer there at all.
 ///   A clean run is evidence for the other accesses alone (`runtime_lane/sync_coverage.rs` holds
-///   the controls).
+///   the controls, and asks the layer whether it sees a kernel's write:
+///   `sync_coverage::layer_sees_kernel_writes`).
 /// - `load-store`: a render pass's load operations checked against an earlier pass's stores
 ///   (`syncval_load_op_after_store_op_validation`, off by default), which a layer release that
 ///   does not know the setting reports as unrecognized (Ubuntu 26.04's 1.4.341 does not; the

@@ -194,6 +194,13 @@ impl EventShared {
         lock(&self.state).timeline.wait(value)
     }
 
+    /// How the host waits for `value` to land: reached, or the index of the submitted GPU signal
+    /// that reaches it, a wait held on the host included (`EventTimeline::landing`); `None` while
+    /// nothing submitted or set reaches it.
+    pub(super) fn landing(&self, value: u64) -> Option<WaitFor> {
+        lock(&self.state).timeline.landing(value)
+    }
+
     /// Whether a wait for `value` is held on the host where a Vulkan wait for a submitted GPU
     /// signal's index would have served (`event_timeline.rs`).
     pub(super) fn held_for_the_host(&self, value: u64) -> bool {

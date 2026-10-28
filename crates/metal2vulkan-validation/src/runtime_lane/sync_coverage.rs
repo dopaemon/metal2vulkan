@@ -6,6 +6,23 @@
 //! under `METAL2VULKAN_LANE_VALIDATION=sync` is evidence only for the accesses the layer sees;
 //! these say which those are.
 //!
+//! **Kernel writes, by the layer's sight.** Whether the layer sees a kernel's write of a buffer it
+//! binds is asked of the layer itself, never of its version: the positive control
+//! ([`layer_sees_kernel_writes`], the run of
+//! [`a_shader_write_then_a_copy_of_one_untracked_buffer`]: one dispatch writing an untracked
+//! buffer through the runtime's own recording, then a copy of that buffer, nothing between them)
+//! runs first, once a process. A store through a descriptor view is the selection of the slot's
+//! place or the stage's store sink (`lower::access::sink`, an `OpSelect` of two storage-buffer
+//! pointers, on a device with variable pointers), which the layer does not trace to the
+//! descriptor: it takes such a kernel's every bound buffer as read alone, where it reports the
+//! same store through a plain access chain (a dispatch of hand-assembled modules of either form
+//! on the runtime's device, then a copy: Ubuntu 26.04's layer, 1.4.341, on arm64 lavapipe, and
+//! Homebrew's, 1.4.363, on MoltenVK on an M3 Max, alike). Where the control finds the layer
+//! blind, each test whose hazard needs a kernel's write prints one `LAYER-BLIND-KERNEL-WRITES`
+//! line naming what it could not check, and requires what the layer does see of its run (its
+//! reads, transfers and the runtime's own commands) to have reported nothing
+//! ([`blind_to_kernel_writes`]).
+//!
 //! The races are harmless to the device: both accesses write or read the same few bytes.
 
 use super::{
@@ -20,6 +37,7 @@ use metal2vulkan_runtime::{
     Size, StorageMode,
 };
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The longest a command buffer of these tests may take.
@@ -92,6 +110,67 @@ fn case_buffers(device: &Device, case: &PublicCase) -> BTreeMap<u32, Buffer> {
             )
         })
         .collect()
+}
+
+/// The positive control's program: a compute encoder's kernel writes an untracked buffer at a
+/// bound slot, and a later blit encoder copies it, with no fence, event or barrier between them.
+fn kernel_write_then_copy(device: &Device) {
+    let case = public_case(COPY_WORD).unwrap();
+    let pipeline = pipeline_state(device, &case).unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let buffers = case_buffers(device, &case);
+    let copy = device
+        .new_buffer(buffers[&1].length(), untracked())
+        .unwrap();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut compute = command_buffer.compute_command_encoder().unwrap();
+    encode_case(
+        &mut compute,
+        &pipeline,
+        &case.compute,
+        &buffers,
+        &CaseResources::default(),
+    )
+    .unwrap();
+    compute.end_encoding().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(&buffers[&1], 0, &copy, 0, copy.length())
+        .unwrap();
+    blit.end_encoding().unwrap();
+    run(&command_buffer);
+}
+
+/// What the layer reported of the positive control ([`kernel_write_then_copy`] on a device of its
+/// own), run once a process.
+fn control() -> &'static [DebugMessage] {
+    static REPORTED: OnceLock<Vec<DebugMessage>> = OnceLock::new();
+    REPORTED.get_or_init(|| reported(kernel_write_then_copy))
+}
+
+/// Whether the validation layer sees a kernel's write of a buffer it binds in the runtime's
+/// recording (the module docs): it reported the positive control's read after write.
+pub(crate) fn layer_sees_kernel_writes() -> bool {
+    control()
+        .iter()
+        .any(|message| message.id_name == "SYNC-HAZARD-READ-AFTER-WRITE")
+}
+
+/// Where the layer does not see a kernel's write ([`layer_sees_kernel_writes`]): print `test`'s
+/// one-line marker, naming the part it did not check (`unchecked`), and require the layer to have
+/// reported nothing among `messages`, what it does see of the run (a degrade notice is the
+/// runtime's, not the layer's).
+pub(crate) fn blind_to_kernel_writes(test: &str, unchecked: &str, messages: &[DebugMessage]) {
+    eprintln!(
+        "LAYER-BLIND-KERNEL-WRITES {test}: the layer saw no kernel write in the positive control, \
+         so this run did not check {unchecked}"
+    );
+    let layer: Vec<&DebugMessage> = (messages.iter())
+        .filter(|message| message.degradation.is_none())
+        .collect();
+    assert!(
+        layer.is_empty(),
+        "{test}: the layer reported what it sees of the run: {layer:#?}"
+    );
 }
 
 /// The lane's claim that the validation layer reported nothing ([`layer_reported_nothing_at_all`],
@@ -181,9 +260,11 @@ fn fills_of_one_untracked_buffer_in_two_encoders() {
 }
 
 /// Two compute encoders of one command buffer dispatch a kernel that writes one untracked buffer
-/// at a bound slot: whether the layer sees a shader's write of a bound buffer.
+/// at a bound slot: whether the layer sees a shader's write of a bound buffer after another's.
 #[test]
 fn shader_writes_of_one_untracked_buffer_in_two_encoders() {
+    const TEST: &str = "shader_writes_of_one_untracked_buffer_in_two_encoders";
+    let sees = layer_sees_kernel_writes();
     let messages = reported(|device| {
         let case = public_case(COPY_WORD).unwrap();
         let pipeline = pipeline_state(device, &case).unwrap();
@@ -204,10 +285,14 @@ fn shader_writes_of_one_untracked_buffer_in_two_encoders() {
         }
         run(&command_buffer);
     });
-    let found = hazards(
-        "shader_writes_of_one_untracked_buffer_in_two_encoders",
-        &messages,
-    );
+    let found = hazards(TEST, &messages);
+    if !sees {
+        return blind_to_kernel_writes(
+            TEST,
+            "the second kernel's write after the first's",
+            &messages,
+        );
+    }
     assert!(!found.is_empty(), "no hazard was reported: {messages:#?}");
 }
 
@@ -244,40 +329,22 @@ fn a_fill_then_a_shader_read_of_one_untracked_buffer() {
     assert!(!found.is_empty(), "no hazard was reported: {messages:#?}");
 }
 
-/// A compute encoder's kernel writes an untracked buffer at a bound slot that a later blit
-/// encoder copies: whether the layer sees a transfer read after a shader's write.
+/// The positive control (the module docs): a compute encoder's kernel writes an untracked buffer
+/// at a bound slot that a later blit encoder copies ([`kernel_write_then_copy`]), whether the layer
+/// sees a transfer read after a shader's write. Where it does not, the run is the reason every
+/// other test here that needs a kernel's write prints `LAYER-BLIND-KERNEL-WRITES`.
 #[test]
 fn a_shader_write_then_a_copy_of_one_untracked_buffer() {
-    let messages = reported(|device| {
-        let case = public_case(COPY_WORD).unwrap();
-        let pipeline = pipeline_state(device, &case).unwrap();
-        let queue = device.new_command_queue().unwrap();
-        let buffers = case_buffers(device, &case);
-        let copy = device
-            .new_buffer(buffers[&1].length(), untracked())
-            .unwrap();
-        let command_buffer = queue.command_buffer().unwrap();
-        let mut compute = command_buffer.compute_command_encoder().unwrap();
-        encode_case(
-            &mut compute,
-            &pipeline,
-            &case.compute,
-            &buffers,
-            &CaseResources::default(),
-        )
-        .unwrap();
-        compute.end_encoding().unwrap();
-        let mut blit = command_buffer.blit_command_encoder().unwrap();
-        blit.copy_from_buffer_to_buffer(&buffers[&1], 0, &copy, 0, copy.length())
-            .unwrap();
-        blit.end_encoding().unwrap();
-        run(&command_buffer);
-    });
-    let found = hazards(
-        "a_shader_write_then_a_copy_of_one_untracked_buffer",
-        &messages,
+    const TEST: &str = "a_shader_write_then_a_copy_of_one_untracked_buffer";
+    let found = hazards(TEST, control());
+    if !layer_sees_kernel_writes() {
+        return blind_to_kernel_writes(TEST, "the copy's read after the kernel's write", control());
+    }
+    assert!(
+        found.iter().any(|id| id == "SYNC-HAZARD-READ-AFTER-WRITE"),
+        "no read after write was reported: {:#?}",
+        control()
     );
-    assert!(!found.is_empty(), "no hazard was reported: {messages:#?}");
 }
 
 /// One concurrent compute encoder dispatches the kernel twice with no memory barrier between:
@@ -292,6 +359,9 @@ fn a_shader_write_then_a_copy_of_one_untracked_buffer() {
 /// buffers, at submission, it reports them.
 #[test]
 fn a_shader_write_then_a_shader_read_of_one_untracked_buffer_in_one_concurrent_encoder() {
+    const TEST: &str =
+        "a_shader_write_then_a_shader_read_of_one_untracked_buffer_in_one_concurrent_encoder";
+    let sees = layer_sees_kernel_writes();
     let messages = reported(|device| {
         let case = public_case(COPY_WORD).unwrap();
         let pipeline = pipeline_state(device, &case).unwrap();
@@ -320,10 +390,14 @@ fn a_shader_write_then_a_shader_read_of_one_untracked_buffer_in_one_concurrent_e
         compute.end_encoding().unwrap();
         run(&command_buffer);
     });
-    let found = hazards(
-        "a_shader_write_then_a_shader_read_of_one_untracked_buffer_in_one_concurrent_encoder",
-        &messages,
-    );
+    let found = hazards(TEST, &messages);
+    if !sees {
+        return blind_to_kernel_writes(
+            TEST,
+            "the second dispatch's read after the first's write",
+            &messages,
+        );
+    }
     assert!(!found.is_empty(), "no hazard was reported: {messages:#?}");
 }
 
@@ -340,11 +414,13 @@ fn a_shader_write_then_a_shader_read_of_one_untracked_buffer_in_one_concurrent_e
 /// written.
 #[test]
 fn disjoint_words_of_one_block_are_a_hazard_to_the_layer_alone() {
+    const TEST: &str = "disjoint_words_of_one_block_are_a_hazard_to_the_layer_alone";
     const VALUES: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
     const BLOCK: [u8; 16] = [
         0xa0, 0xa1, 0xa2, 0xa3, 0xb0, 0xb1, 0xb2, 0xb3, 0xc0, 0xc1, 0xc2, 0xc3, 0xd0, 0xd1, 0xd2,
         0xd3,
     ];
+    let sees = layer_sees_kernel_writes();
     let mut bytes = None;
     let messages = reported(|device| {
         let case = public_case(COPY_WORD).unwrap();
@@ -374,15 +450,19 @@ fn disjoint_words_of_one_block_are_a_hazard_to_the_layer_alone() {
             read_buffer(&read, 0, 4).unwrap(),
         ));
     });
-    let found = hazards(
-        "disjoint_words_of_one_block_are_a_hazard_to_the_layer_alone",
-        &messages,
-    );
+    let found = hazards(TEST, &messages);
     let (block, read) = bytes.unwrap();
     let mut expected = BLOCK;
     expected[..8].copy_from_slice(&VALUES);
     assert_eq!(block, expected, "each write reached its own word alone");
     assert_eq!(read, BLOCK[8..12], "the read found word 2 as written");
+    if !sees {
+        return blind_to_kernel_writes(
+            TEST,
+            "the read after the writes that the descriptors' ranges alone make",
+            &messages,
+        );
+    }
     assert!(
         found.iter().any(|id| id == "SYNC-HAZARD-READ-AFTER-WRITE"),
         "the layer reported no read after write: {messages:#?}"
