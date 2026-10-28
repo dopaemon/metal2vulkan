@@ -83,8 +83,12 @@ pub(crate) struct Counters {
     predicated_loop_runs_again: AtomicU64,
     variants_taken_back: AtomicU64,
     unlisted_argument_sampler_buffers: AtomicU64,
+    draws_dropped_unmade: AtomicU64,
+    draws_dropped_still_making: AtomicU64,
+    dispatches_dropped_still_making: AtomicU64,
     host_step_sampler_sets_made: AtomicU64,
     creation_pipelines_made: AtomicU64,
+    creations_left_making: AtomicU64,
     creation_pipelines_drawn: AtomicU64,
     creation_render_pipelines_made: AtomicU64,
     creation_render_pipelines_drawn: AtomicU64,
@@ -1020,6 +1024,26 @@ impl Counters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A draw whose pipeline the driver did not make after the draw returned ran nothing
+    /// (`CommandBuffer::drop_draw`).
+    pub(crate) fn draw_dropped_unmade(&self) {
+        self.draws_dropped_unmade.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw whose pipeline was still being made at its command buffer's bound ran nothing
+    /// (`CommandBuffer::drop_late_draw`).
+    pub(crate) fn draw_dropped_still_making(&self) {
+        self.draws_dropped_still_making
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A dispatch, or a render pass's tile dispatch, whose pipeline was still being made at its
+    /// command buffer's bound ran nothing (`CommandBuffer::drop_late_dispatch`).
+    pub(crate) fn dispatch_dropped_still_making(&self) {
+        self.dispatches_dropped_still_making
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// `count` records of an indirect command buffer's commands were read from its storage and
     /// decoded (`indirect_command_buffer.rs`).
     pub(crate) fn indirect_records_read(&self, count: u64) {
@@ -1075,6 +1099,13 @@ impl Counters {
             Predicted::Dispatch => &self.creation_dispatch_pipelines_made,
         }
         .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A state's creation returned while its predicted key's making, handed to the device's pool,
+    /// was still running at the bound (`PipelineWaitPolicy::Bounded`, `pipeline/render.rs`,
+    /// `pipeline/dispatch_making.rs`).
+    pub(crate) fn creation_left_making(&self) {
+        self.creations_left_making.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A draw or dispatch took a `VkPipeline` a state's creation made for `predicted`, its first
@@ -3068,6 +3099,23 @@ pub struct WorkCounts {
     /// (`Degradation::UnlistedArgumentSampler`), and is counted once whether or not its
     /// functions reach the state left out.
     pub unlisted_argument_sampler_buffers: u64,
+    /// Draws whose `VkPipeline` the driver did not make after the draw returned (the runtime makes
+    /// a draw's pipeline while the draw goes on): each ran nothing, its command buffer running on
+    /// without error (`CommandBuffer::dropped_draw` names the first of a command buffer).
+    pub draws_dropped_unmade: u64,
+    /// Draws whose `VkPipeline` was still being made once their command buffer's bound passed
+    /// (`PipelineWaitPolicy::Bounded`, the default: its commit plus the policy's
+    /// `pipeline_commit_wait`): each ran nothing, its command buffer running on without error, and the command buffers after it draw with
+    /// the pipeline once it is made (`CommandBuffer::dropped_draw` names the first of a command
+    /// buffer, with the error `VK_TIMEOUT`).
+    pub draws_dropped_still_making: u64,
+    /// Compute dispatches and render passes' tile dispatches whose `VkPipeline` was still being
+    /// made once their command buffer's bound passed (`PipelineWaitPolicy::Bounded`, the default:
+    /// its commit plus the policy's `pipeline_commit_wait`): each ran nothing, so wrote nothing, its command buffer running on
+    /// without error, and the command buffers after it dispatch with the pipeline once it is made
+    /// (`CommandBuffer::dropped_draw` names the first of a command buffer, with the error
+    /// `VK_TIMEOUT`).
+    pub dispatches_dropped_still_making: u64,
     /// Immutable sampler sets a command buffer's host step made, counting samplers on the
     /// scheduler's thread, because the device's map held no set of its variant's samplers: the
     /// open break (a render execution's step drawing a state made after its commit, on the variant
@@ -3093,6 +3141,13 @@ pub struct WorkCounts {
     /// Of [`creation_dispatch_pipelines_made`](Self::creation_dispatch_pipelines_made), the ones a
     /// dispatch took so far.
     pub creation_dispatch_pipelines_drawn: u64,
+    /// Render and compute states' creations that returned while the making of their predicted
+    /// key's `VkPipeline`, which they handed to the device's pool, was still running the policy's
+    /// `pipeline_creation_wait` after they handed it there (`PipelineWaitPolicy::Bounded`, the
+    /// default): their draws and dispatches take the making in flight, their command buffer
+    /// waiting its own bound for it in turn. Each is counted in
+    /// [`creation_pipelines_made`](Self::creation_pipelines_made) too once made.
+    pub creations_left_making: u64,
     /// Immutable sampler sets variants made (the device's map's, and a host step's or a pool
     /// piece's own): none for a variant without immutable samplers.
     pub sampler_sets_made: u64,
@@ -4879,10 +4934,16 @@ impl Device {
             unlisted_argument_sampler_buffers: counters
                 .unlisted_argument_sampler_buffers
                 .load(Ordering::Relaxed),
+            draws_dropped_unmade: counters.draws_dropped_unmade.load(Ordering::Relaxed),
+            draws_dropped_still_making: counters.draws_dropped_still_making.load(Ordering::Relaxed),
+            dispatches_dropped_still_making: counters
+                .dispatches_dropped_still_making
+                .load(Ordering::Relaxed),
             host_step_sampler_sets_made: counters
                 .host_step_sampler_sets_made
                 .load(Ordering::Relaxed),
             creation_pipelines_made: counters.creation_pipelines_made.load(Ordering::Relaxed),
+            creations_left_making: counters.creations_left_making.load(Ordering::Relaxed),
             creation_pipelines_drawn: counters.creation_pipelines_drawn.load(Ordering::Relaxed),
             creation_render_pipelines_made: counters
                 .creation_render_pipelines_made

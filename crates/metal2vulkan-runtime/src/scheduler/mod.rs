@@ -478,6 +478,10 @@ pub(crate) struct State {
     pub(crate) group: Group,
     /// Those batches as the order held them, with their logical queues, in order.
     grouped: Vec<(u64, Held)>,
+    /// The earliest bound of a head whose host step waits for its draws' pipelines
+    /// ([`StepWaits::until`]), found by the last look ([`gate_heads`]): the thread sleeps no
+    /// later, so the step records those still being made as nothing then.
+    wake_by: Option<Instant>,
 }
 
 impl State {
@@ -571,6 +575,10 @@ pub(crate) struct StepWaits {
     pub(crate) queue_alone: Option<usize>,
     /// A pipeline it records, still being made.
     pub(crate) pipelines: bool,
+    /// Where it waits for pipelines and its command buffer's bound has not passed: the bound,
+    /// after which its draws' pipelines still being made are waited for no longer
+    /// (`CommandBuffer::making_deadline`).
+    pub(crate) until: Option<Instant>,
 }
 
 /// What one committed batch waits for and signals, as the scheduler orders it.
@@ -610,6 +618,7 @@ impl Scheduler {
                 decodes: BTreeMap::new(),
                 untracked_decodes: 0,
                 kept: KeptBarriers::default(),
+                wake_by: None,
                 lists: BatchLists::default(),
                 group: Group::default(),
                 grouped: Vec::new(),
@@ -939,6 +948,19 @@ fn run(shared: &SchedulerShared) {
             && !shared.inbox.holds_commits()
             && !shared.inbox.nudged()
         {
+            // A head whose step waits for its draws' pipelines waits until its bound at most
+            // (`StepWaits::until`): a pass looks at it again then.
+            let bound = match state.wake_by {
+                None => None,
+                Some(at) => match at.checked_duration_since(Instant::now()) {
+                    Some(left) if !left.is_zero() => Some(left),
+                    _ => {
+                        state.wake_by = None;
+                        state.dirty = true;
+                        continue;
+                    }
+                },
+            };
             // A stall due is taken without the lock, the empty submissions stopping where a
             // commit or a waker came; the sleep before it ends at the idle's length, no slice.
             let stalls = (shared.stalls.get()).filter(|stalls| !looked && stalls.may_be_due());
@@ -962,6 +984,7 @@ fn run(shared: &SchedulerShared) {
                 }
                 None => (WAIT_SLICE, false),
             };
+            let slice = bound.map_or(slice, |left| left.min(slice));
             shared.sleeps.fetch_add(1, Ordering::Relaxed);
             if let Some(nudge) = shared.nudge.get().filter(|_| shared.gpu_waits(&mut gpu)) {
                 state = wait_for_gpu(shared, state, nudge, &mut gpu, (slice, short));
@@ -999,10 +1022,10 @@ fn run(shared: &SchedulerShared) {
 }
 
 /// Sleep on the GPU (the module docs): for any of `gpu`'s semaphores to reach its value, or the
-/// nudge its next, at most `slice` ([`WAIT_SLICE`], or, where `short`, the idle's length before
-/// a driver's stall is taken, whose end is no slice's), without the lock `state` holds, which
-/// comes back taken. Where a value landed, its events observe their counters, and the state is
-/// marked for a pass.
+/// nudge its next, at most `slice` ([`WAIT_SLICE`], or less to a head's bound, or, where `short`,
+/// the idle's length before a driver's stall is taken, whose end is no slice's), without the lock
+/// `state` holds, which comes back taken. Where a value landed, its events observe their counters,
+/// and the state is marked for a pass.
 fn wait_for_gpu<'a>(
     shared: &'a SchedulerShared,
     mut state: std::sync::MutexGuard<'a, State>,
@@ -1850,8 +1873,10 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
         order,
         values,
         binary,
+        wake_by,
         ..
     } = state;
+    *wake_by = None;
     let mut waiting = false;
     for held in order.heads_mut(behind) {
         if !held.segments
@@ -1868,6 +1893,10 @@ fn gate_heads(state: &mut State, behind: &[u64], left: &mut Left<Work>, awaits: 
         // they finish; one for them alone waits for no work on the GPU.
         let waits = held.buffer.step_waits(held.index);
         if waits.pipelines {
+            // Its bound wakes the thread where its makings do not finish first.
+            if let Some(at) = waits.until {
+                *wake_by = Some(wake_by.map_or(at, |by| by.min(at)));
+            }
             continue;
         }
         if !waits.gpu {

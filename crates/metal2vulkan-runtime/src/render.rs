@@ -1436,6 +1436,10 @@ pub(crate) struct RenderLowering {
     /// The encoder records an execution's commands (`render/executions.rs`): a draw that needs
     /// another instance than the execution's is refused.
     replaying: bool,
+    /// The place among the command buffer's ended encoders of the encoder whose execution it
+    /// replays (`RenderExecution`), which names a draw of the commands it drops
+    /// (`CommandBuffer::drop_late_draw`); `None` where it replays none.
+    executing_encoder: Option<usize>,
     /// The encoder records the current instance's draws again into an instance that leaves more
     /// colors out of its subpass (`render/reroute.rs`): a draw that would record elsewhere, or
     /// whose variant the interlocked storage form refuses, fails the reroute.
@@ -2006,6 +2010,7 @@ impl RenderLowering {
             draw_calls: 0,
             tile_dispatch_calls: 0,
             replaying: false,
+            executing_encoder: None,
             rerouting: false,
             forms: BufferForms::Bound,
             replayed: None,
@@ -8509,14 +8514,59 @@ impl RenderLowering {
             None => {
                 let watch = EachWatch::start();
                 let key = draw_key();
-                let (draw_pipeline, own) = match deferrable {
-                    true => variant.begin_graphics_pipeline(
+                // An execution's replay records now: under its command buffer's bound its draw
+                // waits for its making on the device's pool (most begun by the settle at commit,
+                // `RenderExecution::settle`) until the bound at most, past which it records
+                // nothing. Not a device replay's draw, of one recording for every command.
+                let bounded = (self.replaying && self.replayed.is_none() && !self.rerouting)
+                    && !(empty || culled)
+                    && self.layout.sample_positions.is_empty();
+                let deadline = match bounded {
+                    true => self.core.command_buffer().making_deadline(),
+                    false => None,
+                };
+                let (draw_pipeline, own) = match (deferrable, deadline) {
+                    (true, _) => variant.begin_graphics_pipeline(
                         &device,
                         &key,
                         &compatible,
                         (&pipeline, &formats),
                     ),
-                    false => (
+                    (false, Some(deadline)) => {
+                        let begun = variant.begin_graphics_pipeline(
+                            &device,
+                            &key,
+                            &compatible,
+                            (&pipeline, &formats),
+                        );
+                        match begun {
+                            (DrawPipeline::Making(making), _) => {
+                                match making.wait_until(deadline) {
+                                    Some(Ok(made)) => (DrawPipeline::Made(made), true),
+                                    // A failed making is made again here, as a caller after one
+                                    // does (`making.rs`).
+                                    Some(Err(_)) => (
+                                        DrawPipeline::Made(variant.graphics_pipeline_now(
+                                            &device,
+                                            &key,
+                                            &compatible,
+                                            (&pipeline, &formats),
+                                        )?),
+                                        true,
+                                    ),
+                                    // Still being made at the bound: the draw records nothing,
+                                    // before anything of it is tracked, as a draw whose pipeline
+                                    // a capture misses does; later command buffers draw with it.
+                                    None => {
+                                        self.drop_late_replayed_draw(&variant, specialization)?;
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            made => made,
+                        }
+                    }
+                    (false, None) => (
                         DrawPipeline::Made(variant.graphics_pipeline_now(
                             &device,
                             &key,

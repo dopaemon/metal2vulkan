@@ -20,28 +20,47 @@
 //!   they are made (`scheduler`), its batch held in its queue's order meanwhile, with no wait for
 //!   the GPU. A pass that executes render commands the CPU writes records at commit, which waits
 //!   for its pipelines: its commands are read as they stand then.
-//! - **A failed making.** The command buffer completes with `CommandBufferError::PipelineCreation`,
-//!   its batch and those after it unrun; `CommandBuffer::failed_pipeline` names the draw (its
-//!   encoder's place and its order there), the state, its variant and specialization, and the
-//!   driver's error. Where creation ran at the draw, the draw returned that error.
+//! - **A failed making.** The draw runs nothing and the command buffer runs on: its secondary
+//!   records the barriers and the query it would record around the draw, and no draw.
+//!   `CommandBuffer::dropped_draw` names the first such draw (its encoder's place and its order
+//!   there), the state, its variant and specialization, and the driver's error. Counted:
+//!   `WorkCounts::draws_dropped_unmade`. Where creation ran at the draw, the draw returned that
+//!   error.
+//! - **A making past the bound.** Under `PipelineWaitPolicy::Bounded` (the default) a recording
+//!   waits for the draw's pipeline until its command buffer's commit plus the policy's
+//!   `pipeline_commit_wait` (4.5 s by default) at most (`CommandBuffer::making_deadline`; the
+//!   scheduler's host step runs then, `StepWaits::until`): a pipeline still being made then is not
+//!   waited for, and the draw records as nothing, as for a failed making, its making going on for
+//!   the command buffers after it. `CommandBuffer::dropped_draw` names the first such draw with the
+//!   error `VK_TIMEOUT`, which no driver's creation returns. Counted:
+//!   `WorkCounts::draws_dropped_still_making`; announced `draw-dropped-still-making`. Under
+//!   `PipelineWaitPolicy::Exact` the recording waits until the pipeline is made.
+//! - **An execution's replay.** A draw of an execution's commands records as the replay runs
+//!   (the host step, or `commit` for records the CPU writes), so it takes no pending recording:
+//!   its pipeline, most begun on the device's pool by the execution's settle at commit
+//!   (`RenderExecution::settle`), is waited for until its command buffer's bound at most, and one
+//!   still being made then makes the draw record nothing, before anything of it is tracked,
+//!   named by its execution's encoder's place and its order among the replay's draws, counted and
+//!   announced as above ([`RenderLowering::drop_late_replayed_draw`]). A device replay's draw,
+//!   one recording for every command, waits until the pipeline is made.
 //! - **Recorded once.** A pass recorded at commit and again by a host step (an execution's
 //!   buffer the GPU may write since) records each such draw once, its secondary executed by the
 //!   recording that is submitted.
 
 use super::bound::{Bound, Recorded};
-use super::{DrawState, Recording};
+use super::{DrawState, Recording, RenderLowering};
 use crate::binding::PushWrite;
 use crate::command_buffer::CommandBuffer;
 use crate::device::lock;
 use crate::draw_source::IndexBind;
 use crate::dynamic_state::ExtendedDynamicState;
-use crate::error::{vulkan, Error, FailedPipeline, FailedState};
-use crate::pipeline::{Pending, RawPipeline, RenderPipelineState};
+use crate::error::{internal, vulkan, Error, FailedPipeline, FailedState};
+use crate::pipeline::{Pending, RawPipeline, RenderPipelineState, RenderVariant};
 use crate::render_target;
 use crate::tracker::LegacyBarrier;
 use crate::visibility::Lent;
 use ash::vk;
-use metal2vulkan::cache::VariantKey;
+use metal2vulkan::cache::{SpecializationKey, VariantKey};
 use metal2vulkan::pipeline::SpecKey;
 use std::sync::Mutex;
 
@@ -115,8 +134,8 @@ impl PendingDraw {
     }
 
     /// Its secondary command buffer, recorded and ended once its pipeline is made, waiting for
-    /// that: recorded the first time, as `command_buffer`'s, which a failed making fails
-    /// (`CommandBuffer::fail_pipeline`).
+    /// that: recorded the first time, as `command_buffer`'s, without the draw where its making
+    /// failed (`CommandBuffer::drop_draw`).
     pub(super) fn record(
         &self,
         command_buffer: &CommandBuffer,
@@ -133,18 +152,36 @@ impl PendingDraw {
     }
 
     fn record_once(&self, command_buffer: &CommandBuffer) -> Result<(), Error> {
-        let pipeline = match self.pipeline.wait() {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                command_buffer.fail_pipeline(FailedPipeline {
-                    encoder: self.encoder,
-                    draw: self.draw,
-                    state: FailedState::Render(self.state.clone()),
-                    variant: self.variant.clone(),
-                    specialization: self.specialization.clone(),
-                    error: error.clone(),
-                });
-                return Err(error);
+        // Until the command buffer's bound at most, where it has one (`PipelineWaitPolicy`).
+        let waited = match command_buffer.making_deadline() {
+            Some(deadline) => self.pipeline.wait_until(deadline),
+            None => Some(self.pipeline.wait()),
+        };
+        // A device test's failure of the making (`CommandBuffer::fail_draw_making`).
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let waited = match command_buffer.state().injected_making_failure() {
+            Some(error) => Some(Err(error)),
+            None => waited,
+        };
+        let failed = |error| FailedPipeline {
+            encoder: self.encoder,
+            draw: self.draw,
+            state: FailedState::Render(self.state.clone()),
+            variant: self.variant.clone(),
+            specialization: self.specialization.clone(),
+            error,
+        };
+        let pipeline = match waited {
+            Some(Ok(pipeline)) => Some(pipeline),
+            Some(Err(error)) => {
+                command_buffer.drop_draw(failed(error));
+                None
+            }
+            // Still being made at the bound: the draw runs nothing, and a later command buffer
+            // draws with the pipeline once it is made.
+            None => {
+                command_buffer.drop_late_draw(failed(vulkan(vk::Result::TIMEOUT)));
+                None
             }
         };
         let device = command_buffer.device();
@@ -157,7 +194,8 @@ impl PendingDraw {
         // until the command buffer completes (the encoder retained them at the draw, and the
         // pipeline is held with the pass); the barrier is the one the draw would record into its
         // instance, valid in the pass's subpass; the lent query is a continuation of the offset
-        // the encoder's draws count in, with none active in this secondary before it.
+        // the encoder's draws count in, with none active in this secondary before it. Without its
+        // pipeline it records them around no draw.
         unsafe {
             if let Some(view_mask) = self.storage_barrier {
                 render_target::between_storage_draws(raw, cb, view_mask);
@@ -173,33 +211,35 @@ impl PendingDraw {
             }
             let mut bound = Bound::default();
             let mut recorded = Recorded::default();
-            for owned in &self.recordings {
-                recorded += Recording {
-                    raw,
-                    command_buffer: cb,
-                    layout: owned.layout,
-                    shape: owned.shape,
-                    pipeline: pipeline.raw,
-                    sets: &owned.sets,
-                    offsets: &owned.offsets,
-                    pushed: &owned.pushed,
-                    push_descriptor: shared.push_descriptor,
-                    pushes_after_pipeline_binds: shared.pushes_after_pipeline_binds,
-                    heap: owned.heap,
-                    push: &owned.push,
-                    vertex_buffers: &owned.vertex_buffers,
-                    index: owned.index,
-                    indirect: owned.indirect,
-                    dynamic: &owned.dynamic,
-                    topology: owned.topology,
-                    primitive_restart: owned.primitive_restart,
-                    state: &owned.state,
-                    extended: owned.extended,
-                    mesh: shared.mesh_draws.as_ref(),
-                    draw: owned.draw,
-                    pair: owned.pair.clone(),
+            if let Some(pipeline) = &pipeline {
+                for owned in &self.recordings {
+                    recorded += Recording {
+                        raw,
+                        command_buffer: cb,
+                        layout: owned.layout,
+                        shape: owned.shape,
+                        pipeline: pipeline.raw,
+                        sets: &owned.sets,
+                        offsets: &owned.offsets,
+                        pushed: &owned.pushed,
+                        push_descriptor: shared.push_descriptor,
+                        pushes_after_pipeline_binds: shared.pushes_after_pipeline_binds,
+                        heap: owned.heap,
+                        push: &owned.push,
+                        vertex_buffers: &owned.vertex_buffers,
+                        index: owned.index,
+                        indirect: owned.indirect,
+                        dynamic: &owned.dynamic,
+                        topology: owned.topology,
+                        primitive_restart: owned.primitive_restart,
+                        state: &owned.state,
+                        extended: owned.extended,
+                        mesh: shared.mesh_draws.as_ref(),
+                        draw: owned.draw,
+                        pair: owned.pair.clone(),
+                    }
+                    .record(&mut bound);
                 }
-                .record(&mut bound);
             }
             recorded.count(&shared.counts);
             if let Some(query) = &self.query {
@@ -207,6 +247,33 @@ impl PendingDraw {
             }
             command_buffer.end_raw(cb).map_err(vulkan)?;
         }
+        Ok(())
+    }
+}
+
+impl RenderLowering {
+    /// Drop a draw of an execution's replay whose `VkPipeline` of `variant` under
+    /// `specialization` was still being made at its command buffer's bound (the module docs):
+    /// named by its execution's encoder's place and its order among the replay's draws, its error
+    /// `VK_TIMEOUT`; counted and announced as any draw past the bound
+    /// (`CommandBuffer::drop_late_draw`).
+    pub(super) fn drop_late_replayed_draw(
+        &self,
+        variant: &RenderVariant,
+        specialization: &SpecializationKey,
+    ) -> Result<(), Error> {
+        let state = self
+            .pipeline
+            .clone()
+            .ok_or_else(|| internal("a draw without its pipeline state"))?;
+        self.core.command_buffer().drop_late_draw(FailedPipeline {
+            encoder: self.executing_encoder.unwrap_or_default(),
+            draw: self.draw_calls,
+            state: FailedState::Render(state),
+            variant: variant.key().clone(),
+            specialization: variant.constants(specialization),
+            error: vulkan(vk::Result::TIMEOUT),
+        });
         Ok(())
     }
 }

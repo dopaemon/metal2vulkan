@@ -69,6 +69,7 @@ use crate::values::Size;
 use crate::Device;
 use metal2vulkan::bind::{BindShape, BindState, BindingPlan, FragmentTests};
 use metal2vulkan::cache::{Hash256, PipelineKey, SpecializationKey, VariantKey};
+use metal2vulkan::device::PipelineWaitPolicy;
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, PixelFormat, PrimitiveTopologyClass, RenderStages};
 use metal2vulkan::pipeline::{
@@ -80,6 +81,7 @@ use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::time::Instant;
 
 mod residual;
 
@@ -2663,6 +2665,35 @@ impl RenderVariant {
         self.made_or_make(key, render_pass, (state, formats))
     }
 
+    /// The `VkPipeline` of `key` for an execution's settle at commit, which records nothing
+    /// (`render/executions.rs`), against `render_pass`: from the memo, the making in flight for
+    /// it, or begun now as a draw's is ([`begin_graphics_pipeline`](Self::begin_graphics_pipeline):
+    /// linked here where its shaders' libraries are made, else handed to `device`'s pool), so the
+    /// commit compiles nothing on the program's thread; the host step's draw of the key waits for
+    /// it until its command buffer's bound at most (`render.rs`). Under
+    /// `PipelineWaitPolicy::Exact` made now ([`graphics_pipeline`](Self::graphics_pipeline)).
+    pub(crate) fn settle_graphics_pipeline(
+        self: &Arc<Self>,
+        device: &Device,
+        key: &GraphicsKey,
+        render_pass: &Arc<RenderPassObject>,
+        (state, formats): (&GraphicsState, crate::degradation::BoundFormats<'_>),
+    ) -> Result<DrawPipeline, Error> {
+        if device.compile_device().policy().pipeline_waits == PipelineWaitPolicy::Exact {
+            return self
+                .graphics_pipeline(key, render_pass, (state, formats))
+                .map(DrawPipeline::Made);
+        }
+        device.shared().counts.graphics_pipeline_looked_up();
+        Ok(match self.pipelines.begin_at(key) {
+            (Begun::Made(made), _) => DrawPipeline::Made(made),
+            (Begun::Pending(pending), _) => DrawPipeline::Making(pending),
+            (Begun::Yours(ticket), _) => {
+                self.make_drawn(device, key, render_pass, (state, formats), ticket)
+            }
+        })
+    }
+
     /// [`graphics_pipeline`](Self::graphics_pipeline)'s finding or making, uncounted.
     fn made_or_make(
         self: &Arc<Self>,
@@ -2706,20 +2737,31 @@ impl RenderVariant {
             .then(|| libraries.claim(shared, &content.names(&self.objects, &self.pipeline, key)))
     }
 
-    /// The `VkPipeline`s of `keys`, each against its pass (a pass of the key's `pass`), made at
-    /// the creation of `state`, before any draw, at once: the first on this thread, the others
-    /// on the device's pool, joined before this returns (`Pool::join_all`, the owner's HITCH
-    /// rules 1 and 3). What the program or host sees is decided on this thread, in `keys`' order:
-    /// each key's memo entry begun before (a key made already, or being made by another caller,
-    /// is not this creation's), and its creation log line numbered before. Each piece settles its
-    /// own key's memo entry as its pipeline is made, a failed one not kept, and the join returns
-    /// once every piece settled. The concurrent part only calls the driver and settles its
-    /// entries. Their specialized notices wait for their first draws
+    /// The `VkPipeline`s of `keys`, each against its pass (a pass of the key's `pass`), begun at
+    /// the creation of `state`, before any draw. What the program or host sees is decided on this
+    /// thread, in `keys`' order: each key's memo entry begun before (a key made already, or being
+    /// made by another caller, is not this creation's), and its creation log line numbered
+    /// before. Under `PipelineWaitPolicy::Bounded` (the default) each making is handed to the
+    /// device's pool, kept by the state's piece holds as a draw's is ([`pooled`](Self::pooled)),
+    /// and the creation waits for them the policy's `pipeline_creation_wait` (4.5 s by default) at
+    /// most, one deadline for all of them, as Metal compiles in its creation: a driver's cold
+    /// compile (seconds on MoltenVK with a cold Metal compiler service) holds the thread creating
+    /// the state, which a host may create inside a command buffer's encoding, no longer; a draw
+    /// that finds the making in flight takes it (`render/pending.rs`), its command buffer waiting a
+    /// bound for it in turn (`WorkCounts::creations_left_making`). Under
+    /// `PipelineWaitPolicy::Exact` they are made before the creation returns: the first on this
+    /// thread, the others on the device's pool, joined (`Pool::join_all`, the owner's HITCH rules 1
+    /// and 3). Each piece settles its own key's memo entry as its pipeline is made, a failed one
+    /// not kept, and the join returns once every piece settled. The concurrent part only calls the
+    /// driver and settles its entries. Their specialized notices wait for their first draws
     /// ([`first_use`](Self::first_use)). Each key is its variant's.
     pub(crate) fn make_at_creation(
         keys: Vec<(Arc<RenderVariant>, GraphicsKey, RenderPassObject)>,
         state: &GraphicsState,
     ) {
+        let device = &state.0.device;
+        let joined = device.compile_device().policy().pipeline_waits == PipelineWaitPolicy::Exact;
+        let mut handed = Vec::new();
         let mut pending = Vec::with_capacity(keys.len());
         let mut pieces: Vec<Joined<()>> = Vec::with_capacity(keys.len());
         for (variant, key, pass) in keys {
@@ -2738,6 +2780,15 @@ impl RenderVariant {
             // Its libraries claimed here, on the creating thread, where the device links them:
             // the device's, found by every later key and state that shares a part.
             let claimed = variant.claim_libraries(&key);
+            if !joined {
+                handed.push(variant.pooled(
+                    state,
+                    (key, Arc::new(pass), ticket),
+                    (line, claimed),
+                    true,
+                ));
+                continue;
+            }
             pending.push(ticket.pending());
             // The piece owns the variant (its modules, layouts and immutable samplers, and the
             // device with its pipeline cache), the key (the specialization's bytes), the key's
@@ -2771,8 +2822,19 @@ impl RenderVariant {
                 drop(ticket.settle(made));
             }));
         }
+        // Those handed to the pool, waited for a bound at most: a making still running then goes
+        // on for the draws that take it.
+        let deadline = Instant::now() + device.compile_device().policy().pipeline_creation_wait;
+        for making in &handed {
+            if making.wait_until(deadline).is_none() {
+                device.shared().counts.creation_left_making();
+            }
+        }
         // The full join: every key begun here is settled before the creation returns.
-        drop(state.0.device.shared().pipeline_pool.join_all(
+        if pieces.is_empty() {
+            return;
+        }
+        drop(device.shared().pipeline_pool.join_all(
             pieces,
             true,
             // Each key handed to the pool waits there: a draw that finds it in flight, its
@@ -2975,20 +3037,38 @@ impl RenderVariant {
             Some(formats),
             Occurrence::Made,
         );
-        let pending = ticket.pending();
         // Its creation log line numbered here, on the draw's thread in the guest's order.
         let line = state
             .0
             .log
             .as_ref()
             .map(|log| log.begin((&self.key, &self.pipeline, key, self.logged_spirv())));
-        let key = key.clone();
-        let keeping = state.0.pieces.keep(PieceHeld::Draw(
-            Arc::clone(self),
-            Arc::clone(compatible),
-            Box::new(ticket),
-        ));
-        let place = device.shared().pipeline_pool.run(Box::new(move || {
+        let handed = (key.clone(), Arc::clone(compatible), ticket);
+        DrawPipeline::Making(self.pooled(state, handed, (line, claimed), false))
+    }
+
+    /// Hand the making of `key`, `ticket`'s, to the device's pool, against `pass`, a pass of
+    /// `key.pass`, kept by `state`'s piece holds (the state's release stops a piece not started,
+    /// failing the making), logged on `line`, linked from `claimed` where the device links
+    /// libraries: a draw's making, whose specialized notices the draw announced; or, where
+    /// `at_creation`, a state creation's predicted key's, whose notices wait for its first draw
+    /// ([`first_use`](Self::first_use)), counted made. The making, to look at later, queued at
+    /// its place there.
+    fn pooled(
+        self: &Arc<Self>,
+        state: &GraphicsState,
+        (key, pass, ticket): (
+            GraphicsKey,
+            Arc<RenderPassObject>,
+            Ticket<GraphicsKey, RawPipeline>,
+        ),
+        (line, claimed): (Option<creation_log::Line>, Option<Linked>),
+        at_creation: bool,
+    ) -> Pending<RawPipeline> {
+        let pending = ticket.pending();
+        let keeping =
+            (state.0.pieces).keep(PieceHeld::Draw(Arc::clone(self), pass, Box::new(ticket)));
+        let place = (self.objects.device.shared().pipeline_pool).run(Box::new(move || {
             // Where the state let go meanwhile, the piece stops: its ticket went with the
             // state, failing the making.
             let Some((lease, held)) = keeping.start() else {
@@ -3000,11 +3080,15 @@ impl RenderVariant {
             };
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             super::pool::held::mid_making();
+            let notices = match at_creation {
+                true => Notices::FirstDraw,
+                false => Notices::Announced,
+            };
             let make = || {
                 variant.objects.graphics_pipeline(
                     &variant.pipeline,
                     &key,
-                    (&*compatible, Notices::Announced),
+                    (&*compatible, notices),
                     claimed,
                 )
             };
@@ -3012,6 +3096,10 @@ impl RenderVariant {
                 None => make(),
                 Some(line) => line.made(&variant.objects.device, make),
             };
+            if at_creation && made.is_ok() {
+                let counts = &variant.objects.device.shared().counts;
+                counts.creation_pipeline_made(crate::work_counts::Predicted::Render);
+            }
             // Its callers take it from the making: from the settle, the batches that wait
             // for it may run and complete while this piece still holds the variant and the
             // pass, and the device with them, until it gave them back. A trail spans that
@@ -3027,7 +3115,7 @@ impl RenderVariant {
             );
         }));
         pending.queued_at(place);
-        DrawPipeline::Making(pending)
+        pending
     }
 
     /// The compute `VkPipeline`s of the variant's emulated object and mesh functions under a

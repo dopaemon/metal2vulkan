@@ -2020,13 +2020,16 @@ pub enum CommandBufferError {
     /// `PageFault` on an M3 Max with 26.7 (the consumer's). Code 3 is
     /// [`CommandBufferError::PageFault`], and 11 [`CommandBufferError::DeviceLost`].
     Execution(u64),
-    /// The driver did not make the `VkPipeline` of a draw the command buffer recorded, which
-    /// its submission waited for: the runtime makes a draw's pipeline while the draw goes on
-    /// and the command buffer's batch waits for it, so the failure surfaces here, not at the
-    /// draw. The batch that records the draw, and those after it, did not run.
+    /// The driver did not make the `VkPipeline` of a dispatch the command buffer recorded (a
+    /// compute encoder's, or a render encoder's tile dispatch), which its submission waited
+    /// for: the runtime makes a dispatch's pipeline while the dispatch goes on and the command
+    /// buffer's batch waits for it, so the failure surfaces here, not at the dispatch. The batch
+    /// that records the dispatch, and those after it, did not run.
     /// [`CommandBuffer::failed_pipeline`](crate::CommandBuffer::failed_pipeline) names the
-    /// state and gives the driver's error. Metal makes a state's pipelines as it makes the state,
-    /// and has no such failure.
+    /// state and gives the driver's error. A draw's such failure drops the draw alone, the
+    /// command buffer running on
+    /// ([`CommandBuffer::dropped_draw`](crate::CommandBuffer::dropped_draw)). Metal makes a
+    /// state's pipelines as it makes the state, and has no such failure.
     PipelineCreation(PipelineCreationCause),
     /// A command of the command buffer named a buffer over the caller's host pages (a no-copy
     /// buffer, a heap over the caller's memory, or a resource placed in one) that was rebound
@@ -2200,8 +2203,10 @@ impl PipelineCreationCause {
     }
 }
 
-/// A draw's or a dispatch's `VkPipeline` the driver did not make
-/// ([`CommandBufferError::PipelineCreation`]): the command, by its encoder and its order there;
+/// A draw's or a dispatch's `VkPipeline` the driver did not make (a dispatch's failing its
+/// command buffer, [`CommandBufferError::PipelineCreation`]; a draw's dropping the draw,
+/// [`CommandBuffer::dropped_draw`](crate::CommandBuffer::dropped_draw)): the command, by its
+/// encoder and its order there;
 /// the pipeline state it ran, and the variant of that state and the specialization its pipeline
 /// took; and the error the making returned, which the command returned where the runtime made
 /// the pipeline at the command. A command buffer keeps the first, in encoding order, as Metal

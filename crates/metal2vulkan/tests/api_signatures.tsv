@@ -1384,6 +1384,7 @@ enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
 enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
+enum	metal2vulkan::device::PipelineWaitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PipelineWaitPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
@@ -2475,6 +2476,7 @@ field	metal2vulkan-runtime::WorkCounts.creation_pipelines_drawn	pub creation_pip
 field	metal2vulkan-runtime::WorkCounts.creation_pipelines_made	pub creation_pipelines_made: u64
 field	metal2vulkan-runtime::WorkCounts.creation_render_pipelines_drawn	pub creation_render_pipelines_drawn: u64
 field	metal2vulkan-runtime::WorkCounts.creation_render_pipelines_made	pub creation_render_pipelines_made: u64
+field	metal2vulkan-runtime::WorkCounts.creations_left_making	pub creations_left_making: u64
 field	metal2vulkan-runtime::WorkCounts.dedicated_memory_blocks_live	pub dedicated_memory_blocks_live: u64
 field	metal2vulkan-runtime::WorkCounts.depth_attachments_moved	pub depth_attachments_moved: u64
 field	metal2vulkan-runtime::WorkCounts.depth_instances_held	pub depth_instances_held: u64
@@ -2492,6 +2494,7 @@ field	metal2vulkan-runtime::WorkCounts.dirty_wait_nanos	pub dirty_wait_nanos: u6
 field	metal2vulkan-runtime::WorkCounts.dirty_waits	pub dirty_waits: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_waits_unanswered	pub dirty_waits_unanswered: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_pipelines_pooled	pub dispatch_pipelines_pooled: u64
+field	metal2vulkan-runtime::WorkCounts.dispatches_dropped_still_making	pub dispatches_dropped_still_making: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_settled_as_before	pub dispatches_settled_as_before: u64
@@ -2506,6 +2509,8 @@ field	metal2vulkan-runtime::WorkCounts.draw_shapes_found	pub draw_shapes_found: 
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_made	pub draw_shapes_made: u64
 field	metal2vulkan-runtime::WorkCounts.draw_shapes_reused	pub draw_shapes_reused: u64
 field	metal2vulkan-runtime::WorkCounts.draw_states_recorded	pub draw_states_recorded: u64
+field	metal2vulkan-runtime::WorkCounts.draws_dropped_still_making	pub draws_dropped_still_making: u64
+field	metal2vulkan-runtime::WorkCounts.draws_dropped_unmade	pub draws_dropped_unmade: u64
 field	metal2vulkan-runtime::WorkCounts.draws_pushing_set_zero	pub draws_pushing_set_zero: u64
 field	metal2vulkan-runtime::WorkCounts.draws_settled	pub draws_settled: u64
 field	metal2vulkan-runtime::WorkCounts.driver_diagnostics_withheld	pub driver_diagnostics_withheld: u64
@@ -3628,6 +3633,9 @@ field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: Handle
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
 field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
+field	metal2vulkan::device::DevicePolicy.pipeline_commit_wait	pub pipeline_commit_wait: Duration
+field	metal2vulkan::device::DevicePolicy.pipeline_creation_wait	pub pipeline_creation_wait: Duration
+field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: PipelineWaitPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
@@ -4889,9 +4897,12 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceTexelConversion	DeviceTexe
 macro-member	metal2vulkan-runtime::Degradation::DeviceTranscendentals	DeviceTranscendentals = "device-transcendentals";
 macro-member	metal2vulkan-runtime::Degradation::DeviceVertexConversion	DeviceVertexConversion = "device-vertex-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores = "discard-drops-simdgroup-stores";
+macro-member	metal2vulkan-runtime::Degradation::DispatchDroppedStillMaking	DispatchDroppedStillMaking = "dispatch-dropped-still-making", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareLoadTiles	DontCareLoadTiles = "dont-care-load-tiles", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStandIn	DontCareStandIn = "dont-care-stand-in", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DontCareStore	DontCareStore = "dont-care-store", Precision,
+macro-member	metal2vulkan-runtime::Degradation::DrawDroppedStillMaking	DrawDroppedStillMaking = "draw-dropped-still-making", Precision,
+macro-member	metal2vulkan-runtime::Degradation::DrawDroppedUnmade	DrawDroppedUnmade = "draw-dropped-unmade", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DrawnDepthCopy	DrawnDepthCopy = "drawn-depth-copy", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DriverPipelineCacheKept	DriverPipelineCacheKept = "driver-pipeline-cache-kept", Performance,
 macro-member	metal2vulkan-runtime::Degradation::EmulatedMeshDraws	EmulatedMeshDraws = "emulated-mesh-draws", Performance,
@@ -7464,6 +7475,7 @@ method	metal2vulkan-runtime::CommandBuffer::compute_command_encoder	pub fn compu
 method	metal2vulkan-runtime::CommandBuffer::compute_command_encoder_with_dispatch_type	pub fn compute_command_encoder_with_dispatch_type(&self, dispatch_type: DispatchType) -> Result<ComputeCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::compute_command_encoder_with_raw_dispatch_type	pub fn compute_command_encoder_with_raw_dispatch_type(&self, raw: u64) -> Result<ComputeCommandEncoder, Error>
 method	metal2vulkan-runtime::CommandBuffer::device	pub fn device(&self) -> &Device
+method	metal2vulkan-runtime::CommandBuffer::dropped_draw	pub fn dropped_draw(&self) -> Option<FailedPipeline>
 method	metal2vulkan-runtime::CommandBuffer::encode_signal_event	pub fn encode_signal_event(&self, event: EventRef<'_>, value: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::encode_signal_event_scheduled	pub fn encode_signal_event_scheduled(&self, event: &SharedEvent, value: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::CommandBuffer::encode_signal_vk_semaphore	pub unsafe fn encode_signal_vk_semaphore(&self, semaphore: vk::Semaphore) -> Result<(), Error>
@@ -12346,6 +12358,8 @@ variant	metal2vulkan::device::HostPageTexturePolicy::Shadow	Shadow
 variant	metal2vulkan::device::Independence::All	All
 variant	metal2vulkan::device::Independence::None	None
 variant	metal2vulkan::device::Independence::Only32Bit	Only32Bit
+variant	metal2vulkan::device::PipelineWaitPolicy::Bounded	Bounded
+variant	metal2vulkan::device::PipelineWaitPolicy::Exact	Exact
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
 variant	metal2vulkan::device::RenderLoweringPolicy::AtCall	AtCall
 variant	metal2vulkan::device::RenderLoweringPolicy::Worker	Worker

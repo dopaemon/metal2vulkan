@@ -113,7 +113,7 @@ impl Buffers {
     }
 
     /// Whether the output's first `n` words are `input[i] * SCALE + i`.
-    fn written(&self, n: u64) -> bool {
+    pub(super) fn written(&self, n: u64) -> bool {
         let contents = self.output.contents().unwrap();
         // SAFETY: the buffer's `COUNT * 4` bytes, which no command buffer writes now.
         let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), (COUNT * 4) as usize) };

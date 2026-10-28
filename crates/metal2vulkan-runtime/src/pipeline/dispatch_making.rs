@@ -27,11 +27,20 @@
 //!   takes its key's residual form (`render/residual.rs`); any other hands its own making to the
 //!   pool, as before (on MoltenVK the kernel's MSL library is then compiled already, so that
 //!   making is its specialization and Metal's pipeline compile).
-//!   The making runs on the creating thread and ends before the creation returns: none runs past
-//!   the state's release, which would hold the variant and the device past the program's last
-//!   drop, which Metal's never does. Its specialized notices wait for the first dispatch that
-//!   takes it, which announces them naming what it binds. A creation inside a host step, a tile
-//!   function's state and a stand-in compile make nothing here.
+//!   Under `PipelineWaitPolicy::Bounded` (the default) the making is handed to the device's pool,
+//!   kept by the state's piece holds as a dispatch's is, and the creation waits for it the
+//!   policy's `pipeline_creation_wait` (4.5 s by default) at most, as a render state's does
+//!   (`render.rs`): a driver's cold
+//!   compile holds the thread creating the state, which a host may create inside a command
+//!   buffer's encoding, no longer, and a dispatch that finds the making in flight takes it, its
+//!   command buffer waiting a bound for it in turn (`WorkCounts::creations_left_making`). A
+//!   making still running then may run past the state's release, holding the variant and the
+//!   device until it ends. Under `PipelineWaitPolicy::Exact` it runs on the creating thread and
+//!   ends before the creation returns: none runs past the state's release, which would hold the
+//!   variant and the device past the program's last drop, which Metal's never does. Its
+//!   specialized notices wait for the first dispatch that takes it, which announces them naming
+//!   what it binds. A creation inside a host step, a tile function's state and a stand-in compile
+//!   make nothing here.
 //! - **Where the request states no threadgroup, the creation predicts nothing**, because nothing
 //!   in the request answers what the dispatch will ask for. The local size is the dispatch's own
 //!   call, and a size guessed from the state instead -- Apple's guide to threadgroup sizes
@@ -70,8 +79,10 @@ use crate::degradation::{BoundFormats, Occurrence};
 use crate::error::Error;
 use crate::Device;
 use metal2vulkan::bind::{BindState, BoundSampler, Dispatch, DispatchRegion, SamplerDescriptor};
+use metal2vulkan::device::PipelineWaitPolicy;
 use metal2vulkan::pipeline::{ComputePipeline, ComputePipelineDescriptor, SlotInterface};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// A region's `VkPipeline` for a dispatch that records it later
 /// ([`Variant::begin_region_pipeline`]).
@@ -150,7 +161,7 @@ impl Variant {
                 self.announce(&key, formats);
                 let residual = self.residual_made(&key, formats);
                 let pending = ticket.pending();
-                pending.queued_at(self.pooled(holds, key, ticket));
+                pending.queued_at(self.pooled(holds, key, ticket, false));
                 match residual {
                     // Handed to the pool: nothing waits for the making.
                     Some(made) => {
@@ -212,13 +223,21 @@ impl Variant {
         }
     }
 
-    /// Make, on this thread, the `VkPipeline` of the region a first dispatch of a state of
-    /// `descriptor` on this variant, its base, is predicted to take (the module docs), where no
-    /// caller made or began it: its notices wait for the first dispatch that takes it. A
+    /// Make the `VkPipeline` of the region a first dispatch of a state of `descriptor` on this
+    /// variant, its base, is predicted to take (the module docs), where no caller made or began
+    /// it: its notices wait for the first dispatch that takes it. Under
+    /// `PipelineWaitPolicy::Bounded` handed to the device's pool, kept by `holds`, the state's,
+    /// and waited for the policy's `pipeline_creation_wait` at most; under `Exact` made on this
+    /// thread. A
     /// descriptor that requires no threadgroup size predicts no region at all, and a prediction
     /// the plan refuses or that runs on another variant makes nothing; a failed making is not
     /// kept and refuses nothing, its dispatch meeting it as before.
-    pub(super) fn make_at_creation(&self, device: &Device, descriptor: &ComputePipelineDescriptor) {
+    pub(super) fn make_at_creation(
+        self: &Arc<Self>,
+        device: &Device,
+        descriptor: &ComputePipelineDescriptor,
+        holds: &Arc<PieceHolds<RegionHeld>>,
+    ) {
         if crate::exit_guard::in_host_step() {
             return;
         }
@@ -228,6 +247,19 @@ impl Variant {
         let Begun::Yours(ticket) = self.pipelines.begin(&key) else {
             return;
         };
+        let policy = device.compile_device().policy();
+        if policy.pipeline_waits == PipelineWaitPolicy::Bounded {
+            let pending = ticket.pending();
+            pending.queued_at(self.pooled(holds, key, ticket, true));
+            // A making still running at the bound goes on for the dispatches that take it.
+            if pending
+                .wait_until(Instant::now() + policy.pipeline_creation_wait)
+                .is_none()
+            {
+                device.shared().counts.creation_left_making();
+            }
+            return;
+        }
         let made = self
             .objects
             .pipeline(&key, Notices::FirstDraw)
@@ -269,12 +301,15 @@ impl Variant {
     }
 
     /// Hand the making of `key`, `ticket`'s, to the device's pool, kept by `holds`: a
-    /// dispatch's, which announced its notices. Where it waits there.
+    /// dispatch's, which announced its notices, or the creation's where `at_creation`, whose
+    /// notices wait for the first dispatch that takes it, counted as the creation's making. Where
+    /// it waits there.
     fn pooled(
         self: &Arc<Self>,
         holds: &Arc<PieceHolds<RegionHeld>>,
         key: RegionKey,
         ticket: Ticket<RegionKey, RawPipeline>,
+        at_creation: bool,
     ) -> Place {
         let keeping = holds.keep(RegionHeld::Making(Arc::clone(self), key, Box::new(ticket)));
         let device = self.objects.device.clone();
@@ -288,10 +323,18 @@ impl Variant {
                 RegionHeld::Making(variant, key, ticket) => (variant, key, *ticket),
                 other => return lease.give_back(other, None),
             };
+            let notices = match at_creation {
+                true => Notices::FirstDraw,
+                false => Notices::Announced,
+            };
             let made = variant
                 .objects
-                .pipeline(&key, Notices::Announced)
+                .pipeline(&key, notices)
                 .map(|made| made.kept_at(&variant.objects, kept::Place::Region(key.clone())));
+            if at_creation && made.is_ok() {
+                let counts = &variant.objects.device.shared().counts;
+                counts.creation_pipeline_made(crate::work_counts::Predicted::Dispatch);
+            }
             // Its callers take it from the making: from the settle, the batches that wait for it
             // may run and complete while this piece still holds the variant, and the device with
             // it, until it gave it back. A trail spans that (`trails.rs`).

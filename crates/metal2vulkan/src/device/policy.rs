@@ -2,14 +2,16 @@
 //! decide a `DeviceProfile`.
 
 use crate::device::profile::{GuestIsolation, HandleDomain, PointerDomain};
+use std::time::Duration;
 
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `completion`,
-/// `batch_order`, `render_lowering` and `host_page_textures` can change emitted code, so the
-/// profile carries it (containment as the encoding it selects) and its fingerprint covers it; those
-/// five are the runtime's alone (a heap's compressed texture's image, when the host sees a command
+/// `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
+/// `pipeline_creation_wait` and `pipeline_commit_wait` can change emitted code, so the profile
+/// carries it (containment as the encoding it selects) and its fingerprint covers it; those eight
+/// are the runtime's alone (a heap's compressed texture's image, when the host sees a command
 /// buffer complete, how a batch begins after the earlier ones of its queue, where a render
-/// encoder's calls are lowered, and what holds a sampled texture over host pages), and no profile
-/// carries them.
+/// encoder's calls are lowered, what holds a sampled texture over host pages, and whether and how
+/// long a pipeline the driver is still making is waited for), and no profile carries them.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -53,6 +55,25 @@ pub struct DevicePolicy {
     /// without `shaderFloat16`, rounds where a value leaves it (the default) or at each operation.
     /// Changes emitted code: the profile carries it.
     pub half_chains: HalfChainPolicy,
+    /// Whether a render or compute state's creation, and a committed command buffer, wait a
+    /// bound for a pipeline the driver is still making, the command buffer then dropping the
+    /// draws and dispatches whose pipeline is not made (the default), or until it is made. The
+    /// bounds are the two fields below. The runtime's choice alone: no emitted code changes.
+    pub pipeline_waits: PipelineWaitPolicy,
+    /// Under [`PipelineWaitPolicy::Bounded`], the longest a render or compute state's creation
+    /// waits for the pipelines it hands to the runtime's pool, one deadline for all of them from
+    /// the wait's start: then it returns, the makings going on. 4.5 s by default, so a host call that
+    /// both creates a state and commits a command buffer (a guest's FIFO step may) waits 9 s at
+    /// most for the driver's makings, under a guest's 10 s check of its FIFO. Unread under
+    /// `Exact`. The runtime's alone: no emitted code changes.
+    pub pipeline_creation_wait: Duration,
+    /// Under [`PipelineWaitPolicy::Bounded`], how long after its commit a command buffer waits
+    /// for the pipelines of its commands the driver is still making: one deadline, its commit plus
+    /// this, which its draws, compute dispatches, tile dispatches and execution replays share,
+    /// wherever they record (in its `commit`, or on the runtime's scheduler thread), past which
+    /// each such command records as nothing. 4.5 s by default (as the creation wait, above). Unread
+    /// under `Exact`. The runtime's alone: no emitted code changes.
+    pub pipeline_commit_wait: Duration,
 }
 
 impl DevicePolicy {
@@ -60,7 +81,8 @@ impl DevicePolicy {
     /// compressed image of a heap's texture Metal keeps compressed, command buffers ready together
     /// in one kernel submission, batches of one queue ordered by their ends where the driver runs
     /// them one after another, and a sampled
-    /// texture over host pages in place where the device's check passed.
+    /// texture over host pages in place where the device's check passed, and a pipeline still
+    /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit).
     pub const UNTRUSTED: DevicePolicy = DevicePolicy {
         pointer_domain: PointerDomain::ResidentTable,
         handle_domain: HandleDomain::Table,
@@ -72,6 +94,9 @@ impl DevicePolicy {
         render_lowering: RenderLoweringPolicy::AtCall,
         host_page_textures: HostPageTexturePolicy::InPlace,
         half_chains: HalfChainPolicy::AtExits,
+        pipeline_waits: PipelineWaitPolicy::Bounded,
+        pipeline_creation_wait: Duration::from_millis(4500),
+        pipeline_commit_wait: Duration::from_millis(4500),
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -82,9 +107,10 @@ impl DevicePolicy {
     /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), each render encoder
     /// call lowered inside the call, which returns every refusal
     /// ([`RenderLoweringPolicy::AtCall`]), every texture over host pages a shadow, whose
-    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]), and each `half`
-    /// operation rounded on a device without `shaderFloat16` ([`HalfChainPolicy::EachOperation`]).
-    /// Every other field is kept.
+    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]), each `half`
+    /// operation rounded on a device without `shaderFloat16` ([`HalfChainPolicy::EachOperation`]),
+    /// and a render state's predicted pipeline made at its creation, each draw's pipeline waited
+    /// for until it is made ([`PipelineWaitPolicy::Exact`]). Every other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -93,6 +119,7 @@ impl DevicePolicy {
             render_lowering: RenderLoweringPolicy::AtCall,
             host_page_textures: HostPageTexturePolicy::Shadow,
             half_chains: HalfChainPolicy::EachOperation,
+            pipeline_waits: PipelineWaitPolicy::Exact,
             ..self
         }
     }
@@ -265,4 +292,49 @@ pub enum HalfChainPolicy {
     AtExits,
     /// Every operation's result rounded to `half`, as the AIR computes it.
     EachOperation,
+}
+
+/// How long the runtime waits for a draw's `VkPipeline` the driver is still making. Metal makes a
+/// render state's pipeline inside `newRenderPipelineState`, so no command buffer of Metal's waits
+/// for a compile, and no draw of a state that was made is dropped. The runtime makes a state's
+/// pipelines on its pool while the draws that need them go on (a draw's own key, and a state's
+/// predicted key), so a command buffer committed before one is made waits for it. A driver's cold
+/// compile (MoltenVK on a cold Metal compiler service) can take seconds, past a guest's watchdog,
+/// where a host that creates a state lazily inside a command buffer's encoding would wait inside
+/// it. The runtime's choice alone: no emitted code changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PipelineWaitPolicy {
+    /// The default. A render or compute state's creation hands the making of its predicted
+    /// pipeline to the runtime's pool and waits for it [`DevicePolicy::pipeline_creation_wait`] at
+    /// most (4.5 s by default), then returns with it still being made; a committed command buffer
+    /// waits for its draws' and dispatches' (a compute encoder's, a render pass's tile
+    /// dispatches, an execution replay's draws) pipelines still being made until its commit plus
+    /// [`DevicePolicy::pipeline_commit_wait`] at most (4.5 s by default), one deadline its
+    /// commands share, then records those commands as nothing, the command buffer running on,
+    /// each counted, the first named, announced `draw-dropped-still-making` or
+    /// `dispatch-dropped-still-making`. Later command buffers draw and dispatch with each pipeline
+    /// once made.
+    ///
+    /// What one call blocks for, waiting for the driver's makings: a state's creation, its
+    /// creation wait; a `commit`, which records there what it can (a pass whose pipelines are
+    /// made, an execution of render commands the CPU writes, which waits for its pipelines), until
+    /// its own deadline at most (the moment it committed plus its commit wait), whatever earlier
+    /// command buffers wait for (their deadlines are earlier); every other recording runs on the
+    /// runtime's scheduler thread, which no program call waits for. A creation waits on no command buffer's
+    /// deadline and a commit on no creation's, so a host call that creates a state and commits a
+    /// command buffer waits their sum at most: 9 s by default. Made until made, under this value
+    /// too, where the call that makes them waits for them: a draw that records nothing (no
+    /// vertices or instances, or culled whole), a draw in a pass of custom sample positions, and
+    /// one recorded again into another instance of its pass (an extended-range color's `half`
+    /// shadow starting), each in the draw's call or in an execution's replay; a device replay's
+    /// draws (an execution of render commands the GPU may write, recorded on the GPU), in its
+    /// `commit`; and a making that failed, made again by its command's recording.
+    #[default]
+    Bounded,
+    /// A render or compute state's creation makes its predicted pipeline before it returns, as
+    /// Metal compiles there, and a committed command buffer waits for each of its draws' and
+    /// dispatches' pipelines until it is made: no command is dropped for its making's time.
+    Exact,
 }

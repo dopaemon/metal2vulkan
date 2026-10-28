@@ -21,6 +21,7 @@ use crate::{
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ShaderCacheOptions, Size,
     StoreAction, Texture, TextureDescriptor,
 };
+use metal2vulkan::device::PipelineWaitPolicy;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use std::alloc::Layout;
@@ -67,7 +68,7 @@ impl Drop for Scratch {
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
 /// in `cache`.
 fn device(cache: &Path) -> Device {
-    let options = DeviceOptions {
+    let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -82,6 +83,10 @@ fn device(cache: &Path) -> Device {
         },
         ..DeviceOptions::default()
     };
+    // The held making is waited for until it is made, whatever the hold's length: under
+    // `PipelineWaitPolicy::Bounded` a draw whose making is held past its command buffer's bound
+    // runs nothing (`tests/deferred_calls.rs` takes that form).
+    options.policy.pipeline_waits = PipelineWaitPolicy::Exact;
     Device::system_default_with(&options).unwrap()
 }
 

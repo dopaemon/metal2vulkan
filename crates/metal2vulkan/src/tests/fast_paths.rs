@@ -7,7 +7,7 @@
 
 use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, HalfChainPolicy, HeapCompressionPolicy,
-    HostPageTexturePolicy, RenderLoweringPolicy,
+    HostPageTexturePolicy, PipelineWaitPolicy, RenderLoweringPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -59,12 +59,17 @@ fn choices() -> Vec<Choice> {
         // The accuracy choices, below.
         // The runtime's: a heap's compressed texture's image, when the host sees a command buffer
         // complete, how a batch begins after the earlier ones of its queue, where a render
-        // encoder's calls are lowered, and what holds a sampled texture over host pages.
+        // encoder's calls are lowered, what holds a sampled texture over host pages, and whether and
+        // how long a pipeline being made is waited for (the bounds' values:
+        // `the_ledger_states_the_pipeline_wait_bounds`).
         heap_compression: _,
         completion: _,
         batch_order: _,
         render_lowering: _,
         host_page_textures: _,
+        pipeline_waits: _,
+        pipeline_creation_wait: _,
+        pipeline_commit_wait: _,
         // The translator's: how a `half` chain rounds without `shaderFloat16`.
         half_chains: _,
     } = p;
@@ -75,6 +80,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.render_lowering: RenderLoweringPolicy { AtCall, Worker }),
         choice!(p.host_page_textures: HostPageTexturePolicy { InPlace, Shadow }),
         choice!(p.half_chains: HalfChainPolicy { AtExits, EachOperation }),
+        choice!(p.pipeline_waits: PipelineWaitPolicy { Bounded, Exact }),
     ]
 }
 
@@ -466,4 +472,54 @@ fn exact_answers_shadow_every_texture_over_host_pages() {
         DevicePolicy::UNTRUSTED.exact_answers().host_page_textures,
         HostPageTexturePolicy::Shadow
     );
+}
+
+/// The runtime's choice of how long a draw's pipeline being made is waited for (`pipeline_waits`)
+/// moves no committed profile's fingerprint: no profile carries it, so no translation follows it.
+#[test]
+fn the_runtime_s_pipeline_waits_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let bounded = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let exact = committed_profiles_with(DevicePolicy {
+        pipeline_waits: PipelineWaitPolicy::Exact,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(bounded.len(), exact.len());
+    for ((stem, b), (other, e)) in bounded.iter().zip(&exact) {
+        assert_eq!(stem, other);
+        assert_eq!(b.fingerprint(), e.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` waits for every draw's pipeline until it is made, and the
+/// default waits a bound.
+#[test]
+fn exact_answers_wait_for_every_pipeline() {
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.pipeline_waits,
+        PipelineWaitPolicy::Bounded
+    );
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().pipeline_waits,
+        PipelineWaitPolicy::Exact
+    );
+}
+
+/// The ledger's row of the pipeline waits states each bound as the default policy sets it, as
+/// `field = N s`: a changed bound changes its row.
+#[test]
+fn the_ledger_states_the_pipeline_wait_bounds() {
+    let ledger = text("../../docs/FAST-PATHS.md");
+    let p = DevicePolicy::UNTRUSTED;
+    for (field, bound) in [
+        ("pipeline_creation_wait", p.pipeline_creation_wait),
+        ("pipeline_commit_wait", p.pipeline_commit_wait),
+    ] {
+        let named = format!("{field} = {} s", bound.as_secs_f64());
+        assert!(
+            ledger.contains(&named),
+            "docs/FAST-PATHS.md does not state `{named}`, the default's bound"
+        );
+    }
 }

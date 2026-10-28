@@ -305,7 +305,9 @@ use crate::indirect_execute::{self, unstrided_buffer, ExecutionRange};
 use crate::pipeline::budget::Urgency;
 use crate::pipeline::RenderPipelineState;
 use crate::pipeline::Settled;
-use crate::pipeline::{BufferForms, FixedState, GraphicsKey, RawPipeline, RenderVariant};
+use crate::pipeline::{
+    BufferForms, DrawPipeline, FixedState, GraphicsKey, Pending, RawPipeline, RenderVariant,
+};
 use crate::rate_mapped_pass::RateMappedPass;
 use crate::render_pass::{ColorTarget, PassLayout, Target};
 use crate::render_state::EncoderState;
@@ -341,6 +343,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 mod ahead;
 mod cause;
@@ -757,6 +760,7 @@ impl RenderLowering {
                 .map_or(IndirectCommandCheckNeeds::ALL, |(_, needs)| *needs),
             check: check.map(|(check, _)| Mutex::new(check)),
             read_at: AtomicU64::new(indirect_execute::NOT_READ),
+            encoder: self.core.command_buffer().state().open_encoder_place(),
         });
         // Its commands may name any pipeline state, reading handles in any stage.
         self.command_encoded(every_render_stage());
@@ -959,6 +963,9 @@ pub(crate) struct RenderExecution {
     /// read them after (`IndirectCommandBuffer::cpu_writes`); `indirect_execute::NOT_READ` until
     /// then ([`rewritten`](Self::rewritten)).
     read_at: AtomicU64,
+    /// Its encoder's place among the command buffer's ended encoders, which names a draw of its
+    /// commands that its replay drops (`CommandBuffer::drop_late_draw`).
+    encoder: usize,
 }
 
 /// The encoder's state an execution's draws take: as the call found it, its tables only where
@@ -1784,8 +1791,9 @@ fn object_threadgroup_lengths(record: &CommandRecord) -> BTreeMap<u32, u32> {
 
 /// What an execution's settle at commit made for its host step's draw of one primitive type: the
 /// variant, and the draw's `VkPipeline` in the execution's instance where the settle could make
-/// it. The command buffer holds them until it completes.
-pub(crate) type SettledDraw = (Arc<RenderVariant>, Option<Arc<RawPipeline>>);
+/// it, made or being made on the device's pool (`RenderVariant::settle_graphics_pipeline`). The
+/// command buffer holds them until it completes.
+pub(crate) type SettledDraw = (Arc<RenderVariant>, Option<DrawPipeline>);
 
 impl RenderLowering {
     /// Make, into `made`, what a command's draw of `pipeline` under the encoder's state (an
@@ -1946,9 +1954,14 @@ impl RenderLowering {
             &|k| plan.specialized_value(k),
             Some(&formats),
         );
-        let raw = variant.graphics_pipeline(&key, &self.current.compatible, (state, &formats))?;
-        variant.first_use(&raw, &key.specialization, &formats);
-        Ok((variant, Some(raw)))
+        let device = self.core.device();
+        let compatible = &self.current.compatible;
+        let drawn =
+            variant.settle_graphics_pipeline(device, &key, compatible, (state, &formats))?;
+        if let DrawPipeline::Made(raw) = &drawn {
+            variant.first_use(raw, &key.specialization, &formats);
+        }
+        Ok((variant, Some(drawn)))
     }
 }
 
@@ -2384,6 +2397,7 @@ impl RenderExecution {
             draw_calls: 0,
             tile_dispatch_calls: 0,
             replaying: true,
+            executing_encoder: Some(self.encoder),
             rerouting: false,
             forms,
             replayed: None,
@@ -2636,6 +2650,10 @@ pub(crate) struct DeferredPass {
     shadows: Vec<Arc<ShadowCopies>>,
     /// What the commit made ahead for the host step that records it (`ahead.rs`), once made.
     ahead: OnceLock<Arc<Ahead>>,
+    /// The makings its executions' settle at commit handed to the device's pool
+    /// ([`settle`](Self::settle)), which its host step waits for, until its command buffer's bound
+    /// at most, as for its draws' pipelines.
+    settled: Mutex<Vec<Pending<RawPipeline>>>,
     /// Where `commit` recorded the pass with executions in their GPU form (`gpu.rs`), what each
     /// such execution's buffer's records may hold as the decision found it: a route encoded
     /// since that adds to it sends the pass to the host step ([`outgrown`](Self::outgrown)),
@@ -2715,6 +2733,7 @@ impl DeferredPass {
             bare,
             shadows,
             ahead: OnceLock::new(),
+            settled: Mutex::new(Vec::new()),
             on_gpu: Mutex::new(Vec::new()),
             cause: Mutex::new(None),
         }
@@ -2741,15 +2760,19 @@ impl DeferredPass {
             .any(|execution| execution.icb.gpu_written() || execution.range.indirect())
     }
 
-    /// Whether a pipeline one of its draws or tile dispatches records is still being made.
+    /// Whether a pipeline one of its draws or tile dispatches records is still being made, or one
+    /// its executions' settle handed to the device's pool ([`settle`](Self::settle)).
     pub(crate) fn making(&self) -> bool {
         self.pending.iter().any(|draw| !draw.made())
             || self.steps.tile_pipelines().any(TilePipelines::making)
+            || lock(&self.settled)
+                .iter()
+                .any(|pending| pending.outcome().is_none())
     }
 
-    /// Whether the making of a pipeline one of its draws records failed: its recording fails
-    /// the command buffer, which a host step does (`render/pending.rs`); or one of its tile
-    /// dispatches', which its recording makes again (`render/pending_tile.rs`).
+    /// Whether the making of a pipeline one of its draws records failed: its recording, which a
+    /// host step does, drops the draw (`render/pending.rs`); or one of its tile dispatches',
+    /// which its recording makes again (`render/pending_tile.rs`).
     pub(crate) fn failed(&self) -> bool {
         self.pending.iter().any(PendingDraw::failed)
             || self.steps.tile_pipelines().any(TilePipelines::failed)
@@ -2787,14 +2810,28 @@ impl DeferredPass {
     }
 
     /// Wait until every pipeline its draws and tile dispatches record is made, or failed, each
-    /// making hastened first (`pipeline/pool.rs`).
-    pub(crate) fn wait_made(&self) {
+    /// making hastened first (`pipeline/pool.rs`), until `deadline` at most, its command buffer's
+    /// bound, past which its recording drops the draw or tile dispatch (`render/pending.rs`,
+    /// `render/pending_tile.rs`).
+    pub(crate) fn wait_made(&self, deadline: Option<Instant>) {
         self.hasten(Urgency::Committed);
         for draw in &self.pending {
             // Its outcome is the recording's to read.
-            drop(draw.pipeline.wait());
+            match deadline {
+                Some(deadline) => drop(draw.pipeline.wait_until(deadline)),
+                None => drop(draw.pipeline.wait()),
+            }
         }
-        self.steps.tile_pipelines().for_each(TilePipelines::wait);
+        for tile in self.steps.tile_pipelines() {
+            tile.wait(deadline);
+        }
+        let settled = lock(&self.settled).clone();
+        for pending in &settled {
+            match deadline {
+                Some(deadline) => drop(pending.wait_until(deadline)),
+                None => drop(pending.wait()),
+            }
+        }
     }
 
     /// Run the makings of the pipelines its draws and tile dispatches record before the
@@ -2805,6 +2842,9 @@ impl DeferredPass {
         }
         for tile in self.steps.tile_pipelines() {
             tile.hasten(urgency);
+        }
+        for pending in lock(&self.settled).iter() {
+            pending.hasten(urgency);
         }
     }
 
@@ -2817,6 +2857,10 @@ impl DeferredPass {
         }
         for tile in self.steps.tile_pipelines() {
             tile.when_made(waker);
+        }
+        for pending in lock(&self.settled).iter() {
+            let waker = waker.clone();
+            pending.when_finished(Box::new(move |_| waker()));
         }
     }
 
@@ -2896,7 +2940,7 @@ impl DeferredPass {
             }
         }
         drop(core);
-        self.wait_made();
+        self.wait_made(command_buffer.making_deadline());
         if self.making() || self.failed() {
             let rule = "a pipeline state the pass draws with is being made or failed to make";
             return declined(HostStepCause::Rule(rule));
@@ -3300,10 +3344,14 @@ impl DeferredPass {
     /// draws of each state its records may name, the encoder's where its buffer inherits it,
     /// else those made with `supportIndirectCommandBuffers` alive now. Each such state's creation
     /// compiled its variant in the large-buffer form, which the commit looks up, and the commit
-    /// makes the `VkPipeline`s; it compiles a variant only where the encoder's state asks for
-    /// another, and the step only where a command's own buffers or strides ask for another, or
-    /// the draw records into a run of another shape. Returns what it made, which the command buffer
-    /// holds until it completes; what it cannot settle, the step meets as it is then.
+    /// begins the `VkPipeline`s: under `PipelineWaitPolicy::Bounded` (the default) each making is
+    /// handed to the device's pool (`RenderVariant::settle_graphics_pipeline`), kept here for the
+    /// host step to wait for until its command buffer's bound at most, so the commit compiles none
+    /// on the program's thread; under `Exact` made now. It compiles a variant only where the
+    /// encoder's state asks for another, and the step only where a command's own buffers or
+    /// strides ask for another, or the draw records into a run of another shape. Returns what it
+    /// made, which the command buffer holds until it completes; what it cannot settle, the step
+    /// meets as it is then.
     pub(crate) fn settle(&self, command_buffer: &CommandBuffer) -> Vec<SettledDraw> {
         let mut made = Vec::new();
         let Ok(residency) = command_buffer.residency() else {
@@ -3324,6 +3372,11 @@ impl DeferredPass {
             let inputs = (self.storage.clone(), &residency);
             core = execution.settle(core, inputs, &states, &mut made);
         }
+        // The makings handed to the pool, which the host step waits for.
+        lock(&self.settled).extend(made.iter().filter_map(|(_, drawn)| match drawn {
+            Some(DrawPipeline::Making(pending)) => Some(pending.clone()),
+            _ => None,
+        }));
         made
     }
 

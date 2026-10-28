@@ -254,12 +254,12 @@ impl Deferred {
                 })
             }
             // A pass of draws whose pipelines are being made, or one of which failed, is
-            // recorded by a host step once they are made, which fails the command buffer for a
-            // failed one (`render/pending.rs`). One whose executions read the CPU's records as
+            // recorded by a host step once they are made, which drops the draw of a failed one
+            // (`render/pending.rs`). One whose executions read the CPU's records as
             // they stand now waits for them first.
             Deferred::RenderPass(pass) => {
                 if pass.reads_at_commit() {
-                    pass.wait_made();
+                    pass.wait_made(command_buffer.making_deadline());
                 }
                 if pass.making() || pass.failed() {
                     return Ok(Prepared {
@@ -464,9 +464,11 @@ impl Deferred {
         }
     }
 
-    /// Whether the making of a pipeline the work records failed, which its recording makes again,
-    /// on the thread that records it (`DeferredPass::failed`, `PendingDispatch::failed`): where
-    /// that fails too the command buffer completes with `CommandBufferError::PipelineCreation`.
+    /// Whether the making of a pipeline the work records failed (`DeferredPass::failed`,
+    /// `PendingDispatch::failed`): a dispatch's, which its recording makes again, on the thread
+    /// that records it, the command buffer completing with
+    /// `CommandBufferError::PipelineCreation` where that fails too; a draw's, which its
+    /// recording drops (`render/pending.rs`).
     pub(super) fn failed(&self) -> bool {
         match self {
             Deferred::RenderPass(pass) => pass.failed(),

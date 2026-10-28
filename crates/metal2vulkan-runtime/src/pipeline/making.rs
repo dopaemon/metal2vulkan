@@ -32,6 +32,7 @@ use crate::device::lock;
 use crate::error::{internal, Error};
 use std::hash::Hash;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Instant;
 
 /// A memo of objects made on demand, each made once at a time (the module docs).
 pub(crate) struct Making<K, V> {
@@ -138,6 +139,31 @@ impl<V> Turn<V> {
                 .done
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// [`wait`](Self::wait), but no later than `deadline`: `None` where the making had not
+    /// finished by then.
+    fn wait_until(&self, deadline: Instant) -> Option<Outcome<V>> {
+        debug_assert!(
+            !super::budget::holds_turn(),
+            "a making waited for another while holding a budget turn"
+        );
+        self.hasten(match crate::exit_guard::in_host_step() {
+            true => Urgency::HostStep,
+            false => Urgency::Program,
+        });
+        let mut state = lock(&self.state);
+        loop {
+            if let TurnState::Finished(outcome) = &*state {
+                return Some(outcome.clone());
+            }
+            let left = deadline.checked_duration_since(Instant::now())?;
+            state = self
+                .done
+                .wait_timeout(state, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
         }
     }
 
@@ -289,6 +315,12 @@ impl<V> Pending<V> {
     /// Its outcome, waiting until it finished, hastened meanwhile (the module docs).
     pub(crate) fn wait(&self) -> Result<Arc<V>, Error> {
         self.turn.wait()
+    }
+
+    /// [`wait`](Self::wait), but no later than `deadline`: `None` where it had not finished by
+    /// then (a command buffer's bound for the pipelines it draws with, `render/pending.rs`).
+    pub(crate) fn wait_until(&self, deadline: Instant) -> Option<Result<Arc<V>, Error>> {
+        self.turn.wait_until(deadline)
     }
 
     /// It waits at `place` in the device's pool.

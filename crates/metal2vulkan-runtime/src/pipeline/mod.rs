@@ -748,9 +748,11 @@ impl ComputePipelineState {
             device.keep_room();
         }
         // Its first dispatch's predicted `VkPipeline`, made where Metal compiles
-        // (`dispatch_making.rs`). A stand-in compile is never dispatched.
+        // (`dispatch_making.rs`), a making the pool runs kept by the state's piece holds. A
+        // stand-in compile is never dispatched.
+        let pieces = piece_holds::PieceHolds::new();
         if let (Kernel::Compute(descriptor), false) = (&kernel, stand_in) {
-            base.make_at_creation(device, descriptor);
+            base.make_at_creation(device, descriptor, &pieces);
         }
         device.degrade_absent_reads(&base.shared_pipeline().dependencies, |_| {
             function.function.info().name.to_string()
@@ -795,7 +797,7 @@ impl ComputePipelineState {
                 folded_refused: AtomicBool::new(false),
                 added_unsupported,
                 label: options.label.clone(),
-                pieces: piece_holds::PieceHolds::new(),
+                pieces,
                 at_bind_views,
                 planned: Mutex::new(None),
             };

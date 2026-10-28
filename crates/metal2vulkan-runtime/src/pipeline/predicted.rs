@@ -1,11 +1,11 @@
-//! The `VkPipeline` a render state's first draw is predicted to take, made inside its creation,
+//! The `VkPipeline` a render state's first draw is predicted to take, begun inside its creation,
 //! where Metal compiles.
 //!
 //! Metal pays a render state's compile inside `newRenderPipelineState`, outside any command
 //! buffer. The runtime made a state's `VkPipeline`s at its draws, so on MoltenVK a cold making of
 //! seconds sat inside a command buffer's execution, past a guest's GPU watchdog. A state's
-//! creation now makes, synchronously, the `VkPipeline` of the key a first draw takes under
-//! Metal's defaults, built from the state alone:
+//! creation now begins the making of the `VkPipeline` of the key a first draw takes under Metal's
+//! defaults, built from the state alone (where it runs: the end of these docs):
 //!
 //! - **The variant** the base, where the plan of a draw binding the vertex buffers alone (below)
 //!   runs on it (a variant only a draw needs is made by that draw, as before); **the
@@ -68,9 +68,15 @@
 //! state. A draw whose key the creation did not make makes its own, as before's records of the
 //! driver's data still serve that making where the same pipeline was made before.
 //!
-//! The predicted key's making runs on the creating thread, joined before the creation returns
-//! (`RenderVariant::make_at_creation`), at the rank of a making the program waits for. A key
-//! predicted on the early-tests variant (above) is made there, on that variant.
+//! Under `PipelineWaitPolicy::Exact` the predicted key's making runs on the creating thread,
+//! joined before the creation returns (`RenderVariant::make_at_creation`), at the rank of a
+//! making the program waits for. Under `PipelineWaitPolicy::Bounded` (the default) it is handed to
+//! the device's pool, kept by the state as a draw's making is, and the creation returns: a host
+//! that creates a state inside a command buffer's encoding (a guest's state looked up there
+//! first) is not held by a driver's cold compile, measured at 11.6 s on MoltenVK with a cold
+//! Metal compiler service. The first draw takes the making in flight, and its command buffer
+//! waits a bound for it (`render/pending.rs`). A key predicted on the early-tests variant (above)
+//! is made there, on that variant.
 
 use super::graphics::{FixedState, GraphicsKey};
 use super::render::{GraphicsState, RenderVariant, StateDescriptor};

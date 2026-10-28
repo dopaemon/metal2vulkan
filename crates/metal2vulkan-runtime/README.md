@@ -331,6 +331,30 @@ runtime failed it. What a translated shader reports (a resident-set miss, for on
 the run, not an error: `CommandBuffer::execution_report` reads it once the command buffer
 completed.
 
+A draw whose pipeline the driver did not make after the draw returned (the runtime makes a draw's
+pipeline while the draw goes on) runs nothing, and its command buffer runs on without error:
+`CommandBuffer::dropped_draw` names the first, counted: `WorkCounts::draws_dropped_unmade`. A
+dispatch's such failure fails its command buffer (`CommandBufferError::PipelineCreation`,
+`CommandBuffer::failed_pipeline`).
+
+A draw or dispatch (a compute encoder's, a render pass's tile dispatch, an execution replay's
+draw) whose pipeline the driver is still making `DevicePolicy::pipeline_commit_wait` (4.5 s by
+default) after its command buffer's commit runs nothing too (`PipelineWaitPolicy::Bounded`, the
+default; a render or compute state's creation likewise waits `DevicePolicy::pipeline_creation_wait`,
+4.5 s by default, at most for the pipeline it hands to the runtime's pool), its command buffer
+running on, and the command buffers after it draw and dispatch with the pipeline once made. One
+call so waits for the driver's makings at most: a state's creation, its creation wait; a `commit`,
+until its commit plus its commit wait (its commands share that one deadline, and the commit records
+there only what it can, an execution of render commands the CPU writes among them); neither waits
+on the other's bound, so a host step that creates a state and commits waits 9 s at most by default,
+under a guest's 10 s FIFO check. Made until made under either value, in the call that makes them: a
+draw that records nothing, a draw in a pass of custom sample positions or recorded again into
+another instance of its pass (in the draw's call or an execution's replay), a device replay's draws
+(in its `commit`), and a making that failed, made again by its command's recording. `dropped_draw`
+names the first with the error `VK_TIMEOUT`, counted: `WorkCounts::draws_dropped_still_making` and
+`dispatches_dropped_still_making`, announced `draw-dropped-still-making` and
+`dispatch-dropped-still-making`. `PipelineWaitPolicy::Exact` waits until the pipeline is made.
+
 ## Degrade notices
 
 Where the runtime gives Metal's answer only at a cost Metal does not pay (a copy, a scratch

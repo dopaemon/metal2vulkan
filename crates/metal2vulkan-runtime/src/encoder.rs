@@ -161,6 +161,14 @@ impl Segment {
         (!self.stepped && self.work.making()) || self.work.holds()
     }
 
+    /// [`steps_after_pipelines`](Self::steps_after_pipelines) once its command buffer's bound
+    /// passed (`CommandBuffer::making_deadline`): its step records a draw or dispatch whose
+    /// pipeline is still being made as nothing, so its batch waits only for what its step left
+    /// (`Deferred::holds`).
+    pub(super) fn holds(&self) -> bool {
+        self.work.holds()
+    }
+
     /// Whether it is a dispatch whose pipelines were being made (`pending_dispatch.rs`): an
     /// encoder encoded again (`replay.rs`) leaves one of its own in its place, prepared as the
     /// commit prepared this one, and waits for no making.

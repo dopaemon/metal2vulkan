@@ -71,7 +71,7 @@ use super::dirty_pages::DirtyCommit;
 use super::encoder::{Recorded, Segment};
 use super::error::{
     internal, invalid, vulkan, CommandBufferError, DeadlockCause, EncoderCall, Error,
-    FailedPipeline, MeshRecordsOverflow, PipelineCreationCause, Problem,
+    FailedPipeline, FailedState, MeshRecordsOverflow, PipelineCreationCause, Problem,
     TessellationRecordsOverflow, TimedOut,
 };
 use super::event::{EventRef, EventShared, SharedEvent};
@@ -119,6 +119,7 @@ use metal2vulkan::bind::{
     ExecutionStatus, IndexBoundsPass, ReplayFaults, ResidentRange, ResidentSet, RootTable,
     StatusReport,
 };
+use metal2vulkan::device::PipelineWaitPolicy;
 use metal2vulkan::error::{Feature, Unsupported};
 use metal2vulkan::metal::DispatchType;
 use own::{
@@ -224,6 +225,14 @@ pub(super) struct CommandBufferShared {
     /// The numbers its host steps give the variant instances they make, drawn at its commit in
     /// the program's call (`pipeline/kept.rs`).
     step_numbers: OnceLock<StepNumbers>,
+    /// Until when its recordings wait for its draws' and dispatches' pipelines still being made:
+    /// its commit plus the policy's `pipeline_commit_wait`, set at the commit under
+    /// `PipelineWaitPolicy::Bounded`; none under `PipelineWaitPolicy::Exact`, where they wait
+    /// until each is made (`render/pending.rs`, `pending_dispatch.rs`). A cold compile of
+    /// MoltenVK's on a cold Metal compiler service was measured at 11.6 s inside a state creation
+    /// a guest's command buffer encoding made (the guest's 10 s FIFO check ended its task);
+    /// docs/FAST-PATHS.md holds the row.
+    making_deadline: OnceLock<Instant>,
     /// The textures its encoders made for their own commands (`Device::new_planned_texture`),
     /// held from their making until it completes, whichever of its commands use them (its
     /// first batch takes them, `submit.rs`). The device's next submission moves each one's image
@@ -508,6 +517,10 @@ pub(super) struct State {
     /// memory, `tests::deferred_calls`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     failures_injected: u32,
+    /// The error the making of the next draw's pipeline its recording waits for answers, in place
+    /// of the making's own (a device test's injection, `tests::deferred_calls`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    making_failure_injected: Option<Error>,
     /// `commit` returned with its own work left to run once a render encoder's end is lowered
     /// (`render/queued_commits.rs`), which has not run: to the program, the command buffer is
     /// committed.
@@ -652,9 +665,12 @@ pub(super) struct State {
     step_failure: Option<CommandBufferError>,
     /// The refusal of a host step that failed so (`CommandBufferError::Refused`).
     refusal: Option<Error>,
-    /// The first draw's pipeline whose making failed, which a host step met
+    /// The first dispatch's pipeline whose making failed, which a host step met
     /// (`CommandBufferError::PipelineCreation`).
     failed_pipeline: Option<FailedPipeline>,
+    /// The first draw's pipeline whose making failed, which its recording dropped
+    /// (`render/pending.rs`).
+    dropped_draw: Option<FailedPipeline>,
     /// Metal's description of the failure the driver relayed, where the command buffer failed
     /// with it (`CommandBuffer::error_description`).
     relayed_description: Option<String>,
@@ -1197,6 +1213,13 @@ impl State {
         let place = self.open_encoder_place();
         self.predication
             .enter(place, self.batches.events(), dispatch_type)
+    }
+
+    /// The failure of the making of a draw's pipeline a device test injected
+    /// ([`CommandBuffer::fail_draw_making`]), taken here.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn injected_making_failure(&mut self) -> Option<Error> {
+        self.making_failure_injected.take()
     }
 
     /// Keep `error`, a render encoder's call's refused as it was lowered
@@ -1781,6 +1804,8 @@ impl CommandBuffer {
                 end_lowered: false,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 failures_injected: 0,
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                making_failure_injected: None,
                 queued_commit: false,
                 called_over_mutable_map: false,
                 committing: false,
@@ -1828,6 +1853,7 @@ impl CommandBuffer {
                 step_failure: None,
                 refusal: None,
                 failed_pipeline: None,
+                dropped_draw: None,
                 relayed_description: None,
                 report: None,
                 times: Times::default(),
@@ -1862,6 +1888,7 @@ impl CommandBuffer {
             gate: Arc::default(),
             relayed: Arc::default(),
             step_numbers: OnceLock::new(),
+            making_deadline: OnceLock::new(),
             own_textures: Mutex::new(Vec::new()),
             fill_slot: Mutex::new([0; 16]),
             reencode: AtomicU64::new(0),
@@ -1958,6 +1985,14 @@ impl CommandBuffer {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn fail_commit_work(&self, count: u32) {
         self.state().failures_injected = count;
+    }
+
+    /// Answer the making of the next draw's pipeline its recording waits for
+    /// (`render/pending.rs`) with `error`, as the driver's failure: a device test's injection
+    /// (`tests::deferred_calls`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn fail_draw_making(&self, error: Error) {
+        self.state().making_failure_injected = Some(error);
     }
 
     /// The bytes its upload arena's regions took: a device test's measure (`tests::rerun_arenas`).
@@ -2535,6 +2570,15 @@ impl CommandBuffer {
     ) -> Result<(), Error> {
         let device = &self.0.device;
         let committed = Instant::now();
+        // From here its draws' pipelines still being made are waited for a bound at most: a
+        // driver's cold compile can outlast a guest's watchdog (`PipelineWaitPolicy`).
+        let policy = device.compile_device().policy();
+        if policy.pipeline_waits == PipelineWaitPolicy::Bounded {
+            let _ = self
+                .0
+                .making_deadline
+                .set(committed + policy.pipeline_commit_wait);
+        }
         // Textures' host shadows hold their images' texels only until the program gives the device
         // GPU work of its own, which is what a commit is: raised here, before anything of this
         // command buffer can run, so a `getBytes` after the commit reads the image and not a
@@ -2982,24 +3026,156 @@ impl CommandBuffer {
         self.state().refusal.clone()
     }
 
-    /// Once the command buffer failed with [`CommandBufferError::PipelineCreation`]: the draw
-    /// whose `VkPipeline` the driver did not make, by its encoder and its order there, the state
-    /// and the variant it drew, and the driver's error, which the draw returned where the runtime
-    /// made the pipeline at the draw (`FailedPipeline`). The first such draw, in encoding order:
-    /// Metal reports one error per command buffer. No Metal counterpart.
+    /// Once the command buffer failed with [`CommandBufferError::PipelineCreation`]: the
+    /// dispatch whose `VkPipeline` the driver did not make, by its encoder and its order there,
+    /// the state and the variant it ran, and the driver's error, which the dispatch returned
+    /// where the runtime made the pipeline at the dispatch (`FailedPipeline`). The first such
+    /// dispatch, in encoding order: Metal reports one error per command buffer. No Metal
+    /// counterpart.
     pub fn failed_pipeline(&self) -> Option<FailedPipeline> {
         self.settle_end();
         self.state().failed_pipeline.clone()
     }
 
-    /// Keep `failed`, a draw's pipeline whose making failed, which a host step met
-    /// (`render/pending.rs`), unless one was kept already: the steps record in encoding order
-    /// and stop at the first failure, so the one kept is the first.
+    /// The first draw, in encoding order, whose `VkPipeline` the driver did not make after the
+    /// draw returned (the runtime makes a draw's pipeline while the draw goes on,
+    /// `render/pending.rs`): the draw ran nothing, the command buffer running on, without error.
+    /// Named as [`failed_pipeline`](Self::failed_pipeline) names a dispatch. Counted, each such
+    /// draw: `WorkCounts::draws_dropped_unmade`. Under `PipelineWaitPolicy::Bounded` (the
+    /// default), also the first draw or dispatch (a compute dispatch, a render pass's tile
+    /// dispatch) whose `VkPipeline` was still being made once the command buffer's bound passed,
+    /// with the error `VK_TIMEOUT`: `WorkCounts::draws_dropped_still_making` and
+    /// `dispatches_dropped_still_making`. No Metal counterpart: Metal makes a state's pipelines as
+    /// it makes the state.
+    pub fn dropped_draw(&self) -> Option<FailedPipeline> {
+        self.settle_end();
+        self.state().dropped_draw.clone()
+    }
+
+    /// Keep `failed`, a dispatch's pipeline whose making failed, which a host step met
+    /// (`pending_dispatch.rs`, `render/pending_tile.rs`), unless one was kept already: the steps
+    /// record in encoding order and stop at the first failure, so the one kept is the first.
     pub(super) fn fail_pipeline(&self, failed: FailedPipeline) {
         let mut held = self.state();
         if held.failed_pipeline.is_none() {
             held.failed_pipeline = Some(failed);
         }
+    }
+
+    /// Note `failed`, a draw's pipeline whose making failed, whose recording drops the draw
+    /// (`render/pending.rs`): kept where it is the first, counted
+    /// (`WorkCounts::draws_dropped_unmade`).
+    pub(super) fn drop_draw(&self, failed: FailedPipeline) {
+        let device = self.device();
+        device.shared().counts.draw_dropped_unmade();
+        device.degrade(Degradation::DrawDroppedUnmade, || {
+            let state = match &failed.state {
+                FailedState::Render(state) => format!(
+                    "render pipeline state {}{}",
+                    state.unique_identifier(),
+                    state
+                        .label()
+                        .map(|label| format!(" `{label}`"))
+                        .unwrap_or_default()
+                ),
+                FailedState::Compute(state) => {
+                    format!("compute pipeline state {}", state.unique_identifier())
+                }
+            };
+            let variant = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                failed.variant.hash(&mut hasher);
+                failed.specialization.hash(&mut hasher);
+                hasher.finish()
+            };
+            (
+                format!(
+                    "draw {} of render encoder {} of a command buffer, of {state}, variant and \
+                     specialization {variant:016x}",
+                    failed.draw, failed.encoder
+                ),
+                format!("the driver failed to make its pipeline: {}", failed.error),
+            )
+        });
+        self.keep_dropped(failed);
+    }
+
+    /// Note `late`, a draw whose pipeline was still being made once the command buffer's bound
+    /// passed ([`making_deadline`](Self::making_deadline)), whose recording drops the draw
+    /// (`render/pending.rs`): kept where it is the first, its error `VK_TIMEOUT`, which no
+    /// driver's creation returns; counted (`WorkCounts::draws_dropped_still_making`), and
+    /// announced (`draw-dropped-still-making`) where its recording runs, in the program's
+    /// `commit` or a host step.
+    pub(super) fn drop_late_draw(&self, late: FailedPipeline) {
+        let device = self.device();
+        device.shared().counts.draw_dropped_still_making();
+        let (encoder, draw) = (late.encoder, late.draw);
+        device.degrade(Degradation::DrawDroppedStillMaking, || {
+            (
+                format!("draw {draw} of render encoder {encoder} of a command buffer"),
+                format!(
+                    "its pipeline was still being made {} ms after the command buffer's commit",
+                    device
+                        .compile_device()
+                        .policy()
+                        .pipeline_commit_wait
+                        .as_millis()
+                ),
+            )
+        });
+        self.keep_dropped(late);
+    }
+
+    /// Note `late`, a dispatch whose pipeline was still being made once the command buffer's
+    /// bound passed ([`making_deadline`](Self::making_deadline)): a compute encoder's
+    /// (`pending_dispatch.rs`), or a render pass's tile dispatch where `tile`
+    /// (`render/pending_tile.rs`), whose recording records no dispatch. Kept as
+    /// [`drop_late_draw`](Self::drop_late_draw) keeps a draw, its error `VK_TIMEOUT`; counted
+    /// (`WorkCounts::dispatches_dropped_still_making`), and announced
+    /// (`dispatch-dropped-still-making`) where its recording runs, in the program's `commit` or a
+    /// host step.
+    pub(crate) fn drop_late_dispatch(&self, late: FailedPipeline, tile: bool) {
+        let device = self.device();
+        device.shared().counts.dispatch_dropped_still_making();
+        let (encoder, dispatch) = (late.encoder, late.draw);
+        device.degrade(Degradation::DispatchDroppedStillMaking, || {
+            let what = match tile {
+                true => "tile dispatch",
+                false => "dispatch",
+            };
+            let of = match tile {
+                true => "render encoder",
+                false => "compute encoder",
+            };
+            (
+                format!("{what} {dispatch} of {of} {encoder} of a command buffer"),
+                format!(
+                    "its pipeline was still being made {} ms after the command buffer's commit",
+                    device
+                        .compile_device()
+                        .policy()
+                        .pipeline_commit_wait
+                        .as_millis()
+                ),
+            )
+        });
+        self.keep_dropped(late);
+    }
+
+    /// Keep `dropped` as the command buffer's first draw or dispatch that ran nothing, unless one
+    /// was kept already: the recordings run in encoding order.
+    fn keep_dropped(&self, dropped: FailedPipeline) {
+        let mut held = self.state();
+        if held.dropped_draw.is_none() {
+            held.dropped_draw = Some(dropped);
+        }
+    }
+
+    /// Until when its recordings wait for its draws' and dispatches' pipelines still being made:
+    /// set at its commit under `PipelineWaitPolicy::Bounded`, none before it or under `Exact`.
+    pub(crate) fn making_deadline(&self) -> Option<Instant> {
+        self.0.making_deadline.get().copied()
     }
 
     /// What the command buffer's execution status words report, once it completed: resident-set
@@ -3393,10 +3569,20 @@ impl CommandBufferShared {
             && segments()
                 .filter(|segment| segment.steps_after_the_gpu())
                 .all(|segment| matches!(segment.work, Deferred::Loop(_)));
+        // Past its bound its step records the draws and dispatches whose pipelines are still
+        // being made as nothing (`render/pending.rs`, `pending_dispatch.rs`), waiting for no
+        // making.
+        let deadline = self.making_deadline.get().copied();
+        let late = deadline.is_some_and(|at| Instant::now() >= at);
+        let pipelines = match late {
+            false => segments().any(Segment::steps_after_pipelines),
+            true => segments().any(Segment::holds),
+        };
         StepWaits {
             gpu: segments().any(Segment::steps_after_the_gpu) || sparse,
             queue_alone: checks_alone.then(|| self.queue.vk_queue()),
-            pipelines: segments().any(Segment::steps_after_pipelines),
+            pipelines,
+            until: deadline.filter(|_| pipelines && !late),
         }
     }
 

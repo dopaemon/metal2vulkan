@@ -562,6 +562,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &DELAYED_DEALLOCATORS,
         &READ_ONLY_PAGES,
         &MISPLACED,
+        &STILL_MAKING,
         &DEPTH_DENORMALS,
         &SIGNED_DEPTH_TESTS,
         &FIRST_SPARSE,
@@ -760,6 +761,22 @@ fn an_anisotropic_state_without_mips_is_announced_through_metals_sampler() {
 /// test `a_misplaced_notice_reaches_the_sink_unchanged_from_the_notice_thread_and_is_recorded_once`
 /// takes its site, as a build without debug assertions does.
 const MISPLACED: [Degradation; 1] = [Degradation::MisplacedNotice];
+
+/// The kinds a draw and a dispatch take whose pipeline was still being made once their command
+/// buffer's bound passed (`PipelineWaitPolicy::Bounded`, `pipeline_commit_wait` after its
+/// commit), and a draw whose pipeline the driver failed to make. No lane meets them: a lane holds
+/// none of the runtime's pipeline makings, a driver's compile outlasting the bound is a timing no
+/// lane may count on, and no lane's pipeline fails. The runtime's own tests
+/// `a_draw_whose_pipeline_is_still_being_made_at_its_bound_runs_nothing`,
+/// `a_dispatch_whose_pipeline_is_still_being_made_at_its_bound_runs_nothing` and
+/// `a_draw_whose_pipeline_was_not_made_runs_nothing_and_its_command_buffer_runs_on` take their
+/// sites, the makings held in the device's pool by the runtime's test hold, the last one's
+/// failure injected.
+const STILL_MAKING: [Degradation; 3] = [
+    Degradation::DrawDroppedStillMaking,
+    Degradation::DispatchDroppedStillMaking,
+    Degradation::DrawDroppedUnmade,
+];
 
 /// The kind Metal's private option bit takes where the GPU's writes reach the memory here
 /// ([`the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory`],

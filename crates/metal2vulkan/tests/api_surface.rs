@@ -230,6 +230,7 @@ surface! {
         enum RenderLoweringPolicy N;
         enum HostPageTexturePolicy N;
         enum HalfChainPolicy N;
+        enum PipelineWaitPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;
