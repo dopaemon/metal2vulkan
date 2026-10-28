@@ -188,14 +188,14 @@ pub enum MaskForm {
 /// How the lowering rounds an `f32` to `half` (`lower::arith::narrow`): the device's own
 /// rounding. Lowering takes it from the profile's `shaderFloat16` and float-controls properties
 /// (`ArithPlan::quantize`). `Controlled` gives Metal's conversion to `half` (to nearest even on the
-/// half grid, half denormals kept, infinity from 65520 up) by the Vulkan spec, and `Device` where
-/// the device's quantize is measured to round as Metal does; elsewhere `Device` and `Converted`
-/// are within `PrecisionNote::NativeHalfQuantize`'s or `NativeHalfConversion`'s bound.
+/// half grid, half denormals kept, infinity from 65520 up) by the Vulkan spec; `Device` and
+/// `Converted` are within `PrecisionNote::NativeHalfQuantize`'s or `NativeHalfConversion`'s bound.
+/// It also chooses how a `half` is widened from its bits (`narrow::from_bits`): `OpFConvert` of
+/// the bits read as a 16-bit float in `Converted` and `Controlled`, `UnpackHalf2x16` in `Device`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum QuantizeForm {
-    /// The device's `OpQuantizeToF16`, a result it flushes to zero rounded exactly to the half
-    /// denormal grid, on a profile without `shaderFloat16`: Metal's where the quantize is
-    /// measured to round as Metal does (`DriverDeviation::MetalHalfQuantize`).
+    /// The device's `OpQuantizeToF16` alone, on a profile without `shaderFloat16`: a result
+    /// below the smallest normal half may be a zero.
     #[default]
     Device,
     /// No quantize: `OpFConvert` to a 16-bit float and back, on a profile with `shaderFloat16`
@@ -265,7 +265,7 @@ impl ModuleBuilder {
     }
 
     /// Whether the [`ModuleBuilder::quantize_form`] is the device's own rounding, native half
-    /// rounding, rather than one measured or controlled to be Metal's. Emission sets it with the
+    /// rounding, rather than one controlled to be Metal's. Emission sets it with the
     /// form; a builder that never sets it takes its form as Metal's.
     pub fn set_native_half(&mut self, native: bool) {
         self.native_half = native;

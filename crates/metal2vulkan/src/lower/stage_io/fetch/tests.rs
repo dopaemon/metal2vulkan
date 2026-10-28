@@ -723,17 +723,28 @@ fn every_ten_and_two_bit_code_is_correctly_rounded() {
     }
 }
 
-/// A narrow float's widening to a `float` parameter carries a NaN field's sign and payload up into
-/// the `f32` NaN (the device's NaN encoding, `PrecisionNote::DeviceNanEncoding`, where Metal answers
-/// `0x7FC00000`), while a `half` parameter keeps the fetched `half`'s own bits, as Metal's does
-/// (`vertex-format-half4`). Every finite, zero, subnormal and infinite code is bit-exact either
-/// way, which `every_format_decodes_exactly` holds.
+/// A `half` field's widening to a `float` or `half` parameter, and a `FloatRG11B10` field's (a
+/// half's bits with the mantissa's low bits zero), is the device's widening of its bits
+/// (`narrow::from_bits`): a NaN field reads as a NaN whose bits are the device's (here the
+/// interpreter's canonical NaN; `PrecisionNote::NativeNanEncoding` and, into a `float`,
+/// `DeviceNanEncoding`, where Metal answers `0x7FC00000`), an infinity and a finite value as
+/// themselves. Every finite, zero, subnormal and infinite code is bit-exact, which
+/// `every_format_decodes_exactly` holds.
 #[test]
 fn a_narrow_floats_widening_carries_the_fields_nan_bits() {
     /// The `f32` bits of a `half` whose exponent field is all ones, by the IEEE widening: the
     /// sign, an all-ones `f32` exponent, and the 10-bit mantissa in the top of the 23-bit one.
     fn widened(h: u16) -> u32 {
         (u32::from(h) & 0x8000) << 16 | 0x7F80_0000 | (u32::from(h) & 0x3FF) << 13
+    }
+    /// Whether `got` is `want`'s widening: the same bits, or for a NaN any NaN.
+    fn widens(got: &[u32], want: &[u32]) -> bool {
+        let nan = |w: u32| f32::from_bits(w).is_nan();
+        got.len() == want.len()
+            && got
+                .iter()
+                .zip(want)
+                .all(|(g, w)| g == w || (nan(*g) && nan(*w)))
     }
     // half4: a quiet payload NaN, its negative, a signalling NaN, and +inf.
     let halves = [0x7E01u16, 0xFE01, 0x7C01, 0x7C00];
@@ -749,20 +760,20 @@ fn a_narrow_floats_widening_carries_the_fields_nan_bits() {
         let e = encoding(VertexFormat::Half4).expect("encoding");
         let m = module(e, float(4), Elem::Constant, 0, check);
         let got = run(&m, &data, [0, 0, 0, 0], 4);
-        assert_eq!(got, halves.map(widened), "Half4 into float4 {check:?}");
-        // The same codes into a `half` parameter, held widened: their own bits, as Metal's
-        // `half` attribute keeps them.
+        let want = halves.map(widened);
+        assert!(widens(&got, &want), "Half4 into float4 {check:?}: {got:x?}");
+        // The same codes into a `half` parameter, held widened.
         let m = module(e, half_form(4), Elem::Constant, 0, check);
         let got = run(&m, &data, [0, 0, 0, 0], 4);
-        assert_eq!(got, halves.map(widened), "Half4 into half4 {check:?}");
+        assert!(widens(&got, &want), "Half4 into half4 {check:?}: {got:x?}");
         let e = encoding(VertexFormat::FloatRG11B10).expect("encoding");
         let m = module(e, float(4), Elem::Constant, 8, check);
         let got = run(&m, &data, [0, 0, 0, 0], 4);
         // Each field's mantissa in the top of the `f32` one: six bits, six, then five.
-        assert_eq!(
-            got,
-            [0x7FFE_0000, 0x7FFE_0000, 0x7FFC_0000, 1.0f32.to_bits()],
-            "FloatRG11B10 into float4 {check:?}"
+        let want = [0x7FFE_0000, 0x7FFE_0000, 0x7FFC_0000, 1.0f32.to_bits()];
+        assert!(
+            widens(&got, &want),
+            "FloatRG11B10 into float4 {check:?}: {got:x?}"
         );
     }
 }

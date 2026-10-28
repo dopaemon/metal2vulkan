@@ -1328,9 +1328,6 @@ pub fn float_fn(
         // Rounded per step below.
         F::Mix | F::MulAdd | F::Fract | F::FastFract { .. } | F::FlaggedFract => r,
         F::Dot => narrow::round(fb, f.scalar_form(), r)?,
-        // The square root of a narrow value is a zero or at least `2^-12`: the device's rounding
-        // alone rounds it as Metal does.
-        F::Sqrt => narrow::device_round(fb, f, r)?,
         F::Fmod => {
             let r = narrow::round(fb, f, r)?;
             half_fmod_zero(fb, f, arg(args, 0)?, r)?
@@ -1621,28 +1618,26 @@ fn float_fn_core(
         F::Mix => {
             // The blend `x * (1 - t) + y * t` on `bfloat` and `double`, which Metal's fused form is
             // not measured on: its multiplies and add carry the call's contraction, and each step
-            // rounds to a narrow format. `1 - t` and the final sum add two values of the format,
-            // which take the device's rounding alone (`narrow::device_round`).
+            // rounds to a narrow format by the device's rounding (`narrow::round`).
             let (y, t) = (arg(args, 1)?, arg(args, 2)?);
             let one = fsplat(fb, f, 1.0)?;
             let w = fb.binary_with(BinOp::FSub, one, t, contract)?;
-            let w = narrow::device_round(fb, f, w)?;
+            let w = narrow::round(fb, f, w)?;
             let p = fb.binary_with(BinOp::FMul, a, w, contract)?;
             let p = narrow::round(fb, f, p)?;
             let q = fb.binary_with(BinOp::FMul, y, t, contract)?;
             let q = narrow::round(fb, f, q)?;
             let r = fb.binary_with(BinOp::FAdd, p, q, contract)?;
-            narrow::device_round(fb, f, r)
+            narrow::round(fb, f, r)
         }
         F::Ldexp => ldexp(fb, f, a, arg(args, 1)?),
         F::CopySign => copysign(fb, f, a, arg(args, 1)?),
         F::MulAdd => {
-            // A narrow form takes the unfused choice, each step rounded once by the device (the
-            // sum adds two values of the format, `narrow::device_round`).
+            // A narrow form takes the unfused choice, each step rounded once by the device.
             let p = bin(fb, BinOp::FMul, a, arg(args, 1)?)?;
             let p = narrow::round(fb, f, p)?;
             let r = bin(fb, BinOp::FAdd, p, arg(args, 2)?)?;
-            narrow::device_round(fb, f, r)
+            narrow::round(fb, f, r)
         }
         F::Sqrt => g1(fb, GlslOp::Sqrt),
         F::Fma if f.float_fmt() == Some(FloatFmt::BFloat) => {
@@ -2194,11 +2189,10 @@ fn metal_fract(
     bounded: bool,
     infinite_nan: bool,
 ) -> BResult<Value> {
-    // `floor(x)` of a narrow value is a value of the format: the difference takes the device's
-    // rounding alone, as a sum does.
+    // The difference of a narrow value and its floor takes the device's rounding.
     let fl = glsl(fb, GlslOp::Floor, &[x])?;
     let d = bin(fb, BinOp::FSub, x, fl)?;
-    let d = narrow::device_round(fb, f, d)?;
+    let d = narrow::round(fb, f, d)?;
     let r = if bounded {
         let below_one = splat(fb, f, below_one_bits(f))?;
         glsl(fb, GlslOp::NMin, &[d, below_one])?

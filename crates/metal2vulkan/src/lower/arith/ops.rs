@@ -234,9 +234,8 @@ pub fn bool_binary(
 }
 
 /// A float binary operator on floats of form `f` (LLVM `frem` is C `fmod`, the sign of the
-/// dividend: `OpFRem`). A narrow form rounds the `f32` result to its format; a sum or difference
-/// takes the device's rounding alone, below the smallest normal half included
-/// ([`narrow::device_round`]).
+/// dividend: `OpFRem`). A narrow form rounds the `f32` result to its format by the device's
+/// rounding ([`narrow::round`]).
 pub fn float_binary(
     fb: &mut FunctionBuilder<'_>,
     op: AirBin,
@@ -253,10 +252,7 @@ pub fn float_binary(
         _ => BinOp::FRem,
     };
     let r = fb.binary_with(o, a, b, contract)?;
-    match o {
-        BinOp::FAdd | BinOp::FSub => narrow::device_round(fb, f, r),
-        _ => narrow::round(fb, f, r),
-    }
+    narrow::round(fb, f, r)
 }
 
 /// The census name of a `half` operator on the device's 16-bit arithmetic

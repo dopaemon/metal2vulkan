@@ -2835,7 +2835,6 @@ fn narrow_float_module_growth_is_bounded() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{} on {stem}: L3: {e}", kk.name));
             a.module.words.len()
         };
-        let p = profile(stem, exact_maths()).expect("profile");
         let words = ks.each_ref().map(|kk| words_on(exact_maths(), kk));
         eprintln!(
             "half and bfloat growth on {stem}: float {} words, half {} ({:+}), bfloat {} ({:+})",
@@ -2845,19 +2844,14 @@ fn narrow_float_module_growth_is_bounded() {
             words[2],
             words[2] as i64 - words[0] as i64
         );
-        // Half: through the device's measured quantize, per multiply and per narrowing
-        // conversion a six-instruction rounding with the denormal arithmetic (at most 32 words),
-        // and per sum a three-instruction one without it (at most 16 words), plus the conversions'
-        // share and the shared constants. On the bits, per multiply and conversion seventeen
-        // integer instructions and the three of the denormal arithmetic (at most 104 words), per
-        // sum the seventeen (at most 88), and ten shared constants. Through the conversion, fewer
-        // than either.
-        let bound = if p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfQuantize) {
-            9 * 32 + 8 * 16 + 64
-        } else {
-            9 * 104 + 8 * 88 + 128
-        };
-        assert!(words[1] <= words[0] + bound, "{stem}: half {words:?}");
+        // Half: per rounding (the sixteen operations and the narrowing conversion) the device's
+        // quantize alone on a profile without `shaderFloat16` (one instruction, four words), else
+        // the conversion to 16 bits and its widening, each decorated `NoContraction` under the
+        // float controls (at most fourteen words), plus the 16-bit type's and the modes' share.
+        assert!(
+            words[1] <= words[0] + 17 * 16 + 64,
+            "{stem}: half {words:?}"
+        );
         // Bfloat: a bounded integer rounding (at most 18 instructions) per operation.
         assert!(
             words[2] <= words[0] + 16 * 18 * 6 + 256,
@@ -2866,10 +2860,9 @@ fn narrow_float_module_growth_is_bounded() {
     }
 }
 
-/// A `half` result rounds through `OpQuantizeToF16` on a profile without `shaderFloat16`, and
-/// through the conversion to 16 bits on one with it; the operation decides the rest, never a name:
-/// only a product and a narrowing conversion carry the quantize's denormal arithmetic (one
-/// `RoundEven` each); a sum, exact below the smallest normal half, carries none. A profile with
+/// A `half` result rounds through `OpQuantizeToF16` alone on a profile without `shaderFloat16`,
+/// with no denormal arithmetic (no `RoundEven`) after any operation, and through the conversion
+/// to 16 bits on one with it; the operation decides the rest, never a name. A profile with
 /// `shaderFloat16` whose float controls do not make the conversion Metal's (moltenvk-m3) rounds
 /// through the conversion of `x` itself and its widening, declaring no 16-bit float mode or
 /// `RoundingModeRTE`. A profile whose float controls make that conversion Metal's
@@ -2877,14 +2870,14 @@ fn narrow_float_module_growth_is_bounded() {
 /// `NoContraction`, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
 /// `SignedZeroInfNanPreserve` for 16 bits and the modes its independence ties to them
 /// (`narrow::controlled_modes`). No other module declares a 16-bit float mode or
-/// `RoundingModeRTE` for it. A module that quantizes requires
-/// `DriverDeviation::MetalHalfQuantize`'s fact only where the profile takes it.
+/// `RoundingModeRTE` for it. No module requires `DriverDeviation::MetalHalfQuantize`'s fact: a
+/// quantize records `NativeHalfQuantize` on every profile.
 ///
 /// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. The
 /// `fast` chain's seven multiplies whose one use is the next addition are fused into it: each pair
-/// is the device's `Fma` on the operands held in `float`, its result rounded to `half` with the
-/// denormal arithmetic a product's rounding carries, so the chain keeps the first addition's, the
-/// last multiply's, the conversion's, and the seven pairs' roundings. On a profile whose driver
+/// is the device's `Fma` on the operands held in `float`, its result rounded to `half`, so the
+/// chain keeps the first addition's, the last multiply's, the conversion's, and the seven pairs'
+/// roundings. On a profile whose driver
 /// computes a 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3) each pair is that `Fma` instead,
 /// inline, on its operands converted to 16 bits and its result widened, all exactly (four
 /// `OpFConvert`, the module's one 16-bit float type), so the chain keeps the other three roundings.
@@ -2940,10 +2933,10 @@ fn half_rounding_follows_the_operation() {
                     crate::lower::arith::fma::half_route(&p),
                     crate::lower::arith::fma::Route::F16 | crate::lower::arith::fma::Route::F16Khr
                 );
-            let (q, c, r) = match (kk.name == "fast_chain", f16) {
-                (true, true) => (3, 7 * 4, 2),
-                (true, false) => (3 + 7, 0, 2 + 7),
-                (false, _) => (17, 0, 9),
+            let (q, c) = match (kk.name == "fast_chain", f16) {
+                (true, true) => (3, 7 * 4),
+                (true, false) => (3 + 7, 0),
+                (false, _) => (17, 0),
             };
             // With `shaderFloat16` each rounding is the device's conversion and its widening, with
             // no quantize and no denormal arithmetic (moltenvk-m3).
@@ -2952,8 +2945,6 @@ fn half_rounding_follows_the_operation() {
             // Where the device's float controls make the conversion Metal's, each rounding is
             // that conversion and its widening too.
             let controlled = form == crate::spirv::builder::QuantizeForm::Controlled;
-            // Without `shaderFloat16` each rounding is the device's quantize.
-            let device = form == crate::spirv::builder::QuantizeForm::Device;
             // Where the device's 16-bit `+ - *` is Metal's, measured or under the 16-bit float
             // controls, the operations among the roundings: sixteen of the strict chain's
             // seventeen, the first addition and the last multiply of the fast chain's three. The
@@ -2970,9 +2961,10 @@ fn half_rounding_follows_the_operation() {
                 (true, true) => 2,
                 (true, false) => 16,
             };
-            let want = match (converted || controlled, device) {
-                (true, _) => (0, c + 2 * (q - kept) + 3 * kept, 0),
-                (false, _) => (q, c, r),
+            // Without `shaderFloat16` each rounding is the device's quantize alone.
+            let want = match converted || controlled {
+                true => (0, c + 2 * (q - kept) + 3 * kept, 0),
+                false => (q, c, 0),
             };
             assert_eq!(
                 (quantize, fconvert, round_even),
@@ -3019,14 +3011,11 @@ fn half_rounding_follows_the_operation() {
                 (controlled, rte),
                 "{what}: a 16-bit float mode and RoundingModeRTE"
             );
-            // A module that quantizes requires the quantize's measured fact where the profile
-            // takes it; no module requires the conversion's.
-            assert_eq!(
-                a.requirements
+            // No module requires the quantize's measured fact, nor the conversion's.
+            assert!(
+                !a.requirements
                     .properties
                     .contains(&crate::device::requirements::VkProperty::MetalHalfQuantize),
-                device
-                    && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfQuantize),
                 "{what}"
             );
         }
@@ -3097,54 +3086,51 @@ fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
     assert!(converting > 0, "no profile rounds through the conversion");
 }
 
-/// Only a square root or a sum or difference skips the denormal arithmetic, taking the device's
-/// rounding alone (`narrow::device_round`): a square root and `fract`'s difference round through
-/// `OpQuantizeToF16` alone, and an integer converted to `half` rounds by integer arithmetic with
-/// neither; a transcendental, `ldexp`, a quotient, and the one rounding of a fused sum (`fmuladd`
-/// and `mix`, the device's `Fma` and `FMix` in `float`) keep one `RoundEven` each, since
-/// their `f32` result below `2^-14` is off the `2^-24` grid (half `exp(-10)` is about `4.54e-5`).
-/// The counts pin which steps take `device_round`. On a profile whose driver
-/// computes a 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3), a fused sum rounds nothing
-/// itself: the device's `Fma` rounds it. On a profile with `shaderFloat16` (moltenvk-m3,
-/// amd-rdna3-radv) no rounding holds either: each is the conversion and its widening.
+/// Without `shaderFloat16` every `half` rounding is the device's `OpQuantizeToF16` alone, with no
+/// denormal arithmetic (no `RoundEven`) whatever the operation: a transcendental, `ldexp`, a
+/// quotient, a square root, `fract`'s difference and the one rounding of a fused sum (`fmuladd`
+/// and `mix`, the device's `Fma` and `FMix` in `float`), whose `f32` result below `2^-14` may be
+/// off the `2^-24` grid (half `exp(-10)` is about `4.54e-5`) and is the device's there
+/// (`NativeHalfQuantize`); an integer converted to `half` rounds by integer arithmetic with
+/// neither. On a profile whose driver computes a 16-bit `Fma` as Metal's `half` `fma`
+/// (moltenvk-m3), a fused sum rounds nothing itself: the device's `Fma` rounds it. On a profile
+/// with `shaderFloat16` (moltenvk-m3, amd-rdna3-radv) no rounding holds either: each is the
+/// conversion and its widening.
 #[test]
-fn only_an_exact_half_result_skips_the_denormal_rounding() {
+fn a_half_rounding_without_float16_is_the_quantize_alone() {
     let halves = format!(
         "{}{}{}  %h = bitcast i16 %t to half\n  %g = bitcast i16 %s to half\n  %u = bitcast i16 %v to half\n",
         on("t", 16, 0x3C01),
         on("s", 16, 0x4100),
         on("v", 16, 0x3800)
     );
-    // (name, the operation defining `%x`, `OpQuantizeToF16` count, `RoundEven` count)
-    let cases: [(&'static str, &str, usize, usize); 9] = [
-        ("half_exp", "call half @air.exp.f16(half %h)", 1, 1),
-        ("half_log", "call half @air.log.f16(half %h)", 1, 1),
+    // (name, the operation defining `%x`, `OpQuantizeToF16` count)
+    let cases: [(&'static str, &str, usize); 9] = [
+        ("half_exp", "call half @air.exp.f16(half %h)", 1),
+        ("half_log", "call half @air.log.f16(half %h)", 1),
         (
             "half_ldexp",
             "call half @air.ldexp.f16(half %h, i32 -20)",
             1,
-            1,
         ),
-        ("half_fdiv", "fdiv half %h, %g", 1, 1),
-        ("half_sqrt", "call half @air.sqrt.f16(half %h)", 1, 0),
-        ("half_sitofp", "sitofp i32 %i to half", 0, 0),
-        ("half_fract", "call half @air.fract.f16(half %h)", 1, 0),
+        ("half_fdiv", "fdiv half %h, %g", 1),
+        ("half_sqrt", "call half @air.sqrt.f16(half %h)", 1),
+        ("half_sitofp", "sitofp i32 %i to half", 0),
+        ("half_fract", "call half @air.fract.f16(half %h)", 1),
         (
             "half_mix",
             "call half @air.mix.f16(half %h, half %g, half %u)",
-            1,
             1,
         ),
         (
             "half_fmuladd",
             "call half @llvm.fmuladd.f16(half %h, half %g, half %u)",
             1,
-            1,
         ),
     ];
     let ks: Vec<Kernel> = cases
         .iter()
-        .map(|&(name, op, _, _)| Kernel {
+        .map(|&(name, op, _)| Kernel {
             name,
             body: format!(
                 "{halves}{}  %x = {op}\n  %r = fpext half %x to float\n",
@@ -3167,7 +3153,7 @@ fn only_an_exact_half_result_skips_the_denormal_rounding() {
     };
     for stem in PROFILES {
         let p = profile(stem, exact_maths()).expect("profile");
-        for (kk, &(_, _, quantizes, rounds_even)) in ks.iter().zip(&cases) {
+        for (kk, &(_, _, quantizes)) in ks.iter().zip(&cases) {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
@@ -3186,7 +3172,7 @@ fn only_an_exact_half_result_skips_the_denormal_rounding() {
                 != crate::spirv::builder::QuantizeForm::Device;
             let want = match fused || converts {
                 true => (0, 0),
-                false => (quantizes, rounds_even),
+                false => (quantizes, 0),
             };
             assert_eq!(
                 (quantize, round_even),

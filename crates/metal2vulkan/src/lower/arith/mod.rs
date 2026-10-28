@@ -789,10 +789,8 @@ pub struct ArithPlan {
     /// the profile ([`narrow::quantize_form`]): the device's conversion to 16 bits and its
     /// widening under the float controls that make it Metal's, else that conversion as it is
     /// where the profile has `shaderFloat16` (noted `NativeHalfConversion`), else the device's
-    /// `OpQuantizeToF16` (noted `NativeHalfQuantize`, but where it is measured to round as Metal
-    /// does, `DriverDeviation::MetalHalfQuantize`: a module that quantizes then requires
-    /// `VkProperty::MetalHalfQuantize`; a sum or difference the bare quantize, noted
-    /// `NativeHalfQuantize` either way, `narrow::device_round`).
+    /// `OpQuantizeToF16` alone (noted `NativeHalfQuantize` on every such profile: a result below
+    /// the smallest normal half may be a zero).
     pub quantize: QuantizeForm,
     /// Whether [`ArithPlan::quantize`] is the device's own rounding (native half rounding,
     /// [`narrow::native_rounding`]), decided with it by [`finish`].
@@ -905,8 +903,7 @@ pub const FOLDED: &str = "arith.float.folded";
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.wide = legal::holds_wide(cx.profile);
     cx.families.arith.quantize = narrow::quantize_form(cx.profile);
-    cx.families.arith.native_half =
-        narrow::native_rounding(cx.profile, cx.families.arith.quantize).is_some();
+    cx.families.arith.native_half = narrow::native_rounding(cx.families.arith.quantize).is_some();
     // Under the float controls a `half`'s NaN is the device's conversion's.
     cx.families.arith.native_half_nans = cx.families.arith.quantize == QuantizeForm::Controlled;
     cx.families.arith.mask = if cx

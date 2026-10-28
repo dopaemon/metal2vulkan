@@ -138,8 +138,8 @@ fn every_tie_bits() -> Vec<u64> {
 
 /// `f32_to_half_from_even` rounds every half's tie and its neighbours, and every half, toward
 /// zero saturating and with ties away exactly, from the module's own rounding to nearest even
-/// (`narrow::round_texel`) in every [`QuantizeForm`]: four lanes at a time, as the texel routine
-/// calls it.
+/// (`narrow::round_texel`) in every [`QuantizeForm`] (from the device's quantize, a half denormal
+/// may be its signed zero): four lanes at a time, as the texel routine calls it.
 #[test]
 fn f32_to_half_from_even_is_exact_on_every_tie() {
     use crate::lower::arith::narrow;
@@ -171,7 +171,7 @@ fn f32_to_half_from_even_is_exact_on_every_tie() {
                 .iter()
                 .map(|x| vec![x.clone(), vec![u64::from(tz)]])
                 .collect();
-            check(
+            check_accept(
                 &format!("f32_to_half_from_even {mode:?} {q:?}"),
                 &[v, b],
                 v,
@@ -188,7 +188,11 @@ fn f32_to_half_from_even_is_exact_on_every_tie() {
                             .collect(),
                     )
                 },
-                false,
+                &|g, w| {
+                    g == w
+                        || (is_nan(v, g) && is_nan(v, w))
+                        || (q == QuantizeForm::Device && quantize_flush_of(g, w))
+                },
             );
         }
     }

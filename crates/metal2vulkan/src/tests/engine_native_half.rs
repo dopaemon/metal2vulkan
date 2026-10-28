@@ -2,10 +2,10 @@
 //! conversion and its widening under the float controls that make it Metal's
 //! (`QuantizeForm::Controlled`), else through that conversion as it is where the profile has
 //! `shaderFloat16` (`QuantizeForm::Converted`), recording `PrecisionNote::NativeHalfConversion`,
-//! else through the device's quantize (`QuantizeForm::Device`), recording `NativeHalfQuantize`
-//! unless the quantize is measured to round as Metal's `half(float)` does; a sum or difference
-//! takes the bare quantize, recorded either way. A `half` read from memory is the device's
-//! widening wherever the module holds 16-bit floats.
+//! else through the device's quantize alone (`QuantizeForm::Device`), recording
+//! `NativeHalfQuantize` on every such profile. A `half` read from memory is the device's widening
+//! on every profile: its conversion where the module holds 16-bit floats, `UnpackHalf2x16`
+//! elsewhere.
 //!
 //! The kernels read two `float`s from buffer 0 and store one result after them: a `half` sum of
 //! the two narrowed, and the first narrowed alone. `llvm-as` assembles the module; without it the
@@ -28,6 +28,7 @@ use crate::pipeline::PrecisionNote;
 use crate::spirv::builder::QuantizeForm;
 use crate::spirv::ids::{ConstId, Value};
 use crate::spirv::interp::{run, Buffer, Config, Resources};
+use crate::spirv::ir::GlslOp;
 use crate::spirv::ir::{
     BinOp, ConstKind, Constant, Contraction, ConvOp, Inst, Type, TypedModule, ValueOrigin,
 };
@@ -147,8 +148,7 @@ fn expected(p: &DeviceProfile) -> QuantizeForm {
 }
 
 /// Every committed profile rounds by the device's own form: the controlled conversion with no
-/// note, the conversion noted `NativeHalfConversion`, and the quantize noted `NativeHalfQuantize`
-/// unless it is measured to be Metal's.
+/// note, the conversion noted `NativeHalfConversion`, and the quantize noted `NativeHalfQuantize`.
 #[test]
 fn half_rounding_is_the_devices_on_every_profile() {
     let profiles = committed_profiles().expect("profiles");
@@ -156,12 +156,11 @@ fn half_rounding_is_the_devices_on_every_profile() {
     for (stem, p) in &profiles {
         let form = quantize_form(p);
         assert_eq!(form, expected(p), "{stem}");
-        let note = native_rounding(p, form);
+        let note = native_rounding(form);
         let want = match form {
             QuantizeForm::Controlled => None,
             QuantizeForm::Converted => Some(PrecisionNote::NativeHalfConversion),
-            QuantizeForm::Device => (!p.takes_driver_deviation(DriverDeviation::MetalHalfQuantize))
-                .then_some(PrecisionNote::NativeHalfQuantize),
+            QuantizeForm::Device => Some(PrecisionNote::NativeHalfQuantize),
         };
         assert_eq!(note, want, "{stem}");
         match note {
@@ -181,7 +180,8 @@ fn half_rounding_is_the_devices_on_every_profile() {
 /// its `half` through the conversion, records `NativeHalfConversion` and requires no measured
 /// fact; on a profile without `shaderFloat16` it quantizes and records `NativeHalfQuantize`; RADV
 /// takes the controlled conversion, with no fact and no note. Each passes L3. On the interpreter,
-/// whose conversion rounds to nearest even, the native modules answer Metal's `half(float)`.
+/// whose conversion and quantize round to nearest even, the native modules answer Metal's
+/// `half(float)`, but for the quantize's zero below the smallest normal half.
 #[test]
 fn native_half_rounding_records_its_kind_and_requires_no_fact() {
     let Some(bc) = bitcode() else {
@@ -214,8 +214,9 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         }
     }
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to
-    // even, the largest half below 65520 and infinity from it, and a half denormal.
-    for stem in ["lavapipe", "swiftshader"] {
+    // even, the largest half below 65520 and infinity from it; a half denormal the conversion's,
+    // and the quantize's zero (the device's, `NativeHalfQuantize`).
+    for (stem, keeps) in [("lavapipe", true), ("swiftshader", false)] {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, &p, x);
         let tie = 1.0 + 2f32.powi(-11);
@@ -225,7 +226,7 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         let denormal = 3.0 * 2f32.powi(-24);
         assert_eq!(
             run("half_narrow", [denormal + 2f32.powi(-27), 0.0]),
-            denormal,
+            if keeps { denormal } else { 0.0 },
             "{stem}: a half denormal"
         );
         assert_eq!(run("half_sum", [1.0, 2f32.powi(-11)]), 1.0, "{stem}: a sum");
@@ -234,15 +235,13 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
 }
 
 /// On a profile without `shaderFloat16` (`QuantizeForm::Device`: the floor, SwiftShader, NVIDIA's
-/// Pascal) a `half` sum takes the device's `OpQuantizeToF16` alone, with no denormal arm
-/// (`narrow::flushes_below_normal`), and records `NativeHalfQuantize`, while the narrowing alone
-/// keeps its arm; on the interpreter, whose quantize flushes what is too small for a normal half,
-/// a sum below the smallest normal half answers the zero of its sign, where Metal answers the half
-/// denormal, and the narrowing of the same value answers that denormal. A sum from the smallest
-/// normal half up is the exactly rounded half.
+/// Pascal) a `half` sum and a narrowing alike take the device's `OpQuantizeToF16` alone, with no
+/// denormal arm (no `RoundEven`), and record `NativeHalfQuantize` and require no fact; on the
+/// interpreter, whose quantize flushes what is too small for a normal half, a sum or a narrowing
+/// below the smallest normal half answers the zero of its sign, where Metal answers the half
+/// denormal. A result from the smallest normal half up is the exactly rounded half.
 #[test]
-fn a_half_sum_below_the_smallest_normal_takes_the_devices_quantize() {
-    use crate::lower::arith::narrow::flushes_below_normal;
+fn a_half_below_the_smallest_normal_takes_the_devices_quantize() {
     let Some(bc) = bitcode() else {
         return;
     };
@@ -253,14 +252,13 @@ fn a_half_sum_below_the_smallest_normal_takes_the_devices_quantize() {
             continue;
         }
         devices += 1;
-        for (name, bare) in [("half_sum", true), ("half_narrow", false)] {
+        for (name, _) in &KERNELS {
             let what = format!("{name} on {stem}");
-            let (a, _, kept) =
-                compile_kept(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            let a = compile(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let flushes = flushes_below_normal(&kept, &mut meter())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert_eq!(flushes, bare, "{what}: a quantize with no denormal arm");
+            let r = rounding(&a.module.words);
+            assert!(r.quantizes > 0, "{what}: {r:?}");
+            assert_eq!(r.round_evens, 0, "{what}: a denormal arm, {r:?}");
             assert!(
                 a.precision.contains(&PrecisionNote::NativeHalfQuantize),
                 "{what}: {:?}",
@@ -274,23 +272,33 @@ fn a_half_sum_below_the_smallest_normal_takes_the_devices_quantize() {
             );
         }
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, p, x);
-        let sum = run("half_sum", [denormal, 2f32.powi(-24)]);
+        // Two normal halves whose difference is the half denormal `3 * 2^-24`.
+        let normal = 2f32.powi(-14);
+        let sum = run("half_sum", [normal + denormal, -normal]);
         assert_eq!(
             sum.to_bits(),
             0,
             "{stem}: a sum below the smallest normal half"
         );
-        let sum = run("half_sum", [-denormal, 0.0]);
+        let sum = run("half_sum", [-normal - denormal, normal]);
         assert_eq!(sum.to_bits(), (-0.0f32).to_bits(), "{stem}: its sign");
+        let narrowed = run("half_narrow", [denormal, 0.0]);
         assert_eq!(
-            run("half_narrow", [denormal, 0.0]),
-            denormal,
-            "{stem}: the narrowing's denormal arm"
+            narrowed.to_bits(),
+            0,
+            "{stem}: a narrowing below the smallest normal half"
+        );
+        let narrowed = run("half_narrow", [-denormal, 0.0]);
+        assert_eq!(narrowed.to_bits(), (-0.0f32).to_bits(), "{stem}: its sign");
+        assert_eq!(
+            run("half_sum", [2f32.powi(-13) + 2f32.powi(-23), -normal]),
+            2f32.powi(-14) + 2f32.powi(-23),
+            "{stem}: a normal sum"
         );
         assert_eq!(
-            run("half_sum", [2f32.powi(-14), 2f32.powi(-24)]),
-            2f32.powi(-14) + 2f32.powi(-24),
-            "{stem}: a normal sum"
+            run("half_narrow", [2f32.powi(-14) + 2f32.powi(-25), 0.0]),
+            2f32.powi(-14),
+            "{stem}: a normal narrowing's tie to even"
         );
     }
     assert!(devices > 0, "a profile without shaderFloat16");
@@ -318,8 +326,9 @@ fn decode_module() -> String {
 }
 
 /// The `half` decodes of `m` in its functions' blocks: the device's widenings (an `OpFConvert`
-/// from 16- to 32-bit floats) and the integer decode's conversions of a magnitude to `float`
-/// (`OpConvertUToF`, one per decode, which nothing else in the decode kernels has).
+/// from 16- to 32-bit floats, or a `GLSL.std.450 UnpackHalf2x16`) and the conversions of a
+/// magnitude to `float` an integer decode would take (`OpConvertUToF`, which nothing else in the
+/// decode kernels has).
 fn decodes(m: &TypedModule) -> (usize, usize) {
     let width = |v: Value| -> Option<u8> {
         let ty = m.value(v).ok()?.ty;
@@ -344,6 +353,13 @@ fn decodes(m: &TypedModule) -> (usize, usize) {
                 Some(r),
             ) if width(*a) == Some(16) && width(r) == Some(32) => device += 1,
             (
+                Inst::Glsl {
+                    op: GlslOp::UnpackHalf2x16,
+                    ..
+                },
+                _,
+            ) => device += 1,
+            (
                 Inst::Convert {
                     op: ConvOp::ConvertUToF,
                     ..
@@ -356,14 +372,15 @@ fn decodes(m: &TypedModule) -> (usize, usize) {
     (device, integer)
 }
 
-/// A `half` read from memory is the device's widening of its bits wherever the profile has
-/// `shaderFloat16`, inside a loop and out, with no integer decode: on lavapipe and NVIDIA (the
-/// device's conversion, no float controls) the module records `NativeNanEncoding` and
-/// `NativeHalfConversion` (a NaN's bits and, where the device flushes 16-bit denormals, a
-/// denormal); on MoltenVK, whose widening the measured `MetalHalfArithmetic` reads as Metal's, it
-/// records `NativeNanEncoding` alone and requires that fact. A `half4` widens as one vector. A
-/// profile without `shaderFloat16` keeps the integer decode, which adds neither note. Each
-/// module passes L3 and answers the `half`s' values on the interpreter (whose widening is exact).
+/// A `half` read from memory is the device's widening of its bits on every profile, inside a loop
+/// and out, with no integer decode: on lavapipe and NVIDIA (the device's conversion, no float
+/// controls) the module records `NativeNanEncoding` and `NativeHalfConversion` (a NaN's bits and,
+/// where the device flushes 16-bit denormals, a denormal); on MoltenVK, whose widening the measured
+/// `MetalHalfArithmetic` reads as Metal's, it records `NativeNanEncoding` alone and requires that
+/// fact; on the floor (no `shaderFloat16`) it is `UnpackHalf2x16` of each word, recording both
+/// notes and requiring no fact. A `half4` widens as one vector (two words unpacked and shuffled
+/// where the device unpacks). Each module passes L3 and answers the `half`s' values on the
+/// interpreter (whose widening is exact).
 #[test]
 fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
     let Some(bc) = assemble("native-half-decode", &decode_module()) else {
@@ -383,13 +400,15 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
     ];
     let nan = PrecisionNote::NativeNanEncoding;
     let conversion = PrecisionNote::NativeHalfConversion;
+    // Each profile, whether its widening is noted `NativeHalfConversion` (else measured), and
+    // whether it unpacks words (no `shaderFloat16`).
     let cases = [
-        ("lavapipe", Some(true)),
-        ("nvidia-rtx5080-laptop", Some(true)),
-        ("moltenvk-m3", Some(false)),
-        ("vk12-floor", None),
+        ("lavapipe", true, false),
+        ("nvidia-rtx5080-laptop", true, false),
+        ("moltenvk-m3", false, false),
+        ("vk12-floor", true, true),
     ];
-    for (stem, native) in cases {
+    for (stem, native, unpacks) in cases {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
         for (entry, both) in [("both", true), ("inside", false)] {
             let what = format!("{entry} on {stem}");
@@ -397,40 +416,30 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
                 compile_kept(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             assert!(!kept.loops().is_empty(), "{what}: the loop");
-            // The loop's `half`, and before it the first `half` and the `half4`.
-            let reads = if both { 3 } else { 1 };
+            // The loop's `half`, and before it the first `half` and the `half4`, which the unpack
+            // reads as its two words.
+            let reads = match (both, unpacks) {
+                (false, _) => 1,
+                (true, false) => 3,
+                (true, true) => 4,
+            };
             let (device, integer) = decodes(&kept);
-            match native {
-                Some(native) => {
-                    assert_eq!((device, integer), (reads, 0), "{what}: the decodes");
-                    assert!(a.precision.contains(&nan), "{what}: {:?}", a.precision);
-                    assert_eq!(
-                        a.precision.contains(&conversion),
-                        native,
-                        "{what}: {:?}",
-                        a.precision
-                    );
-                    assert_eq!(
-                        a.requirements
-                            .properties
-                            .contains(&VkProperty::MetalHalfArithmetic),
-                        !native,
-                        "{what}: {:?}",
-                        a.requirements.properties
-                    );
-                }
-                None => {
-                    assert_eq!((device, integer), (0, reads), "{what}: the decodes");
-                    // The integer decode adds no note to the operations' own.
-                    assert_eq!(
-                        a.precision.contains(&nan),
-                        plan.precision.contains(&nan),
-                        "{what}: {:?}",
-                        a.precision
-                    );
-                    assert!(!a.precision.contains(&conversion), "{what}");
-                }
-            }
+            assert_eq!((device, integer), (reads, 0), "{what}: the decodes");
+            assert!(a.precision.contains(&nan), "{what}: {:?}", a.precision);
+            assert_eq!(
+                a.precision.contains(&conversion),
+                native,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert_eq!(
+                a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfArithmetic),
+                !native,
+                "{what}: {:?}",
+                a.requirements.properties
+            );
             let res = Resources {
                 buffers: vec![Buffer {
                     slot: Some(ResourceSlot {
@@ -561,6 +570,10 @@ struct Rounding {
     unit_loads: usize,
     /// `OpBitcast`s of a 16-bit integer to a 16-bit float: a unit read as a `half`.
     unit_halves: usize,
+    /// `GLSL.std.450 RoundEven`s: the exact denormal arm a quantize no longer takes.
+    round_evens: usize,
+    /// `GLSL.std.450 UnpackHalf2x16`s: a `half` widened from its bits without `shaderFloat16`.
+    unpacks: usize,
 }
 
 /// [`Rounding`] of `words`, read back through the test parser.
@@ -611,6 +624,19 @@ fn rounding(words: &[u32]) -> Rounding {
                 }
             }
             Op::QuantizeToF16 => r.quantizes += 1,
+            Op::ExtInst => match i.operands.get(1) {
+                Some(Operand::LiteralExtInstInteger(n))
+                    if *n == GlslOp::RoundEven.to_spirv() as u32 =>
+                {
+                    r.round_evens += 1
+                }
+                Some(Operand::LiteralExtInstInteger(n))
+                    if *n == GlslOp::UnpackHalf2x16.to_spirv() as u32 =>
+                {
+                    r.unpacks += 1
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -814,20 +840,22 @@ fn half_load_module() -> String {
         .replace("ptr @half_narrow,", "ptr @half_load,")
 }
 
-/// A kernel that reads a `half` from memory and rounds nothing widens its bits by the device's
-/// conversion on every committed profile with `shaderFloat16`, with no integer decode (a 16-bit
-/// storage unit it reads is read as a 16-bit float itself), and records `NativeNanEncoding` (a
-/// NaN's bits the device's) and selects no canonical NaN. Under the float
+/// A kernel that reads a `half` from memory and rounds nothing widens its bits by the device on
+/// every committed profile, with no integer decode, and records `NativeNanEncoding` (a NaN's bits
+/// the device's) and selects no canonical NaN. With `shaderFloat16` the widening is the device's
+/// conversion (a 16-bit storage unit it reads is read as a 16-bit float itself): under the float
 /// controls (ANV, RADV) its entry declares them (`narrow::controlled_modes`, so a half denormal
 /// widens exactly) and it records no other note; where the measured `MetalHalfArithmetic` reads
 /// every `half` through that widening as Metal's (MoltenVK) it requires the fact; elsewhere
 /// (NVIDIA, lavapipe: the device's conversion, no float controls) it records
-/// `NativeHalfConversion`, whose bound holds a denormal the device flushes. A profile without
-/// `shaderFloat16` keeps the integer decode, which adds neither. Each passes L3; on the
-/// interpreter a half denormal, a zero's sign, `65504` and an infinity read as their values, and a
-/// NaN as a NaN; the `half` stored back unchanged keeps its bits, NaNs included.
+/// `NativeHalfConversion`, whose bound holds a denormal the device flushes. Without it (Pascal,
+/// the LunarG baseline, SwiftShader, the floor) the widening is one `UnpackHalf2x16` of the word,
+/// a 16-bit unit's zero extension where the profile has 16-bit storage, with no 16-bit float type,
+/// recording `NativeHalfConversion` too and requiring no fact. Each passes L3; on the interpreter
+/// a half denormal, a zero's sign, `65504` and an infinity read as their values, and a NaN as a
+/// NaN; the `half` stored back unchanged keeps its bits, NaNs included.
 #[test]
-fn a_half_read_from_memory_is_the_devices_widening_wherever_it_has_float16() {
+fn a_half_read_from_memory_is_the_devices_widening_on_every_profile() {
     use crate::spv::ExecutionMode as M;
     let Some(bc) = assemble("native-half-load", &half_load_module()) else {
         return;
@@ -837,7 +865,7 @@ fn a_half_read_from_memory_is_the_devices_widening_wherever_it_has_float16() {
         let form = quantize_form(p);
         *forms.entry(format!("{form:?}")).or_insert(0usize) += 1;
         let what = format!("half_load on {stem} ({form:?})");
-        let (a, plan, _) =
+        let (a, _, _) =
             compile_kept(&bc, "half_load", p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         let r = rounding(&a.module.words);
@@ -851,16 +879,11 @@ fn a_half_read_from_memory_is_the_devices_widening_wherever_it_has_float16() {
         let conversion = a.precision.contains(&PrecisionNote::NativeHalfConversion);
         match form {
             QuantizeForm::Device => {
-                assert_eq!(r.widenings, 0, "{what}: {r:?}");
-                // The integer decode adds no note to the widening `fpext`'s own.
-                assert_eq!(
-                    nan,
-                    plan.precision.contains(&PrecisionNote::NativeNanEncoding)
-                );
-                assert!(!conversion && !fact, "{what}: {:?}", a.precision);
+                assert_eq!((r.widenings, r.unpacks), (0, 1), "{what}: {r:?}");
+                assert!(nan && conversion && !fact, "{what}: {:?}", a.precision);
             }
             QuantizeForm::Controlled => {
-                assert_eq!(r.widenings, 1, "{what}: {r:?}");
+                assert_eq!((r.widenings, r.unpacks), (1, 0), "{what}: {r:?}");
                 for mode in [M::RoundingModeRTE, M::DenormPreserve] {
                     assert!(
                         r.modes.contains(&(mode as u32, 16)),
@@ -870,7 +893,7 @@ fn a_half_read_from_memory_is_the_devices_widening_wherever_it_has_float16() {
                 assert!(nan && !conversion && !fact, "{what}: {:?}", a.precision);
             }
             QuantizeForm::Converted => {
-                assert_eq!(r.widenings, 1, "{what}: {r:?}");
+                assert_eq!((r.widenings, r.unpacks), (1, 0), "{what}: {r:?}");
                 assert!(nan, "{what}: {:?}", a.precision);
                 assert_eq!(conversion, !measured, "{what}: {:?}", a.precision);
                 assert_eq!(fact, measured, "{what}: {:?}", a.requirements.properties);

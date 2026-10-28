@@ -49,11 +49,13 @@
 //!   where the profile takes `MetalCanonicalNans`, and a NaN of the device's bits elsewhere
 //!   (`NativeNanEncoding`).
 //! - **The `half` quantize** (`MetalHalfQuantize`): the NaN model's narrowing, conversion and
-//!   `half` cases. Where the profile takes the deviation, a `half` rounding is the device's
-//!   `OpQuantizeToF16` alone and the kernels require `VkProperty::MetalHalfQuantize`; under the
-//!   float controls it is the device's conversion, Metal's by the Vulkan spec. Both give Metal's
-//!   largest `half` there, so those words are checked; elsewhere the device's own form rounds
-//!   (`NativeHalfConversion` or `NativeHalfQuantize`), whose words the test prints.
+//!   `half` cases. No kernel requires `VkProperty::MetalHalfQuantize`: a `half` rounding through
+//!   the device's `OpQuantizeToF16` (a profile without `shaderFloat16`) records
+//!   `NativeHalfQuantize` whether the profile takes the deviation or not, its result below the
+//!   smallest normal `half` the device's. Under the float controls a rounding is the device's
+//!   conversion, Metal's by the Vulkan spec, which gives Metal's largest `half`, so those words
+//!   are checked; elsewhere the device's own form rounds (`NativeHalfConversion` or
+//!   `NativeHalfQuantize`), whose words the test prints.
 //! - **The `half` conversion**: the same cases, and the owned `half` edge fixtures. A profile with
 //!   `shaderFloat16` and without the float controls that make the device's conversion Metal's
 //!   rounds through that conversion and records `PrecisionNote::NativeHalfConversion`: the device's
@@ -73,15 +75,16 @@
 //!   a NaN's bits (`NativeNanEncoding`), or the device's own conversion or quantize, noted
 //!   (`NativeHalfConversion`, `NativeHalfQuantize`), whose words the test prints.
 //! - **The `half` widening** (`MetalHalfArithmetic` again, whose measurement reads every `half`
-//!   through the device's widening): the owned fixture `hwd_half_reads` reads back every `half`
-//!   bit pattern, one thread each, through threadgroup words and a buffer, and uses some reads only
-//!   in a sum, a product, a widening to `float` and a compare, and moves another through a select
-//!   to memory. Every read is the module's decode for the profile (`lower::arith::narrow::from_bits`):
-//!   the device's widening of the bits wherever the profile has `shaderFloat16`, else the integer
-//!   decode, exact. Each of the 65,536 patterns is held to Metal's answer but within the stage's
-//!   notes' bound: a NaN's bits the device's (`NativeNanEncoding`), and where the widening is not
-//!   measured to be Metal's (`NativeHalfConversion`) a denormal the zero of its sign; where the
-//!   profile takes the deviation the module requires it, and every denormal is Metal's.
+//!   through the device's widening): the owned fixture `hwd_half_reads` reads back every `half` bit
+//!   pattern, one thread each, through threadgroup words and a buffer, and uses some reads only in
+//!   a sum, a product, a widening to `float` and a compare, and moves another through a select to
+//!   memory. Every read is the module's decode for the profile (`lower::arith::narrow::from_bits`):
+//!   the device's widening of the bits on every profile (its conversion with `shaderFloat16`,
+//!   `UnpackHalf2x16` without). Each of the 65,536 patterns is held to Metal's answer but within
+//!   the stage's notes' bound: a NaN's bits the device's (`NativeNanEncoding`), and where the
+//!   widening is neither under the 16-bit float controls nor measured to be Metal's
+//!   (`NativeHalfConversion`) a denormal the zero of its sign; where the profile takes the
+//!   deviation the module requires it, and every denormal is Metal's.
 //! - **The fragment simdgroups** (`MetalFragmentSimdgroups`): the owned fixture
 //!   `gsm2_fragment_lanes` writes a fragment's `[[thread_index_in_simdgroup]]`, read as a `uint`
 //!   and a `ushort` parameter and as a program-scope `uint`, over three draws into a 32x32 target:
@@ -943,10 +946,10 @@ const HALF_EDGE_CASES: [&str; 6] = [
 /// `0xFBFF` in either half, or the `float` 65504 of either sign) is the Metal row's of the same
 /// chip where the kernel rounds as Metal does: the device's conversion to 16 bits and back under
 /// the float controls that make it Metal's where the profile has them (the kernels then declare
-/// them and require no fact), else the device's quantize where the profile takes
-/// `MetalHalfQuantize` (the kernels then require `VkProperty::MetalHalfQuantize`). A kernel that
-/// rounds by the device's own form (`rounds_natively`) answers the device's words, which the test
-/// prints.
+/// them and require no fact). A kernel that rounds by the device's own form (`rounds_natively`:
+/// its conversion, or its quantize, whether the profile takes `MetalHalfQuantize` or not) answers
+/// the device's words, which the test prints, and no kernel requires
+/// `VkProperty::MetalHalfQuantize`.
 #[test]
 fn half_quantize_rounds_as_metal_at_the_edge() {
     let messages = Messages::default();
@@ -969,13 +972,9 @@ fn half_quantize_rounds_as_metal_at_the_edge() {
             let case = public_case(case_name).unwrap();
             let controlled = rounds_under_float_controls(&device, &case);
             let native = rounds_natively(&device, &case);
-            // A profile that rounds through the device's conversion holds no quantize to rely on.
-            let metals = quantizes && !native && !controlled;
-            assert_eq!(
-                requires_property(&device, &case, VkProperty::MetalHalfQuantize),
-                metals,
-                "{case_name} on {name}: the kernel takes the device's quantize alone exactly \
-                 where the profile takes the deviation and has not the float controls"
+            assert!(
+                !requires_property(&device, &case, VkProperty::MetalHalfQuantize),
+                "{case_name} on {name}: a kernel's quantize records its note and requires no fact"
             );
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
@@ -989,9 +988,9 @@ fn half_quantize_rounds_as_metal_at_the_edge() {
                 .filter(|(_, a, b)| a != b)
                 .collect();
             eprintln!(
-                "half quantize {case_name} on {name} (the device's: {metals}, the device's own \
-                 rounding: {native}, under float controls: {controlled}): {} of {} edge words \
-                 differ from Metal",
+                "half quantize {case_name} on {name} (measured quantize: {quantizes}, the \
+                 device's own rounding: {native}, under float controls: {controlled}): {} of {} \
+                 edge words differ from Metal",
                 differ.len(),
                 edge.len()
             );
@@ -1048,9 +1047,9 @@ const DFL_TRIG_CASE: &str = "precise-trigonometric-functions-at-nan-operands-und
 /// `DriverDeviation::MetalFloatDenormals` (elsewhere a denormal is the device's own, and the test
 /// prints how many words differ), the kernels requiring `VkProperty::MetalFloatDenormals` exactly
 /// where the profile takes the deviation; in the `half`
-/// edge cases every word where the kernel rounds as Metal does (under the float controls, or
-/// through the quantize, requiring `VkProperty::MetalHalfQuantize`, exactly where the profile takes
-/// that one), the device's words printed where it rounds by its own form;
+/// edge cases every word where the kernel rounds as Metal does (under the float controls), the
+/// device's words printed where it rounds by its own form (its conversion, or its quantize, for
+/// which no kernel requires `VkProperty::MetalHalfQuantize`);
 /// and in [`DFL_TRIG_CASE`] every word whose Metal answer is a NaN (the functions' other words are
 /// the math library's precision, not their NaNs). A NaN's bits are Metal's only where the profile
 /// takes `DriverDeviation::MetalCanonicalNans` and Metal answers its canonical NaN; elsewhere the
@@ -1120,18 +1119,15 @@ fn owned_float_fixtures_answer_metal() {
             let case = public_case(case_name).unwrap();
             let controlled = rounds_under_float_controls(&device, &case);
             let native = rounds_natively(&device, &case);
-            let quantize = quantizes && !native && !controlled;
-            assert_eq!(
-                requires_property(&device, &case, VkProperty::MetalHalfQuantize),
-                quantize,
-                "{case_name} on {name}: the kernel takes the device's quantize alone exactly \
-                 where the profile takes the deviation and has not the float controls"
+            assert!(
+                !requires_property(&device, &case, VkProperty::MetalHalfQuantize),
+                "{case_name} on {name}: a kernel's quantize records its note and requires no fact"
             );
             let run = run_case(&device, &case).unwrap();
             let metal = metal_row(&case, METAL_ENVIRONMENT);
             let differ = differing_of(&run.output, &metal, 16, &(0..16).collect::<Vec<_>>());
             eprintln!(
-                "owned half edge {case_name} on {name} (the device's quantize: {quantize}, own \
+                "owned half edge {case_name} on {name} (measured quantize: {quantizes}, own \
                  rounding: {native}, under float controls: {controlled}): {} of {} words differ \
                  from Metal",
                 differ.len(),
@@ -1587,12 +1583,13 @@ fn half_denormal(h: u16) -> bool {
 }
 
 /// Every word `hwd_half_reads` writes, for every `half` bit pattern, is held to Metal's but within
-/// the notes its stage records. Each read is the module's decode (`lower::arith::narrow::from_bits`):
-/// on a profile with `shaderFloat16` the device's widening, exact but for a NaN's bits
-/// (`PrecisionNote::NativeNanEncoding`) and, where that widening is not measured to be Metal's
+/// the notes its stage records. Each read is the module's decode (`lower::arith::narrow::from_bits`),
+/// the device's widening on every profile (its conversion with `shaderFloat16`, `UnpackHalf2x16`
+/// without), exact but for a NaN's bits (`PrecisionNote::NativeNanEncoding`) and, where that
+/// widening is neither under the 16-bit float controls nor measured to be Metal's
 /// (`DriverDeviation::MetalHalfArithmetic`, whose fact the module then requires), a denormal,
-/// which may be the zero of its sign (`NativeHalfConversion`); elsewhere the integer decode,
-/// exact. So every thread whose pattern is neither is held to Metal's, a NaN pattern's word to a
+/// which may be the zero of its sign (`NativeHalfConversion`). So every thread whose pattern is
+/// neither is held to Metal's, a NaN pattern's word to a
 /// NaN where the stage records the NaN note, and a denormal's to Metal's or the zero of its sign
 /// where it records the conversion; the compares are Metal's on every device. The runtime
 /// announces the notes the stage records, and the test prints how many words of each are the

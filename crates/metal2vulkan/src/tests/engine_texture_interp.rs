@@ -63,6 +63,18 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
 }
 
 /// Every committed profile, and two without any robustness (so the shader contains itself).
+/// Half `h` as profile `p`'s rounding answers it on the interpreter: itself, but in
+/// `QuantizeForm::Device` (no `shaderFloat16`), whose quantize alone rounds, a half denormal is the
+/// zero of its sign.
+fn quantized(p: &DeviceProfile, h: u16) -> u16 {
+    let device = crate::lower::arith::narrow::quantize_form(p)
+        == crate::spirv::builder::QuantizeForm::Device;
+    match device && h & 0x7C00 == 0 {
+        true => h & 0x8000,
+        false => h,
+    }
+}
+
 fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut out = crate::spirv::testing::committed_profiles().expect("profiles");
     let all = [
@@ -540,7 +552,9 @@ fn short_texels_sign_extend_and_half_reads_round() {
 /// format whose conversion is not measured (the default) takes every other `half` texel's exact
 /// rounding, which keeps a half denormal. On any other profile the read is the device's conversion
 /// of its `f32` texel, to nearest even here, with no class. Both record
-/// `PrecisionNote::HalfTexelConversion`.
+/// `PrecisionNote::HalfTexelConversion`. On a profile without `shaderFloat16` the rounding is the
+/// device's quantize alone (`PrecisionNote::NativeHalfQuantize`), whose result below the smallest
+/// normal half the interpreter gives as the zero of its sign.
 #[test]
 fn half_reads_convert_by_the_bound_format() {
     use crate::device::requirements::VkProperty;
@@ -618,7 +632,11 @@ fn half_reads_convert_by_the_bound_format() {
                 .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
-            assert_eq!(halves, want, "{stem} class {class:?}");
+            assert_eq!(
+                halves,
+                want.map(|h| quantized(&p, h)),
+                "{stem} class {class:?}"
+            );
         }
         ran += 1;
     }
@@ -629,8 +647,9 @@ fn half_reads_convert_by_the_bound_format() {
 /// exact `f32` value, reads back bit for bit, every half subnormal, both zeros, both infinities and
 /// `±65504` included, and a NaN as a NaN, its bits the rounding's (`DeviceNanEncoding`); a 32-bit
 /// float texel rounds to nearest even onto the half grid, subnormals kept, past `65504` to the
-/// infinity. The interpreter gives `OpQuantizeToF16`'s result below the smallest normal half as the
-/// zero of the input's sign, so a bare quantize fails here.
+/// infinity. On a profile without `shaderFloat16` the rounding is the device's quantize alone
+/// (`PrecisionNote::NativeHalfQuantize`), whose result below the smallest normal half the
+/// interpreter gives as the zero of the input's sign; every other answer is the same.
 #[test]
 fn half_reads_keep_subnormals_zeros_infinities_and_nans() {
     let Some(bc) = fixture() else {
@@ -684,10 +703,11 @@ fn half_reads_keep_subnormals_zeros_infinities_and_nans() {
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .collect();
             let nan = |h: u16| h & 0x7C00 == 0x7C00 && h & 0x3FF != 0;
+            let want = want.map(|h| quantized(&p, h));
             let same = got.len() == want.len()
                 && got
                     .iter()
-                    .zip(want)
+                    .zip(&want)
                     .all(|(&g, &w)| g == w || (nan(g) && nan(w)));
             assert!(
                 same,

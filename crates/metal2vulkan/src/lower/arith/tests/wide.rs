@@ -3,8 +3,9 @@
 //! Operands and results cross the kernel boundary as their two words per lane (the parent's
 //! `load`/`store` go through `wide::from_words`/`wide::to_words`), so the word composition is
 //! checked by every test. Every kernel also passes L3 on `vk12-floor`, which has no
-//! `shaderInt64` (a float64 kernel only on the parent's 64-bit profile): the sequences need no
-//! 64-bit integer. References are the parent's LLVM and Metal definitions.
+//! `shaderInt64` (a float64 kernel only on the parent's 64-bit profile), built in the profile's
+//! `half` rounding form (it has no `shaderFloat16`): the sequences need no 64-bit integer.
+//! References are the parent's LLVM and Metal definitions.
 
 use super::super::wide::{self as w, WideOp};
 use super::*;
@@ -26,7 +27,8 @@ fn floor() -> DeviceProfile {
         .expect("vk12-floor")
 }
 
-/// [`check_accept`] after L3 on `vk12-floor` (unless a form needs 64-bit floats).
+/// [`check_accept`] after L3 on `vk12-floor` (unless a form needs 64-bit floats), the module there
+/// built in the profile's `half` rounding form.
 fn check_wide(
     what: &str,
     ins: &[Form],
@@ -40,8 +42,21 @@ fn check_wide(
         .chain(std::iter::once(&out))
         .any(|f| f.float_fmt() == Some(FloatFmt::F64));
     if !f64_used {
-        let m = kernel(ins, out, body).unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
-        assert_valid(m, &floor());
+        let p = floor();
+        let q = crate::lower::arith::narrow::quantize_form(&p);
+        let m = kernel_defs(
+            ins,
+            out,
+            &|b| {
+                b.set_quantize_form(q);
+                Ok(Vec::new())
+            },
+            &|fb, xs, _| body(fb, xs),
+            false,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
+        assert_valid(m, &p);
     }
     check(what, ins, out, body, cases, reference, false);
 }
@@ -506,9 +521,9 @@ fn wide_to_float_rounds_once() {
     }
 }
 
-/// A wide integer converts to `half` by integer arithmetic on its `f32`, with no `OpQuantizeToF16`,
-/// on the values `integers_for_half` gives a 64-bit integer, plus `2^32` and `2^39` and their
-/// neighbours.
+/// A wide integer converts to `half` by integer arithmetic on its `f32`, with no `OpQuantizeToF16`
+/// even where the module rounds by the device's quantize ([`QuantizeForm::Device`]), on the values
+/// `integers_for_half` gives a 64-bit integer, plus `2^32` and `2^39` and their neighbours.
 #[test]
 fn wide_integers_round_to_half_without_quantize() {
     for bits in [64u8, 40] {
@@ -531,8 +546,18 @@ fn wide_integers_round_to_half_without_quantize() {
             let what = format!("{kind:?} wide i{bits} -> half");
             let body =
                 |fb: &mut FunctionBuilder<'_>, x: &[Value]| w::cast(fb, kind, f, float(16), x[0]);
-            let module =
-                kernel(&[f], float(16), &body).unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
+            let module = kernel_defs(
+                &[f],
+                float(16),
+                &|b| {
+                    b.set_quantize_form(QuantizeForm::Device);
+                    Ok(Vec::new())
+                },
+                &|fb, xs, _| body(fb, xs),
+                false,
+                false,
+            )
+            .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
             assert!(
                 !super::super::narrow::quantizes(&module),
                 "{what}: the module holds OpQuantizeToF16"

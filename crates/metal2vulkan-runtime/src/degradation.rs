@@ -2111,26 +2111,35 @@ degradations! {
         DeviceVertexConversion = "device-vertex-conversion";
         /// Class: native half rounding. The device's own conversion of a `float` to 16 bits
         /// rounds the pipeline's `half` results, on a device with `shaderFloat16` whose float
-        /// controls do not make that conversion Metal's `half(float)`. Recorded bound: a finite result within one
-        /// unit in the last place of the `half` (to nearest even on NVIDIA's RTX 5080 Laptop
-        /// GPU, toward zero on its RTX 3090 and lavapipe); where the device rounds toward zero,
-        /// 65504 from 65520 up where Metal answers infinity; a result below `2^-14` the zero of
-        /// its sign on a device that flushes 16-bit denormals; a NaN's encoding (`0x7FFF` on the
-        /// RTX 5080, where Metal answers `0x7E00`) and the sign of a zero result the device's.
+        /// controls do not make that conversion Metal's `half(float)`; and the device's widening
+        /// reads a `half` from its bits (a load, a reinterpretation, a texel's bits) where it is
+        /// neither under those controls nor measured to be Metal's: NVIDIA's and lavapipe's
+        /// conversion, and `UnpackHalf2x16` on every device without `shaderFloat16`. Recorded
+        /// bound: a finite result within one unit in the last place of the `half` (to nearest
+        /// even on NVIDIA's RTX 5080 Laptop GPU, toward zero on its RTX 3090 and lavapipe); where
+        /// the device rounds toward zero, 65504 from 65520 up where Metal answers infinity; a
+        /// result below `2^-14`, or a `half` denormal read, the zero of its sign on a device that
+        /// flushes 16-bit denormals; a NaN's encoding (`0x7FFF` on the RTX 5080, where Metal
+        /// answers `0x7E00`) and the sign of a zero result the device's.
         NativeHalfConversion = "native-half-conversion";
-        /// Class: native half rounding. The device's `OpQuantizeToF16` rounds the pipeline's
-        /// `half` results on a device without `shaderFloat16` whose quantize is not measured to
-        /// be Metal's. Recorded bound: a finite
-        /// result within one unit in the last place of the `half`; 65504 to 65520 possibly
-        /// infinity where Metal answers 65504; a NaN's encoding the device's.
+        /// Class: native half rounding. The device's `OpQuantizeToF16` alone rounds the
+        /// pipeline's `half` results computed in `float` on every device without `shaderFloat16`,
+        /// its quantize measured or not; an integer's `half` rounds exactly. Recorded bound: a
+        /// finite result within one unit in the last place of the `half`; 65504 to 65520 possibly
+        /// infinity where Metal answers 65504; a value below `2^-14` possibly a zero of either
+        /// sign where Metal answers the `half` denormal, or `2^-14` from just below it; a NaN's
+        /// encoding the device's.
         NativeHalfQuantize = "native-half-quantize";
         /// Class: native device maths. The device's NaN answers a `float` or `half` operation's
         /// NaN result where Metal answers a NaN the device is not measured to answer (every NaN
-        /// but the canonical one on a device measured to answer Metal's canonical NaN). Recorded
-        /// bound: where Metal answers a NaN the device answers a
-        /// NaN, its sign and payload the device's own, where Metal answers `0x7fc00000`
-        /// (`0x7e00` as `half`), an operand's bits, or the canonical NaN with an operand's sign;
-        /// every other result unchanged.
+        /// but the canonical one on a device measured to answer Metal's canonical NaN); and every
+        /// pipeline that reads a `half` from its bits, on every device, widens it by the device
+        /// (`OpFConvert` with `shaderFloat16`, `UnpackHalf2x16` without), a NaN to a NaN of the
+        /// device's bits. Recorded bound: where Metal answers a NaN the device answers a NaN, its
+        /// sign and payload the device's own, where Metal answers `0x7fc00000` (`0x7e00` as
+        /// `half`), an operand's bits, or the canonical NaN with an operand's sign, and where
+        /// Metal widens a `half` NaN to `0x7fc00000`; a `half` stored back unchanged keeps its
+        /// bits; every other result unchanged.
         NativeNanEncoding = "native-nan-encoding";
         /// Class: native device maths. The device's `NMin`, `NMax` or `NClamp` answers Metal's
         /// `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on

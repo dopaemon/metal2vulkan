@@ -61,17 +61,6 @@ fn nbits(f: Form, x: f64) -> u64 {
     }
 }
 
-/// [`nbits`] of `x` as the device's rounding alone gives it in `QuantizeForm::Device`, the module
-/// builder's default (`narrow::device_round`, a sum's or difference's): a `half` below the smallest
-/// normal half is the interpreter's quantize's zero of its sign.
-fn nbits_flushed(f: Form, x: f64) -> u64 {
-    let b = nbits(f, x);
-    match f.float_fmt() {
-        Some(FloatFmt::Half) if b & 0x7C00 == 0 => b & 0x8000,
-        _ => b,
-    }
-}
-
 /// Equal bits, or both NaN.
 fn exact_ok(out: Form) -> impl Fn(u64, u64) -> bool {
     move |g, w| g == w || (is_nan(out, g) && is_nan(out, w))
@@ -98,11 +87,14 @@ fn bf16_values() -> Vec<u64> {
 }
 
 /// Every half and bfloat bit pattern round-trips through its widened `f32` bit for bit (denormals,
-/// infinities, and NaN payloads and signs included), and the widened value is the pattern's.
+/// infinities, and NaN payloads and signs included) where the value is stored unchanged, and the
+/// widened value is the pattern's.
 ///
 /// The store of a loaded value reuses the bits it was decoded from, so the round trip runs twice:
 /// once through that reuse, and once through a copy of the value, which has no noted bits, so
-/// `to_bits` runs its sequence.
+/// `to_bits` runs its sequence: there a half NaN is the device's widening's (here the interpreter's
+/// canonical NaN, `PrecisionNote::NativeNanEncoding`), and every other half and every bfloat
+/// pattern comes back exactly.
 #[test]
 fn narrow_bits_round_trip_every_pattern() {
     for f in [half(), bfloat()] {
@@ -123,7 +115,7 @@ fn narrow_bits_round_trip_every_pattern() {
             &|fb, x| fb.unary(UnOp::CopyObject, x[0]),
             &cases,
             &|c| Some(vec![arg(c, 0)]),
-            &|g, w| g == w,
+            &|g, w| g == w || (f == half() && is_nan(f, g) && is_nan(f, w)),
         );
         check(
             &format!("{f:?} widened value"),
@@ -296,7 +288,10 @@ fn narrow_constant_bits_fold_exactly() {
 /// the harness loads above each lane's 16 bits cleared); so is a vector that keeps two lanes of a
 /// loaded vector and replaces the other two; so is a chain one lane of which has no known bits (a
 /// copy of a loaded lane), which runs the sequence; so is each lane stored alone, with and without
-/// known vector bits; and the vector's widened lanes are the patterns' values.
+/// known vector bits; and the vector's widened lanes are the patterns' values. Where the sequence
+/// runs, a `half` NaN's bits are the device's widening's (`PrecisionNote::NativeNanEncoding`): so
+/// in a copy's chain, and in the loaded vector's, which the harness builds from its lanes' decodes
+/// (a construct, whose bits are not noted).
 #[test]
 fn narrow_lanes_move_as_bits_through_vectors() {
     use super::super::narrow::note_insert;
@@ -326,6 +321,8 @@ fn narrow_lanes_move_as_bits_through_vectors() {
             .collect();
         let ins = [f, f, f, f];
         let lanes = |c: &Case| Some((0..4).map(|i| arg(c, i)).collect());
+        // Bits the sequence computes: a `half` NaN is the device's widening's.
+        let sequenced = |g: u64, w: u64| g == w || (f == half() && is_nan(f, g) && is_nan(f, w));
         for copy in [None, Some(2)] {
             check_accept(
                 &format!("{f:?} lanes through a vector (copied lane: {copy:?})"),
@@ -334,7 +331,10 @@ fn narrow_lanes_move_as_bits_through_vectors() {
                 &|fb, x| assemble(fb, f, x, copy),
                 &cases,
                 &lanes,
-                &|g, w| g == w,
+                &|g, w| match copy {
+                    Some(_) => sequenced(g, w),
+                    None => g == w,
+                },
             );
         }
         check(
@@ -355,8 +355,8 @@ fn narrow_lanes_move_as_bits_through_vectors() {
             },
             false,
         );
-        // Lanes 0 and 2 of a loaded vector replaced by two loaded lanes: the kept lanes' bits
-        // carry the harness's junk, which the store clears.
+        // Lanes 0 and 2 of a loaded vector replaced by two loaded lanes: the kept lanes' junk
+        // above their 16 bits is cleared.
         let mixed: Vec<Case> = (0..0x4000u64)
             .map(|b| {
                 vec![
@@ -379,7 +379,7 @@ fn narrow_lanes_move_as_bits_through_vectors() {
             },
             &mixed,
             &|c| Some(vec![c[0][0], c[2][1], c[1][0], c[2][3]]),
-            &|g, w| g == w,
+            &sequenced,
         );
         // The first and the last lane (the other lanes extract the same way).
         for lane in [0u32, 3] {
@@ -401,7 +401,10 @@ fn narrow_lanes_move_as_bits_through_vectors() {
                     },
                     &cases,
                     &|c| Some(vec![arg(c, lane as usize)]),
-                    &|g, w| g == w,
+                    &|g, w| match copied {
+                        true => sequenced(g, w),
+                        false => g == w,
+                    },
                 );
             }
         }
@@ -477,9 +480,8 @@ fn narrow_lane_inserts_never_cost_words() {
 /// bfloat pattern, each in one lane of a vector built by `narrow::insert`, widens to the `f32` bits
 /// its own decode gives (`f32_of_half_bits` is checked against that decode in
 /// `narrow_constant_bits_fold_exactly`), and every pattern, each in one lane of a vector of
-/// unknown bits stored lane by lane, is stored exactly; the first saves the lane decodes (more
-/// than 100 words for halves), and the second costs no more than one vector encode and a copy
-/// per lane.
+/// unknown bits stored lane by lane, is stored exactly; the first is smaller than the lane
+/// decodes, and the second costs no more than one vector encode and a copy per lane.
 #[test]
 fn narrow_vector_decodes_and_encodes_are_offered() {
     use super::super::narrow::insert;
@@ -508,13 +510,10 @@ fn narrow_vector_decodes_and_encodes_are_offered() {
         let m = kernel_with(&ins, out, &built(true), true, false).expect("build");
         let plain = kernel_with(&ins, out, &built(false), true, false).expect("build");
         let (with, without) = (words(m.clone()), words(plain));
-        // A bfloat decode is one shift, a half decode about twenty instructions.
-        let saved = if f == half() { 100 } else { 0 };
-        assert!(
-            with + saved < without,
-            "{f:?}: {with} words offered, {without} not"
-        );
-        // Bit for bit what each lane's own decode gives (a signaling NaN stays signaling).
+        // A bfloat decode is one shift, a half decode the device's widening of a few.
+        assert!(with < without, "{f:?}: {with} words offered, {without} not");
+        // Bit for bit what each lane's own decode gives: a bfloat's every pattern (a signaling NaN
+        // stays signaling), a half's but a NaN, which is the device's widening's NaN.
         let widened = |h: u64| {
             let h = h as u32;
             u64::from(if f == half() {
@@ -523,6 +522,7 @@ fn narrow_vector_decodes_and_encodes_are_offered() {
                 h << 16
             })
         };
+        let nan32 = |b: u64| f32::from_bits(b as u32).is_nan();
         check_module(
             &format!("{f:?} lanes decoded once"),
             m,
@@ -530,7 +530,7 @@ fn narrow_vector_decodes_and_encodes_are_offered() {
             out,
             &cases,
             &|c| Some((0..4).map(|i| widened(arg(c, i))).collect()),
-            &|g, w| g == w,
+            &|g, w| g == w || (f == half() && nan32(g) && nan32(w)),
         );
         // A copy of a loaded vector has no known bits; its lanes are stored one by one.
         let v4 = vec(f, 4);
@@ -552,7 +552,8 @@ fn narrow_vector_decodes_and_encodes_are_offered() {
             v4,
             &cases,
             &|c| Some(c[0].clone()),
-            &|g, w| g == w,
+            // A copy's half NaN is the device's widening's (`NativeNanEncoding`).
+            &|g, w| g == w || (f == half() && is_nan(f, g) && is_nan(f, w)),
         );
     }
 }
@@ -578,10 +579,11 @@ fn narrow_float_operators_are_named_by_format() {
 }
 
 /// A bitcast from or to narrow float vectors moves narrow patterns bit for bit (NaN payloads
-/// included) under each plan: through one word (`Packed`), through words (`Words`), and lane by
-/// lane (`Lanes`), where a narrow vector converts to and from its format bits once as a vector. The
-/// word plan between `<4 x half>` and `<2 x i32>` moves every half pattern; the others move the
-/// interesting values and pseudo-random patterns.
+/// included, but for a `half` NaN whose loaded bits are not reused: its bits are the device's
+/// widening's, `PrecisionNote::NativeNanEncoding`) under each plan: through one word (`Packed`),
+/// through words (`Words`), and lane by lane (`Lanes`), where a narrow vector converts to and from
+/// its format bits once as a vector. The word plan between `<4 x half>` and `<2 x i32>` moves every
+/// half pattern; the others move the interesting values and pseudo-random patterns.
 #[test]
 fn narrow_vector_bitcasts_move_narrow_patterns() {
     let mut rng = Rng(11);
@@ -640,15 +642,20 @@ fn narrow_vector_bitcasts_move_narrow_patterns() {
                             .collect(),
                     )
                 },
-                &|g, w| g == w,
+                &|g, w| {
+                    // Each 16-bit pattern alike, or a `half` NaN for a `half` NaN.
+                    (0..4).all(|k| {
+                        let (g, w) = ((g >> (16 * k)) & 0xFFFF, (w >> (16 * k)) & 0xFFFF);
+                        g == w || (f == half() && is_nan(f, g) && is_nan(f, w))
+                    })
+                },
             );
         }
     }
 }
 
 /// `+ - * / %` on widened narrow floats round once to the format (double rounding through `f32` is
-/// innocuous for these), on scalars and vectors; in `QuantizeForm::Device` a `half` sum or
-/// difference below the smallest normal half is the device's quantize's zero ([`nbits_flushed`]).
+/// innocuous for these), on scalars and vectors.
 #[test]
 fn narrow_float_operators_round_once() {
     for (f, vals) in [(half(), half_values()), (bfloat(), bf16_values())] {
@@ -669,8 +676,8 @@ fn narrow_float_operators_round_once() {
                 &|c| {
                     let (a, b) = (nval(f, arg(c, 0)), nval(f, arg(c, 1)));
                     Some(vec![match op {
-                        AirBin::FAdd => nbits_flushed(f, a + b),
-                        AirBin::FSub => nbits_flushed(f, a - b),
+                        AirBin::FAdd => nbits(f, a + b),
+                        AirBin::FSub => nbits(f, a - b),
                         AirBin::FMul => nbits(f, a * b),
                         AirBin::FDiv => nbits(f, a / b),
                         _ => nbits(f, a % b),
@@ -709,8 +716,6 @@ fn narrow_float_operators_round_once() {
 /// The float functions on half and bfloat values: closed functions return values of the format,
 /// `fract` rounds its `f32` difference once (it is not closed: a negative non-integral input needs
 /// more bits), `mix` and `llvm.fmuladd` round per step (the unfused choice), `sqrt` rounds once.
-/// In `QuantizeForm::Device` `fract`'s difference and `fmuladd`'s sum take the device's rounding
-/// alone, which flushes a `half` below the smallest normal half ([`nbits_flushed`]).
 #[test]
 fn narrow_float_functions_match_their_definitions() {
     for (f, vals) in [(half(), half_values()), (bfloat(), bf16_values())] {
@@ -793,9 +798,8 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
             &cases,
             &|c| {
                 let x = |i: usize| nval(f, c[i][0]);
-                // An intermediate step's rounding, and a sum's or difference's.
+                // An intermediate step's rounding.
                 let q = |v: f64| nval(f, nbits(f, v));
-                let qs = |v: f64| nval(f, nbits_flushed(f, v));
                 let r = match op {
                     FloatFn::Abs => x(0).abs(),
                     FloatFn::Floor => x(0).floor(),
@@ -803,13 +807,11 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                     FloatFn::Trunc => x(0).trunc(),
                     FloatFn::Round => metal_round(is_half, x(0)),
                     FloatFn::Rint => x(0).round_ties_even(),
-                    // A half NaN is kept bit for bit, a bfloat one is `float`'s.
-                    FloatFn::Fract if x(0).is_nan() && is_half => return Some(vec![c[0][0]]),
                     FloatFn::Fract if x(0).is_nan() => f64::NAN,
                     FloatFn::Fract if x(0).is_infinite() => 0.0,
                     FloatFn::Fract => {
                         let below = 1.0 - 2f64.powi(if is_half { -11 } else { -8 });
-                        qs(x(0) - x(0).floor()).min(below)
+                        q(x(0) - x(0).floor()).min(below)
                     }
                     FloatFn::Sign if x(0) > 0.0 => 1.0,
                     FloatFn::Sign if x(0) < 0.0 => -1.0,
@@ -826,7 +828,7 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                         return Some(vec![median3_ref(b, &|v| nval(f, v), false)]);
                     }
                     FloatFn::Mix => q(x(0) * q(1.0 - x(2))) + q(x(1) * x(2)),
-                    FloatFn::MulAdd => qs(q(x(0) * x(1)) + x(2)),
+                    FloatFn::MulAdd => q(q(x(0) * x(1)) + x(2)),
                     _ => x(0).sqrt(),
                 };
                 Some(vec![nbits(f, r)])
@@ -838,9 +840,8 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
 
 /// Class K: Metal's `half` `fract` with every fast-math flag (`nan_half_fast`) answers the largest
 /// `half` below one, `0x3BFF`, for a NaN and for either infinity, where without flags (`nan_half`)
-/// a NaN is itself and an infinity `+0`; every finite lane is the precise one's, its difference the
-/// device's rounding alone (in `QuantizeForm::Device` a positive denormal's is the quantize's
-/// zero).
+/// a NaN is a NaN (its bits the device's widening's) and an infinity `+0`; every finite lane is the
+/// precise one's, its difference rounded once.
 #[test]
 fn flagged_half_fract_answers_below_one_at_nans_and_infinities() {
     let mut halves: Vec<u64> = (0..0x10000u64).step_by(97).collect();
@@ -860,7 +861,7 @@ fn flagged_half_fract_answers_below_one_at_nans_and_infinities() {
                     _ => 0,
                 }
             } else {
-                let d = f16_to_f64(nbits_flushed(half(), x - x.floor()) as u16);
+                let d = f16_to_f64(nbits(half(), x - x.floor()) as u16);
                 u64::from(f64_to_f16(d.min(1.0 - 2f64.powi(-11))))
             };
             Some(vec![r; n])
@@ -883,14 +884,16 @@ fn flagged_half_fract_answers_below_one_at_nans_and_infinities() {
                 },
                 &cases,
                 &|c| run(op, c),
-                &|g, w| g == w,
+                &exact_ok(f),
             );
         }
     }
 }
 
-/// The `f32` operands [`half_rounding_keeps_denormals`] rounds to `half`, in each of the
-/// module's half roundings.
+/// The `f32` operands [`converted_half_rounding_is_the_exactly_rounded_half`] rounds to `half`:
+/// every 17th half pattern and every denormal one, each exactly and at its exact ties with both
+/// neighbours, just inside and outside them, and the `f32` edge values (the ties at the smallest
+/// normal half, `65504..65520`, signed zeros, `f32` denormals, NaN).
 fn half_rounding_operands() -> Vec<f32> {
     let mut xs: Vec<f32> = Vec::new();
     for h in (0..0x7C00u16).step_by(17).chain(0..0x400) {
@@ -937,60 +940,15 @@ fn half_rounding_operands() -> Vec<f32> {
     xs
 }
 
-/// Rounding an `f32` to `half` keeps half denormals and rounds to nearest even on every part of the
-/// half range: every 17th half pattern and every denormal one, each exactly and at its exact ties
-/// with both neighbours, just inside and outside them, and the `f32` edge values (the ties at the
-/// smallest normal half, `65504..65520`, signed zeros, `f32` denormals, NaN). Metal's readings of
-/// A1's `half-denormal-results-of-arithmetic-and-conversions` (dd2cb644) and
-/// `half-tanh-under-fast-math-at-every-sixteenth-pattern` (27353187) keep every half denormal a
-/// result rounds to.
-#[test]
-fn half_rounding_keeps_denormals() {
-    let xs = half_rounding_operands();
-    let (f32f, h) = (float(32), half());
-    let cases: Vec<Case> = xs
-        .iter()
-        .filter(|x| x.is_nan() || x.is_finite() || x.is_infinite())
-        .map(|x| vec![vec![u64::from(x.to_bits())]])
-        .collect();
-    check_accept(
-        "round f32 to half",
-        &[f32f],
-        h,
-        &|fb, x| crate::lower::arith::narrow::round(fb, h, x[0]),
-        &cases,
-        &|c| Some(vec![u64::from(f64_to_f16(f64::from(f32v(arg(c, 0)))))]),
-        &exact_ok(h),
-    );
-    let v = vec(h, 3);
-    let vc: Vec<Case> = xs
-        .chunks(3)
-        .filter(|c| c.len() == 3)
-        .map(|c| vec![c.iter().map(|x| u64::from(x.to_bits())).collect()])
-        .collect();
-    check_accept(
-        "round <3 x float> to half",
-        &[vec(f32f, 3)],
-        v,
-        &|fb, x| crate::lower::arith::narrow::round(fb, v, x[0]),
-        &vc,
-        &|c| {
-            Some(
-                c[0].iter()
-                    .map(|b| u64::from(f64_to_f16(f64::from(f32v(*b)))))
-                    .collect(),
-            )
-        },
-        &exact_ok(v),
-    );
-}
-
 /// In `QuantizeForm::Converted` and `Controlled` a `half` rounding is the conversion to 16 bits
 /// and its widening alone, which the interpreter rounds to nearest even with half denormals kept,
 /// as the Vulkan spec makes it under the controlled form's float controls: over
-/// [`half_rounding_operands`], `round` and `device_round` give the exactly rounded half on scalars
-/// and vectors, with no `OpQuantizeToF16` and no `RoundEven` in the module. In
-/// `Controlled` each conversion is decorated `NoContraction`, and none in `Converted`.
+/// [`half_rounding_operands`], `round` gives the exactly rounded half on scalars and vectors, with
+/// no `OpQuantizeToF16` and no `RoundEven` in the module. In `Controlled` each conversion is
+/// decorated `NoContraction`, and none in `Converted`. Metal's readings of A1's
+/// `half-denormal-results-of-arithmetic-and-conversions` (dd2cb644) and
+/// `half-tanh-under-fast-math-at-every-sixteenth-pattern` (27353187) keep every half denormal a
+/// result rounds to, as this rounding does.
 #[test]
 fn converted_half_rounding_is_the_exactly_rounded_half() {
     let xs = half_rounding_operands();
@@ -1012,21 +970,14 @@ fn converted_half_rounding_is_the_exactly_rounded_half() {
                 .collect::<Vec<u64>>(),
         )
     };
-    type Round = fn(&mut FunctionBuilder<'_>, Form, Value) -> BResult<Value>;
-    let rounds: [(&str, Round); 2] = [
-        ("round", crate::lower::arith::narrow::round),
-        ("device_round", crate::lower::arith::narrow::device_round),
-    ];
     use crate::spirv::builder::QuantizeForm;
     use crate::spirv::ir::Contraction;
-    for ((name, round), q) in rounds
-        .into_iter()
-        .flat_map(|r| [(r, QuantizeForm::Converted), (r, QuantizeForm::Controlled)])
-    {
+    let name = "round";
+    for q in [QuantizeForm::Converted, QuantizeForm::Controlled] {
         for (form, input, cs) in [(h, f32f, &cases), (v, vec(f32f, 3), &vc)] {
             let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| {
                 fb.module().set_quantize_form(q);
-                round(fb, form, x[0])
+                crate::lower::arith::narrow::round(fb, form, x[0])
             };
             let m = kernel_with(&[input], form, &body, true, false)
                 .unwrap_or_else(|e| panic!("{name} {q:?}: build: {e:?}"));
@@ -1142,78 +1093,66 @@ fn metal_half_operands() -> Vec<u32> {
     xs
 }
 
-/// In `QuantizeForm::Device`, the default, through the interpreter's quantize (to nearest even,
-/// flushing what is too small for a normal half to the zero of its sign), `round` is Metal's
-/// conversion of a `float` to `half` ([`metal_half`]) over [`metal_half_operands`] (signed zeros
-/// included, a NaN a NaN) on scalars and vectors, its quantize's flush to zero rounded onto the
-/// half denormal grid, and keeps that arm (`narrow::flushes_below_normal` finds none);
-/// `device_round` is the quantize alone: Metal's conversion of every operand from the smallest
-/// normal half up, and the quantize's zero below it.
+/// In `QuantizeForm::Device`, the default, a `half` rounding is the device's `OpQuantizeToF16`
+/// alone, with no denormal arm (no `RoundEven`, no test of the quantize for a zero): through the
+/// interpreter's quantize (to
+/// nearest even, flushing what is too small for a normal half to the zero of its sign), `round`
+/// over [`metal_half_operands`] (signed zeros included, a NaN a NaN), on scalars and vectors, is
+/// Metal's conversion of a `float` to `half` ([`metal_half`]) from the smallest normal half up and
+/// the quantize's zero of the operand's sign below it, where Metal answers the half denormal.
 #[test]
-fn device_half_rounding_is_metals_conversion_on_a_nearest_even_quantize() {
+fn device_half_rounding_is_the_quantize_alone() {
     use crate::spirv::builder::QuantizeForm;
     let xs = metal_half_operands();
     let (f32f, h) = (float(32), half());
     let v = vec(h, 3);
-    type Round = fn(&mut FunctionBuilder<'_>, Form, Value) -> BResult<Value>;
-    let rounds: [(&str, Round, bool); 2] = [
-        ("round", crate::lower::arith::narrow::round, false),
-        (
-            "device_round",
-            crate::lower::arith::narrow::device_round,
-            true,
-        ),
-    ];
     // The quantize alone: Metal's conversion where it is a normal half, an infinity or a NaN, and
     // the zero of the operand's sign below the smallest normal half.
     let flushed = |b: u64| match metal_half(b) {
         h if h & 0x7C00 == 0 => h & 0x8000,
         h => h,
     };
-    // The device form's quantize is the interpreter's: a quarter of the operands shows the
-    // routine around it.
-    for (form_name, form, step) in [("device", QuantizeForm::Device, 4)] {
-        for (name, round, bare) in rounds {
-            let want = |c: &Case| {
-                Some(
-                    c[0].iter()
-                        .map(|b| if bare { flushed(*b) } else { metal_half(*b) })
-                        .collect::<Vec<u64>>(),
-                )
-            };
-            let ops: Vec<u32> = xs.iter().copied().step_by(step).collect();
-            let cases: Vec<Case> = ops.iter().map(|b| vec![vec![u64::from(*b)]]).collect();
-            let vc: Vec<Case> = ops
-                .chunks(3)
-                .step_by(5)
-                .filter(|c| c.len() == 3)
-                .map(|c| vec![c.iter().map(|b| u64::from(*b)).collect()])
-                .collect();
-            for (lanes, input, cs) in [(h, f32f, &cases), (v, vec(f32f, 3), &vc)] {
-                let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| {
-                    fb.module().set_quantize_form(form);
-                    round(fb, lanes, x[0])
-                };
-                let what = format!("{form_name} {name} on {lanes:?}");
-                let m = kernel_with(&[input], lanes, &body, true, false)
-                    .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
-                assert!(
-                    crate::lower::arith::narrow::quantizes(&m),
-                    "{what}: OpQuantizeToF16"
-                );
-                let mut meter = crate::budget::Meter::new(&crate::budget::Budget::default());
-                let flushes = crate::lower::arith::narrow::flushes_below_normal(&m, &mut meter)
-                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                assert_eq!(flushes, bare, "{what}: a quantize with no denormal arm");
-                // The interpreter's quantize keeps a NaN a NaN, its bits the device's.
-                let nan_loose = exact_ok(lanes);
-                check_module(&what, m, &[input], lanes, cs, &want, &nan_loose);
-            }
-        }
+    let want = |c: &Case| Some(c[0].iter().map(|b| flushed(*b)).collect::<Vec<u64>>());
+    // The quantize is the interpreter's: a quarter of the operands shows the module around it.
+    let ops: Vec<u32> = xs.iter().copied().step_by(4).collect();
+    let cases: Vec<Case> = ops.iter().map(|b| vec![vec![u64::from(*b)]]).collect();
+    let vc: Vec<Case> = ops
+        .chunks(3)
+        .step_by(5)
+        .filter(|c| c.len() == 3)
+        .map(|c| vec![c.iter().map(|b| u64::from(*b)).collect()])
+        .collect();
+    for (lanes, input, cs) in [(h, f32f, &cases), (v, vec(f32f, 3), &vc)] {
+        let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| {
+            fb.module().set_quantize_form(QuantizeForm::Device);
+            crate::lower::arith::narrow::round(fb, lanes, x[0])
+        };
+        let what = format!("device round on {lanes:?}");
+        let m = kernel_with(&[input], lanes, &body, true, false)
+            .unwrap_or_else(|e| panic!("{what}: build: {e:?}"));
+        assert!(
+            crate::lower::arith::narrow::quantizes(&m),
+            "{what}: OpQuantizeToF16"
+        );
+        let arm = m.blocks().iter().flat_map(|b| &b.insts).any(|n| {
+            matches!(
+                n.inst,
+                Inst::Glsl {
+                    op: GlslOp::RoundEven,
+                    ..
+                } | Inst::Binary {
+                    op: BinOp::FOrdEqual,
+                    ..
+                }
+            )
+        });
+        assert!(!arm, "{what}: a denormal arm");
+        // The interpreter's quantize keeps a NaN a NaN, its bits the device's.
+        check_module(&what, m, &[input], lanes, cs, &want, &exact_ok(lanes));
     }
 }
 
-/// A `half` sum or difference takes the device's rounding alone (`narrow::device_round`): over
+/// A `half` sum or difference takes the device's rounding (`narrow::round`): over
 /// every eleventh half pattern below `2^-13` and its negation, the patterns around the smallest
 /// normal half, and normal, infinite, and NaN operands, on scalars and vectors, every sum and
 /// difference is the exactly rounded half where that is a normal half, a zero, an infinity or a
@@ -2924,15 +2863,15 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
     }
 }
 
-/// Wherever the module can hold a 16-bit float (`QuantizeForm::Converted` and `Controlled`, a
-/// profile with `shaderFloat16`), `from_bits` is the device's widening of the bits as 16-bit
-/// floats, with no integer decode: every half bit pattern, with junk above its 16 bits, reads as
-/// its exact `f32` value but a NaN, which reads as a NaN, on one to four lanes (one conversion of
-/// the gathered lanes), and `narrow::widens_bits` finds the widening. In `QuantizeForm::Device`
-/// (no `shaderFloat16`) the integer decode stands: every pattern exact, NaN payloads included, and
-/// `widens_bits` finds none.
+/// `from_bits` is the device's widening on every form, with no integer decode: wherever the module
+/// can hold a 16-bit float (`QuantizeForm::Converted` and `Controlled`, a profile with
+/// `shaderFloat16`), of the bits as 16-bit floats (one conversion of the gathered lanes); in
+/// `QuantizeForm::Device` (no `shaderFloat16`), `GLSL.std.450 UnpackHalf2x16` of each lane's word
+/// (one a lane, and no 16-bit type). Every half bit pattern, with junk above its 16 bits, reads as
+/// its exact `f32` value but a NaN, which reads as a NaN, on one to four lanes, and
+/// `narrow::widens_bits` finds the widening.
 #[test]
-fn a_half_decode_with_float16_is_the_devices_widening() {
+fn a_half_decode_is_the_devices_widening_in_every_form() {
     use super::super::narrow::{f32_of_half_bits, from_bits, widens_bits};
     use crate::spirv::builder::QuantizeForm;
     let junk = |h: u32| u64::from(h | NARROW_JUNK);
@@ -2954,7 +2893,7 @@ fn a_half_decode_with_float16_is_the_devices_widening() {
         QuantizeForm::Converted,
         QuantizeForm::Controlled,
     ] {
-        let native = q != QuantizeForm::Device;
+        let float16 = q != QuantizeForm::Device;
         for lanes in 1u8..=4 {
             let cases = lanes_of(u32::from(lanes));
             let cases = &cases;
@@ -2969,7 +2908,7 @@ fn a_half_decode_with_float16_is_the_devices_widening() {
             let budget = crate::budget::Budget::default();
             let mut meter = crate::budget::Meter::new(&budget);
             let widens = widens_bits(&m, &mut meter).expect("widens_bits");
-            assert_eq!(widens, native, "{what}: widens_bits");
+            assert!(widens, "{what}: widens_bits");
             let insts = || m.blocks().iter().flat_map(|b| &b.insts);
             let decodes = insts().any(|n| {
                 matches!(
@@ -2991,13 +2930,28 @@ fn a_half_decode_with_float16_is_the_devices_widening() {
                     )
                 })
                 .count();
-            assert_eq!(conversions, usize::from(native), "{what}: the conversions");
-            assert_eq!(decodes, !native, "{what}: the integer decode");
+            let unpacks = insts()
+                .filter(|n| {
+                    matches!(
+                        n.inst,
+                        Inst::Glsl {
+                            op: GlslOp::UnpackHalf2x16,
+                            ..
+                        }
+                    )
+                })
+                .count();
+            let halves = m
+                .types()
+                .iter()
+                .any(|(_, t)| matches!(t, Type::Float { width: 16 }));
+            assert_eq!(conversions, usize::from(float16), "{what}: the conversions");
+            let want_unpacks = if float16 { 0 } else { usize::from(lanes) };
+            assert_eq!(unpacks, want_unpacks, "{what}: the unpacks");
+            assert_eq!(halves, float16, "{what}: a 16-bit float type");
+            assert!(!decodes, "{what}: an integer decode");
             check_accept(&what, &ins, out, &body, cases, &want, &|g, w| {
-                g == w
-                    || (native
-                        && f32::from_bits(g as u32).is_nan()
-                        && f32::from_bits(w as u32).is_nan())
+                g == w || (f32::from_bits(g as u32).is_nan() && f32::from_bits(w as u32).is_nan())
             });
         }
     }

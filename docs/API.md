@@ -208,10 +208,10 @@ Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 
 simdgroups (including lockstep races on threadgroup memory within a barrier interval), and the
 bit-exact `fneg` and `fabs` of a `float`, its NaNs and denormals included. A NaN's bits, the
 operand `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` pick beside a NaN or between two
-zeros, a `half` read from its bits, which is the device's widening wherever the device has
-`shaderFloat16` (a NaN's bits, and a denormal on a device that may flush 16-bit ones), and a
-`half` sum or difference below the smallest normal `half` on a device without `shaderFloat16`
-(its `OpQuantizeToF16`'s zero) are the device's, each recorded as a precision note.
+zeros, a `half` read from its bits, which is the device's widening on every device (a NaN's
+bits, and a denormal on a device that may flush 16-bit ones), and a `half` rounded from a value
+below the smallest normal `half` on a device without `shaderFloat16` (its `OpQuantizeToF16`'s
+zero) are the device's, each recorded as a precision note.
 
 What the runtime enables for itself outside the vocabulary enters no enable set, compile profile
 or fingerprint: among it the extensions of its dma-buf fallback for no-copy memory whose pointer
@@ -2963,21 +2963,23 @@ bound.
   conversion under them, exactly, with no note): NVIDIA, whose driver folds the conversion's round
   trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK,
   lavapipe, and any device without them. Also recorded where a `half` read from its bits is the
-  device's widening on such a device and that widening is not measured to be Metal's (NVIDIA,
-  lavapipe): a half denormal may read as the zero of its sign.
+  device's widening and that widening is neither under those controls nor measured to be Metal's:
+  the conversion on NVIDIA and lavapipe, and `GLSL.std.450 UnpackHalf2x16` on every device without
+  `shaderFloat16`. A half denormal may read as the zero of its sign.
 - `metal2vulkan-degrade-native-half-quantize` (precision). `PrecisionNote::NativeHalfQuantize`:
-  Native half rounding (a quantize): the module rounds a `half` result it computes in `float` by the
-  device's `OpQuantizeToF16` on a device without `shaderFloat16` whose quantize is not measured to
-  round as Metal's conversion does, and a `half` sum or difference by that quantize alone on every
-  device without `shaderFloat16`: a sum below the smallest normal `half` may be a zero where Metal
-  answers the half denormal.
+  Native half rounding (a quantize): the module rounds a `half` result it computes in `float` (a
+  `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's
+  `OpQuantizeToF16` alone, on every device without `shaderFloat16`, its quantize measured or not: a
+  value below the smallest normal `half` may round to a zero where Metal answers the half denormal
+  (or `2^-14`, from just below it). An integer's `half` rounds exactly instead.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, where Metal answers a NaN the device is not measured to answer (every NaN but
   Metal's canonical one on a device measured to answer that, MoltenVK on an Apple GPU). Also
-  recorded where a `half` read from its bits is the device's widening, on every device with
-  `shaderFloat16`: a NaN's bits the device's, where Metal widens every `half` NaN to `0x7fc00000`
-  and moves one it does not widen with its bits.
+  recorded wherever a `half` is read from its bits, on every device, since the read is the
+  device's widening (its conversion with `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits
+  the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not
+  widen with its bits.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not

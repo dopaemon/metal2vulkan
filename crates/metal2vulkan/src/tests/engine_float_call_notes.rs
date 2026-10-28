@@ -12,9 +12,9 @@
 //! in that entry's math mode. The loads and stores around it record none, but a `half` kernel's
 //! widening and rounding, which the module records once by the profile's own form: its rounding's
 //! note (`narrow::native_rounding`), which the test sets aside, and a module's widening of a
-//! `half` from its bits by the device (every profile with `shaderFloat16`), whose NaN's bits are
-//! the device's (`narrow::widens_bits`, `NativeNanEncoding`), which the test adds to the
-//! operation's notes.
+//! `half` from its bits by the device (every profile), whose NaN's bits are the device's
+//! (`narrow::widens_bits`, `NativeNanEncoding`), and without `shaderFloat16` its denormals too
+//! (`UnpackHalf2x16`, `NativeHalfConversion`), which the test adds to the operation's notes.
 //!
 //! `llvm-as` assembles the modules; without it the test skips visibly.
 
@@ -363,7 +363,7 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                     let mut got: BTreeSet<PrecisionNote> = a.precision.iter().copied().collect();
                     if matches!(elem, Elem::F16) {
                         let form = narrow::quantize_form(p);
-                        if let Some(own) = narrow::native_rounding(p, form) {
+                        if let Some(own) = narrow::native_rounding(form) {
                             got.remove(&own);
                         }
                         let (_, m) = typed_module(&bitcode, &k.name, p)
@@ -372,6 +372,9 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
                             .unwrap_or_else(|e| panic!("{what}: {e:?}"))
                         {
                             want.insert(PrecisionNote::NativeNanEncoding);
+                            if form == crate::spirv::builder::QuantizeForm::Device {
+                                want.insert(PrecisionNote::NativeHalfConversion);
+                            }
                         }
                     }
                     assert_eq!(got, want, "{what}");

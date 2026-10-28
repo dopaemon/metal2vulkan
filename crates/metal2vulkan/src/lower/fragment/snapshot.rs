@@ -91,9 +91,9 @@
 //!   takes the split), the value the fetch returned.
 //! - `Half`: each lane's half-float code (`narrow::to_bits`, exact for every half value, a NaN's
 //!   payload included), in an `R16G16B16A16_UINT` image; a read widens it back as a `half` read
-//!   from memory widens (`narrow::from_bits`): the device's widening where the module holds 16-bit
-//!   floats, every code's value but a NaN's bits and, where the device may flush a 16-bit
-//!   denormal, a denormal, each recorded (`narrow::widens_bits`); elsewhere exactly.
+//!   from memory widens (`narrow::from_bits`): the device's widening on every device, every code's
+//!   value but a NaN's bits and, where the device may flush a 16-bit denormal, a denormal, each
+//!   recorded (`narrow::widens_bits`).
 //! - An integer form: each lane's code (the fetched integer lane, a code of the format), its low 8
 //!   or 16 bits in an `R8G8B8A8_UINT` or `R16G16B16A16_UINT` image; a read extends it, with its
 //!   sign where signed.

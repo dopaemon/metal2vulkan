@@ -7,6 +7,12 @@
 //! CPU interpreter over every case whose reference result is defined (LLVM poison and undefined
 //! behavior are skipped, so an interpreter trap is a real failure). References are written from
 //! the LLVM and Metal definitions in plain Rust.
+//!
+//! A kernel rounds to `half` in `QuantizeForm::Controlled` unless its body sets another form: the
+//! device's conversion under the 16-bit float controls, Metal's `half(float)` by the Vulkan spec,
+//! which the interpreter rounds to nearest even with half denormals kept. A `half` operand is the
+//! device's widening of its bits (`narrow::from_bits`), exact but for a NaN, which the
+//! interpreter widens to its canonical NaN (`PrecisionNote::NativeNanEncoding`).
 
 use super::legal::{f16_to_f64, f64_to_f16, FloatFmt, Form, Held};
 use super::libm::Lib;
@@ -325,6 +331,7 @@ fn kernel_defs(
     lanes: bool,
 ) -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
+    b.set_quantize_form(QuantizeForm::Controlled);
     let outb = buffer(&mut b, 0)?;
     let inb = buffer(&mut b, 1)?;
     let funcs = defs(&mut b)?;
@@ -383,9 +390,8 @@ fn wide_profile() -> DeviceProfile {
 }
 
 /// The `half` roundings the blends' checks run under (`extended_range::blend::half_of`): the
-/// device's quantize with its exact denormal arm, and the device's conversion under the 16-bit
-/// float controls, each checked against Metal's arithmetic on the interpreter's nearest-even
-/// quantize and conversion.
+/// integer sequence, which every form but the controlled one takes, and the device's conversion
+/// under the 16-bit float controls, each checked against Metal's arithmetic.
 const HALF_FORMS: [QuantizeForm; 2] = [QuantizeForm::Device, QuantizeForm::Controlled];
 
 /// One case: per operand, per lane, the held bits.
@@ -427,6 +433,15 @@ fn is_nan(f: Form, b: u64) -> bool {
         Held::Float(FloatFmt::F64) => f64::from_bits(b).is_nan(),
         _ => false,
     }
+}
+
+/// Whether `f32` bits `got` are the device's quantize's answer for the `half` value `want` (`f32`
+/// bits) below the smallest normal half: its signed zero. SPIR-V lets `OpQuantizeToF16` answer a
+/// zero there, and the interpreter's does (as NIR's `fquantize2f16`), so a module rounding by
+/// [`QuantizeForm::Device`] may answer it (`PrecisionNote::NativeHalfQuantize`).
+fn quantize_flush_of(got: u64, want: u64) -> bool {
+    let w = f32::from_bits(want as u32);
+    w != 0.0 && w.abs() < 2f32.powi(-14) && got == want & 0x8000_0000
 }
 
 fn is_zero(f: Form, b: u64) -> bool {
@@ -1907,7 +1922,9 @@ fn float_ref(op: FloatFn, bits: u8, a: &[u64]) -> Option<u64> {
 
 /// `llvm.copysign` is the first operand's bits with the second's sign bit, exactly: NaN payloads,
 /// infinities, zeros, and denormals keep every other bit, on `float` and on the narrow formats held
-/// widened (whose container's sign bit is the format's).
+/// widened (whose container's sign bit is the format's). A `half` NaN's bits, its sign among them,
+/// are the device's widening's (`PrecisionNote::NativeNanEncoding`): a `half` NaN's sign moves as
+/// that NaN's, and a NaN first operand is a NaN.
 #[test]
 fn copysign_moves_exactly_the_sign_bit() {
     let mut f32s = f32_values();
@@ -1921,9 +1938,14 @@ fn copysign_moves_exactly_the_sign_bit() {
     let mut halves: Vec<u64> = vec![0, 0x8000, 0x0001, 0x8001, 0x3C00, 0xBC00, 0x7BFF];
     halves.extend([0x7C00, 0xFC00, 0x7E00, 0x7C01, 0xFE01, 0x03FF]);
     let bfloats: Vec<u64> = vec![0, 0x8000, 0x0001, 0x3F80, 0xBF80, 0x7F80, 0xFF80, 0x7FC1];
+    let numbers: Vec<u64> = halves
+        .iter()
+        .copied()
+        .filter(|&h| !is_nan(float(16), h))
+        .collect();
     for (what, f, vals, sign) in [
         ("f32", float(32), f32s, 0x8000_0000u64),
-        ("half", float(16), halves, 0x8000),
+        ("half", float(16), numbers, 0x8000),
         ("bfloat", bfloat(), bfloats, 0x8000),
     ] {
         check_accept(
@@ -1946,6 +1968,34 @@ fn copysign_moves_exactly_the_sign_bit() {
             &|g, w| g == w,
         );
     }
+    // A `half` NaN operand, its bits the device's widening's.
+    let half = float(16);
+    let nans: Vec<u64> = halves
+        .iter()
+        .copied()
+        .filter(|&h| is_nan(half, h))
+        .collect();
+    let mut cases = pairs(&nans, &halves);
+    cases.extend(pairs(&halves, &nans));
+    check_accept(
+        "copysign half NaN operands",
+        &[half, half],
+        half,
+        &|fb, x| {
+            math::float_fn(
+                fb,
+                FloatFn::CopySign,
+                half,
+                Contraction::Forbidden,
+                NanTest::IsNan,
+                x,
+                &Lib::instructions(),
+            )
+        },
+        &cases,
+        &|c| Some(vec![(arg(c, 0) & !0x8000) | (arg(c, 1) & 0x8000)]),
+        &|g, w| (is_nan(half, g) && is_nan(half, w)) || g & 0x7FFF == w & 0x7FFF,
+    );
 }
 
 #[test]

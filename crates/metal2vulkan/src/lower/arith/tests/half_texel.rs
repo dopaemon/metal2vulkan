@@ -3,7 +3,8 @@
 //! exact values (a normalized code's value `c / (2^b - 1)`, a grid step's `n / D`), and, for a
 //! value off its format's grid (a filter other than Metal's), the routine's own `f32` step
 //! `RoundEven(x · D)`. Each runs in every [`QuantizeForm`], whose rounding the routine shares where
-//! it is Metal's.
+//! it is Metal's; the device's quantize ([`QuantizeForm::Device`]) may answer a `half` denormal as
+//! its signed zero ([`quantize_flush_of`]).
 
 use super::texel_round::half_of;
 use super::*;
@@ -59,7 +60,8 @@ fn body_families(
 }
 
 /// Run the routine over `texels` at `class`, `form`, and `lanes`, against `reference` of each
-/// lane's index and value, in every [`QuantizeForm`].
+/// lane's index and value, in every [`QuantizeForm`] (a `half` denormal the device's quantize's
+/// zero or itself in [`QuantizeForm::Device`]).
 fn run_lanes(
     what: &str,
     class: u32,
@@ -72,7 +74,7 @@ fn run_lanes(
         .map(|t| vec![t.to_vec(), vec![u64::from(class)]])
         .collect();
     for q in FORMS {
-        check(
+        check_accept(
             &format!("{what} {form:?} {lanes:?} {q:?}"),
             &[v4(), int(32)],
             v4(),
@@ -86,9 +88,17 @@ fn run_lanes(
                         .collect(),
                 )
             },
-            false,
+            &|g, w| texel_answers(q, g, w),
         );
     }
+}
+
+/// Whether `f32` bits `got` answer the `half` value `want` in a module rounding by `q`: exactly, a
+/// NaN for a NaN, or, by the device's quantize, a denormal's signed zero.
+fn texel_answers(q: QuantizeForm, got: u64, want: u64) -> bool {
+    got == want
+        || (is_nan(v4(), got) && is_nan(v4(), want))
+        || (q == QuantizeForm::Device && quantize_flush_of(got, want))
 }
 
 /// Run the routine over `texels` (four lanes each, `f32` bits) at `class` and `form`, against
@@ -346,9 +356,9 @@ fn a_float_texel_rounds_by_its_access() {
     );
 }
 
-/// A format whose conversion is not measured takes every other `half` texel's exact rounding
-/// (`narrow::round_texel`): to nearest even, half denormals kept, a NaN or an infinity itself, in
-/// either form.
+/// A format whose conversion is not measured takes every other `half` texel's rounding
+/// (`narrow::round_texel`): to nearest even, half denormals kept (but by the device's quantize), a
+/// NaN or an infinity itself, in either form.
 #[test]
 fn an_unmeasured_format_takes_the_exact_rounding() {
     let texels = quads(&float_texels());
@@ -1042,7 +1052,9 @@ fn grid16_values(f: Norm, rng: &mut Rng) -> Vec<u64> {
 /// (`texel_round::ones_ratio_to_half`); the two answer alike, bit for bit, on every value of
 /// [`grid16_values`] (every step of both grids, both signs, and values off the grids), in both
 /// roundings the routine takes and in a read's and a filtered sample's forms. Under native half
-/// rounding it keeps the integer form, which answers alike too.
+/// rounding it keeps the integer form, which answers alike too; a module rounding by the device's
+/// quantize is always under native half rounding (`narrow::native_rounding`), so it runs only so,
+/// and there a `half` denormal may be the quantize's signed zero ([`texel_answers`]).
 fn grid16_forms_agree(part: usize, of: usize) {
     let mut rng = Rng(0x00b1_f0b1_f5ee_d016);
     let ins = [v4(), int(32)];
@@ -1080,7 +1092,11 @@ fn grid16_forms_agree(part: usize, of: usize) {
                 };
                 let what = format!("{f:?} {form:?} {lanes:?} {q:?}");
                 let want = run_module(&what, build(HalfFamilies::Every, false), &ins, v4(), &cases);
-                for native in [false, true] {
+                let natives: &[bool] = match q {
+                    QuantizeForm::Device => &[true],
+                    QuantizeForm::Converted | QuantizeForm::Controlled => &[false, true],
+                };
+                for &native in natives {
                     let got = run_module(
                         &what,
                         build(HalfFamilies::MetalSampler, native),
@@ -1091,7 +1107,13 @@ fn grid16_forms_agree(part: usize, of: usize) {
                     let differ: Vec<String> = cases
                         .iter()
                         .zip(got.iter().zip(&want))
-                        .filter(|(_, (g, w))| g != w)
+                        .filter(|(_, (g, w))| {
+                            g.len() != w.len()
+                                || !g
+                                    .iter()
+                                    .zip(w.iter())
+                                    .all(|(g, w)| texel_answers(q, *g, *w))
+                        })
                         .take(8)
                         .map(|(c, (g, w))| format!("{:x?}: got {g:x?}, want {w:x?}", c[0]))
                         .collect();
@@ -1201,8 +1223,8 @@ fn the_device_rounding_reads_the_texel_alone() {
 /// Metal-sampler routine does for every class that takes it: for each pixel format whose class
 /// `plain_on_metal_sampler` holds, the routine at that class, read and sample, one texel's lanes, a
 /// filtered value's and gathered channels', is the texel rounded to nearest even with its NaN
-/// kept, as is the plain arm itself, in each form a device sampling through Metal's own texture
-/// unit rounds in.
+/// kept (a denormal the device's quantize's zero or itself), as is the plain arm itself, in each
+/// form a device sampling through Metal's own texture unit rounds in.
 #[test]
 fn the_plain_arm_is_the_metal_sampler_routine_for_its_classes() {
     let mut texels: Vec<u64> = vec![
@@ -1271,14 +1293,14 @@ fn the_plain_arm_is_the_metal_sampler_routine_for_its_classes() {
             .collect();
         for q in roundings {
             for (form, lanes) in accesses {
-                check(
+                check_accept(
                     &format!("{pf:?} {form:?} {lanes:?} {q:?}"),
                     &[v4(), int(32)],
                     v4(),
                     &body_families(form, lanes, q, HalfFamilies::MetalSampler),
                     &cases,
                     &|c| Some(c[0].iter().map(|x| rte(*x)).collect()),
-                    false,
+                    &|g, w| texel_answers(q, g, w),
                 );
             }
         }
@@ -1290,7 +1312,7 @@ fn the_plain_arm_is_the_metal_sampler_routine_for_its_classes() {
     );
     let cases: Vec<Case> = quads.iter().map(|t| vec![t.to_vec()]).collect();
     for q in roundings {
-        check(
+        check_accept(
             &format!("the plain arm {q:?}"),
             &[v4()],
             v4(),
@@ -1304,7 +1326,7 @@ fn the_plain_arm_is_the_metal_sampler_routine_for_its_classes() {
             },
             &cases,
             &|c| Some(c[0].iter().map(|x| rte(*x)).collect()),
-            false,
+            &|g, w| texel_answers(q, g, w),
         );
     }
     // The families the predicate leaves out: a 32-bit float texel (its samples round toward zero),

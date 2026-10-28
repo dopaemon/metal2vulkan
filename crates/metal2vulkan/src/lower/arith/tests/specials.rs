@@ -605,7 +605,8 @@ const POW: [(u32, u32, u32, u32, u16, u16, u16); 90] = [
 /// One lane: the operands' bits and Metal's answer.
 type Row = (Vec<u64>, u64);
 
-/// Run `op` on form `f` over `rows` and require every answer bit for bit, NaN payloads included.
+/// Run `op` on form `f` over `rows` and require every answer bit for bit, NaN payloads included but
+/// a `half` NaN's, whose bits are the device's widening's (`PrecisionNote::NativeNanEncoding`).
 fn metal_answers(op: FloatFn, f: Form, rows: &[Row]) {
     let cases: Vec<Case> = rows
         .iter()
@@ -633,7 +634,7 @@ fn metal_answers(op: FloatFn, f: Form, rows: &[Row]) {
                 .find(|(o, _)| *o == ops)
                 .map(|(_, want)| vec![*want])
         },
-        &|g, w| g == w,
+        &|g, w| g == w || (f == float(16) && is_nan(f, g) && is_nan(f, w)),
     );
 }
 
@@ -670,14 +671,11 @@ fn fract_and_saturate_answer_as_metal() {
         .filter(normal)
         .collect();
     metal_answers(FloatFn::Saturate, f32_, &saturate);
-    // `half` `fract`'s difference is the device's quantize (`narrow::device_round`): a result
-    // below the smallest normal `half` is the zero of its sign (`PrecisionNote::NativeHalfQuantize`),
-    // every other lane Metal's.
-    let flushed: Vec<Row> = rows(|r| [u64::from(r.4), u64::from(r.5)])
-        .into_iter()
-        .map(|(x, w)| (x, if w & 0x7C00 == 0 { w & 0x8000 } else { w }))
-        .collect();
-    metal_answers(FloatFn::Fract, half, &flushed);
+    metal_answers(
+        FloatFn::Fract,
+        half,
+        &rows(|r| [u64::from(r.4), u64::from(r.5)]),
+    );
     metal_answers(
         FloatFn::Saturate,
         half,

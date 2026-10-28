@@ -1601,32 +1601,37 @@ pub enum PrecisionNote {
     ///   computed `half` NaN is `0x7FFF` (where 18 C3 cases differed in NaNs, signs of zero,
     ///   `atan2` and `pow` at special operands, and `half` texel and pack conversions).
     ///
-    /// Every `half` such a module reads from its bits (a load, a reinterpretation, a texel's bits)
-    /// is the device's widening of them (an `OpFConvert` to 32 bits of the bits read as a 16-bit
-    /// float), on every device with `shaderFloat16`, and a module that reads one records this note
-    /// too where that widening is not measured to read every `half` as Metal's (MoltenVK's is,
-    /// `DriverDeviation::MetalHalfArithmetic`, and the module requires it there): its bound is the
-    /// last two items', a half denormal read as the zero of its sign on a device that flushes
-    /// 16-bit denormals (the Vulkan spec lets a device flush a denormal "obtained via unpacking an
-    /// integer" without `DenormPreserve` for 16 bits) and a NaN's bits the device's
+    /// Every `half` a module reads from its bits (a load, a reinterpretation, a texel's bits) is
+    /// the device's widening of them, on every device: an `OpFConvert` to 32 bits of the bits read
+    /// as a 16-bit float with `shaderFloat16`, `GLSL.std.450 UnpackHalf2x16` of them without it.
+    /// A module that reads one records this note too where that widening is neither under the
+    /// float controls' `DenormPreserve` for 16 bits (ANV, RADV) nor measured to read every `half`
+    /// as Metal's (MoltenVK's conversion is, `DriverDeviation::MetalHalfArithmetic`, and the module
+    /// requires it there), so on every device without `shaderFloat16`: its bound is the last two
+    /// items', a half denormal read as the zero of its sign on a device that flushes 16-bit
+    /// denormals (the Vulkan spec lets a device flush a denormal "obtained via unpacking an
+    /// integer" without `DenormPreserve` for 16 bits, and gives `UnpackHalf2x16`
+    /// implementation-defined precision) and a NaN's bits the device's
     /// ([`PrecisionNote::NativeNanEncoding`], which the module records); every other `half`
     /// widens to its exact value.
     ///
     /// Validation derives no tolerance from it.
     NativeHalfConversion,
     /// Native half rounding (a quantize): the module rounds a `half` result it computes in
-    /// `float` by the device's `OpQuantizeToF16`, on a device without `shaderFloat16` whose
-    /// quantize is not measured to round as Metal's conversion does; and a `half` sum or
-    /// difference (an `fadd` or `fsub`, `fract`'s difference, a multiply-add's sum, a `mix`'s
-    /// steps) by that quantize alone on every device without `shaderFloat16`, measured or not.
-    /// Vulkan leaves the quantize's rounding mode to the device, and the SPIR-V specification
-    /// lets it answer a zero for a magnitude too small for a normal `half`. The recorded bound,
-    /// against Metal's `half(float)`: a finite result within one unit in the last place of the
-    /// `half`; a value from 65504 up to 65520 may be infinity where Metal's is 65504 (NVIDIA's
-    /// 615.71.09 rounds `0x477FEFFF` to infinity); a sum or difference below the smallest normal
-    /// `half` (`2^-14`) may be a zero, of either sign, where Metal answers the half denormal (the
-    /// translation rounds every other result the quantize flushes onto the half denormal grid
-    /// itself); a NaN's encoding is the device's. Validation derives no tolerance from it.
+    /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by the
+    /// device's `OpQuantizeToF16` alone, on every device without `shaderFloat16`, its quantize
+    /// measured or not (`DriverDeviation::MetalHalfQuantize` measures its rounding of normal
+    /// results alone). An integer's `half` is not this rounding: it rounds by integer arithmetic,
+    /// exactly, around NVIDIA's 615.71.09 keeping an integer conversion unrounded under the
+    /// quantize. Vulkan leaves the quantize's rounding mode to the device, and the SPIR-V
+    /// specification lets it answer a zero for a magnitude too small for a normal `half`. The
+    /// recorded bound, against Metal's `half(float)`: a finite result within one unit in the last
+    /// place of the `half`; a value from 65504 up to 65520 may be infinity where Metal's is 65504
+    /// (NVIDIA's 615.71.09 rounds `0x477FEFFF` to infinity); a value below the smallest normal
+    /// `half` (`2^-14`) may round to a zero, of either sign, where Metal answers the half denormal,
+    /// or `2^-14` from just below it (the quantize tests the value it rounds; NIR's
+    /// `fquantize2f16` flushes every one, SwiftShader's too); a NaN's encoding is the device's.
+    /// Validation derives no tolerance from it.
     NativeHalfQuantize,
     /// Native device maths: a `float` or `half` operation's NaN result is the device's, its sign
     /// and payload unselected, where Metal answers a NaN the device is not measured to answer:
@@ -1639,14 +1644,15 @@ pub enum PrecisionNote {
     /// device's own (llvmpipe: `0xffc00000`), where Metal answers its canonical `0x7fc00000`
     /// (`0x7e00` as `half`), an operand's bits (`round`, `ldexp`, `fast::tan`), or the canonical
     /// NaN with an operand's sign (`asin`, `atan`, `asinh`, `atanh`). Every non-NaN result is as
-    /// without it. Also recorded by a module that reads a `half` from its bits (a load, a
-    /// reinterpretation, a texel's bits) by the device's widening, as every module does on a
-    /// device with `shaderFloat16`: a NaN widens to a NaN whose bits are the device's, where Metal
-    /// widens every `half` NaN to `0x7fc00000` and moves one it does not widen with its bits, so a
-    /// `half` NaN the module moves as a value (through a select, a phi or a sign operation) may
-    /// leave with the device's bits; a `half` stored back unchanged keeps its bits. Every other `half` widens to its value, but a denormal on a device that may
-    /// flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Validation derives no
-    /// tolerance from it.
+    /// without it. Also recorded by every module that reads a `half` from its bits (a load, a
+    /// reinterpretation, a texel's bits), on every device: the read is the device's widening (an
+    /// `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `UnpackHalf2x16`
+    /// without it), and a NaN widens to a NaN whose bits are the device's, where Metal widens
+    /// every `half` NaN to `0x7fc00000` and moves one it does not widen with its bits, so a `half`
+    /// NaN the module moves as a value (through a select, a phi or a sign operation) may leave
+    /// with the device's bits; a `half` stored back unchanged keeps its bits. Every other `half`
+    /// widens to its value, but a denormal on a device that may flush 16-bit ones
+    /// ([`PrecisionNote::NativeHalfConversion`]). Validation derives no tolerance from it.
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or

@@ -126,8 +126,9 @@ fn signed_normalized_codes_come_back() {
     }
 }
 
-/// Every half value widened comes back bit for bit: zeros, denormals, infinities, and each NaN
-/// payload as the widening places it.
+/// Every half value widened comes back bit for bit, zeros, denormals and infinities, and each NaN a
+/// NaN: a read's widening of the code is the device's, whose NaN bits it records
+/// (`PrecisionNote::NativeNanEncoding`).
 #[test]
 fn half_codes_come_back() {
     let values: Vec<u64> = (0..=u16::MAX)
@@ -144,7 +145,7 @@ fn half_codes_come_back() {
         &body,
         &cases(&values),
         &|c| Some(c[0].clone()),
-        &same,
+        &|g, w| same(g, w) || (is_nan(float(32), g) && is_nan(float(32), w)),
     );
 }
 

@@ -111,8 +111,9 @@ fn a_wider_texel_rounds_to_nearest_even_keeping_subnormals() {
 /// Under native half rounding (the device's conversion or quantize, where neither is measured to be
 /// Metal's) a texel's `half` is the form's own rounding: every half-float texel and every wider
 /// value but a NaN reads as before, to nearest even with half subnormals kept (the interpreter's
-/// conversion rounds so, and the quantize form keeps them by the arm), and a NaN stays a NaN, its
-/// bits the form's, without the keep's unsigned compare of the texel's bits.
+/// conversion rounds so; its quantize answers a subnormal as its signed zero, which SPIR-V allows),
+/// and a NaN stays a NaN, its bits the form's, without the keep's unsigned compare of the texel's
+/// bits.
 #[test]
 fn a_texel_under_native_half_rounding_takes_its_forms_nan() {
     use crate::spirv::builder::QuantizeForm;
@@ -154,7 +155,11 @@ fn a_texel_under_native_half_rounding_takes_its_forms_nan() {
                         arg(c, 0) as u32,
                     ))))])
                 },
-                &|g, w| g == w || (is_nan(half(), g) && is_nan(half(), w)),
+                &|g, w| {
+                    g == w
+                        || (is_nan(half(), g) && is_nan(half(), w))
+                        || (q == QuantizeForm::Device && w & 0x7C00 == 0 && g == w & 0x8000)
+                },
             );
         }
         // The keep's one test of the texel's bits, left out under native half rounding.

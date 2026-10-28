@@ -41,17 +41,17 @@
 //! could not align (and every attribute where the profile has no buffer robustness). They are
 //! contained like any descriptor access (the normative in-shader check when the profile has no
 //! buffer robustness, reading at offset 0 and yielding zero bytes out of bounds) and decoded
-//! exactly ([`Encoding`]): integers zero- or sign-extended by the format's signedness, normalized
-//! integers as Metal converts them (`c / (2^b - 1)`, signed `max(c / (2^(b-1) - 1), -1)`), `half`
-//! bits exactly, and the packed 10:10:10:2, 11:11:10 float, and 9:9:9:5 shared-exponent formats by
-//! their layouts. Missing components read as `(0, 0, 0, 1)` and extra ones are dropped. A float
-//! format then rounds to a narrow float parameter; an integer format is masked to a narrow integer
-//! parameter. Across the classes ([`class_match`]): an unnormalized 8- or 16-bit integer format
-//! read into a float parameter converts each extended component to its value as a float (exact) and
-//! rounds it to a narrow one, as Metal does; a 32-bit one is an invalid descriptor, as Metal
-//! refuses the pipeline; and a float-class format read into an integer parameter is not a
-//! conversion whose Metal meaning is established, so the projection refuses it (`NotImplemented`)
-//! and the pulled read refuses it again for a hand-built projection.
+//! ([`Encoding`]): integers zero- or sign-extended by the format's signedness, normalized integers
+//! as Metal converts them (`c / (2^b - 1)`, signed `max(c / (2^(b-1) - 1), -1)`), `half` bits by
+//! the device's widening (`narrow::from_bits`), and the packed 10:10:10:2, 11:11:10 float, and
+//! 9:9:9:5 shared-exponent formats by their layouts. Missing components read as `(0, 0, 0, 1)` and
+//! extra ones are dropped. A float format then rounds to a narrow float parameter; an integer
+//! format is masked to a narrow integer parameter. Across the classes ([`class_match`]): an
+//! unnormalized 8- or 16-bit integer format read into a float parameter converts each extended
+//! component to its value as a float (exact) and rounds it to a narrow one, as Metal does; a 32-bit
+//! one is an invalid descriptor, as Metal refuses the pipeline; and a float-class format read into
+//! an integer parameter is not a conversion whose Metal meaning is established, so the projection
+//! refuses it (`NotImplemented`) and the pulled read refuses it again for a hand-built projection.
 //!
 //! **Kernel stage inputs**. A kernel's `[[stage_in]]` attribute is fetched the same way, once at
 //! entry, from the kernel buffer slot `ResourceSlot{Kernel, Buffer, buffer_index}` its stage-input
@@ -413,8 +413,8 @@ impl PulledRead {
     /// An upper estimate of the SPIR-V words the fetch emits, once per attribute at entry (its uses
     /// read the held value and add nothing): the byte-path leaf, the offset and containment
     /// (through a view or the root entry of a device address, whichever the access family chooses),
-    /// and the decode of four lanes at the cost of an exact half decode (the dearest one) plus the
-    /// conversion to the parameter's form.
+    /// and the decode of four lanes at the cost of the bound on a half's decode (the dearest one)
+    /// plus the conversion to the parameter's form.
     pub fn words(&self) -> u32 {
         let lane =
             64 + narrow::bits_words(Form {
@@ -688,7 +688,9 @@ fn normalized(fb: &mut FunctionBuilder<'_>, c: SValue, bits: u8, signed: bool) -
     fb.select(neg, nq, q)
 }
 
-/// The `f32` of half bits `h`, exactly.
+/// The `f32` of half bits `h`: the device's widening of them (`narrow::from_bits`), the `half`'s
+/// value but for a NaN's bits and, on a device that may flush 16-bit denormals, a denormal, which
+/// the module records (`PrecisionNote::NativeNanEncoding`, `NativeHalfConversion`).
 fn half(fb: &mut FunctionBuilder<'_>, h: SValue) -> BResult<SValue> {
     narrow::from_bits(
         fb,
@@ -790,9 +792,9 @@ fn components(fb: &mut FunctionBuilder<'_>, e: Encoding, raw: SValue) -> BResult
 
 /// Record `PrecisionNote::DeviceNanEncoding` for a read of an attribute of `encoding` as `float`
 /// lanes of `form` where the encoding is a narrow float's ([`Encoding::widens_narrow_float`]):
-/// Metal's fetch answers its canonical NaN, sign and payload dropped, where the decode carries the
-/// 16-, 11- or 10-bit field's bits up into the payload. A `half` read keeps the field's own bits,
-/// as Metal's does.
+/// Metal's fetch answers its canonical NaN, sign and payload dropped, where the decode, the
+/// device's widening of the 16-, 11- or 10-bit field as a half's bits, answers a NaN of the
+/// device's bits. A `half` read stored unchanged keeps the field's own bits, as Metal's does.
 pub(super) fn narrow_float_nans(cx: &mut SelectCx<'_>, encoding: Encoding, form: Form) {
     if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {
         cx.precision

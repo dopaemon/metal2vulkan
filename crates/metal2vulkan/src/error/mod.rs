@@ -616,8 +616,9 @@ pub enum DriverDeviation {
     /// as Metal's conversion to `half` does, so that a value from 65504 up to 65520 is 65504, not
     /// infinity (`VkProperty::MetalHalfQuantize`). Vulkan leaves the quantize's rounding mode to
     /// the device. A module that rounds to `half` through the quantize (`QuantizeForm::Device`, a
-    /// profile without `shaderFloat16`) requires the property where the profile takes it;
-    /// unmeasured, it records `PrecisionNote::NativeHalfQuantize`.
+    /// profile without `shaderFloat16`) records `PrecisionNote::NativeHalfQuantize` whether the
+    /// profile takes it or not, and requires no property: the measurement covers the quantize's
+    /// normal results, and its result below the smallest normal `half` is the device's.
     MetalHalfQuantize,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
