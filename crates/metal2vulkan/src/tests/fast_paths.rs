@@ -6,8 +6,8 @@
 //! classed, and so reaches the ledger.
 
 use crate::device::{
-    BatchOrderPolicy, CompletionPolicy, DevicePolicy, HeapCompressionPolicy, HostPageTexturePolicy,
-    RenderLoweringPolicy,
+    BatchOrderPolicy, CompletionPolicy, DevicePolicy, HalfChainPolicy, HeapCompressionPolicy,
+    HostPageTexturePolicy, RenderLoweringPolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -65,6 +65,8 @@ fn choices() -> Vec<Choice> {
         batch_order: _,
         render_lowering: _,
         host_page_textures: _,
+        // The translator's: how a `half` chain rounds without `shaderFloat16`.
+        half_chains: _,
     } = p;
     vec![
         choice!(p.heap_compression: HeapCompressionPolicy { Compressed, Uncompressed }),
@@ -72,6 +74,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.batch_order: BatchOrderPolicy { Ends, Exact }),
         choice!(p.render_lowering: RenderLoweringPolicy { AtCall, Worker }),
         choice!(p.host_page_textures: HostPageTexturePolicy { InPlace, Shadow }),
+        choice!(p.half_chains: HalfChainPolicy { AtExits, EachOperation }),
     ]
 }
 
@@ -126,6 +129,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             ReductionOrder,
             FunctionStorageAssumed,
             ColorAttachmentGroups,
+            FastMathRewrites,
         ],
         Elsewhere: [
             HalfOutputPrecision,
@@ -138,7 +142,6 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             PixelSamplerScaling,
             DeviceArithmetic,
             DeviceRayIntersection,
-            FastMathRewrites,
             TessellationWinding,
             TessellationFactorEdgeCases,
             TessellationFactorScale,

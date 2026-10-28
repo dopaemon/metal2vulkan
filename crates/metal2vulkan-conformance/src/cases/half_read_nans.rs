@@ -49,7 +49,6 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture both kernels live in.
 const FIXTURE: &str = "format_scout";
@@ -262,13 +261,9 @@ impl Case for HalfReadNans {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // `format_scout`'s AIR asks for fast math, and a device whose compiler rewrites the
-        // arithmetic it allows announces that at the pipeline's making. Only the notice set is
-        // loosened: every one of the 2,048 words still compares exactly, so a device that rewrites
-        // nothing observable reads as announced with nothing differing -- which is what this M3
-        // Max shows, every word of all six formats byte-identical to Metal's -- and one that
-        // changes a texel shows the texel. The allowance fails the case if the notice stops
-        // firing, so it cannot outlive the reason for it.
+        // `format_scout`'s AIR asks for fast math, whose `fast-math-rewrites` the suite declares
+        // for every case (`crate::replay::NATIVE_NOTES`); every one of the 2,048 words still
+        // compares exactly.
         //
         // Nothing else is loosened. The lane names `device-nan-encoding` for a device whose own
         // decode of a half NaN is not Metal's, and it is deliberately **not** named here: it fired
@@ -285,10 +280,7 @@ impl Case for HalfReadNans {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::FastMathRewrites.code()),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

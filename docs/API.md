@@ -85,8 +85,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `robustBufferAccess`, buffer accesses and vertex input are left to it. (MoltenVK advertises the
   feature without implementing it; there such accesses are not contained, as on native Metal.)
 - **The device's arithmetic.** The device's own maths library, divisions, fused multiply-adds,
-  `float` denormals, rounding order of `dot`/`mix`/`fast::sqrt`, NaN bits, and the operand of
-  `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate`, on every device and with no exact form.
+  `float` denormals, rounding order of `dot`/`mix`/`fast::sqrt`, the grouping and fusion of
+  fast-math sums and products (each operation in the AIR's order, its own fast-math flags its
+  decoration), NaN bits, and the operand of `fmin`, `fmax`, `min3`, `max3`, `clamp` and
+  `saturate`, on every device and with no exact form.
   Each records a precision note with its bound; on MoltenVK on an Apple GPU, whose `float`
   functions are Metal's own, they are Metal's answers, but for a NaN's bits where the device is
   not measured to answer Metal's.
@@ -99,8 +101,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   own, most of them change nothing.
 - `DevicePolicy::exact_answers()` selects Metal's answer for each of the runtime's choices that
   offers one (the batch order and render lowering below, the heap texture compression, command
-  buffer completion and textures over host pages), each listed in [FAST-PATHS.md](FAST-PATHS.md)
+  buffer completion and textures over host pages) and the AIR's rounding of each `half` operation
+  on a device without `shaderFloat16` (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
   with its bound and the measured cost of its exact form.
+- **`half` chains held at `float` precision without `shaderFloat16`** (`HalfChainPolicy::AtExits`,
+  the default; changes emitted code). A device without 16-bit floats has no `half` arithmetic, so
+  a module computes each `half` `+ - *` in `float` and rounds it by the device's quantize. An
+  operation whose flags hold `contract` and `reassoc` and whose result only such operations read
+  is left unrounded: the chain rounds where a value leaves it, one quantize per exit instead of
+  one per operation, recorded `FastMathRewrites`. `half_chains = HalfChainPolicy::EachOperation`,
+  which `exact_answers()` selects, rounds every operation. A device with `shaderFloat16` computes
+  `half` alike under either value.
 - **Batches of a queue ordered by their ends** (`BatchOrderPolicy::Ends`, the runtime's choice; no
   pipeline differs). On ANV, RADV and NVIDIA's driver, each measured to start no kernel submission
   of a `VkQueue` before the one before it completed, each batch of command buffers ends with a
@@ -2610,7 +2621,15 @@ bound.
   arithmetic whose AIR lets a compiler rewrite it with a neighbouring operation: an addition or
   subtraction and the multiply feeding it both carry LLVM's `contract`, two chained additions,
   subtractions, or multiplies both carry `reassoc`, or an `llvm.fmuladd` (fused or not, as the
-  implementation chooses).
+  implementation chooses). The module states each operation in the AIR's order with its own
+  flags: one carrying both `contract` and `reassoc` is the device's compiler's to group and fuse,
+  any other is kept apart (`NoContraction`); Metal's compiler groups and fuses by its own choice.
+  On a device without `shaderFloat16`, a chain of such `half` additions, subtractions and products
+  is held at `float` precision between the roundings where its values leave it
+  (`HalfChainPolicy::AtExits`, the default; `HalfChainPolicy::EachOperation` rounds each).
+  Cost: a sum of mixed signs grouped otherwise, or a multiply-add fused on one side alone, differs
+  from Metal's by any amount relative to the result; a held `half` chain by the roundings it
+  skips, a value inside it past `half`'s range staying finite.
 - `metal2vulkan-degrade-tessellation-winding` (precision). `PrecisionNote::TessellationWinding`: A
   tessellation pipeline's vertex order: Metal's clockwise output winding is declared
   `VertexOrderCcw` and its counter-clockwise one `VertexOrderCw`, as MoltenVK maps them under

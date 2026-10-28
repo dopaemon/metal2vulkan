@@ -60,7 +60,7 @@ use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::ColorAttachmentState;
 use crate::pipeline::lower_inputs::{
-    ChannelWrite, ExtendedRangeColor, FactorLane, HalfOutputLane, RotatedBlendForm,
+    ChannelWrite, ExtendedRangeColor, FactorLane, RotatedBlendForm,
 };
 use crate::pipeline::rotated_blend::{rotated_blend, rotated_form, RotatedBlend};
 use crate::pipeline::stage_io::IoRole;
@@ -323,8 +323,7 @@ fn metal_stored(c: &ColorAttachmentDescriptor) -> Option<[Option<ChannelWrite>; 
 /// has no attachment and is not color 0 under alpha to coverage, and the second outputs it writes
 /// for rotated attachments are the pipeline's ([`wanted_rotated_factors`]), and so are the forms of
 /// their blends ([`wanted_rotated_blends`]), and the attachments holding Metal's alpha in red it
-/// writes or reads are the pipeline's ([`wanted_alpha_in_red`]), and the pipeline takes the `half` outputs it computes
-/// at `float` precision as it compiled them ([`half_output_lanes_hold`]), and its texture writes
+/// writes or reads are the pipeline's ([`wanted_alpha_in_red`]), and its texture writes
 /// that Metal's mode 2 stores otherwise compiled under the pipeline's `textureWriteRoundingMode`
 /// (`StageIo::texture_write_rounding`), else `NeedsInput(ColorWrites)`.
 pub(crate) fn check(
@@ -347,7 +346,6 @@ pub(crate) fn check(
         && wanted_alpha_in_red(fragment, colors, p) == io.alpha_in_red_colors
         && wanted_rotated_factors(fragment, colors, p) == io.rotated_factors
         && wanted_rotated_blends(fragment, colors, p) == io.rotated_blends
-        && half_output_lanes_hold(fragment, colors)
         && io.texture_write_rounding.is_none_or(|m| m == rounding)
         && unattached
     {
@@ -634,84 +632,6 @@ pub(crate) fn wanted_alpha_in_red(
     let mut out = alpha_in_red_colors(colors, p);
     out.retain(|a| used.contains(a));
     out
-}
-
-/// The channels of the color attachments `colors` that take a fragment function's `half` output
-/// at `float` precision where Metal computes its last operation so, by color index
-/// (`LoweringInputs::half_output_lanes`): each attachment of a 32-bit float format whose every
-/// stored channel either does not blend ([`HalfOutputLane::Float32`]) or blends with factors one
-/// and one under `Add` ([`HalfOutputLane::Float32Added`]); a channel the format lacks or the write
-/// mask drops is `None`.
-pub(crate) fn half_output_lanes(
-    colors: &[Option<ColorAttachmentDescriptor>],
-) -> BTreeMap<u32, [Option<HalfOutputLane>; 4]> {
-    use metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask as M, PixelFormat as P};
-    let mut out = BTreeMap::new();
-    for (i, c) in colors.iter().enumerate() {
-        let Some(c) = c else { continue };
-        let channels = match c.pixel_format {
-            P::R32Float => 1,
-            P::RG32Float => 2,
-            P::RGBA32Float => 4,
-            _ => continue,
-        };
-        let mut lanes = [None; 4];
-        let mut every = true;
-        for (k, (lane, bit)) in lanes
-            .iter_mut()
-            .zip([M::RED, M::GREEN, M::BLUE, M::ALPHA])
-            .enumerate()
-            .take(channels)
-        {
-            if !c.write_mask.contains(bit) {
-                continue;
-            }
-            let (s, d, op) = match k {
-                3 => (
-                    c.source_alpha_blend_factor,
-                    c.destination_alpha_blend_factor,
-                    c.alpha_blend_operation,
-                ),
-                _ => (
-                    c.source_rgb_blend_factor,
-                    c.destination_rgb_blend_factor,
-                    c.rgb_blend_operation,
-                ),
-            };
-            *lane = match (c.blending_enabled, s, d, op) {
-                (false, ..) => Some(HalfOutputLane::Float32),
-                (true, F::One, F::One, O::Add) => Some(HalfOutputLane::Float32Added),
-                _ => {
-                    every = false;
-                    None
-                }
-            };
-        }
-        if every && lanes.iter().any(Option::is_some) {
-            out.insert(i as u32, lanes);
-        }
-    }
-    out
-}
-
-/// Whether a render pipeline whose color attachments are `colors` takes the `half` outputs the
-/// fragment stage `fragment` computes at `float` precision as it compiled them
-/// (`StageIo::half_output_lanes`): each attachment the function recorded has the same entry of
-/// [`half_output_lanes`]. An attachment it recorded none for, every one where it compiled without
-/// the map, takes the `half` the function rounds, and the function records
-/// `PrecisionNote::HalfOutputPrecision` for it (under fast math it lists the attachment,
-/// `StageIo::half_fast_colors`, for `HalfOutputFastMathBlend`): a missing map loses Metal's
-/// `float`, never the pipeline.
-pub(crate) fn half_output_lanes_hold(
-    fragment: &FunctionArtifact,
-    colors: &[Option<ColorAttachmentDescriptor>],
-) -> bool {
-    let recorded = &fragment.interface.io.half_output_lanes;
-    if recorded.is_empty() {
-        return true;
-    }
-    let lanes = half_output_lanes(colors);
-    recorded.iter().all(|(c, l)| lanes.get(c) == Some(l))
 }
 
 /// The second outputs of the attachments of `colors` held with their channels rotated, on `p`

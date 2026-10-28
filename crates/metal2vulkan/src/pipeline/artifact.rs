@@ -668,9 +668,18 @@ pub enum PrecisionNote {
     /// Float arithmetic whose AIR lets a compiler rewrite it with a neighbouring operation: an
     /// addition or subtraction and the multiply feeding it both carry LLVM's `contract`, two
     /// chained additions, subtractions, or multiplies both carry `reassoc`, or an `llvm.fmuladd`
-    /// (fused or not, as the implementation chooses). The AIR's value is any of the rewrites those
-    /// flags allow, and Metal's compiler and the device's may each take a different one, so their
-    /// roundings may differ.
+    /// (fused or not, as the implementation chooses). The module states each operation in the
+    /// AIR's order with its own flags: one carrying both `contract` and `reassoc` is left to the
+    /// device's compiler, which groups and fuses it as it chooses, and any other is kept apart
+    /// (`NoContraction`). The AIR's value is any of the rewrites those flags allow, and Metal's
+    /// compiler takes its own grouping and fusion, so the roundings may differ: by any amount
+    /// relative to the result where a sum of mixed signs is grouped otherwise, or a multiply-add
+    /// fused on one side alone. On a device without `shaderFloat16`, under
+    /// `HalfChainPolicy::AtExits` (the default), a chain of such `half` additions, subtractions and
+    /// products is held at `float` precision between the roundings where its values leave it
+    /// (`lower::arith::half_chain`): the result may differ from the rounded operations' by the
+    /// roundings skipped, and a value inside the chain past `half`'s range stays finite.
+    /// Recorded on every device.
     FastMathRewrites,
     /// A tessellation pipeline's vertex order: Metal's clockwise output winding is declared
     /// `VertexOrderCcw` and its counter-clockwise one `VertexOrderCw`, as MoltenVK maps them under

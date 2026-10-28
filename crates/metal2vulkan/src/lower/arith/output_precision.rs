@@ -1,37 +1,20 @@
-//! A fragment function's `half` color outputs whose last operation Metal computes at `float`
-//! precision.
+//! The notes of a fragment function's color outputs that Metal may store otherwise than the
+//! function computes them. Nothing here changes what the function computes: each output is its own
+//! arithmetic, rounded as the AIR says.
 //!
-//! Metal's compiler chooses per output (an M4 under macOS 27.0.1 and the M3 Max under macOS 26.7,
-//! plain Metal, every lane of each case alike): under fast math, a `half` output whose value is a
-//! product, a sum or difference, or a fused multiply-add of `half`s, and which has no other use,
-//! reaches a 32-bit float attachment that does not blend unrounded, the product exact and the
-//! others rounded to `float` once; a product reaches such an attachment blended with factors one
-//! and one under `Add` unrounded too, added to the destination in `float`. Everywhere else in those
-//! cases the value is the `half` the function computes.
-//!
-//! [`plan`] marks those operations for the channels `LoweringInputs::half_output_lanes` lists
-//! ([`ArithPlan::unrounded`](super::ArithPlan::unrounded)): selection computes each in `float`
-//! on the widened operands, which are `half`s, and rounds it to nothing narrower, so the output
-//! stores the `float` Metal stores. A mark needs every fast-math flag on the operation (the
-//! probes' fast math; a partial set was not measured), one return, and a route from the
-//! operation to the returned output through `insertelement`, `shufflevector` and `insertvalue`
-//! alone, each used once, that stores each of its lanes in one listed channel at most. A
-//! regrouped tree's addition (`contract::chain`) and a chain of fused multiply-adds are not
-//! marked: their rounding at `float` was not measured.
-//!
-//! An output to a listed attachment records its note ([`half_output_note`]) unless every channel
-//! the attachment stores takes a marked lane or a constant, which Metal and the function store
-//! alike.
-//!
-//! The note follows the module's math mode: a module compiled with fast math records
-//! `PrecisionNote::HalfOutputFastMathBlend`, where Metal's compiler, folding the blend into the
-//! function, reads the output's `float` or its `half` and fuses or regroups the blend per pipeline,
-//! so no fixed form is Metal's; any other module (without fast math, or naming no mode) records
-//! `PrecisionNote::HalfOutputPrecision`.
+//! **A `half` color output** ([`note_half_output`]). Metal's compiler may carry an output's last
+//! operation at `float` precision into the attachment, the blend and the format's conversion, where
+//! the function rounds it to `half` first (an M4 under macOS 27.0.1 and the M3 Max under macOS
+//! 26.7: under fast math a product, a sum or difference, or a fused multiply-add of `half`s with no
+//! other use, into a 32-bit float attachment). The note follows the module's math mode: a module
+//! compiled with fast math records `PrecisionNote::HalfOutputFastMathBlend`, where Metal's
+//! compiler, folding the blend into the function, reads the output's `float` or its `half` and fuses
+//! or regroups the blend per pipeline, so no fixed form is Metal's; any other module (without fast
+//! math, or naming no mode) records `PrecisionNote::HalfOutputPrecision`.
 //!
 //! A module without fast math (`air.compile.fast_math_disable`) records no note itself: Metal
 //! stores the `half` it returns, so only a blend can store another value. It lists the attachment
-//! (`StageIo::half_blend_colors`, [`note_half_output`]), and the pipeline's stage records
+//! (`StageIo::half_blend_colors`), and the pipeline's stage records
 //! `PrecisionNote::HalfOutputPrecision` where that attachment blends
 //! (`color_writes::blends_output`). A module with fast math lists an attachment it reaches as a
 //! color attachment too (`StageIo::half_fast_colors`), and the pipeline's stage records
@@ -39,10 +22,10 @@
 //! (`color_writes::stores_output`): one whose write mask stores none holds nothing the output could
 //! differ by. A module naming no math mode keeps the note at any attachment: what Metal's compiler
 //! does there was not measured.
+//!
+//! **A blended extended-range output** ([`note_extended_range_sources`]): where Metal's blend may
+//! round the function's output otherwise than `extended_range::blend`'s model.
 
-use std::collections::{BTreeMap, BTreeSet};
-
-use super::contract;
 use crate::air::intrinsics::{AirIntrinsic, LlvmFloatOp, LlvmIntrinsic, Math, MathFn};
 use crate::air::ir::{BinOp as AirBin, Callee, Const, FastMath, InstId, InstKind, Type, Value};
 use crate::budget::Meter;
@@ -50,7 +33,6 @@ use crate::error::Error;
 use crate::lower::select::SelectCx;
 use crate::lower::stage_io::Returned;
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::lower_inputs::HalfOutputLane;
 use crate::pipeline::sym::Stage;
 
 /// Every fast-math flag: Metal's fast math, which the probes measured.
@@ -103,19 +85,6 @@ fn lanes(cx: &SelectCx<'_>, v: Value) -> Option<u32> {
         Type::Vector { len, .. } => Some(*len),
         _ => Some(1),
     }
-}
-
-/// Whether instruction `at` yields a `half` or a vector of `half`.
-fn is_half(cx: &SelectCx<'_>, at: InstId) -> bool {
-    let Some(ty) = cx.value_ty(Value::Inst(at)) else {
-        return false;
-    };
-    let types = cx.entry.module.types();
-    let scalar = match types.get(ty) {
-        Some(Type::Vector { elem, .. }) => types.get(*elem),
-        other => other,
-    };
-    matches!(scalar, Some(Type::Half))
 }
 
 /// Lane `lane` of `v`, followed back through moves each used once (`v` itself is the route's
@@ -216,35 +185,6 @@ fn field(
     }
 }
 
-/// Whether instruction `at` is a last operation Metal computes at `float` precision into a
-/// channel taking `lane`: every fast-math flag, on `half`s, used once (by the route), and a
-/// product for either channel, or a sum, difference, or fused multiply-add for a channel that
-/// does not blend.
-fn keeps_float(cx: &SelectCx<'_>, uses: &[u32], at: InstId, lane: HalfOutputLane) -> bool {
-    let plan: &contract::Plan = &cx.families.arith.contract;
-    if uses.get(at.raw() as usize) != Some(&1)
-        || plan.folded.contains(&at)
-        || plan.members.contains(&at)
-        || !is_half(cx, at)
-    {
-        return false;
-    }
-    let Some(InstKind::BinOp { op, fmf, .. }) = cx.body.insts.get(at).map(|i| &i.kind) else {
-        return false;
-    };
-    if *fmf != fast() {
-        return false;
-    }
-    let fused = plan.fused.get(&at);
-    if fused.is_some_and(|f| !f.inner.is_empty()) {
-        return false;
-    }
-    matches!(
-        (lane, op, fused),
-        (_, AirBin::FMul, None) | (HalfOutputLane::Float32, AirBin::FAdd | AirBin::FSub, _)
-    )
-}
-
 /// The note a `half` color output records where Metal may hand it to the attachment otherwise
 /// than the function stores it (the module docs): `PrecisionNote::HalfOutputFastMathBlend` in a
 /// module compiled with fast math (`air.compile.fast_math_enable`), whose blend Metal's compiler
@@ -295,95 +235,6 @@ pub(crate) fn note_half_output(cx: &mut SelectCx<'_>, color: u32) {
     if let Err(at) = colors.binary_search(&color) {
         colors.insert(at, color);
     }
-}
-
-/// Mark the `half` color outputs' last operations Metal computes at `float` precision
-/// (`ArithPlan::unrounded`), and record [`half_output_note`] for an output to a listed attachment
-/// one of whose stored channels takes neither such a lane nor a constant (the module docs).
-pub fn plan(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
-    if cx.stage != Stage::Fragment || cx.inputs.half_output_lanes.is_empty() {
-        return Ok(());
-    }
-    // The outputs to listed attachments that hold `half`s: each one's field and channels.
-    let outputs: Vec<(u32, u32, [Option<HalfOutputLane>; 4])> = cx
-        .families
-        .stage_io
-        .outputs
-        .iter()
-        .filter(|o| o.link.form.float_fmt() == Some(super::legal::FloatFmt::Half))
-        .filter_map(|o| {
-            let color = o.color?;
-            let lanes = *cx.inputs.half_output_lanes.get(&color)?;
-            Some((o.field, color, lanes))
-        })
-        .collect();
-    if outputs.is_empty() {
-        return Ok(());
-    }
-    let mut returns = Vec::new();
-    for (_, inst) in cx.body.insts.iter() {
-        m.tick(1)?;
-        if let InstKind::Ret(v) = &inst.kind {
-            returns.push(*v);
-        }
-    }
-    let returned = match returns.as_slice() {
-        [Some(v)] => Some(*v),
-        _ => None,
-    };
-    let uses = use_counts(cx, m)?;
-    // Each instruction's lanes, with the channel each reaches; a lane reaching two is refused.
-    let mut reached: BTreeMap<InstId, BTreeMap<u32, HalfOutputLane>> = BTreeMap::new();
-    let mut refused: BTreeSet<InstId> = BTreeSet::new();
-    // Each output's stored channels: the instruction lane each takes, or none (a constant).
-    let mut stored: Vec<Vec<Option<(InstId, u32)>>> = Vec::new();
-    let mut settled = Vec::new();
-    for (f, _, lanes) in &outputs {
-        let value = match returned {
-            Some(r) => field(cx, &uses, r, *f, m)?,
-            None => None,
-        };
-        let mut channels = Vec::new();
-        let mut ok = value.is_some();
-        for (k, lane) in lanes.iter().enumerate() {
-            let Some(lane) = *lane else { continue };
-            let Some(value) = value else { break };
-            match source(cx, &uses, value, k as u32, m)? {
-                Source::Constant => channels.push(None),
-                Source::Lane { at, lane: l } => {
-                    let entry = reached.entry(at).or_default();
-                    if entry.insert(l, lane).is_some() {
-                        refused.insert(at);
-                    }
-                    channels.push(Some((at, l)));
-                }
-                Source::Other => ok = false,
-            }
-        }
-        stored.push(channels);
-        settled.push(ok);
-    }
-    let mut unrounded = BTreeSet::new();
-    for (at, lanes) in &reached {
-        if refused.contains(at) {
-            continue;
-        }
-        let every = lanes.values().all(|&l| keeps_float(cx, &uses, *at, l));
-        if every {
-            unrounded.insert(*at);
-        }
-    }
-    for ((channels, ok), (_, color, _)) in stored.iter().zip(settled).zip(&outputs) {
-        let all = ok
-            && channels
-                .iter()
-                .all(|c| c.is_none_or(|(at, _)| unrounded.contains(&at)));
-        if !all {
-            note_half_output(cx, *color);
-        }
-    }
-    cx.families.arith.unrounded.extend(unrounded);
-    Ok(())
 }
 
 /// Record `PrecisionNote::ExtendedRangeBlendSource` where Metal's blend of the function's color

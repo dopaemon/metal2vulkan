@@ -24,8 +24,7 @@
 //! rounded", "according to IEEE 754 roundTiesToEven" under `RoundingModeRTE`, with denormals kept
 //! under `DenormPreserve` and zero signs under `SignedZeroInfNanPreserve`, which the entry then
 //! declares (`narrow::computes_in_16_bits`): Metal's `half` `fma`, with no fact. A NaN's bits are
-//! the device's, as the controlled rounding's are; a fused pair's NaN is selected as on every route
-//! (`super::contract`). Every other `half` one takes [`Route::Native`]: the device's `float` `Fma`
+//! the device's, as the controlled rounding's are. Every other `half` one takes [`Route::Native`]: the device's `float` `Fma`
 //! of the operands held in `float`, whose product is exact there, rounded to `half`.
 //!
 //! An extended-range blend computes its own correctly rounded multiply-adds ([`half_sum`],
@@ -125,12 +124,6 @@ pub struct Fma {
 }
 
 impl Fma {
-    /// The fused multiply-add on `form` on profile `p`, by the profile's [`routes`]. `None` for
-    /// any other form.
-    pub fn on(p: &DeviceProfile, form: Form) -> Option<Fma> {
-        Fma::by(routes(p), form)
-    }
-
     /// The fused multiply-add on `form` by `routes` (a profile's [`routes`]): `half` by its
     /// `half` route, `float` by its `float` route. `None` for any other form.
     pub fn by(routes: Routes, form: Form) -> Option<Fma> {

@@ -124,6 +124,13 @@ pub struct ModuleBuilder {
     /// The 16-bit integer each zero extension to 32 bits the lowering noted widens
     /// (`FunctionBuilder::note_widened16`).
     pub(super) widened16: HashMap<Value, Value>,
+    /// The 16-bit float (scalar or vector) each `OpFConvert` to 32 bits widens, by its result
+    /// (`FunctionBuilder::convert`): a conversion of the result back to 16 bits is that float,
+    /// exactly. A widening of a conversion from 32 bits is not listed: that pair is a rounding to
+    /// `half` (`lower::arith::narrow::rounds_by_conversion`), kept whole.
+    pub(super) widened_halves: HashMap<Value, Value>,
+    /// The result of every `OpFConvert` from 32 to 16 bits (`FunctionBuilder::convert`).
+    pub(super) narrowed_floats: HashSet<Value>,
     /// Every `OpUndef` result (`FunctionBuilder::is_undef`).
     pub(super) undefs: HashSet<Value>,
     /// The dynamic texel offsets the lowering asked to be taken as constants, by offset value
@@ -336,6 +343,8 @@ impl ModuleBuilder {
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
             + map_bytes(&self.widened16)
+            + map_bytes(&self.widened_halves)
+            + self.narrowed_floats.capacity() * std::mem::size_of::<Value>()
             + vec_bytes(&self.offers)
             + map_bytes(&self.encodes)
             + self.undefs.capacity() * std::mem::size_of::<Value>();

@@ -54,14 +54,13 @@
 //! One 8 by 8 `RGBA8Unorm` target of the case's own memory per case, one primitive per draw, no
 //! loop, and every pass's attachment written and read back by the same command buffer.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{Abort, Answer, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
     ColorState, PassColor, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, TargetSpec,
 };
-use crate::replay::NOTICES_SITE;
 use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
@@ -229,33 +228,20 @@ impl Case for TopologyClassCase {
         // and `RGBA8Unorm` codes survive Metal's store, so which pixels a point or a triangle lit
         // is exact on every device or it is a bug.
         //
-        // The notices site is loosened for the plain function's case alone, by the one notice its
-        // draw may announce. `rt6_full` computes its clip position from the vertex id under the
-        // fixture's default fast math, so a device whose own float rewrites are not Metal's has the
-        // translator announce it; which device that is is the device's answer and not the case's,
-        // and it moves no pixel of a fullscreen triangle. `rt6_point` computes nothing and
-        // announces nothing, which is why its case declares no allowance at all -- and that
-        // asymmetry is itself a small confirmation that the notice is the arithmetic's and not the
-        // topology class's.
+        // `rt6_full` computes its clip position from the vertex id under the fixture's default fast
+        // math, whose `fast-math-rewrites` the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`); it moves no pixel of a fullscreen triangle.
         //
-        // One more is declared for both cases, and it belongs to the venue rather than to a
+        // One is declared for both cases, and it belongs to the venue rather than to a
         // topology class: the positions and the read-back are `Shared`
         // ([`crate::replay::shared_memory_notice`], measured on the 5080). It loosens no texel.
         let mut allowances: Vec<Allowance> = vec![crate::replay::shared_memory_notice()];
         // And the point-size function's case alone declares what a device without
         // `shaderPointSize`'s guarantee announces for the size it writes: measured on llvmpipe for
-        // that row and for neither the plain row nor any venue whose driver is Metal. It is the
-        // same asymmetry the fast-math notice has, read the other way round.
+        // that row and for neither the plain row nor any venue whose driver is Metal.
         if self.subject.vertex == POINT_VERTEX {
             allowances.push(crate::replay::notice_allowance(
                 Degradation::DevicePointSize.code(),
-            ));
-        }
-        if self.subject.vertex == PLAIN_VERTEX {
-            allowances.push(Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(Degradation::FastMathRewrites),
             ));
         }
         allowances
@@ -401,7 +387,9 @@ mod tests {
     //! point-size case ever stopped being exactly those two, a test here fails and says which.
 
     use super::*;
+    use crate::allowance::Justification;
     use crate::recording::Recording;
+    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
 
     /// The classes under which Metal creates a pipeline whose vertex function writes
@@ -523,11 +511,9 @@ mod tests {
                     assert_ne!(a, b, "{}: two classes fingerprint alike", case.name());
                 }
             }
-            // Only the notices site may be loosened. Both cases declare the three kinds that
-            // belong to the device -- its colour conversion, its point-size guarantee and its
-            // memory model -- and only the case whose function has arithmetic to rewrite declares
-            // the fast-math notice: the point-size function computes nothing, which is what says
-            // that notice is the arithmetic's and not the topology class's.
+            // Only the notices site may be loosened, and only the point-size case declares the
+            // point-size notice beside the venue's memory model; the fast-math notice is the
+            // suite's (`crate::replay::NATIVE_NOTES`), declared by neither case.
             for allowance in case.allowances() {
                 assert_eq!(
                     allowance.path,
@@ -538,19 +524,17 @@ mod tests {
             }
             let fast_math =
                 Justification::Degradation(Degradation::FastMathRewrites.code().to_owned());
-            let names_fast_math = case
-                .allowances()
-                .iter()
-                .any(|allowance| allowance.justified_by == fast_math);
-            assert_eq!(
-                names_fast_math,
-                !writes_point_size(&case.subject),
-                "{}: the point-size case declares the fast-math notice, or the plain one does not",
+            assert!(
+                !case
+                    .allowances()
+                    .iter()
+                    .any(|allowance| allowance.justified_by == fast_math),
+                "{}: a case declares the suite's fast-math notice",
                 case.name()
             );
             assert_eq!(
                 case.allowances().len(),
-                1 + usize::from(writes_point_size(&case.subject)) + usize::from(names_fast_math),
+                1 + usize::from(writes_point_size(&case.subject)),
                 "{}: an unexpected number of declarations",
                 case.name()
             );

@@ -132,9 +132,9 @@ pub use layout::{
 pub use link::heap_unused_while_pending;
 pub use lower_inputs::{
     AliasView, AmplificationDraws, BlendEquation, CaptureForm, ChannelWrite, ColorGroup,
-    ExtendedRangeColor, FactorLane, FetchedAttachment, FramebufferFetchInputs, HalfOutputLane,
-    LoweringInputs, RotatedBlendForm, StorageImageChoice, StorageImageClass, VertexFetch,
-    VertexFetchProjection, ViewportCompensation,
+    ExtendedRangeColor, FactorLane, FetchedAttachment, FramebufferFetchInputs, LoweringInputs,
+    RotatedBlendForm, StorageImageChoice, StorageImageClass, VertexFetch, VertexFetchProjection,
+    ViewportCompensation,
 };
 pub use table::FunctionHandle;
 // The vocabulary the pipeline surface reaches: render-pipeline keys, runtime facts and their

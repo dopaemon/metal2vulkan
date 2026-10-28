@@ -375,8 +375,11 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// - **maths**: the native-maths class (`native-transcendentals`, `native-division`,
 ///   `native-fma`, `native-dot`, `native-mix`, `native-min-max`, `native-nan-encoding`), the
 ///   device's functions and precision bounds (`device-transcendentals`, `device-arithmetic`), the
-///   device's denormals and NaN bits (`device-denormals`, `device-nan-encoding`), and the device's
-///   rounding of a tiny product (`float-tininess-after-rounding`);
+///   device's denormals and NaN bits (`device-denormals`, `device-nan-encoding`), the device's
+///   rounding of a tiny product (`float-tininess-after-rounding`), and the device's compiler's
+///   grouping and fusion of the fast-math arithmetic the AIR's flags let it rewrite
+///   (`fast-math-rewrites`: the module states each operation in the AIR's order and reproduces no
+///   grouping of Metal's);
 /// - **rounding**: the native-half class (`native-half-conversion`, `native-half-quantize`), and
 ///   the device's own depth conversion and depth test (`unorm-depth-rounding`, `depth-denormals`,
 ///   `signed-depth-test`);
@@ -395,8 +398,7 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// `restricted-depth-range`), of an emulation's own precision (`decoded-texel-precision`,
 /// `grad-from-bias`, `pixel-sampler-scaling`, `bicubic-filter-arithmetic`), of a Metal form not
 /// measured or not built (`blended-write-rounding`, `unmeasured-resolve`, `device-interpolation`,
-/// `reduction-order`), of the freedom the AIR's own flags give (`fast-math-rewrites`), and every
-/// performance or validity notice.
+/// `reduction-order`), and every performance or validity notice.
 ///
 /// **It declares the notice, and nothing about a value.** Each entry loosens the notices site
 /// alone, exactly as a case's own [`notice_allowance`] does, so every value of every case still
@@ -419,6 +421,7 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::DeviceDenormals,
         D::DeviceNanEncoding,
         D::FloatTininessAfterRounding,
+        D::FastMathRewrites,
         D::NativeHalfConversion,
         D::NativeHalfQuantize,
         D::UnormDepthRounding,

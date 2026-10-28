@@ -293,17 +293,6 @@ pub struct StageIo {
     /// (`NeedsInput(DepthCompareClamp)`). Empty for every other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub depth_compares: DepthCompares,
-    /// The channels taking a `half` output at `float` precision the function compiled under
-    /// (`LoweringInputs::half_output_lanes`), by color index: those of the attachments it writes
-    /// a `half` output to. Link refuses a stage one of whose entries is not the pipeline's
-    /// (`NeedsInput(ColorWrites)`); an attachment without one, every attachment of a function
-    /// compiled without the map among them, takes the `half` the function rounds, under
-    /// `PrecisionNote::HalfOutputPrecision` (under fast math `HalfOutputFastMathBlend`, by
-    /// [`half_fast_colors`](Self::half_fast_colors)), and links.
-    /// Empty for any other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub half_output_lanes:
-        BTreeMap<u32, [Option<crate::pipeline::lower_inputs::HalfOutputLane>; 4]>,
     /// The `textureWriteRoundingMode` under which a fragment function's texture writes that
     /// Apple's mode 2 stores otherwise were compiled (`LoweringInputs::texture_write_rounding`),
     /// where the function writes a `float` texel that may reach a half-float or packed
@@ -363,8 +352,7 @@ pub struct StageIo {
     pub float_blend_colors: Vec<u32>,
     /// The attachments a `half` color output of a module compiled with fast math
     /// (`air.compile.fast_math_enable`) reaches as color attachments, by color index, sorted (not
-    /// one the function writes in the storage form, nor one whose channels take the output at
-    /// `float` precision where Metal computes it so, [`half_output_lanes`](Self::half_output_lanes)).
+    /// one the function writes in the storage form).
     /// Metal's compiler folds the attachment's blend and conversion into the function under fast
     /// math, so the pipeline's stage records `PrecisionNote::HalfOutputFastMathBlend` where one of
     /// these attachments stores some channel (`color_writes::stores_output`). One whose write mask

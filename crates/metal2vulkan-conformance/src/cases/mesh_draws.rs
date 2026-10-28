@@ -367,8 +367,6 @@ const FRAGMENT: &str = "mesh_draws_fragment";
 pub const MESH_PASS_NOTICES: &[Degradation] = &[
     // The pass drew through the mesh-draw emulation, on a device without `VK_EXT_mesh_shader`.
     Degradation::EmulatedMeshDraws,
-    // A stage's compiler rewrote its fast-math arithmetic as it made the pipeline.
-    Degradation::FastMathRewrites,
     // The notes the barrier and draw path makes: a fragment stage ordered before a later draw's
     // earlier stages, a pass split at a barrier, and the bytes of draws the pass does not order.
     Degradation::FragmentsBeforeGeometry,

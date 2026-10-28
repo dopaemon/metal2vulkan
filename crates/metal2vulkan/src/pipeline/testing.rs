@@ -221,8 +221,6 @@ pub fn fragment_inputs(
     inputs.rotated_colors = crate::pipeline::color_writes::rotated_colors(&r.color_attachments, p);
     inputs.alpha_in_red_colors =
         crate::pipeline::color_writes::alpha_in_red_colors(&r.color_attachments, p);
-    inputs.half_output_lanes =
-        crate::pipeline::color_writes::half_output_lanes(&r.color_attachments);
     inputs.rotated_factors =
         crate::pipeline::color_writes::rotated_factors(&r.color_attachments, p);
     inputs.rotated_blends = crate::pipeline::color_writes::rotated_blends(&r.color_attachments, p);

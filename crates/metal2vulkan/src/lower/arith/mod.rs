@@ -35,13 +35,12 @@
 //! than correct rounding add
 //! `PrecisionNote::DeviceArithmetic` (`fdiv`, `frem`, `sqrt`, a `double` or `bfloat` `fma`, `fmod`,
 //! `dot`) or `PrecisionNote::DeviceTranscendentals` (the transcendental functions) to the plan.
-//! Float arithmetic without both of LLVM's `contract` and `reassoc` fast-math flags (and `mix`'s
-//! multiply and add, unless its call carries both) is decorated `NoContraction`, so no device fuses
-//! or regroups operations that LLVM keeps apart. A `contract` multiply is fused into the `contract`
-//! additions that use it exactly where Metal fuses it, one correctly rounded fused multiply-add
-//! ([`contract`]); an addition Metal keeps apart from such a multiply is `NoContraction`.
-//! Arithmetic the flags let a compiler regroup with its neighbour, a pair whose fusion the probe
-//! did not measure, and a `bfloat` or `double` `llvm.fmuladd`, add
+//! Float arithmetic is emitted in the AIR's order, one instruction per operation, each decorated by
+//! its own fast-math flags: one carrying both of LLVM's `contract` and `reassoc` is left
+//! undecorated, so the device's compiler groups and fuses it as those flags allow; any other (and
+//! `mix`'s multiply and add, unless its call carries both) is `NoContraction`, so no device fuses
+//! or regroups operations that LLVM keeps apart. Arithmetic the flags let a compiler regroup or
+//! fuse with its neighbour, and a `bfloat` or `double` `llvm.fmuladd`, add
 //! `PrecisionNote::FastMathRewrites`: its value is any of those the flags allow, and Metal's
 //! compiler may take another than the device's. Every other lowering is exact for every non-poison
 //! input within the device's floating-point environment: signed zeros, infinities, and NaNs are
@@ -68,12 +67,12 @@
 pub mod aggregate;
 pub mod chunk;
 pub mod color_write;
-pub mod contract;
 pub mod denormal;
 pub mod divide;
 pub mod exact_division;
 pub mod extended_range;
 pub mod fma;
+pub mod half_chain;
 pub mod legal;
 pub mod libm;
 pub mod math;
@@ -81,8 +80,6 @@ pub mod nan;
 pub mod narrow;
 pub mod ops;
 pub mod output_precision;
-pub(crate) mod reassoc;
-pub(crate) mod regroup;
 pub mod srgb;
 pub mod texel_round;
 pub mod wide;
@@ -190,8 +187,8 @@ pub enum ArithStrategy {
         op: AirBin,
         form: Form,
     },
-    /// A float binary operator on floats of `form`; `contract` is `Forbidden` unless the
-    /// instruction carries the `contract` fast-math flag.
+    /// A float binary operator on floats of `form`, in the AIR's order; `contract` is `Forbidden`
+    /// unless the instruction carries both `contract` and `reassoc` ([`contraction`]).
     Float {
         op: AirBin,
         form: Form,
@@ -312,23 +309,6 @@ pub enum ArithStrategy {
     /// ([`divide::native`], `PrecisionNote::NativeDivision`).
     NativeDivide {
         form: Form,
-    },
-    /// A `contract` multiply (or its `fpext` to `float`) fused into every addition that uses it
-    /// ([`contract`]), or an addition of a tree Metal regroups folded into a chain: no value of its
-    /// own.
-    Folded,
-    /// A `contract` addition fused with its product ([`contract`]): `fma(a, b, c)` by `fma`'s
-    /// route, with the product or the addend negated as `negate` says; in a chain, `c` is the
-    /// addend of the last of the `inner` links, whose values are each the addend of the one before,
-    /// the first's that of `fma(a, b, _)`.
-    Fused {
-        fma: fma::Fma,
-        a: ValueId,
-        b: ValueId,
-        c: ValueId,
-        negate: contract::Negate,
-        /// A chain's fused multiply-adds inside the outer one, outermost first.
-        inner: Box<[contract::FusedLink]>,
     },
     Convert {
         kind: ConvertKind,
@@ -486,11 +466,10 @@ impl FamilyStrategy for ArithStrategy {
                 FloatPrecision::DeviceArithmetic => "arith.float_fn.device_arithmetic",
                 FloatPrecision::DeviceTranscendental => "arith.float_fn.device_transcendental",
             },
-            S::Fma(f) | S::Fused { fma: f, .. } => f.name(),
+            S::Fma(f) => f.name(),
             S::FastFmod { .. } => FAST_FMOD,
             S::Mix { .. } => MIX,
             S::Dot { .. } => DOT,
-            S::Folded => FOLDED,
             S::Convert {
                 kind: ConvertKind::ToInt { .. },
                 ..
@@ -538,7 +517,7 @@ impl FamilyStrategy for ArithStrategy {
         // constants and types (a vector constant adds its lanes).
         use ArithStrategy as S;
         match self {
-            S::IndexExtension | S::PointerAggregate | S::Folded => 0,
+            S::IndexExtension | S::PointerAggregate => 0,
             S::Handle(_) | S::Forward(_) => 4,
             S::Member { path, .. } => {
                 6u32.saturating_add(u32::try_from(path.len()).unwrap_or(u32::MAX))
@@ -583,10 +562,6 @@ impl FamilyStrategy for ArithStrategy {
             S::IntFn { f, form } => f.words(form.bits()),
             S::FloatFn { f, form, .. } => f.words(*form),
             S::Fma(f) => f.words(),
-            // The fused multiply-add and a negation, for the pair and each link.
-            S::Fused { fma, inner, .. } => inner
-                .iter()
-                .fold(fma.words() + 8, |w, _| w.saturating_add(fma.words() + 8)),
             // The device's division, the truncation, its negation, and the fused multiply-add.
             S::FastFmod { fma } => 80 + fma.words(),
             // The negation of `t` on its bits and the two fused multiply-adds.
@@ -662,10 +637,7 @@ impl FamilyStrategy for ArithStrategy {
 
     /// An aggregate that holds a pointer has no value.
     fn yields_value(&self) -> bool {
-        !matches!(
-            self,
-            ArithStrategy::PointerAggregate | ArithStrategy::Folded
-        )
+        !matches!(self, ArithStrategy::PointerAggregate)
     }
 }
 
@@ -734,13 +706,9 @@ pub struct ArithPlan {
     /// How each member-wise phi's value on the edge from a block is assembled from its incoming
     /// aggregate's members ([`aggregate::incoming`]).
     pub incoming: BTreeMap<(InstId, BlockId), aggregate::Build>,
-    /// The multiply-add pairs Metal fuses ([`contract`]).
-    pub contract: contract::Plan,
-    /// The `half` additions, subtractions, products and fused multiply-adds a fragment function
-    /// returns as an output's lane that Metal computes at `float` precision
-    /// ([`output_precision`]): each selected in `float` on its widened operands, unrounded to
-    /// `half`.
-    pub unrounded: BTreeSet<InstId>,
+    /// The `half` additions, subtractions and products held at `float` precision, unrounded,
+    /// between a chain's roundings on a device without `shaderFloat16` ([`half_chain`]).
+    pub held_at_float: BTreeSet<InstId>,
     /// The direction of the first `air.pack`/`air.unpack` of `unorm4x8_srgb`, when one reads
     /// Metal's sRGB table, which [`declare`] then declares once ([`srgb`]) and the census charges
     /// once, to that direction's strategy ([`routine_words`]).
@@ -886,9 +854,6 @@ pub const CHUNKED_DOT: &str = "arith.chunked.dot.fused";
 pub const SRGB_UNPACK: &str = "arith.unpack.srgb";
 /// The census name of an `arcp` division ([`ArithStrategy::FastDivide`]).
 pub const FAST_DIVIDE: &str = "arith.fdiv.fast";
-/// The census name of a multiply fused into the additions that use it
-/// ([`ArithStrategy::Folded`]).
-pub const FOLDED: &str = "arith.float.folded";
 
 /// Complete the arith family's plan once every instruction and parameter is selected: declare
 /// `SignedZeroInfNanPreserve` for each required width the profile supports, and note
@@ -1072,12 +1037,14 @@ fn lanes_of(cx: &SelectCx<'_>, v: Value) -> Result<u32, Error> {
     }
 }
 
-/// The SPIR-V contraction of an operation with fast-math flags `fmf`. An undecorated SPIR-V
-/// operation lets the device both fuse it and regroup it with its neighbours (`NoContraction`
-/// forbids both), and MoltenVK's fast-math Metal compile does regroup. LLVM grants the two
-/// separately, `contract` and `reassoc`, so only an operation that carries both stays undecorated;
-/// any other is `NoContraction`, which keeps the rounding of each operation, one of the values its
-/// flags allow.
+/// The SPIR-V contraction of an operation with fast-math flags `fmf`: the AIR's own permission,
+/// nothing of Metal's choices. An undecorated SPIR-V operation lets the device both fuse it and
+/// regroup it with its neighbours (Vulkan assumes `AllowContract` and `AllowReassoc` for it;
+/// `NoContraction` forbids both). LLVM grants the two separately, `contract` and `reassoc`, so an
+/// operation that carries both stays undecorated, and the device's compiler groups and fuses it as
+/// it chooses; any other is `NoContraction`, which keeps it apart and in the AIR's order: an
+/// operation without `contract` is never fused, and one without `reassoc` (every operation of a
+/// precise module) never regrouped.
 fn contraction(fmf: FastMath) -> Contraction {
     if fmf.contains(FastMath::CONTRACT.union(FastMath::REASSOC)) {
         Contraction::Allowed
@@ -1086,72 +1053,86 @@ fn contraction(fmf: FastMath) -> Contraction {
     }
 }
 
-/// Note `PrecisionNote::FastMathRewrites` when float arithmetic `op` with flags `fmf` on
-/// operands `a` and `b` may be regrouped with the operation defining one of them, as LLVM's
-/// flags allow: `op` and the operand are additions, subtractions, or multiplies that both carry
-/// `reassoc`. A negation between them is looked through: it is exact, and a compiler folds it into
-/// either operation. So are lane selections, insertions and extractions: Metal's compiler splits
-/// vectors into lanes before it regroups. Arithmetic that chains only through memory is not seen
-/// here. A multiply's fusion into an addition (both carrying `contract`) is Metal's rule, which
-/// [`contract`] follows and notes where it is not measured, and a multiply `at` whose lane-uniform
-/// factors are paired is Metal's grouping ([`regroup::paired`]).
-fn note_rewrites(
-    cx: &mut SelectCx<'_>,
-    at: Option<InstId>,
-    (op, fmf): (AirBin, FastMath),
-    a: Value,
-    b: Value,
-) {
+/// Note `PrecisionNote::FastMathRewrites` when float arithmetic `op` with flags `fmf` on operands
+/// `a` and `b` lets a compiler rewrite it with the operation defining one of them, as LLVM's flags
+/// allow: `op` and the operand are additions, subtractions, or multiplies that both carry
+/// `reassoc` (a regrouping), or `op` is an addition or subtraction and the operand a multiply, both
+/// carrying `contract`, the multiply's `fpext` to `float` looked through (a fusion). Where both
+/// carry `contract` and `reassoc` the module leaves them undecorated and the device's compiler
+/// takes its own rewrite; elsewhere it keeps them apart ([`contraction`]); Metal's compiler takes
+/// its own in either case. A negation between them is looked through: it is exact, and a compiler
+/// folds it into either operation. So are lane selections, insertions and extractions: a compiler
+/// splits vectors into lanes before it regroups. Arithmetic that chains only through memory is not
+/// seen here.
+fn note_rewrites(cx: &mut SelectCx<'_>, (op, fmf): (AirBin, FastMath), a: Value, b: Value) {
     if !matches!(op, AirBin::FAdd | AirBin::FSub | AirBin::FMul) {
         return;
     }
-    let rewritable = [a, b].into_iter().any(|v| {
-        float_arith_def(cx, v, LOOK_THROUGH).is_some_and(|(_, def_fmf)| {
-            fmf.contains(FastMath::REASSOC) && def_fmf.contains(FastMath::REASSOC)
-        })
-    });
-    let ir = regroup::Ir {
-        module: &cx.entry.module,
-        func: cx.entry.func,
-        body: cx.body,
+    let sum = matches!(op, AirBin::FAdd | AirBin::FSub);
+    let rewritable = |def: AirBin, def_fmf: FastMath, widened: bool| {
+        let regrouped =
+            !widened && fmf.contains(FastMath::REASSOC) && def_fmf.contains(FastMath::REASSOC);
+        let fused = sum
+            && def == AirBin::FMul
+            && fmf.contains(FastMath::CONTRACT)
+            && def_fmf.contains(FastMath::CONTRACT);
+        regrouped || fused
     };
-    if rewritable && !(op == AirBin::FMul && at.is_some_and(|at| regroup::paired(ir, at))) {
+    if [a, b]
+        .into_iter()
+        .any(|v| float_arith_def(cx, v, LOOK_THROUGH, false, &rewritable))
+    {
         cx.precision.insert(PrecisionNote::FastMathRewrites);
     }
 }
 
-/// How many negations, lane selections, insertions and extractions [`float_arith_def`] looks
-/// through: a bound on its walk.
+/// How many negations, widenings, lane selections, insertions and extractions [`float_arith_def`]
+/// looks through: a bound on its walk.
 const LOOK_THROUGH: u32 = 8;
 
-/// The float addition, subtraction, or multiply defining `v`, through negations and lane
-/// selections, insertions and extractions, at most `depth` of them, with its fast-math flags: of
-/// a selection of two vectors' lanes or an insertion, the first such operation either source
-/// reaches.
-fn float_arith_def(cx: &SelectCx<'_>, v: Value, depth: u32) -> Option<(AirBin, FastMath)> {
+/// Whether a float addition, subtraction, or multiply defining `v`, through negations, `fpext`s
+/// and lane selections, insertions and extractions, at most `depth` of them, satisfies `f` of its
+/// operator, its fast-math flags, and whether the walk crossed a widening (`widened`, or one of its
+/// own): either source of a selection of two vectors' lanes or of an insertion.
+fn float_arith_def(
+    cx: &SelectCx<'_>,
+    v: Value,
+    depth: u32,
+    widened: bool,
+    f: &dyn Fn(AirBin, FastMath, bool) -> bool,
+) -> bool {
     let Value::Inst(id) = v else {
-        return None;
+        return false;
     };
-    let kind = &cx.body.insts.get(id)?.kind;
+    let Some(inst) = cx.body.insts.get(id) else {
+        return false;
+    };
     if let InstKind::BinOp {
         op: op @ (AirBin::FAdd | AirBin::FSub | AirBin::FMul),
         fmf,
         ..
-    } = kind
+    } = &inst.kind
     {
-        return Some((*op, *fmf));
+        return f(*op, *fmf, widened);
     }
-    let depth = depth.checked_sub(1)?;
-    match kind {
-        InstKind::FNeg { v: negated, .. } => float_arith_def(cx, *negated, depth),
+    let Some(depth) = depth.checked_sub(1) else {
+        return false;
+    };
+    match &inst.kind {
+        InstKind::FNeg { v: negated, .. } => float_arith_def(cx, *negated, depth, widened, f),
+        InstKind::Cast {
+            op: CastOp::FPExt,
+            v: narrow,
+        } => float_arith_def(cx, *narrow, depth, true, f),
         InstKind::ShuffleVector { a, b, .. } => {
-            float_arith_def(cx, *a, depth).or_else(|| float_arith_def(cx, *b, depth))
+            float_arith_def(cx, *a, depth, widened, f) || float_arith_def(cx, *b, depth, widened, f)
         }
         InstKind::InsertElement { vec, elt, .. } => {
-            float_arith_def(cx, *elt, depth).or_else(|| float_arith_def(cx, *vec, depth))
+            float_arith_def(cx, *elt, depth, widened, f)
+                || float_arith_def(cx, *vec, depth, widened, f)
         }
-        InstKind::ExtractElement { vec, .. } => float_arith_def(cx, *vec, depth),
-        _ => None,
+        InstKind::ExtractElement { vec, .. } => float_arith_def(cx, *vec, depth, widened, f),
+        _ => false,
     }
 }
 
@@ -1402,9 +1383,6 @@ pub fn select(
     inst: &Inst,
     m: &mut Meter,
 ) -> Result<ArithStrategy, Error> {
-    if let Some(s) = contract::select(cx, at, inst)? {
-        return Ok(s);
-    }
     if let InstKind::Cast {
         op: CastOp::ZExt | CastOp::SExt,
         ..
@@ -1478,12 +1456,6 @@ fn select_in(
     Ok(match &inst.kind {
         InstKind::BinOp { op, a, b, fmf, .. } => {
             let f = form_in(cx, *a, chunk)?;
-            // A `half` output's last operation Metal computes at `float` precision: its operands,
-            // `half`s held widened, operated on as `float`s.
-            let f = match cx.families.arith.unrounded.contains(&at) {
-                true => f.with(Held::Float(FloatFmt::F32)),
-                false => f,
-            };
             match f.held {
                 Held::Bool if !op.is_float() => S::Bool { op: *op, form: f },
                 Held::Int { .. } if !op.is_float() => S::Int { op: *op, form: f },
@@ -1504,7 +1476,7 @@ fn select_in(
                 Held::Float(fmt) if divide::precise(*op, fmt, *fmf) => {
                     let notes = float_binop_notes(*op, fmt, *fmf, cx.profile);
                     record(cx, notes.unwrap_or_default());
-                    note_rewrites(cx, Some(at), (*op, *fmf), *a, *b);
+                    note_rewrites(cx, (*op, *fmf), *a, *b);
                     fp_env(cx, *fmf, f);
                     leave_denormals(cx, f, denormal::Covered::Never);
                     let s = S::NativeDivide { form: f };
@@ -1513,19 +1485,9 @@ fn select_in(
                 Held::Float(fmt) if op.is_float() => {
                     let notes = float_binop_notes(*op, fmt, *fmf, cx.profile);
                     record(cx, notes.unwrap_or_default());
-                    // A tree's addition Metal regroups by the measured rule; its plan notes the
-                    // values the tree reads.
-                    if !cx.families.arith.contract.members.contains(&at) {
-                        note_rewrites(cx, Some(at), (*op, *fmf), *a, *b);
-                    }
+                    note_rewrites(cx, (*op, *fmf), *a, *b);
                     fp_env(cx, *fmf, f);
-                    // An addition Metal keeps apart from its `contract` multiply operand is
-                    // never fused by the device either.
-                    let contract = if cx.families.arith.contract.kept.contains(&at) {
-                        Contraction::Forbidden
-                    } else {
-                        contraction(*fmf)
-                    };
+                    let contract = contraction(*fmf);
                     // Metal divides `float` under `arcp` as `x` times its fast reciprocal of `y`
                     // (a probe cases 914cc4d2 and 711cc190, every flag set measured, every lane),
                     // its reciprocal flushing past `2^126` and at a denormal `y`: the device's
@@ -1548,9 +1510,19 @@ fn select_in(
                         let s = S::F16 { op: *op, form: f };
                         with_nan(cx, s, nan::binary_answer(*op, fmt))
                     } else {
+                        // A `half` chain's operation held at `float` precision: its operands,
+                        // `half`s held widened or held operations' `float`s, operated on as
+                        // `float`s and left unrounded ([`half_chain`]), noted.
+                        let form = match cx.families.arith.held_at_float.contains(&at) {
+                            true => {
+                                cx.precision.insert(PrecisionNote::FastMathRewrites);
+                                f.with(Held::Float(FloatFmt::F32))
+                            }
+                            false => f,
+                        };
                         let s = S::Float {
                             op: *op,
-                            form: f,
+                            form,
                             contract,
                         };
                         // Metal reads an `f32` denormal operand of `+ - *` as a zero and flushes a
@@ -2912,8 +2884,6 @@ pub fn emit(
     let x = match s {
         // Its only uses read its operand: it has no value of its own.
         S::IndexExtension => return Ok(()),
-        // Its additions read its factors.
-        S::Folded => return Ok(()),
         // No SPIR-V value: its extractions resolve through provenance.
         S::PointerAggregate => return Ok(()),
         S::Handle(k) => crate::memory::leaf::k32(fb, *k)?,
@@ -2974,8 +2944,6 @@ fn arity(s: &ArithStrategy) -> Option<usize> {
         | S::Undef(_)
         | S::IndexExtension
         | S::IndexWord(_)
-        | S::Folded
-        | S::Fused { .. }
         | S::PointerAggregate
         | S::Handle(_)
         | S::Forward(_)
@@ -3000,7 +2968,6 @@ fn value(
     Ok(match s {
         S::IndexExtension
         | S::IndexWord(_)
-        | S::Folded
         | S::SinCos { .. }
         | S::PointerAggregate
         | S::Handle(_)
@@ -3178,33 +3145,6 @@ fn value(
             math::float_fn(fb, *f, *form, *contract, test, xs, &lib)?
         }
         S::Fma(f) => fma::emit(fb, *f, xs)?,
-        S::Fused {
-            fma,
-            a,
-            b,
-            c,
-            negate,
-            inner,
-        } => {
-            let mut x = cx.operand(fb, *a)?;
-            let y = cx.operand(fb, *b)?;
-            let mut z = cx.operand(fb, *c)?;
-            match negate {
-                contract::Negate::Neither => {}
-                contract::Negate::Product => x = fb.unary(UnOp::FNegate, x)?,
-                contract::Negate::Addend => z = fb.unary(UnOp::FNegate, z)?,
-            }
-            // A chain's links, innermost first, each one's value the next one's addend.
-            for link in inner.iter().rev() {
-                let mut p = cx.operand(fb, link.a)?;
-                let q = cx.operand(fb, link.b)?;
-                if link.negate {
-                    p = fb.unary(UnOp::FNegate, p)?;
-                }
-                z = fma::emit(fb, *fma, &[p, q, z])?;
-            }
-            fma::emit(fb, *fma, &[x, y, z])?
-        }
         S::FastFmod { fma: f } => {
             let (x, y) = match xs {
                 [x, y, ..] => (*x, *y),

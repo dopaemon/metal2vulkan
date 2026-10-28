@@ -2161,7 +2161,6 @@ pub(crate) fn fragment_inputs(
     out.sample_mask = d.sample_mask;
     out.alpha_test = d.alpha_test;
     out.depth_compare_clamp_mask = d.depth_compare_clamp_mask;
-    out.half_output_lanes = crate::pipeline::color_writes::half_output_lanes(d.color_attachments);
     out.texture_write_rounding = d.texture_write_rounding_mode;
     out
 }
@@ -2406,10 +2405,9 @@ fn decoded_module(r: &Request<'_>, m: &mut Meter) -> Result<air::Decoded, Error>
     }
 }
 
-/// [`specialize_one`], then Metal's grouping of multiply chains (`lower::arith::regroup`) and of
-/// fast-math sums (`lower::arith::reassoc`), and the order Apple's simdgroup lockstep gives
-/// threadgroup accesses made explicit for `p`: the entry selection reads, whose instruction indices
-/// a refusal's location names. [`plan_one`] and `DeviceProfile::specialized_entry` both build it
+/// [`specialize_one`], then the order Apple's simdgroup lockstep gives threadgroup accesses made
+/// explicit for `p`: the entry selection reads, whose instruction indices a refusal's location
+/// names. [`plan_one`] and `DeviceProfile::specialized_entry` both build it
 /// here, so a tool that resolves a refusal's location reads the compile's own entry.
 fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Specialized, Error> {
     let Specialized {
@@ -2418,11 +2416,6 @@ fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Sp
         spec,
         before,
     } = specialize_one(r, m)?;
-    // Metal's pairing of a multiply chain's lane-uniform factors, before lockstep's barriers name
-    // their instructions.
-    let spec = crate::lower::arith::regroup::apply(spec, m)?;
-    // Metal's grouping of each fast-math sum whose grouping the rank pins.
-    let spec = crate::lower::arith::reassoc::apply(spec, m)?;
     let spec = crate::lower::simd::lockstep::order(spec, p, m)?;
     Ok(Specialized {
         air_hash,

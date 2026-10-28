@@ -438,15 +438,6 @@ mod serde_round_trips {
             captured_positions: Some(crate::pipeline::CaptureForm::Indexed(
                 metal::IndexType::UInt16,
             )),
-            half_output_lanes: BTreeMap::from([(
-                1,
-                [
-                    Some(crate::pipeline::HalfOutputLane::Float32),
-                    Some(crate::pipeline::HalfOutputLane::Float32Added),
-                    None,
-                    None,
-                ],
-            )]),
             extended_shadows: BTreeSet::from([0]),
             cross_class: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 10),

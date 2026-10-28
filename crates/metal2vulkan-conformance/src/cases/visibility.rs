@@ -344,9 +344,6 @@ pub fn all() -> Vec<Visibility> {
 const PASS_NOTICES: &[Degradation] = &[
     // A `Shared` buffer the device keeps in system memory, which the visibility buffer is.
     Degradation::SharedInSystemMemory,
-    // The device's own compiler rewrote the stage's fast-math arithmetic as it made the pipeline,
-    // which MoltenVK 1.4.2 on this M3 Max announces for this fixture's vertex stage.
-    Degradation::FastMathRewrites,
     // The multisampled attachment of a `MultisampleResolve` store, and a `DontCare` store, are
     // Vulkan's `DONT_CARE` on a driver measured to leave the earlier texels there. Nothing of
     // these cases reads a colour attachment -- the visibility result is the answer, and it is

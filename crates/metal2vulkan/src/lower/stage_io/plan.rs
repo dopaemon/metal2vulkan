@@ -2067,26 +2067,14 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             refuse_bfloat_color(cx.entry, ty)?;
             // A `half` output to an attachment the pipeline has: Metal may carry its last
             // operation at `float` precision into the blend and the format's conversion, where
-            // the function rounds it to `half` first. An attachment whose channels take the
-            // output at `float` precision where Metal does is recorded, and the arith family's plan
-            // decides its note (`arith::output_precision`); without the attachment's entry (a
-            // function compiled without the map among them) the output keeps the `half` and the
-            // note, and links all the same.
+            // the function rounds it to `half` first (`arith::output_precision`).
             if let OutputRole::RenderTarget {
                 attachment: AbiInt::Const(color),
                 ..
             } = o.role
             {
-                let lanes = cx.inputs.half_output_lanes.get(&color).copied();
-                match lanes.filter(|_| half_color(cx.entry, ty)) {
-                    Some(lanes) => {
-                        let sp = &mut cx.families.stage_io;
-                        sp.interface.half_output_lanes.insert(color, lanes);
-                    }
-                    None if half_color(cx.entry, ty) && !unattached.contains(&color) => {
-                        crate::lower::arith::output_precision::note_half_output(cx, color);
-                    }
-                    None => {}
+                if half_color(cx.entry, ty) && !unattached.contains(&color) {
+                    crate::lower::arith::output_precision::note_half_output(cx, color);
                 }
                 // A `float` output of a module without fast math: the pipeline decides by the
                 // attachment's blend whether Metal stores it otherwise (`float_blend_colors`).

@@ -173,9 +173,6 @@ const PASS_NOTICES: &[Degradation] = &[
     // 10-bit or bfloat attachment takes (`render/unused_bits_load.rs`); none of this family's
     // formats takes one.
     Degradation::UnreachedTilesRewritten,
-    // The device's own compiler rewrote the stage's fast-math arithmetic as it made the pipeline,
-    // which MoltenVK 1.4.2 on this M3 Max announces for this fixture's stages.
-    Degradation::FastMathRewrites,
 ];
 
 /// The bytes of a `SIDE` by `SIDE` target of `texel` bytes a texel whose every channel holds

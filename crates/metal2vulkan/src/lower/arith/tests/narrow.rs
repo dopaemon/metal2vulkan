@@ -2766,10 +2766,11 @@ fn half_arithmetic_on_the_device_is_the_rounded_result() {
     }
 }
 
-/// The device's `half` arithmetic is the instruction on 16-bit floats between two narrowings and a
-/// widening, with no rounding of the module's own: no conversion barrier
-/// (`narrow::rounds_by_conversion` finds none), and the only instructions computing 16-bit
-/// values are the two narrowings and the operation, always kept apart: a sum or difference
+/// The device's `half` arithmetic is the instruction on 16-bit floats and a widening, with no
+/// rounding of the module's own: no conversion barrier (`narrow::rounds_by_conversion` finds none),
+/// and the only instructions computing 16-bit values are the operation and at most two narrowings
+/// of its operands: an operand the module widened from a 16-bit float is that float, narrowed by
+/// nothing (`FunctionBuilder::convert`); the operation is always kept apart: a sum or difference
 /// decorated `NoContraction`, a product `Fma(a, b, -0.0)` decorated `NoContraction`, never an
 /// `OpFMul` (undecorated, Metal's fast compile answers the widened operands' `float` product;
 /// decorated, SPIRV-Cross's `spvFMul` answers `+0` for a `-0` product).
@@ -2853,12 +2854,17 @@ fn half_arithmetic_on_the_device_is_one_16_bit_instruction() {
                 _ => (OP_EXT_INST, FMA),
             };
             let shapes: Vec<(u32, u32)> = computed.iter().map(|&(c, g, _)| (c, g)).collect();
-            assert_eq!(
-                shapes,
-                vec![(OP_FCONVERT, 0), (OP_FCONVERT, 0), want],
-                "{what}: the 16-bit instructions"
+            let (last, before) = shapes.split_last().expect("the operation");
+            assert_eq!(*last, want, "{what}: the 16-bit instructions {shapes:?}");
+            assert!(
+                before.len() <= 2 && before.iter().all(|s| *s == (OP_FCONVERT, 0)),
+                "{what}: the 16-bit instructions {shapes:?}"
             );
-            assert!(decorated.contains(&computed[2].2), "{what}: NoContraction");
+            let op_id = computed
+                .last()
+                .map(|&(_, _, id)| id)
+                .expect("the operation");
+            assert!(decorated.contains(&op_id), "{what}: NoContraction");
         }
     }
 }

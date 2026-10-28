@@ -685,22 +685,6 @@ pub struct LoweringInputs {
     /// compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub captured_positions: Option<CaptureForm>,
-    /// The channels of the render pipeline's color attachments that take a fragment function's
-    /// `half` output at `float` precision where Metal computes its last operation so, by color
-    /// index, one entry per channel the attachment stores: each attachment of a 32-bit float format
-    /// (`R32Float`, `RG32Float`, `RGBA32Float`) whose stored channels each take one
-    /// ([`HalfOutputLane`]). An attachment of another format, or one a stored channel of which
-    /// blends otherwise, is not listed. `Device::compile_render_pipeline` sets it for a `Function`
-    /// fragment stage from the pipeline's color attachments. The function records the entries of
-    /// the attachments it writes a `half` output to (`StageIo::half_output_lanes`), and link
-    /// refuses one whose recorded entry is not the pipeline's as `NeedsInput(ColorWrites)`. A
-    /// function compiled without the map (or an attachment's entry) rounds that output to `half`
-    /// with `PrecisionNote::HalfOutputPrecision` (under fast math `HalfOutputFastMathBlend`, which
-    /// the pipeline's stage records where the attachment stores some channel,
-    /// `StageIo::half_fast_colors`) and links into any pipeline: the missing input loses Metal's
-    /// `float`, never the pipeline. Empty for any other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub half_output_lanes: BTreeMap<u32, [Option<HalfOutputLane>; 4]>,
     /// The extended-range color attachments, by color index, whose `half` shadow the draw's
     /// render pass instance holds (`VariantKey::extended_shadows`): Metal's tile memory holds
     /// such an attachment as `half` through the pass and rounds it to the codes once at the
@@ -925,23 +909,6 @@ impl CaptureForm {
             CaptureForm::Indexed(ty) => Some(ty),
         }
     }
-}
-
-/// How a channel of a color attachment takes a fragment function's `half` output whose last
-/// operation Metal's fast math computes at `float` precision (`LoweringInputs::half_output_lanes`,
-/// an M4, plain Metal). The output is that operation's only use, and the operation carries every
-/// fast-math flag.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum HalfOutputLane {
-    /// A channel of a 32-bit float format that does not blend: Metal stores a product of two
-    /// `half`s exactly, and a sum, a difference, or a fused multiply-add of `half`s rounded to
-    /// `float` once.
-    Float32,
-    /// A channel of a 32-bit float format blended with factors one and one under `Add`: Metal
-    /// adds a product of two `half`s exactly to the destination, rounded to `float` once.
-    Float32Added,
 }
 
 /// How the blend of an attachment held with its channels rotated reads the fragment function's

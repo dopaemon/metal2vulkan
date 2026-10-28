@@ -4,7 +4,26 @@ use crate::spirv::builder::function::FunctionBuilder;
 use crate::spirv::builder::ops::err;
 use crate::spirv::error::{BResult, OperandRule};
 use crate::spirv::ids::{TypeId, Value};
-use crate::spirv::ir::{Contraction, ConvOp, Inst, StorageClass, Type};
+use crate::spirv::ir::{
+    ConstBits, ConstKind, Constant, Contraction, ConvOp, Inst, StorageClass, Type, ValueOrigin,
+};
+
+/// The `half` bits of the `float` with bits `f` where it is exactly a zero, an infinity or a normal
+/// `half`; `None` for a NaN, a value that needs rounding, and a `half` denormal.
+fn exact_half_bits(f: u32) -> Option<u16> {
+    let sign = ((f >> 16) & 0x8000) as u16;
+    let exp = (f >> 23) & 0xFF;
+    let man = f & 0x7F_FFFF;
+    match (exp, man) {
+        (0, 0) => Some(sign),
+        (0xFF, 0) => Some(sign | 0x7C00),
+        // A normal `half`: an unbiased exponent from -14 to 15 and ten significand bits.
+        (113..=142, m) if m & 0x1FFF == 0 => {
+            Some(sign | (((exp - 112) as u16) << 10) | (m >> 13) as u16)
+        }
+        _ => None,
+    }
+}
 
 /// A bitcast endpoint: a numeric (non-`bool`) scalar or vector, or a `PhysicalStorageBuffer`
 /// pointer, with its total bit width.
@@ -27,6 +46,11 @@ impl FunctionBuilder<'_> {
     /// - `Bitcast`: numeric scalars/vectors or `PhysicalStorageBuffer` pointers of equal total
     ///   width; a pointer converts only to another such pointer, a 64-bit integer, or a vector of
     ///   two 32-bit integers.
+    ///
+    /// An `FConvert` to 16 bits emits nothing where its value is exact: of a 32-bit float this
+    /// builder widened from a 16-bit float of type `to`, that float (unless the 16-bit float is
+    /// itself a narrowing, whose pair is a rounding to `half` kept whole); of a plain constant
+    /// whose every lane is a zero, an infinity or a normal `half`, the 16-bit constant.
     pub fn convert(&mut self, op: ConvOp, a: Value, to: TypeId) -> BResult<Value> {
         self.convert_with(op, a, to, Contraction::Allowed)
     }
@@ -48,6 +72,8 @@ impl FunctionBuilder<'_> {
     ) -> BResult<Value> {
         let o = op.to_spirv();
         let result = err(o, OperandRule::ResultType);
+        // The widths of an `FConvert`'s operand and result.
+        let mut float_widths = None;
         match op {
             ConvOp::ConvertFToU
             | ConvOp::ConvertFToS
@@ -86,6 +112,9 @@ impl FunctionBuilder<'_> {
                 if !ok {
                     return Err(result);
                 }
+                if op == ConvOp::FConvert {
+                    float_widths = Some((x.width, t.width));
+                }
             }
             ConvOp::ConvertUToPtr => {
                 let x = self.want(o, 0, a, |n| n.is_int() && n.is_scalar())?;
@@ -112,7 +141,88 @@ impl FunctionBuilder<'_> {
                 }
             }
         }
+        match float_widths {
+            // A 16-bit float widened and narrowed back is that float, exactly; a rounding's pair
+            // (a narrowing widened back) is not taken apart (`note_widened_half`).
+            Some((32, 16)) => {
+                if let Some(h) = self
+                    .widened_half_of(a)
+                    .filter(|h| self.value_ty(*h).ok() == Some(to))
+                {
+                    return Ok(h);
+                }
+                if let Some(c) = self.exact_half_const(a, to)? {
+                    return Ok(c);
+                }
+                let y = self.emit(Inst::Convert { op, a, contract }, to)?;
+                self.note_narrowed_float(y);
+                return Ok(y);
+            }
+            Some((16, 32)) => {
+                let y = self.emit(Inst::Convert { op, a, contract }, to)?;
+                self.note_widened_half(y, a);
+                return Ok(y);
+            }
+            _ => {}
+        }
         self.emit(Inst::Convert { op, a, contract }, to)
+    }
+
+    /// The 16-bit float constant of type `to` (a scalar or vector) that 32-bit float constant `a`
+    /// holds exactly, where every lane of it is a zero, an infinity or a normal `half`; `None`
+    /// where `a` is no plain constant or a lane is a NaN or needs rounding, or a `half` denormal
+    /// (each the device's conversion's to answer).
+    fn exact_half_const(&mut self, a: Value, to: TypeId) -> BResult<Option<Value>> {
+        let ValueOrigin::Const(c) = self.origin(a)? else {
+            return Ok(None);
+        };
+        let lanes: Vec<u64> = match &self.mb().consts().get(c)?.kind {
+            ConstKind::Plain(Constant::Scalar { bits, .. }) => vec![bits.0],
+            ConstKind::Plain(Constant::Null { .. }) => vec![0; self.lanes_of(to)?],
+            ConstKind::Plain(Constant::Composite { parts, .. }) => {
+                let mut lanes = Vec::with_capacity(parts.len());
+                for p in parts.iter() {
+                    match &self.mb().consts().get(*p)?.kind {
+                        ConstKind::Plain(Constant::Scalar { bits, .. }) => lanes.push(bits.0),
+                        ConstKind::Plain(Constant::Null { .. }) => lanes.push(0),
+                        _ => return Ok(None),
+                    }
+                }
+                lanes
+            }
+            _ => return Ok(None),
+        };
+        let Some(halves) = lanes
+            .iter()
+            .map(|b| u32::try_from(*b).ok().and_then(exact_half_bits))
+            .collect::<Option<Vec<u16>>>()
+        else {
+            return Ok(None);
+        };
+        let e = self.module().ty(Type::Float { width: 16 })?;
+        let mut parts = Vec::with_capacity(halves.len());
+        for h in &halves {
+            parts.push(self.module().constant(Constant::Scalar {
+                ty: e,
+                bits: ConstBits(u64::from(*h)),
+            })?);
+        }
+        let k = match parts.as_slice() {
+            [one] if to == e => *one,
+            _ => self.module().constant(Constant::Composite {
+                ty: to,
+                parts: parts.into(),
+            })?,
+        };
+        self.module().const_value(k).map(Some)
+    }
+
+    /// The lane count of scalar or vector type `ty`.
+    fn lanes_of(&self, ty: TypeId) -> BResult<usize> {
+        Ok(match self.mb().types().get(ty)? {
+            Type::Vector { len, .. } => usize::from(*len),
+            _ => 1,
+        })
     }
 
     fn is_psb_ptr(&self, ty: TypeId) -> BResult<bool> {

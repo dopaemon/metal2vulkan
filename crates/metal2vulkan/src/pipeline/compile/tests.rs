@@ -743,7 +743,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", cubic_samplers: {}", "")
                 .replace(", rotated_blends: {}", "")
                 .replace(", captured_positions: None", "")
-                .replace(", half_output_lanes: {}", "")
                 .replace(", extended_shadows: {}", "")
                 .replace(", cross_class: {}", "")
                 .replace(", texture_write_rounding: TowardZero", "")

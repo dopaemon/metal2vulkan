@@ -54,7 +54,7 @@ use crate::pipeline::layout::{
 };
 use crate::pipeline::lower_inputs::{
     BlendEquation, CaptureForm, ChannelWrite, ColorGroup, ExtendedRangeColor, FactorLane,
-    HalfOutputLane, RotatedBlendForm, VertexFetch,
+    RotatedBlendForm, VertexFetch,
 };
 use crate::pipeline::stage_io::{
     CoverageLoop, CoverageLoopRefusal, DepthCompares, DepthMode, Interpolation as IoInterpolation,
@@ -1128,7 +1128,7 @@ codec_struct! {
         inputs, outputs, builtins, pulled, stage_in, multisampled, varyings_at_pixel,
         position_depth, coverage_loop, color_writes, rounded_colors, primitive_inputs,
         early_fragment_tests, extended_range_colors, unattached_colors, sample_mask,
-        rotated_colors, rotated_factors, rotated_blends, decoded_fetches, half_output_lanes,
+        rotated_colors, rotated_factors, rotated_blends, decoded_fetches,
         texture_write_rounding, uniform_outputs, uniform_inputs, instanced_attributes,
         half_blend_colors, half_fast_colors, float_blend_colors, zero_indices, color_group,
         word_colors, alpha_in_red_colors, alpha_test, depth_compares,
@@ -1180,7 +1180,6 @@ codec_enum! {
     FactorLane { Zero, One, Output(f0) }
     RotatedBlendForm { Premultiplied, Unmeasured }
     CaptureForm { Vertices, Indexed(f0) }
-    HalfOutputLane { Float32, Float32Added }
     TextureWriteRoundingMode { TowardZero, NearestEven }
     CompareFunction { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always }
     CoverageLoopRefusal {

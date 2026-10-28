@@ -240,9 +240,7 @@ impl FamilyPlans {
     /// Call `f` with each value instruction `id` (`inst`) of `body` reads where it stands, as
     /// the families lower it: none for an instruction that emits nothing (a planned index
     /// extension, or a `ptrtoint` whose bits go only into forwarding cells); the value a forwarding
-    /// `extractvalue` forwards, instead of its aggregate; none for a multiply folded into the
-    /// additions that use it, and a fused addition's two factors and addend instead of its product;
-    /// and otherwise each operand, a use of an index extension reading the extension's narrow
+    /// `extractvalue` forwards, instead of its aggregate; and otherwise each operand, a use of an index extension reading the extension's narrow
     /// operand. A typed access whose chain takes its `getelementptr`'s index operands reads those
     /// too. A phi reads nothing where it stands: its copies read at the end of each incoming block
     /// ([`FamilyPlans::incoming_reads`]).
@@ -287,10 +285,6 @@ impl FamilyPlans {
         for &id in self.arith.forwards.keys() {
             mark(id, ReadIndex::FORWARDED);
         }
-        let contract = &self.arith.contract;
-        for &id in contract.folded.iter().chain(contract.fused.keys()) {
-            mark(id, ReadIndex::CONTRACTED);
-        }
         for &id in self.access.typed_indices.keys() {
             mark(id, ReadIndex::TYPED_INDICES);
         }
@@ -322,13 +316,7 @@ impl FamilyPlans {
         match (&inst.kind, forwarded) {
             (InstKind::Phi { .. }, _) => {}
             (_, Some(v)) => f(read(v)),
-            (kind, None) => {
-                if !(named(id, ReadIndex::CONTRACTED)
-                    && self.arith.contract.reads(id, |v| f(read(v))))
-                {
-                    kind.for_each_value(|v| f(read(v)));
-                }
-            }
+            (kind, None) => kind.for_each_value(|v| f(read(v))),
         }
         // A typed access whose chain takes its GEP's index operands reads them too.
         if named(id, ReadIndex::TYPED_INDICES) {
@@ -375,10 +363,8 @@ impl ReadIndex {
     const READS_NOTHING: u8 = 1;
     /// A forwarding `extractvalue` (`arith::aggregate::forwarded`).
     const FORWARDED: u8 = 2;
-    /// A folded multiply or a fused addition (`arith::contract::Plan::reads`).
-    const CONTRACTED: u8 = 4;
     /// A typed access that reads its GEP's index operands (`access::AccessPlan::typed_indices`).
-    const TYPED_INDICES: u8 = 8;
+    const TYPED_INDICES: u8 = 4;
 
     /// Whether a plan of kind `bit` may name instruction `id`.
     fn names(&self, id: InstId, bit: u8) -> bool {
@@ -1372,13 +1358,10 @@ fn select_body(
     select_params(cx, &used)?;
     // The member-wise phis' representations, before any use of one is selected.
     arith::aggregate::plan_phis(cx, m)?;
-    // The multiply-add pairs Metal fuses, before either of a pair is selected.
-    arith::contract::plan(cx, m)?;
-    // The `half` outputs' last operations Metal computes at `float` precision, after the pairs
-    // it fuses and before any of them is selected.
-    arith::output_precision::plan(cx, m)?;
     // A blended extended-range output whose source Metal may round otherwise than the model.
     arith::output_precision::note_extended_range_sources(cx, m)?;
+    // The `half` chains' operations held at `float` precision, before any of them is selected.
+    cx.families.arith.held_at_float = arith::half_chain::plan(cx, m)?;
 
     let mut blocks = 0u64;
     for (b, block) in body.blocks.iter() {

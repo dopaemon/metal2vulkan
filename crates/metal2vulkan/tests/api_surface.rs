@@ -229,6 +229,7 @@ surface! {
         enum BatchOrderPolicy N;
         enum RenderLoweringPolicy N;
         enum HostPageTexturePolicy N;
+        enum HalfChainPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;
@@ -405,7 +406,6 @@ surface! {
         enum FactorLane N;
         struct FetchedAttachment N;
         struct FramebufferFetchInputs N;
-        enum HalfOutputLane N;
         struct LoweringInputs N;
         enum RotatedBlendForm N;
         struct StorageImageChoice N;

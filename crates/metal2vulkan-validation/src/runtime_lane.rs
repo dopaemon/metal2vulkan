@@ -542,6 +542,8 @@ mod interlocked_draw_order;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod keep_alives;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod kept_apart;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_buffer_bytes;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod kept_images;
@@ -744,8 +746,6 @@ mod separate_samples;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod seq_cst_fences;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod settled_sums;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod shader_stencil;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod shared_exponent_storage;
@@ -775,8 +775,6 @@ mod submission_handlers;
 mod submit_costs;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod submit_per_import;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod sum_regroup;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod surface_aliases;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

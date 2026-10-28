@@ -457,6 +457,8 @@ pub struct ProfileFields {
     pub handle_domain: HandleDomain,
     pub containment: Containment,
     pub isolation: GuestIsolation,
+    /// How a fast-math `half` chain rounds without `shaderFloat16` (`DevicePolicy::half_chains`).
+    pub half_chains: crate::device::HalfChainPolicy,
     pub leaf: LeafCaps,
     pub subgroup: SubgroupModel,
     pub images: ImageCaps,

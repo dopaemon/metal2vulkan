@@ -1442,6 +1442,7 @@ enum	metal2vulkan::device::FloatWidth	#[derive(Clone, Copy, Debug, PartialEq, Eq
 enum	metal2vulkan::device::FormatUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FormatUsage
 enum	metal2vulkan::device::FunctionStorage	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FunctionStorage
 enum	metal2vulkan::device::GuestIsolation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum GuestIsolation
+enum	metal2vulkan::device::HalfChainPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HalfChainPolicy
 enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HandleDomain
 enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
 enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
@@ -1515,7 +1516,6 @@ enum	metal2vulkan::pipeline::DescriptorView	#[cfg_attr(feature = "serde", derive
 enum	metal2vulkan::pipeline::EntryMath	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum EntryMath
 enum	metal2vulkan::pipeline::EntryRef	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum EntryRef<'a>
 enum	metal2vulkan::pipeline::FactorLane	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FactorLane
-enum	metal2vulkan::pipeline::HalfOutputLane	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum HalfOutputLane
 enum	metal2vulkan::pipeline::HandleClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum HandleClass
 enum	metal2vulkan::pipeline::ImageAccess	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ImageAccess
 enum	metal2vulkan::pipeline::ImageDim	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ImageDim
@@ -3681,6 +3681,7 @@ field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
 field	metal2vulkan::device::DevicePolicy.batch_order	pub batch_order: BatchOrderPolicy
 field	metal2vulkan::device::DevicePolicy.completion	pub completion: CompletionPolicy
 field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
+field	metal2vulkan::device::DevicePolicy.half_chains	pub half_chains: HalfChainPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
 field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
 field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
@@ -4173,7 +4174,6 @@ field	metal2vulkan::pipeline::LoweringInputs.extended_shadows	pub extended_shado
 field	metal2vulkan::pipeline::LoweringInputs.flat_grid	pub flat_grid: bool
 field	metal2vulkan::pipeline::LoweringInputs.folded_groups	pub folded_groups: bool
 field	metal2vulkan::pipeline::LoweringInputs.framebuffer_fetch	pub framebuffer_fetch: Option<FramebufferFetchInputs>
-field	metal2vulkan::pipeline::LoweringInputs.half_output_lanes	pub half_output_lanes: BTreeMap<u32, [Option<HalfOutputLane>; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.instanced_attributes	pub instanced_attributes: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
 field	metal2vulkan::pipeline::LoweringInputs.max_call_stack_depth	pub max_call_stack_depth: Option<u32>
@@ -12389,6 +12389,8 @@ variant	metal2vulkan::device::FunctionStorage::Assumed	Assumed(u64)
 variant	metal2vulkan::device::FunctionStorage::Measured	Measured(u64)
 variant	metal2vulkan::device::GuestIsolation::Off	Off
 variant	metal2vulkan::device::GuestIsolation::On	On
+variant	metal2vulkan::device::HalfChainPolicy::AtExits	AtExits
+variant	metal2vulkan::device::HalfChainPolicy::EachOperation	EachOperation
 variant	metal2vulkan::device::HandleDomain::Table	Table
 variant	metal2vulkan::device::HeapCompressionPolicy::Compressed	Compressed
 variant	metal2vulkan::device::HeapCompressionPolicy::Uncompressed	Uncompressed
@@ -13385,8 +13387,6 @@ variant	metal2vulkan::pipeline::EntryRef::Name	Name(&'a str)
 variant	metal2vulkan::pipeline::FactorLane::One	One
 variant	metal2vulkan::pipeline::FactorLane::Output	Output(u8)
 variant	metal2vulkan::pipeline::FactorLane::Zero	Zero
-variant	metal2vulkan::pipeline::HalfOutputLane::Float32	Float32
-variant	metal2vulkan::pipeline::HalfOutputLane::Float32Added	Float32Added
 variant	metal2vulkan::pipeline::HandleClass::FunctionTable	FunctionTable
 variant	metal2vulkan::pipeline::HandleClass::Image	Image(ImageHandleClass)
 variant	metal2vulkan::pipeline::HandleClass::Sampler	Sampler { compare: bool, integer: bool, cube_gradient: bool }

@@ -1737,359 +1737,6 @@ fn an_ordered_not_equal_is_the_negated_unordered_equal() {
     }
 }
 
-/// Metal fuses a `contract` multiply into the `contract` addition or subtraction that uses it, in
-/// the same block, when every use of the product does so (a probe cases e761c0aa and c3cc7397):
-/// `a * a + c` with `a = 1 + 2^-12` and `c = -(1 + 2^-11)` is the product's rounding error `2^-24`
-/// fused and 0 rounded twice. A product used by two additions is fused into both; `c - a * b` and
-/// `a * b - c` negate a factor and the addend; of two products the first operand's is fused; a
-/// `half` pair and a `half` product widened to `float` fuse too (`(1 + 2^-6)^2 - (1 + 2^-5) =
-/// 2^-12`). A stored product, one reaching the addition through a `select`, and an addition without
-/// `contract` stay two roundings. Every fused `float` pair is one `OpFmaKHR` on moltenvk-m3; none
-/// of these shapes notes `FastMathRewrites`, while a negation between the product and the addition,
-/// which the probe did not measure, does.
-#[test]
-fn contract_pairs_fuse_as_metal_fuses_them() {
-    let a = 1.0f32 + 2f32.powi(-12);
-    let c = -(1.0f32 + 2f32.powi(-11));
-    let tiny = 2f32.powi(-24);
-    assert_eq!(a.mul_add(a, c), tiny);
-    assert_eq!(a * a + c, 0.0);
-    let inputs = format!(
-        "{}{}{}{}",
-        of("a", a),
-        of("c", c),
-        of("e", -c),
-        of("one", -1.0)
-    );
-    let p = "  %p = fmul contract float %a, %a\n";
-    let half_inputs = format!(
-        "{}{}  %ha = bitcast i16 %ta to half\n  %hc = bitcast i16 %tc to half\n",
-        on("ta", 16, 0x3C10),
-        on("tc", 16, 0xBC20)
-    );
-    // (name, body defining %r as a float, the stored bits, OpFmaKHR on moltenvk-m3, notes
-    // FastMathRewrites)
-    let shapes: [(&'static str, String, u32, usize, bool); 11] = [
-        (
-            "contract_pair_fuses",
-            format!("{inputs}{p}  %r = fadd contract float %p, %c\n"),
-            tiny.to_bits(),
-            1,
-            false,
-        ),
-        (
-            "contract_product_used_twice_fuses_into_both",
-            format!("{inputs}{p}  %s = fadd contract float %p, %c\n  %t = fadd contract float %p, %one\n  %r = fadd float %s, %t\n"),
-            (2f32.powi(-11) + 2f32.powi(-23)).to_bits(),
-            2,
-            false,
-        ),
-        (
-            "contract_subtrahend_product_negates_a_factor",
-            format!("{inputs}{p}  %r = fsub contract float %e, %p\n"),
-            (-tiny).to_bits(),
-            1,
-            false,
-        ),
-        (
-            "contract_product_minus_addend_negates_the_addend",
-            format!("{inputs}{p}  %r = fsub contract float %p, %e\n"),
-            tiny.to_bits(),
-            1,
-            false,
-        ),
-        (
-            "contract_two_products_fuse_the_first",
-            format!("{inputs}{p}  %q = fmul contract float %e, %one\n  %r = fadd contract float %p, %q\n"),
-            tiny.to_bits(),
-            1,
-            false,
-        ),
-        (
-            "contract_stored_product_rounds_twice",
-            format!("{inputs}{p}  store float %p, ptr addrspace(1) %0, align 4\n  %r = fadd contract float %p, %c\n"),
-            0,
-            0,
-            false,
-        ),
-        (
-            "contract_product_through_a_select_rounds_twice",
-            format!("{inputs}{p}  %k = fcmp olt float %a, 2.0\n  %q = select i1 %k, float %p, float %c\n  %r = fadd contract float %q, %c\n"),
-            0,
-            0,
-            false,
-        ),
-        (
-            "contract_needs_both_operations",
-            format!("{inputs}{p}  %r = fadd float %p, %c\n"),
-            0,
-            0,
-            false,
-        ),
-        (
-            "contract_half_pair_fuses",
-            format!("{half_inputs}  %hp = fmul contract half %ha, %ha\n  %hs = fadd contract half %hp, %hc\n  %r = fpext half %hs to float\n"),
-            2f32.powi(-12).to_bits(),
-            0,
-            false,
-        ),
-        (
-            "contract_widened_half_product_fuses_in_float",
-            format!("{half_inputs}{}  %hp = fmul contract half %ha, %ha\n  %w = fpext half %hp to float\n  %r = fadd contract float %w, %fc\n", of("fc", -(1.0 + 2f32.powi(-5)))),
-            2f32.powi(-12).to_bits(),
-            1,
-            false,
-        ),
-        (
-            "contract_through_a_negation_is_not_measured",
-            format!("{inputs}{p}  %n = fneg float %p\n  %r = fadd contract float %n, %e\n"),
-            0,
-            0,
-            true,
-        ),
-    ];
-    let ks: Vec<Kernel> = shapes
-        .iter()
-        .map(|(name, body, want, _, _)| Kernel {
-            name,
-            body: body.clone(),
-            float: true,
-            want: Some(*want),
-            needs: &[],
-            note: None,
-        })
-        .collect();
-    let Some(bitcode) = assemble("contract", &module(&ks)) else {
-        return;
-    };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let pr = profile(stem, exact_maths()).expect("profile");
-        for ((name, _, want, khr, noted), kk) in shapes.iter().zip(&ks) {
-            let what = format!("{name} on {stem}");
-            let art = compile(&bitcode, kk.name, &pr).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&art, &pr).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(
-                art.precision.contains(&PrecisionNote::FastMathRewrites),
-                *noted,
-                "{what}: {:?}",
-                art.precision
-            );
-            if stem == "moltenvk-m3" {
-                assert_eq!(
-                    count_op(&words, crate::spv::Op::FmaKHR),
-                    *khr,
-                    "{what}: OpFmaKHR"
-                );
-            }
-            let got = interpret(&bitcode, kk.name, &pr);
-            assert_eq!(got, *want, "{what}: {got:#x}");
-        }
-    }
-}
-
-/// A fused `c - a * b` negates a factor that is not a sum where the other is one. The A1
-/// regularizer step `w - lr * (sign(w) * s + g)` of f9a12252 at lane 16 (`sign(w) = +0`, `s =
-/// 1`, `g = -0`, `lr = 0.5`, `w = -0`) is `-0` exactly; `fma(-fma(+0, 1, -0), 0.5, -0)` is that
-/// value, but MoltenVK's fast-math Metal compile moved the negation into the inner sum and
-/// answered `+0`, where Metal answers `-0`. `fma(-0.5, fma(+0, 1, -0), -0)` is the same value
-/// and leaves it no sum to move it into. Both factor orders of the product; every profile route.
-#[test]
-fn a_fused_subtraction_negates_a_factor_that_is_not_a_sum() {
-    let inputs = format!(
-        "{}{}{}{}{}  %lr = bitcast i32 %lrb to float\n  %m = fmul contract float %s, %x\n  %t = fadd contract float %m, %g\n",
-        of("s", 0.0),
-        of("x", 1.0),
-        of("g", -0.0),
-        oi("lrb", 0.5f32.to_bits()),
-        of("w", -0.0)
-    );
-    let ks = [
-        Kernel {
-            name: "fused_subtraction_of_sum_times_factor",
-            body: format!(
-                "{inputs}  %p = fmul contract float %t, %lr\n  %r = fsub contract float %w, %p\n"
-            ),
-            float: true,
-            want: Some(0x8000_0000),
-            needs: &[],
-            note: None,
-        },
-        Kernel {
-            name: "fused_subtraction_of_factor_times_sum",
-            body: format!(
-                "{inputs}  %p = fmul contract float %lr, %t\n  %r = fsub contract float %w, %p\n"
-            ),
-            float: true,
-            want: Some(0x8000_0000),
-            needs: &[],
-            note: None,
-        },
-    ];
-    let Some(bitcode) = assemble("negate-factor", &module(&ks)) else {
-        return;
-    };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let p = profile(stem, exact_maths()).expect("profile");
-        for kk in &ks {
-            let what = format!("{} on {stem}", kk.name);
-            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            // On moltenvk-m3 both pairs are `OpFmaKHR` and the negation is the module's only
-            // one; the device's `Fma` negates the same operand.
-            if stem == "moltenvk-m3" {
-                let negated = negated_operands(&words);
-                assert_eq!(negated.len(), 1, "{what}: one OpFNegate");
-                let sums: Vec<u32> = [
-                    crate::spv::Op::FmaKHR,
-                    crate::spv::Op::FAdd,
-                    crate::spv::Op::FSub,
-                ]
-                .into_iter()
-                .flat_map(|op| results_and_no_contraction(&words, op).0)
-                .collect();
-                assert!(
-                    !sums.contains(&negated[0]),
-                    "{what}: the negated factor is a sum"
-                );
-            }
-            let got = interpret(&bitcode, kk.name, &p);
-            assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
-        }
-    }
-}
-
-/// Metal regroups a tree of fast-math additions over `contract` products as the owned probe
-/// `engine/unm_contract_chain` measured (Apple M4 and M3 Max, every thread), not pair by pair:
-/// `(a * b + c * d) + e` with `e` loaded is `fma(c, d, fma(a, b, e))`, and with `e` computed
-/// without reading memory `fma(a, b, fma(c, d, e))`, where the pair rule would give `fma(a, b, c *
-/// d) + e`; `e - (a * b + c * d)` with `e` loaded is `fma(-c, d, fma(-a, b, e))`; a third product
-/// is fused outermost and its addend moved innermost; and `(a * b + e1) + e2` is `fma(a, b, e1) +
-/// e2`. The operands are chosen so that the groupings differ. A tree whose regrouping turns on an
-/// addend of a kind the probe did not measure (a value computed without reading memory other than a
-/// converted integer) notes `FastMathRewrites`; the others do not. Every link is one `OpFmaKHR` on
-/// moltenvk-m3.
-#[test]
-fn contract_chains_regroup_as_metal_does() {
-    let (a, b, c, d, e) = (
-        -1.204_375_f32,
-        -1.529_513_6_f32,
-        1.322_877_2_f32,
-        -1.410_43_f32,
-        0.023_719_51_f32,
-    );
-    let loaded = c.mul_add(d, a.mul_add(b, e));
-    let kept = a.mul_add(b, c.mul_add(d, e));
-    let pairwise = a.mul_add(b, c * d) + e;
-    assert!(loaded != kept && loaded != pairwise && kept != pairwise);
-    let subtracted = (-c).mul_add(d, (-a).mul_add(b, e));
-    assert!(subtracted != (-a).mul_add(b, (-c).mul_add(d, e)));
-    assert!(subtracted != e - a.mul_add(b, c * d));
-    let inputs = format!(
-        "{}{}{}{}{}  %p = fmul fast float %a, %b\n  %q = fmul fast float %c, %d\n",
-        of("a", a),
-        of("b", b),
-        of("c", c),
-        of("d", d),
-        of("ev", e)
-    );
-    // The addend loaded back from the output word.
-    let load = "  store float %ev, ptr addrspace(1) %0, align 4\n  %e = load float, ptr addrspace(1) %0, align 4\n";
-    // (name, body defining %r, the stored value, OpFmaKHR on moltenvk-m3, notes
-    // FastMathRewrites)
-    let shapes: [(&'static str, String, f32, usize, bool); 5] = [
-        (
-            "chain_loaded_addend_regroups",
-            format!("{inputs}{load}  %s = fadd fast float %p, %q\n  %r = fadd fast float %s, %e\n"),
-            loaded,
-            2,
-            false,
-        ),
-        (
-            "chain_computed_addend_keeps_its_order",
-            format!("{inputs}  %s = fadd fast float %p, %q\n  %r = fadd fast float %s, %ev\n"),
-            kept,
-            2,
-            true,
-        ),
-        (
-            "chain_subtracted_sum_regroups",
-            format!("{inputs}{load}  %s = fadd fast float %p, %q\n  %r = fsub fast float %e, %s\n"),
-            subtracted,
-            2,
-            false,
-        ),
-        (
-            "chain_third_product_fuses_outermost",
-            format!("{inputs}{load}  %t = fmul fast float %c, %a\n  %s = fadd fast float %p, %q\n  %u = fadd fast float %s, %t\n  %r = fadd fast float %u, %e\n"),
-            c.mul_add(a, a.mul_add(b, c.mul_add(d, e))),
-            3,
-            false,
-        ),
-        (
-            "chain_second_addend_stays_an_addition",
-            format!("{inputs}  %s = fadd fast float %p, %ev\n  %r = fadd fast float %s, %c\n"),
-            a.mul_add(b, e) + c,
-            1,
-            false,
-        ),
-    ];
-    let ks: Vec<Kernel> = shapes
-        .iter()
-        .map(|(name, body, want, _, _)| Kernel {
-            name,
-            body: body.clone(),
-            float: true,
-            want: Some(want.to_bits()),
-            needs: &[],
-            note: None,
-        })
-        .collect();
-    let Some(bitcode) = assemble("chains", &module(&ks)) else {
-        return;
-    };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let pr = profile(stem, exact_maths()).expect("profile");
-        for ((name, _, want, khr, noted), kk) in shapes.iter().zip(&ks) {
-            let what = format!("{name} on {stem}");
-            let art = compile(&bitcode, kk.name, &pr).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&art, &pr).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(
-                art.precision.contains(&PrecisionNote::FastMathRewrites),
-                *noted,
-                "{what}: {:?}",
-                art.precision
-            );
-            if stem == "moltenvk-m3" {
-                assert_eq!(
-                    count_op(&words, crate::spv::Op::FmaKHR),
-                    *khr,
-                    "{what}: OpFmaKHR"
-                );
-            }
-            let got = interpret(&bitcode, kk.name, &pr);
-            assert_eq!(got, want.to_bits(), "{what}: {got:#x}");
-        }
-    }
-}
-
-/// The operand of every `OpFNegate` in `words`.
-fn negated_operands(words: &[u32]) -> Vec<u32> {
-    let mut out = Vec::new();
-    let mut i = 5;
-    while i < words.len() {
-        let (len, opcode) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
-        assert!(len > 0 && i + len <= words.len(), "malformed module");
-        if opcode == crate::spv::Op::FNegate as u32 {
-            out.push(words[i + 3]);
-        }
-        i += len;
-    }
-    out
-}
-
 /// Metal divides `float` under `arcp` as `x` times its fast reciprocal of `y` (a probe cases
 /// 9496749c and 3921d3e2, every flag set with `arcp`, every lane): the probe's lane 0, `0x42aa3a21
 /// / 0x44c80075`, is `0x3d59e381` under `arcp` (`x` times `1 / y` rounded). The module takes the
@@ -2626,18 +2273,18 @@ fn glsl_fma_results(words: &[u32]) -> Vec<u32> {
 }
 
 /// An undecorated SPIR-V float operation lets the device fuse `a * b + c` (which rounds
-/// differently) and regroup it with its neighbours, as MoltenVK's fast-math Metal compile does.
-/// LLVM grants the two separately (`contract`, `reassoc`), so only an operation carrying both is
-/// left undecorated; every other addition is decorated `NoContraction`, and every other multiply is
-/// the product rounded on its own, decorated `NoContraction`: an `OpFMul` where the profile's
-/// `float` functions are the device's, and `GLSL.std.450 Fma(a, b, -0.0)` where they are Metal's,
-/// whose SPIR-V reaches Metal through SPIRV-Cross. The decoration matters where the addition may be
-/// fused: Mesa splits a contractable `Fma` into a multiply and an add and folds the `-0.0` away,
-/// and the multiply may then be fused with the `reassoc contract` add of `mul_strict_add_fast`
-/// (NIR's `fuse` option on older Mesa, or a backend such as ACO) unless the multiply is
-/// `NoContraction`. The interpreter rounds each operation on its own: here `(1 + 2^-12)^2 - (1 +
-/// 2^-11)` is 0 unfused and 2^-24 fused. A pair that both carry `contract` is the one Metal fuses:
-/// one fused multiply-add, the multiply no operation of its own, 2^-24 on every profile.
+/// differently) and regroup it with its neighbours. LLVM grants the two separately (`contract`,
+/// `reassoc`), so only an operation carrying both is left undecorated, for the device's compiler to
+/// group and fuse as it chooses; every other addition is decorated `NoContraction`, and every other
+/// multiply is the product rounded on its own, decorated `NoContraction`: an `OpFMul` where the
+/// profile's `float` functions are the device's, and `GLSL.std.450 Fma(a, b, -0.0)` where they are
+/// Metal's, whose SPIR-V reaches Metal through SPIRV-Cross. The decoration matters where the
+/// addition may be fused: Mesa splits a contractable `Fma` into a multiply and an add and folds the
+/// `-0.0` away, and the multiply may then be fused with the `reassoc contract` add of
+/// `mul_strict_add_fast` (NIR's `fuse` option on older Mesa, or a backend such as ACO) unless the
+/// multiply is `NoContraction`. Nothing is fused by the translation: each pair is its multiply and
+/// its addition in the AIR's order, and the interpreter, which rounds each operation on its own,
+/// answers `(1 + 2^-12)^2 - (1 + 2^-11)` as 0 (2^-24 fused) on every profile.
 #[test]
 fn float_ops_without_contract_and_reassoc_are_no_contraction() {
     let inputs = format!(
@@ -2675,29 +2322,26 @@ fn float_ops_without_contract_and_reassoc_are_no_contraction() {
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            if matches!(
-                kk.name,
-                "mul_add_contract" | "mul_add_reassoc_contract" | "mul_add_fast"
-            ) {
-                assert_eq!(
-                    interpret(&bitcode, kk.name, &p),
-                    2f32.powi(-24).to_bits(),
-                    "{what}: fused"
-                );
-                continue;
-            }
             let (muls, decorated) = results_and_no_contraction(&words, crate::spv::Op::FMul);
             let (adds, _) = results_and_no_contraction(&words, crate::spv::Op::FAdd);
             let fmas = glsl_fma_results(&words);
-            let add_rewritable = kk.name == "mul_strict_add_fast";
-            // No unfused multiply here carries both flags: each is the profile's product with
-            // `NoContraction`.
+            let (khr, _) = results_and_no_contraction(&words, crate::spv::Op::FmaKHR);
+            assert!(khr.is_empty(), "{what}: fused {khr:?}");
+            let mul_rewritable = matches!(kk.name, "mul_add_reassoc_contract" | "mul_add_fast");
+            let add_rewritable = mul_rewritable || kk.name == "mul_strict_add_fast";
+            // A multiply carrying both flags is the device's `OpFMul`, undecorated; any other is
+            // the profile's product with `NoContraction`.
             let metal = p.fields().float_functions == FloatFunctions::Metal;
-            let mul = match (muls.as_slice(), fmas.as_slice(), metal) {
-                ([], [m], true) | ([m], [], false) => *m,
+            let mul = match (muls.as_slice(), fmas.as_slice()) {
+                ([m], []) if mul_rewritable || !metal => *m,
+                ([], [m]) if !mul_rewritable && metal => *m,
                 _ => panic!("{what}: one multiply in the profile's form: {muls:?} {fmas:?}"),
             };
-            assert!(decorated.contains(&mul), "{what}: %{mul} NoContraction");
+            assert_eq!(
+                decorated.contains(&mul),
+                !mul_rewritable,
+                "{what}: %{mul} NoContraction"
+            );
             // The input fadds carry no flags; the last fadd is the kernel's.
             let add = *adds.last().expect("an fadd");
             assert_eq!(
@@ -2711,12 +2355,12 @@ fn float_ops_without_contract_and_reassoc_are_no_contraction() {
 }
 
 /// Float arithmetic the AIR lets a compiler rewrite with its neighbour notes `FastMathRewrites`:
-/// two chained operations that both carry `reassoc` (through a negation), and a `contract` pair
-/// whose fusion the probe did not measure, a negation between the multiply and the addition.
-/// Arithmetic whose neighbours carry no matching flag does not: a lone `fast` operation on
-/// unflagged inputs, a `contract` multiply feeding a `reassoc` addition, and strict arithmetic; nor
-/// does a `float` `llvm.fmuladd`, which is the fused multiply-add Metal computes, nor a `contract`
-/// multiply fused into its one `contract` addition or subtraction, which is the pair Metal fuses.
+/// two chained operations that both carry `reassoc` (through a negation), and a `contract`
+/// multiply feeding a `contract` addition or subtraction (through a negation too), which the
+/// device's compiler and Metal's may each fuse or not. Arithmetic whose neighbours carry no
+/// matching flag does not: a lone `fast` operation on unflagged inputs, a `contract` multiply
+/// feeding a `reassoc` addition, and strict arithmetic; nor does a `float` `llvm.fmuladd`, which is
+/// the fused multiply-add Metal computes.
 #[test]
 fn arithmetic_the_air_lets_a_compiler_rewrite_notes_fast_math_rewrites() {
     let inputs = format!("{}{}{}", of("a", 1.5), of("b", 2.5), of("c", -3.0));
@@ -2741,8 +2385,6 @@ fn arithmetic_the_air_lets_a_compiler_rewrite_notes_fast_math_rewrites() {
             "reassoc_product_through_neg",
             "  %p = fmul reassoc float %a, %b\n  %n = fneg float %p\n  %r = fmul reassoc float %n, %c\n",
         ),
-    ];
-    let quiet = [
         kernel(
             "fast_mul_add",
             "  %p = fmul fast float %a, %b\n  %r = fadd fast float %p, %c\n",
@@ -2751,6 +2393,8 @@ fn arithmetic_the_air_lets_a_compiler_rewrite_notes_fast_math_rewrites() {
             "contract_mul_sub",
             "  %p = fmul contract float %a, %b\n  %r = fsub contract float %c, %p\n",
         ),
+    ];
+    let quiet = [
         kernel(
             "fmuladd",
             "  %r = call float @llvm.fmuladd.f32(float %a, float %b, float %c)\n",
@@ -2873,17 +2517,12 @@ fn narrow_float_module_growth_is_bounded() {
 /// `RoundingModeRTE` for it. No module requires `DriverDeviation::MetalHalfQuantize`'s fact: a
 /// quantize records `NativeHalfQuantize` on every profile.
 ///
-/// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. The
-/// `fast` chain's seven multiplies whose one use is the next addition are fused into it: each pair
-/// is the device's `Fma` on the operands held in `float`, its result rounded to `half`, so the
-/// chain keeps the first addition's, the last multiply's, the conversion's, and the seven pairs'
-/// roundings. On a profile whose driver
-/// computes a 16-bit `Fma` as Metal's `half` `fma` (moltenvk-m3) each pair is that `Fma` instead,
-/// inline, on its operands converted to 16 bits and its result widened, all exactly (four
-/// `OpFConvert`, the module's one 16-bit float type), so the chain keeps the other three roundings.
-/// On a profile whose driver's 16-bit `+ - *`, kept apart, is Metal's (moltenvk-m3), each `fadd`
-/// and `fmul` that rounds is that instruction, between two narrowings and a widening (three
-/// `OpFConvert`), and rounds nothing itself: the conversion's rounding alone is left to the module.
+/// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. Nothing
+/// is fused: the `fast` chain's operations are the strict chain's, each in the AIR's order, so
+/// both keep seventeen roundings. On a profile whose driver's 16-bit `+ - *`, kept apart, is
+/// Metal's (moltenvk-m3), each `fadd` and `fmul` that rounds is that instruction, which reads the
+/// previous one's 16-bit result itself and narrows `%x0`, and rounds nothing itself: the
+/// conversion's rounding alone is left to the module, and the last result is widened once.
 #[test]
 fn half_rounding_follows_the_operation() {
     let chain = |fast: bool| -> String {
@@ -2926,18 +2565,7 @@ fn half_rounding_follows_the_operation() {
             let round_even = count_ops(&words, |w| {
                 w[0] & 0xFFFF == crate::spv::Op::ExtInst as u32 && w.len() > 4 && w[4] == 2
             });
-            // The fused pairs on 16-bit floats: the device's `Fma` measured Metal's, or `OpFmaKHR`
-            // under the 16-bit float controls; each converts three operands and widens its result.
-            let f16 = kk.name == "fast_chain"
-                && matches!(
-                    crate::lower::arith::fma::half_route(&p),
-                    crate::lower::arith::fma::Route::F16 | crate::lower::arith::fma::Route::F16Khr
-                );
-            let (q, c) = match (kk.name == "fast_chain", f16) {
-                (true, true) => (3, 7 * 4),
-                (true, false) => (3 + 7, 0),
-                (false, _) => (17, 0),
-            };
+            let (q, c) = (17, 0);
             // With `shaderFloat16` each rounding is the device's conversion and its widening, with
             // no quantize and no denormal arithmetic (moltenvk-m3).
             let form = crate::lower::arith::narrow::quantize_form(&p);
@@ -2946,8 +2574,7 @@ fn half_rounding_follows_the_operation() {
             // that conversion and its widening too.
             let controlled = form == crate::spirv::builder::QuantizeForm::Controlled;
             // Where the device's 16-bit `+ - *` is Metal's, measured or under the 16-bit float
-            // controls, the operations among the roundings: sixteen of the strict chain's
-            // seventeen, the first addition and the last multiply of the fast chain's three. The
+            // controls, the operations among the roundings: sixteen of each chain's seventeen. The
             // conversion's rounding stays the module's.
             let ha = (p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic)
                 && p.fields().leaf.float16)
@@ -2956,14 +2583,14 @@ fn half_rounding_follows_the_operation() {
                 !ha || converted || controlled,
                 "{what}: the half arithmetic beside the conversion"
             );
-            let kept = match (ha, kk.name == "fast_chain") {
-                (false, _) => 0,
-                (true, true) => 2,
-                (true, false) => 16,
-            };
+            let kept = if ha { 16 } else { 0 };
+            // Each 16-bit operation reads the previous one's 16-bit result itself, and narrows
+            // `%x0`, the conversion's rounding, which stays a pair (the first operation reads it
+            // twice); the last result is widened once.
+            let operations = if kept > 0 { kept + 2 } else { 0 };
             // Without `shaderFloat16` each rounding is the device's quantize alone.
             let want = match converted || controlled {
-                true => (0, c + 2 * (q - kept) + 3 * kept, 0),
+                true => (0, c + 2 * (q - kept) + operations, 0),
                 false => (q, c, 0),
             };
             assert_eq!(
@@ -2990,7 +2617,7 @@ fn half_rounding_follows_the_operation() {
             });
             assert_eq!(
                 half_type,
-                usize::from(f16 || converted || controlled),
+                usize::from(converted || controlled),
                 "{what}: a 16-bit float type"
             );
             // The controlled form's modes: `RoundingModeRTE` at 16 bits and the widths tied to it.
@@ -3023,9 +2650,9 @@ fn half_rounding_follows_the_operation() {
 }
 
 /// Where the device's 16-bit `+ - *` is measured Metal's, a `half` sum is that instruction, which
-/// rounds nothing of the module's: it requires `MetalHalfArithmetic`. So does every kernel there
-/// that reads a `half` from its bits (each here, by a bitcast), by the device's widening, which
-/// the same measurement reads as Metal's.
+/// rounds nothing of the module's: it requires `MetalHalfArithmetic`. A kernel there whose
+/// `half`s (each read from its bits by a bitcast) only the device's 16-bit `fma` reads takes them
+/// as 16-bit floats, with no widening, and requires nothing of that measurement.
 #[test]
 fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
     let halves = format!(
@@ -3077,7 +2704,7 @@ fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
                 a.requirements
                     .properties
                     .contains(&crate::device::requirements::VkProperty::MetalHalfArithmetic),
-                ha,
+                ha && kk.name == "half_sum",
                 "{what}: {:?}",
                 a.requirements.properties
             );

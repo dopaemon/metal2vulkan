@@ -243,8 +243,6 @@ const MEASURED_RUNS: u32 = 1;
 const PASS_NOTICES: &[Degradation] = &[
     // A `Shared` buffer the device keeps in system memory, which the triangle's vertices are.
     Degradation::SharedInSystemMemory,
-    // The device's own compiler rewrote the stage's fast-math arithmetic as it made the pipeline.
-    Degradation::FastMathRewrites,
     // The fixture's vertex function writes `[[point_size]]`, which a device without
     // `shaderPointSize`'s guarantee takes as its own point size. Announced on lavapipe.
     Degradation::DevicePointSize,

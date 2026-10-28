@@ -565,7 +565,11 @@ fn the_fused_multiply_add_route_follows_the_profile() {
     for (stem, p) in committed_profiles().expect("profiles") {
         let l = &p.fields().leaf;
         let want = if l.fma32 { Route::Khr } else { Route::Native };
-        assert_eq!(Fma::on(&p, float(32)).expect("float").route, want, "{stem}");
+        assert_eq!(
+            Fma::by(fma::routes(&p), float(32)).expect("float").route,
+            want,
+            "{stem}"
+        );
         let half = if p.takes_driver_deviation(DriverDeviation::MetalHalfFma) && l.float16 {
             Route::F16
         } else if l.fma16
@@ -575,12 +579,16 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         } else {
             Route::Native
         };
-        assert_eq!(Fma::on(&p, float(16)).expect("half").route, half, "{stem}");
+        assert_eq!(
+            Fma::by(fma::routes(&p), float(16)).expect("half").route,
+            half,
+            "{stem}"
+        );
         assert_eq!(half == Route::F16, is_moltenvk_capture(&stem), "{stem}");
         f16 += usize::from(half == Route::F16);
         khr16 += usize::from(half == Route::F16Khr);
-        assert_eq!(Fma::on(&p, bfloat()), None, "{stem}");
-        assert_eq!(Fma::on(&p, float(64)), None, "{stem}");
+        assert_eq!(Fma::by(fma::routes(&p), bfloat()), None, "{stem}");
+        assert_eq!(Fma::by(fma::routes(&p), float(64)), None, "{stem}");
         seen.insert(want);
     }
     assert_eq!(

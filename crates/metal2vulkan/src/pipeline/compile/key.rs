@@ -249,11 +249,6 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.rotated_blends).as_bytes());
     }
     // Appended only when set, as `storage_view_slots`.
-    if !inputs.half_output_lanes.is_empty() {
-        h.bytes(b"half-output-lanes")
-            .bytes(format!("{:?}", inputs.half_output_lanes).as_bytes());
-    }
-    // Appended only when set, as `storage_view_slots`.
     if !inputs.swizzled_storage.is_empty() {
         h.bytes(b"swizzled-storage")
             .bytes(format!("{:?}", inputs.swizzled_storage).as_bytes());

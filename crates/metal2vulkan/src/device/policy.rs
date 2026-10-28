@@ -49,6 +49,10 @@ pub struct DevicePolicy {
     /// shadow the encoders copy the texels into and back. The runtime's choice alone: no emitted
     /// code changes.
     pub host_page_textures: HostPageTexturePolicy,
+    /// Whether a chain of fast-math `half` additions, subtractions and products, on a device
+    /// without `shaderFloat16`, rounds where a value leaves it (the default) or at each operation.
+    /// Changes emitted code: the profile carries it.
+    pub half_chains: HalfChainPolicy,
 }
 
 impl DevicePolicy {
@@ -67,6 +71,7 @@ impl DevicePolicy {
         batch_order: BatchOrderPolicy::Ends,
         render_lowering: RenderLoweringPolicy::AtCall,
         host_page_textures: HostPageTexturePolicy::InPlace,
+        half_chains: HalfChainPolicy::AtExits,
     };
 
     /// This policy with Metal's answer wherever the choices offer it: a heap's texture whose bytes
@@ -76,9 +81,10 @@ impl DevicePolicy {
     /// its queue by
     /// the accesses it depends on alone ([`BatchOrderPolicy::Exact`]), each render encoder
     /// call lowered inside the call, which returns every refusal
-    /// ([`RenderLoweringPolicy::AtCall`]), and every texture over host pages a shadow, whose
-    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]). Every other field is
-    /// kept.
+    /// ([`RenderLoweringPolicy::AtCall`]), every texture over host pages a shadow, whose
+    /// copies touch its texels alone ([`HostPageTexturePolicy::Shadow`]), and each `half`
+    /// operation rounded on a device without `shaderFloat16` ([`HalfChainPolicy::EachOperation`]).
+    /// Every other field is kept.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -86,6 +92,7 @@ impl DevicePolicy {
             batch_order: BatchOrderPolicy::Exact,
             render_lowering: RenderLoweringPolicy::AtCall,
             host_page_textures: HostPageTexturePolicy::Shadow,
+            half_chains: HalfChainPolicy::EachOperation,
             ..self
         }
     }
@@ -237,4 +244,25 @@ pub enum HostPageTexturePolicy {
     /// texels into before each use and merge back after each write, whose copies touch the
     /// texels alone.
     Shadow,
+}
+
+/// How a chain of `half` additions, subtractions and products rounds on a device without
+/// `shaderFloat16`, where a module computes each in `float` on its operands held widened and
+/// rounds its result by the device's `OpQuantizeToF16` (`PrecisionNote::NativeHalfQuantize`):
+/// capability emulation, as the device has no 16-bit arithmetic. A device with `shaderFloat16`
+/// computes `half` as it does under either value. Changes emitted code: the profile carries it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum HalfChainPolicy {
+    /// An operation whose flags hold `contract` and `reassoc`, and whose result only such
+    /// operations on `half` read, is held at `float` precision unrounded (the default): the chain
+    /// rounds where a value leaves it, a quantize at each of its exits instead of one per
+    /// operation. A result may differ from the rounded operations' by the roundings the chain
+    /// skips, and a value past `half`'s range inside the chain stays finite. Recorded
+    /// `PrecisionNote::FastMathRewrites`.
+    #[default]
+    AtExits,
+    /// Every operation's result rounded to `half`, as the AIR computes it.
+    EachOperation,
 }

@@ -141,6 +141,25 @@ impl<'m> FunctionBuilder<'m> {
         self.m.widened16.get(&y).copied()
     }
 
+    /// Note that `y`, a 32-bit float, is the widening of 16-bit float `of`: `of` dominates `y`. A
+    /// widening of a narrowing ([`FunctionBuilder::note_narrowed_float`]) is a rounding's second
+    /// half, which is not noted, so the pair stays whole.
+    pub(super) fn note_widened_half(&mut self, y: Value, of: Value) {
+        if !self.m.narrowed_floats.contains(&of) {
+            self.m.widened_halves.insert(y, of);
+        }
+    }
+
+    /// Note that `y` is a conversion of a 32-bit float to 16 bits.
+    pub(super) fn note_narrowed_float(&mut self, y: Value) {
+        self.m.narrowed_floats.insert(y);
+    }
+
+    /// The 16-bit float `y` was noted to widen.
+    pub(super) fn widened_half_of(&self, y: Value) -> Option<Value> {
+        self.m.widened_halves.get(&y).copied()
+    }
+
     /// Note that vector `y` is vector `v` with lane `index` replaced by `e`: `v` and `e` dominate
     /// `y`.
     pub fn note_insert(&mut self, y: Value, v: Value, e: Value, index: u32) {

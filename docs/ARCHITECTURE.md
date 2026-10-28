@@ -67,7 +67,7 @@ rest is `crates/metal2vulkan/src/`.
 | `graph` | The shared RPO, dominator tree, loop forest and SCC |
 | `budget` | `Budget`, `CancelToken`, and the per-attempt `Meter`: deadline, cancellation, work units, the byte ledger and every structural cap |
 | `memory/` | Pointer provenance, the `MemoryPlan`, leaf access emitters, arenas, root and handle lookups, word composition, atomics |
-| `lower/` | `select` (routing every instruction, intrinsic and parameter into the `Plan`), `strategy`, `push` (push-constant placement), `estimate` (output size), `specialized` (bound-texture values read as push data), and one module per family: `arith`, `access`, `texture`, `sampler`, `simd`, `sync`, `fragment`, `stage_io`, `dispatch`, `tessellation`, `mesh`, `raytracing` |
+| `lower/` | `select` (routing every instruction, intrinsic and parameter into the `Plan`), `strategy`, `push` (push-constant placement), `estimate` (output size), `specialized` (bound-texture values read as push data), and one module per family: `arith` (each float operation in the AIR's order, decorated by its own fast-math flags, so the device's compiler groups and fuses only what they allow; `half_chain`, a fast-math `half` chain held at `float` precision between its roundings where the device has no 16-bit floats), `access`, `texture`, `sampler`, `simd`, `sync`, `fragment`, `stage_io`, `dispatch`, `tessellation`, `mesh`, `raytracing` |
 | `structurize/` | The structurizer over the AIR CFG, the emit walk that drives the families, and single-store promotion |
 | `spirv/` | The typed SPIR-V IR and interners, the module and function builders, dead-value removal, the roll pass, the verifier, requirement derivation and the serializer. `spirv::interp` is a CPU interpreter used only by tests |
 | `spv.rs` | The SPIR-V grammar's opcodes and enumerants the translator names, generated from Khronos's grammar (`scripts/regen-spirv-grammar/`) |
@@ -93,8 +93,9 @@ needs an internal item is one of the crate's own tests (`src/tests/`).
   policy. Every device-dependent choice (subgroup tier, buffer views, storage widths, robustness,
   push-constant room, limits, measured driver deviations) reads it, and its fingerprint is part of
   every cache key.
-- **The device's native forms.** The maths, NaN bits, minimum and maximum, `half` rounding and
-  blends, the sampler and the texel and color conversions are the device's own on every device,
+- **The device's native forms.** The maths, the grouping and fusion of fast-math arithmetic, NaN
+  bits, minimum and maximum, `half` rounding and blends, the sampler and the texel and color
+  conversions are the device's own on every device,
   each difference from Metal recorded as a precision note; on MoltenVK on Apple's GPUs most are
   Metal's own. The policy's accuracy switches are the runtime's ([FAST-PATHS.md](FAST-PATHS.md)).
 - **Structure, not names.** Families decide from IR types, address spaces, the metadata ABI and the
