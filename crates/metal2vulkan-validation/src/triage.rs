@@ -1943,7 +1943,6 @@ entry:
         write("metal2vulkan/build_support.rs", "\n");
         write("metal2vulkan/src/lib.rs", "pub fn translate() {}\n");
         write("metal2vulkan-runtime/Cargo.toml", "[package]\n");
-        write("metal2vulkan-runtime/build.rs", "fn main() {}\n");
         write("metal2vulkan-runtime/src/lib.rs", "pub fn submit() {}\n");
         write("metal2vulkan-devtools/Cargo.toml", "[package]\n");
         write("metal2vulkan-devtools/src/lib.rs", "pub fn assemble() {}\n");

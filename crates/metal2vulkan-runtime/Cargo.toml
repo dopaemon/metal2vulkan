@@ -82,5 +82,3 @@ objc2-metal = "0.3"
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_no_recycle)"] }
 
-[build-dependencies]
-sha2.workspace = true

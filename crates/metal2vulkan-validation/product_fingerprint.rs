@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 /// The product fingerprint of the workspace's crates directory `crates`, as hex: the translator's
 /// own sources (`metal2vulkan/`, `build_support::product_hash`: exactly the files it can compile or
 /// read, the AIR front end's crate and the workspace's manifest with them), then the runtime
-/// crate's (`metal2vulkan-runtime/`: its manifest, build script, and the files its module tree
-/// compiles or reads), then the dev-tools crate's (`metal2vulkan-devtools/`: its manifest and every
+/// crate's (`metal2vulkan-runtime/`: its manifest and the files its module tree compiles or
+/// reads), then the dev-tools crate's (`metal2vulkan-devtools/`: its manifest and every
 /// file under its `src/`), whose assemblers give the public rows and cases their bitcode, and
 /// nothing of `metal2vulkan-validation/`.
 pub fn product_fingerprint(crates: &Path) -> String {
@@ -24,11 +24,11 @@ pub fn product_fingerprint(crates: &Path) -> String {
     hex(&hash.finalize())
 }
 
-/// The runtime crate's manifest, build script, and the files its module tree compiles or reads
+/// The runtime crate's manifest and the files its module tree compiles or reads
 /// (`build_support::product_files`), sorted.
 fn runtime_crate_files(crates: &Path) -> Vec<PathBuf> {
     let runtime = crates.join("metal2vulkan-runtime");
-    let mut files = vec![runtime.join("Cargo.toml"), runtime.join("build.rs")];
+    let mut files = vec![runtime.join("Cargo.toml")];
     files.extend(product_files(&runtime));
     files.sort();
     files

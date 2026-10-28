@@ -64,6 +64,7 @@ use crate::resource_ids::{
     function_name, number, pipeline_placement, Holder, IdHold, IdPlacement, IdSpace, Numbered,
     NumberedStage, ResourceId, StateKind,
 };
+use crate::shader_cache::VariantStages;
 use crate::unique_identifier::UniqueIdentifier;
 use crate::values::Size;
 use crate::Device;
@@ -2414,17 +2415,27 @@ impl RenderVariant {
         let compile = sources.device().compile_device();
         let budget = sources.budget();
         // The pipeline a creation of a descriptor of the same key learned for `key`, found
-        // without asking its keys again; else the keys, kept for the next one.
+        // without asking its keys again; else its stages' functions, found by the keys that
+        // creation learned, linked with no stage decoded; else the keys, kept for the next one.
         let cache = &sources.device().shared().shader_cache;
         let mut asked = None;
-        if let Some(pipeline) = cache.variant_pipeline(compile, descriptor_key, key) {
-            if let Some(found) = sources.render(&pipeline) {
+        if let Some(kept) = cache.variant_pipeline(compile, descriptor_key, key) {
+            if let Some(found) = sources.render(&kept.pipeline) {
                 return Ok(CompiledVariant::found(found));
             }
-            asked = Some(pipeline);
+            if let Some(linked) = Self::kept_stages(sources, descriptor, &kept) {
+                return Self::link(sources, linked, key, None);
+            }
+            asked = Some(kept.pipeline);
         }
         let keys = compile.render_variant_key(descriptor, key, &budget, entries)?;
-        let unrecorded = cache.remember_variant_pipeline(descriptor_key, key, &keys.pipeline);
+        let stages = VariantStages {
+            pipeline: keys.pipeline,
+            vertex: keys.vertex,
+            fragment: keys.fragment,
+        };
+        let unrecorded = cache.remember_variant_pipeline(descriptor_key, key, &stages);
+        let record = unrecorded.then_some((descriptor_key, &stages));
         // The key a record gave is the key this creation computes, so asking for its pipeline
         // again would repeat a lookup that has just missed. The keys are compared rather than
         // assumed equal: a record of another key is one this build does not recognize, and it is
@@ -2432,7 +2443,7 @@ impl RenderVariant {
         if asked != Some(keys.pipeline) {
             if let Some(found) = sources.render(&keys.pipeline) {
                 if unrecorded {
-                    cache.record_variant_pipeline(compile, descriptor_key, key, &keys.pipeline);
+                    cache.record_variant_pipeline(compile, descriptor_key, key, &stages);
                 }
                 return Ok(CompiledVariant::found(found));
             }
@@ -2458,9 +2469,49 @@ impl RenderVariant {
                 &budget,
             )?));
         }
+        Self::link(sources, linked, key, record)
+    }
+
+    /// `descriptor` with each `Function` stage the function of the compile key `kept` names for
+    /// it, found by that key alone ([`Sources::found_function`]): the descriptor a creation that
+    /// learned those keys links. `None` where one is not found, or where `kept` names a stage the
+    /// descriptor does not have or none for one it has: the creation learns the keys again.
+    fn kept_stages(
+        sources: &Sources<'_>,
+        descriptor: &RenderPipelineDescriptor,
+        kept: &VariantStages,
+    ) -> Option<RenderPipelineDescriptor> {
+        let mut linked = descriptor.clone();
+        if let StageSource::Function(_) = &descriptor.vertex {
+            linked.vertex = StageSource::Compiled(sources.found_function(&kept.vertex)?);
+        }
+        match (&descriptor.fragment, &kept.fragment) {
+            (Some(StageSource::Function(_)), Some(fragment)) => {
+                linked.fragment = Some(StageSource::Compiled(sources.found_function(fragment)?));
+            }
+            (Some(StageSource::Compiled(_)), _) | (None, None) => {}
+            (Some(StageSource::Function(_)), None) | (None, Some(_)) => return None,
+        }
+        Some(linked)
+    }
+
+    /// The pipeline under `key` linked from `linked`, a descriptor with its stages compiled,
+    /// kept as [`Sources::linked_render`] keeps it; and where `record` names
+    /// the descriptor's key and the variant's keys, the directory's record of them
+    /// (`ShaderCache::record_variant_pipeline`), which a later process finds what it names by:
+    /// the pipeline's artifact where the directory took it, else the stages' functions, which
+    /// the directory then holds.
+    fn link(
+        sources: &Sources<'_>,
+        linked: RenderPipelineDescriptor,
+        key: &VariantKey,
+        record: Option<(&PipelineKey, &VariantStages)>,
+    ) -> Result<CompiledVariant, metal2vulkan::error::Error> {
+        let compile = sources.device().compile_device();
+        let budget = sources.budget();
         let pipeline = compile.compile_render_variant(&linked, key, &budget)?;
         // The stages the link was given, whichever way they arrived: the ones this creation
-        // compiled, and the ones the descriptor already carried compiled.
+        // compiled or found, and the ones the descriptor already carried compiled.
         let functions: Vec<CompiledFunction> = [Some(&linked.vertex), linked.fragment.as_ref()]
             .into_iter()
             .flatten()
@@ -2469,13 +2520,11 @@ impl RenderVariant {
                 StageSource::Function(_) => None,
             })
             .collect();
-        let stage_keys: Vec<FunctionCompileKey> =
-            std::iter::once(keys.vertex).chain(keys.fragment).collect();
-        let (pipeline, stored) = sources.linked_render(pipeline, &stage_keys);
-        // Recorded where the pipeline it names went to the directory with it, and so where a
-        // later process can answer the record (`ShaderCache::record_variant_pipeline`).
-        if unrecorded && stored {
-            cache.record_variant_pipeline(compile, descriptor_key, key, &keys.pipeline);
+        let stage_keys: Vec<FunctionCompileKey> = functions.iter().map(|f| *f.key()).collect();
+        let pipeline = sources.linked_render(pipeline, &stage_keys);
+        if let Some((descriptor_key, stages)) = record {
+            let cache = &sources.device().shared().shader_cache;
+            cache.record_variant_pipeline(compile, descriptor_key, key, stages);
         }
         Ok(CompiledVariant {
             remembered: Remembered::Compiled(pipeline),

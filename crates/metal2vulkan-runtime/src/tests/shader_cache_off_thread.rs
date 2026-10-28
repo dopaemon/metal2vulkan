@@ -16,12 +16,12 @@
 //!
 //! # What a sweep gives the directory
 //!
-//! A sweep of states over one function pair hands over its stages' two compiled functions and
-//! nothing else. Its pipelines are stored only where re-linking them would translate, and where
-//! the directory holds their stages it does not (`Sources::linked_render`); the record of which
-//! key to find a pipeline under is written only beside the pipeline it names, since all the
-//! record does is hand a later process that key (`ShaderCache::record_variant_pipeline`). So the
-//! second device finds the pair, links each sibling's pipeline itself, and translates nothing.
+//! A sweep of states over one function pair hands over its stages' two compiled functions, and
+//! no pipeline: its pipelines are stored only where re-linking them would translate, and where
+//! the directory holds their stages it does not (`Sources::linked_render`). Each creation hands
+//! over its variant record too, which names its stages' functions
+//! (`ShaderCache::record_variant_pipeline`), a record and no translation. So the second device
+//! finds the pair, links each sibling's pipeline itself, and translates nothing.
 //!
 //! The second test is the durability half, and it is what makes the move honest: a second device
 //! over the first one's directory must find every entry the first one's creations handed over, so

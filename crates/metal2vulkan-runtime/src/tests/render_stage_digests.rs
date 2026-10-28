@@ -30,13 +30,16 @@
 //!
 //! # The variant record
 //!
-//! Beside the artifact the directory takes a record of the key a creation of this descriptor
-//! learned for this variant, so that a later process can look the pipeline up without asking for
-//! its keys again (`ShaderCache::record_variant_pipeline`). All the record does is hand over that
-//! key, so a record whose pipeline neither the directory nor an archive holds answers nothing and
-//! the later process computes the key regardless. A sweep's pipelines are exactly the ones the
-//! directory does not take, so its records are written only where its artifacts are, and the same
-//! pair of devices says it.
+//! Beside what it links the directory takes a record of the keys a creation of this descriptor
+//! learned for this variant: its pipeline's, and its stages' functions'
+//! (`ShaderCache::record_variant_pipeline`). A later process that finds neither in its memo
+//! looks the pipeline up by the one, else links the functions it finds by the others, so it
+//! decodes and specializes no stage's AIR, which learning the keys does (most of a warm
+//! creation's own time for a large fragment function). A sweep's
+//! pipelines are the ones the directory does not take, so its records are what spare that
+//! process the decodes: each creation writes one, and a second device over the directory links
+//! the whole sweep with no stage decoded, where a directory that takes no entry leaves the second
+//! device decoding the pair again.
 //!
 //! # The memo's weight
 //!
@@ -210,56 +213,81 @@ fn a_sweep_encodes_a_pipeline_artifact_only_where_its_functions_are_absent() {
     );
 }
 
-/// A sweep gives the directory **no** variant record where it gives it no pipeline artifact, and
-/// one per creation where it gives it one.
-#[test]
-fn a_sweep_records_a_variant_pipeline_only_where_its_artifact_is_stored() {
-    let held = Scratch::new("render-variant-records-held");
-    let device = device(&held.0, ShaderCacheOptions::default().capacity);
-    let base = descriptor(&device);
+/// [`RUN`] sibling creations on `device`, kept until the device's statistics are read: its
+/// work counts once they are made.
+fn swept(device: &Device) -> crate::WorkCounts {
+    let base = descriptor(device);
     let options = PipelineOptions::default();
-    let before = variant_records_written();
-    let encoded_before = render_artifacts_encoded();
-    let mut kept = Vec::with_capacity(RUN);
-    for i in 0..RUN {
-        kept.push(
+    let kept: Vec<_> = (0..RUN)
+        .map(|i| {
             device
                 .new_render_pipeline_state(&sibling(&base, i), &options)
-                .unwrap(),
-        );
-    }
-    let written = variant_records_written() - before;
-    let encoded = render_artifacts_encoded() - encoded_before;
-    assert_eq!(
-        encoded, 0,
-        "the sweep's creations must store no pipeline artifact, else the records below are of \
-         pipelines the directory does hold and this says nothing: {encoded} artifacts encoded"
-    );
-    assert_eq!(
-        written, 0,
-        "a sweep of {RUN} creations whose pipelines the directory does not hold gave it \
-         {written} records of where to find them"
-    );
-    // The half that says the zero is a fact about the condition: a directory that takes no entry
-    // holds none of the stages' functions, so each creation stores its artifact, and the record
-    // of which key to find it under is then an answer a later process can use.
-    let none = Scratch::new("render-variant-records-none");
-    let capped = capped_device(&none.0);
-    let base = descriptor(&capped);
+                .unwrap()
+        })
+        .collect();
+    let counts = device.work_counts();
+    drop(kept);
+    counts
+}
+
+/// A sweep gives the directory a variant record per creation, and a second device over the same
+/// directory links every sibling from the stages' functions those records name, decoding no
+/// stage and translating nothing; against a directory that takes no entry, the second device
+/// decodes the pair again.
+#[test]
+fn a_second_device_links_a_recorded_sweep_with_no_stage_decoded() {
+    let held = Scratch::new("render-variant-records-held");
+    let capacity = ShaderCacheOptions::default().capacity;
     let before = variant_records_written();
-    let mut kept = Vec::with_capacity(RUN);
-    for i in 0..RUN {
-        kept.push(
-            capped
-                .new_render_pipeline_state(&sibling(&base, i), &options)
-                .unwrap(),
-        );
-    }
+    let first = device(&held.0, capacity);
+    let made = swept(&first);
+    // Gone, so its cache thread has written what the sweep handed it.
+    drop(first);
     let written = variant_records_written() - before;
     assert_eq!(
         written, RUN as u64,
-        "a sweep of {RUN} creations that stores its artifacts must record the key of each of \
-         them, not {written}"
+        "a sweep of {RUN} creations must record each one's keys, not {written}"
+    );
+    assert!(
+        made.stage_entries_specialized > 0,
+        "the first device must decode the pair at all, not {} stages: a sweep that decodes \
+         nothing makes the second device's zero a zero that measures nothing",
+        made.stage_entries_specialized
+    );
+    let second = device(&held.0, capacity);
+    let start = second.work_counts();
+    let encoded_before = render_artifacts_encoded();
+    let after = swept(&second);
+    assert_eq!(
+        (
+            after.stage_entries_specialized - start.stage_entries_specialized,
+            after.functions_translated - start.functions_translated,
+        ),
+        (0, 0),
+        "the second device decoded or translated stages the first one's records name"
+    );
+    assert_eq!(
+        after.variant_pipelines_made - start.variant_pipelines_made,
+        RUN as u64,
+        "every sibling must make a pipeline of its own, else the sweep is not the one this \
+         measures"
+    );
+    assert_eq!(
+        render_artifacts_encoded(),
+        encoded_before,
+        "the second device linked from the functions the directory holds, and stores no artifact"
+    );
+    drop(second);
+    // The half that says the zero is the records': a directory that takes no entry holds no
+    // record, and the second device decodes the pair again.
+    let none = Scratch::new("render-variant-records-none");
+    swept(&capped_device(&none.0));
+    let second = capped_device(&none.0);
+    let start = second.work_counts();
+    let after = swept(&second);
+    assert!(
+        after.stage_entries_specialized > start.stage_entries_specialized,
+        "a device over a directory that holds no record must decode the pair again"
     );
 }
 

@@ -765,7 +765,6 @@ mod tests {
             "metal2vulkan-runtime/Cargo.toml",
             "[package]\nname = \"runtime\"\n",
         );
-        write("metal2vulkan-runtime/build.rs", "fn main() {}\n");
         write("metal2vulkan-runtime/src/lib.rs", "pub fn submit() {}\n");
         write(
             "metal2vulkan-devtools/Cargo.toml",

@@ -79,7 +79,9 @@ second process does not translate it again. It cannot be turned off.
 - **Where.** By default `~/Library/Caches/metal2vulkan` on macOS, `$XDG_CACHE_HOME/metal2vulkan`
   elsewhere, or `~/.cache/metal2vulkan` when `XDG_CACHE_HOME` is unset. `ShaderCacheOptions`
   (in `DeviceOptions`, or `RawDevice` for an adopted device) names another directory. Several
-  processes and builds may share it; each build reads only its own translations.
+  processes and builds may share it; a build reads only the translations of its own translator
+  (its version, `SEMANTICS_VERSION`, `ARTIFACT_FORMAT_VERSION` and translator sources), so an
+  update that changed only the runtime keeps every translation.
 - **How much.** At most `capacity` bytes on disk (25 GiB by default), least recently used first;
   another build's entries go after 30 days unused. In memory, at most `memory_capacity` bytes
   (256 MiB by default): a pipeline state made again takes its translation from there without

@@ -10,7 +10,7 @@ use crate::shader_cache::driver::{
     make, open, seal, Identity, LiveCaches, Making, Records, Refusal, LIVE,
 };
 use crate::shader_cache::store::{entry_name, Directory, Lookup, Store, LAYOUT, UNUSED_BUILD};
-use crate::shader_cache::{CacheSetup, EntryKind, ShaderCacheOptions};
+use crate::shader_cache::{record_name, CacheSetup, EntryKind, ShaderCacheOptions};
 use ash::vk::{self, Handle};
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -168,6 +168,44 @@ fn another_build_reads_nothing_of_this_one() {
     );
     let new = store(scratch.path(), BUILD, 1 << 20);
     assert_eq!(get(&new, &name(&BUILD, 1), 1), Lookup::Absent);
+}
+
+/// A creation's record (linked-use answers, reflection, a variant's keys) written under one
+/// `RUNTIME_VERSION` is not found under another in the same build's directory, while a
+/// translated artifact's name does not move with it: the runtime's derivation from a descriptor
+/// is named by the runtime's version, which the build directory's identity does not carry.
+#[test]
+fn a_creation_record_of_another_runtime_version_is_not_found() {
+    let scratch = Scratch::new();
+    let store = store(scratch.path(), BUILD, 1 << 20);
+    let now = metal2vulkan::cache::RUNTIME_VERSION;
+    let other = now.wrapping_add(1);
+    for kind in [
+        EntryKind::LinkedAnswers,
+        EntryKind::RenderReflection,
+        EntryKind::VariantPipeline,
+    ] {
+        let key = [5; 32];
+        let written = record_name(&BUILD, kind, &key, &NO_PROFILE, now);
+        put(&store, &written, 1, b"record");
+        assert_eq!(
+            get(&store, &written, 1),
+            Lookup::Hit(data(1, b"record")),
+            "{kind:?} under its own runtime version"
+        );
+        let asked = record_name(&BUILD, kind, &key, &NO_PROFILE, other);
+        assert_ne!(asked, written, "{kind:?}");
+        assert_eq!(
+            get(&store, &asked, 1),
+            Lookup::Absent,
+            "{kind:?} under another runtime version"
+        );
+        assert_ne!(
+            written,
+            entry_name(&BUILD, kind, &key, &NO_PROFILE),
+            "{kind:?}: a record's name is not an artifact's name of the same key"
+        );
+    }
 }
 
 /// An entry under the right name holding another key's contents is a miss, and is removed: a

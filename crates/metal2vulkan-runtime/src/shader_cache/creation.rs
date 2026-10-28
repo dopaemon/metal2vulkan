@@ -13,7 +13,9 @@
 //!   the device alone: `Device::render_descriptor_key` digests every field of the descriptor
 //!   (each `Function` stage by its compile key: AIR hash, entry, constants, linked functions and
 //!   dynamic libraries) with the device's profile fingerprint and `SEMANTICS_VERSION`. A
-//!   pipeline key is kept per variant key too. The creation's budget decides only whether an
+//!   variant's keys are kept per variant key too ([`VariantStages`]): its pipeline's, and its
+//!   stages' functions', which a later creation finds and links with no stage decoded. The
+//!   creation's budget decides only whether an
 //!   answer comes at all: a refused answer (a deadline, a cancellation, a decode's error) is not
 //!   kept, so the next creation asks again.
 //! - **And by more than they read, which costs a sweep a trip each.** The key is every field,
@@ -34,10 +36,13 @@
 //! - **In memory first, then the directory.** A lookup asks the device's maps, then the
 //!   directory's entry (kept in the maps when found); what a creation works out goes to both.
 //!   The entries live in the build's directory like the artifacts, so a build never reads
-//!   another's, under names of their kind, key and profile. The answers and the reflection are
+//!   another translator's, under names of their kind, key, profile and the runtime's
+//!   `RUNTIME_VERSION` ([`record_name`]): they are the runtime's derivation from a descriptor,
+//!   which the build's identity (the translator's) does not cover, so a runtime whose version
+//!   moved reads none of them. The answers and the reflection are
 //!   the translator's frames (`LinkedUseAnswers::to_bytes`,
 //!   `RenderPipelineReflection::to_bytes`: versions, kind, key, profile and checksum checked); a
-//!   variant's pipeline key is a record of its own name and the key under a SHA-256 checksum. A
+//!   variant's keys are a record of its own name and the keys under a SHA-256 checksum. A
 //!   lookup counts in no statistic but a refused or unreadable entry, and a write in none but a
 //!   failed one: they are not translations found, compiled or written. The write itself is the
 //!   device's cache thread's, as an artifact's is (`store.rs`, `worker.rs`).
@@ -51,6 +56,7 @@ use crate::device::lock;
 use crate::pipeline::memo::Lru;
 use metal2vulkan::cache::{Hash256, PipelineKey, VariantKey};
 use metal2vulkan::device::Device as CompileDevice;
+use metal2vulkan::library::FunctionCompileKey;
 use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -58,17 +64,33 @@ use std::sync::Mutex;
 /// The most entries each of the memo's maps keeps.
 pub(crate) const ENTRIES: usize = 256;
 
+/// The tag a creation record's key hashes first, before the runtime's version ([`record_name`]).
+const RECORD_KEY_TAG: &[u8] = b"metal2vulkan-runtime creation record key v1\0";
+
 /// The tag a variant's record name hashes first.
-const VARIANT_NAME_TAG: &[u8] = b"metal2vulkan-runtime variant pipeline name v1\0";
+const VARIANT_NAME_TAG: &[u8] = b"metal2vulkan-runtime variant pipeline name v2\0";
 
 /// The first bytes of a variant's record.
-const VARIANT_MAGIC: &[u8; 8] = b"M2VVPIP\0";
+const VARIANT_MAGIC: &[u8; 8] = b"M2VVPIP\x02";
 
-/// A variant record's length: its magic, its name, the pipeline key, and the checksum.
-const VARIANT_RECORD: usize = 8 + 32 + 32 + 32;
+/// A variant record's length: its magic, its name, the pipeline key, the vertex stage's key, a
+/// byte saying whether a fragment stage's key follows, that key (zeros where none), and the
+/// checksum.
+const VARIANT_RECORD: usize = 8 + 32 + 32 + 32 + 1 + 32 + 32;
+
+/// What a creation learned of a render descriptor's variant (`Device::render_variant_key`): the
+/// key its pipeline is found by, and the compile keys its stages' functions are found by. A
+/// creation that finds both functions links them, as one that computed the keys links what it
+/// found or compiled under them, and decodes no stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VariantStages {
+    pub(crate) pipeline: PipelineKey,
+    pub(crate) vertex: FunctionCompileKey,
+    pub(crate) fragment: Option<FunctionCompileKey>,
+}
 
 /// The variant records this process gave the directory, which `tests::render_stage_digests`'
-/// count reads: a sweep whose pipelines the directory does not hold must give it none. Carried
+/// count reads: a sweep must give it one per creation. Carried
 /// only where that device test is compiled, since nothing else reads it.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 static RECORDS_WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -89,7 +111,7 @@ fn note_variant_record_written() {
 /// docs).
 pub(crate) struct CreationMemo {
     linked: Mutex<Lru<PipelineKey, LinkedUseAnswers>>,
-    pipelines: Mutex<Lru<(PipelineKey, VariantKey), PipelineKey>>,
+    pipelines: Mutex<Lru<(PipelineKey, VariantKey), VariantStages>>,
     reflections: Mutex<Lru<PipelineKey, RenderPipelineReflection>>,
     /// How many reflections the device has worked out, for the check that every state of one
     /// descriptor shares one ([`ShaderCache::reflections_derived`]). Working one out decodes the
@@ -145,30 +167,30 @@ impl ShaderCache {
         self.keep_answer(EntryKind::LinkedAnswers, key.digest(), compile, bytes);
     }
 
-    /// The key of the pipeline of the render descriptor of `key` on `compile` under `variant`, as
-    /// a creation learned it: the memo's, else the directory's.
+    /// The keys of the variant of the render descriptor of `key` on `compile` under `variant`,
+    /// as a creation learned them: the memo's, else the directory's.
     pub(crate) fn variant_pipeline(
         &self,
         compile: &CompileDevice,
         key: &PipelineKey,
         variant: &VariantKey,
-    ) -> Option<PipelineKey> {
+    ) -> Option<VariantStages> {
         let at = (*key, variant.clone());
-        if let Some(pipeline) = lock(&self.creation.pipelines).get(&at) {
-            return Some(*pipeline);
+        if let Some(stages) = lock(&self.creation.pipelines).get(&at) {
+            return Some(*stages);
         }
         let name = variant_name(key, variant);
-        let pipeline = self.read_answer(EntryKind::VariantPipeline, &name, compile, |bytes| {
-            variant_record_pipeline(bytes, &name)
+        let stages = self.read_answer(EntryKind::VariantPipeline, &name, compile, |bytes| {
+            variant_record_stages(bytes, &name)
         })?;
-        lock(&self.creation.pipelines).insert(at, pipeline, 1);
-        Some(pipeline)
+        lock(&self.creation.pipelines).insert(at, stages, 1);
+        Some(stages)
     }
 
-    /// Keep `pipeline` as the key of the pipeline of the render descriptor of `key` under
+    /// Keep `stages` as the keys of the variant of the render descriptor of `key` under
     /// `variant` in the memo, which is what spares another creation of the same descriptor in
     /// this process its [`Device::render_variant_key`]; whether the memo did not already hold
-    /// it, and so whether the directory's record of it is one this creation would write
+    /// them, and so whether the directory's record of them is one this creation would write
     /// ([`record_variant_pipeline`](Self::record_variant_pipeline)).
     ///
     /// [`Device::render_variant_key`]: metal2vulkan::device::Device::render_variant_key
@@ -176,34 +198,33 @@ impl ShaderCache {
         &self,
         key: &PipelineKey,
         variant: &VariantKey,
-        pipeline: &PipelineKey,
+        stages: &VariantStages,
     ) -> bool {
         let at = (*key, variant.clone());
         let mut pipelines = lock(&self.creation.pipelines);
-        if pipelines.get(&at) == Some(pipeline) {
+        if pipelines.get(&at) == Some(stages) {
             return false;
         }
-        pipelines.insert(at, *pipeline, 1);
+        pipelines.insert(at, *stages, 1);
         true
     }
 
-    /// Write the directory's record that the pipeline of the render descriptor of `key` on
-    /// `compile` under `variant` is `pipeline`.
+    /// Write the directory's record that the variant of the render descriptor of `key` on
+    /// `compile` under `variant` has the keys `stages`.
     ///
-    /// **A record is written only where the pipeline it names can be found.** All the record does
-    /// for a later process is hand it a key to look the pipeline up by, sparing it one
-    /// `render_variant_key`; a record whose pipeline neither the directory nor an archive holds
-    /// answers nothing, and the process asks for its keys anyway. A sweep of states over one
-    /// function pair is exactly that case: the pipeline's own artifact is stored only where
-    /// re-linking it would translate (`Sources::linked_render`), so every sibling's record would
-    /// name a pipeline nothing holds, and the next process would pay a directory read of the
-    /// record, and this one a write of it, for a key it computes regardless.
+    /// **A record spares a later process its stages' decodes.** It hands that process the key to
+    /// look the pipeline up by and, where the directory does not hold the pipeline, the keys of
+    /// the stages' functions to link it from, so `render_variant_key`, which decodes and
+    /// specializes every `Function` stage's AIR to learn them, runs only where neither is found.
+    /// A sweep of states over one function pair stores no pipeline artifact where the directory
+    /// holds its stages (`Sources::linked_render`), and each sibling's record is what lets the
+    /// next process link it from those stages without decoding them.
     pub(crate) fn record_variant_pipeline(
         &self,
         compile: &CompileDevice,
         key: &PipelineKey,
         variant: &VariantKey,
-        pipeline: &PipelineKey,
+        stages: &VariantStages,
     ) {
         let name = variant_name(key, variant);
         note_variant_record_written();
@@ -211,7 +232,7 @@ impl ShaderCache {
             EntryKind::VariantPipeline,
             &name,
             compile,
-            variant_record(&name, pipeline),
+            variant_record(&name, stages),
         );
     }
 
@@ -283,11 +304,12 @@ impl ShaderCache {
     /// used entries going past it), but counted as no entry written (it is no translation); a
     /// failed write is counted and said as an artifact's is.
     fn keep_answer(&self, kind: EntryKind, key: &Hash256, compile: &CompileDevice, bytes: Vec<u8>) {
-        let name = entry_name(
+        let name = record_name(
             self.store.directory().build(),
             kind,
             key,
             &compile.profile_fingerprint(),
+            metal2vulkan::cache::RUNTIME_VERSION,
         );
         if self.store.write_soon(&name, bytes).is_err() {
             self.store.write_failed();
@@ -307,17 +329,40 @@ impl ShaderCache {
         compile: &CompileDevice,
         decode: impl FnOnce(&[u8]) -> Result<T, E>,
     ) -> Option<T> {
-        let name = entry_name(
+        let name = record_name(
             self.store.directory().build(),
             kind,
             key,
             &compile.profile_fingerprint(),
+            metal2vulkan::cache::RUNTIME_VERSION,
         );
         match self.store.load(&name, decode) {
             Lookup::Hit(value) => Some(value),
             Lookup::Absent | Lookup::Unreadable | Lookup::Rejected => None,
         }
     }
+}
+
+/// The name a creation's record of `kind` under `key` for `profile` is kept under in `build`'s
+/// directory: the entry name of the SHA-256 of [`RECORD_KEY_TAG`], `runtime` (the runtime's
+/// `RUNTIME_VERSION`) and `key`. What a creation works out from its descriptor -- its linked-use
+/// answers, its reflection, its variant's keys -- is the runtime's own derivation, which the build
+/// directory's identity does not cover (it names the translator, `this_build`), so the runtime's
+/// version names it: a runtime change that maps a descriptor to other answers or keys bumps
+/// `RUNTIME_VERSION` and reads none of an earlier runtime's records.
+pub(crate) fn record_name(
+    build: &Hash256,
+    kind: EntryKind,
+    key: &Hash256,
+    profile: &Hash256,
+    runtime: u32,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(RECORD_KEY_TAG);
+    hash.update(runtime.to_le_bytes());
+    hash.update(key);
+    let key: Hash256 = hash.finalize().into();
+    entry_name(build, kind, &key, profile)
 }
 
 /// The name a variant's record is kept under: the SHA-256 of the render descriptor's key and the
@@ -331,12 +376,16 @@ fn variant_name(key: &PipelineKey, variant: &VariantKey) -> Hash256 {
     hash.finalize().into()
 }
 
-/// A variant's record: its magic, `name`, `pipeline`'s digest, and the SHA-256 of all three.
-fn variant_record(name: &Hash256, pipeline: &PipelineKey) -> Vec<u8> {
+/// A variant's record: its magic, `name`, the digests of `stages` (the fragment's after a byte
+/// saying whether there is one), and the SHA-256 of all of them.
+fn variant_record(name: &Hash256, stages: &VariantStages) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(VARIANT_RECORD);
     bytes.extend_from_slice(VARIANT_MAGIC);
     bytes.extend_from_slice(name);
-    bytes.extend_from_slice(pipeline.digest());
+    bytes.extend_from_slice(stages.pipeline.digest());
+    bytes.extend_from_slice(stages.vertex.digest());
+    bytes.push(u8::from(stages.fragment.is_some()));
+    bytes.extend_from_slice(stages.fragment.as_ref().map_or(&[0; 32], |f| f.digest()));
     let checksum: Hash256 = Sha256::digest(&bytes).into();
     bytes.extend_from_slice(&checksum);
     bytes
@@ -346,28 +395,40 @@ fn variant_record(name: &Hash256, pipeline: &PipelineKey) -> Vec<u8> {
 #[derive(Debug)]
 struct NotTheRecord;
 
-/// The pipeline key of the record `bytes` named `name`, refused unless they are exactly such a
-/// record ([`variant_record`]).
-fn variant_record_pipeline(bytes: &[u8], name: &Hash256) -> Result<PipelineKey, NotTheRecord> {
+/// The keys of the record `bytes` named `name`, refused unless they are exactly such a record
+/// ([`variant_record`]).
+fn variant_record_stages(bytes: &[u8], name: &Hash256) -> Result<VariantStages, NotTheRecord> {
+    let sum = VARIANT_RECORD - 32;
     if bytes.len() != VARIANT_RECORD
         || &bytes[..8] != VARIANT_MAGIC
         || &bytes[8..40] != name
-        || bytes[72..] != <[u8; 32]>::from(Sha256::digest(&bytes[..72]))
+        || bytes[sum..] != <[u8; 32]>::from(Sha256::digest(&bytes[..sum]))
     {
         return Err(NotTheRecord);
     }
-    let digest: Hash256 = bytes[40..72].try_into().map_err(|_| NotTheRecord)?;
-    Ok(PipelineKey::new(digest))
+    let digest = |at: usize| -> Result<Hash256, NotTheRecord> {
+        bytes[at..at + 32].try_into().map_err(|_| NotTheRecord)
+    };
+    let fragment = match bytes[104] {
+        0 => None,
+        1 => Some(FunctionCompileKey::new(digest(105)?)),
+        _ => return Err(NotTheRecord),
+    };
+    Ok(VariantStages {
+        pipeline: PipelineKey::new(digest(40)?),
+        vertex: FunctionCompileKey::new(digest(72)?),
+        fragment,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A variant record gives its pipeline key back under its own name only, and a damaged or
-    /// cut record is refused.
+    /// A variant record gives its keys back under its own name only, with and without a
+    /// fragment stage, and a damaged or cut record is refused.
     #[test]
-    fn a_variant_record_names_its_pipeline_under_its_own_name_only() {
+    fn a_variant_record_names_its_keys_under_its_own_name_only() {
         let key = PipelineKey::new([1; 32]);
         let mut variant = VariantKey::new();
         let name = variant_name(&key, &variant);
@@ -378,18 +439,35 @@ mod tests {
             name,
             variant_name(&PipelineKey::new([2; 32]), &VariantKey::new())
         );
-        let pipeline = PipelineKey::new([9; 32]);
-        let record = variant_record(&name, &pipeline);
-        assert_eq!(variant_record_pipeline(&record, &name).ok(), Some(pipeline));
-        assert!(variant_record_pipeline(&record, &other).is_err());
-        for at in [0, 8, 40, 71, 72, VARIANT_RECORD - 1] {
-            let mut damaged = record.clone();
-            damaged[at] ^= 1;
-            assert!(
-                variant_record_pipeline(&damaged, &name).is_err(),
-                "byte {at}"
-            );
+        let stages = VariantStages {
+            pipeline: PipelineKey::new([9; 32]),
+            vertex: FunctionCompileKey::new([7; 32]),
+            fragment: Some(FunctionCompileKey::new([5; 32])),
+        };
+        let vertex_only = VariantStages {
+            fragment: None,
+            ..stages
+        };
+        for stages in [stages, vertex_only] {
+            let record = variant_record(&name, &stages);
+            assert_eq!(record.len(), VARIANT_RECORD);
+            assert_eq!(variant_record_stages(&record, &name).ok(), Some(stages));
+            assert!(variant_record_stages(&record, &other).is_err());
+            for at in [
+                0,
+                8,
+                40,
+                72,
+                104,
+                105,
+                VARIANT_RECORD - 33,
+                VARIANT_RECORD - 1,
+            ] {
+                let mut damaged = record.clone();
+                damaged[at] ^= 1;
+                assert!(variant_record_stages(&damaged, &name).is_err(), "byte {at}");
+            }
+            assert!(variant_record_stages(&record[..VARIANT_RECORD - 1], &name).is_err());
         }
-        assert!(variant_record_pipeline(&record[..VARIANT_RECORD - 1], &name).is_err());
     }
 }
