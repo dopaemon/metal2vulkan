@@ -25,8 +25,9 @@
 //! of device the cfg selects. A device that imports no host memory says so and passes.
 
 use crate::{
-    Buffer, CommandBufferStatus, Degradation, Device, DeviceKind, DeviceOptions, HostMemory,
-    ImportGate, ImportRequest, MessageSink, ResourceOptions, WorkCounts,
+    AddressPlacement, Buffer, BufferContents, BufferDescriptor, CommandBufferStatus, Degradation,
+    Device, DeviceKind, DeviceOptions, GpuAddress, HostMemory, ImportGate, ImportRequest,
+    MessageSink, ResourceOptions, WorkCounts,
 };
 use std::alloc::Layout;
 use std::ptr::NonNull;
@@ -375,6 +376,58 @@ fn copied_buffer_is_never_made_over_pages_the_process_cannot_read() {
         before.copied_host_buffers_made
     );
     assert_eq!(announced(&heard), 0, "nothing announced");
+    // SAFETY: the mapping made above, which nothing uses.
+    assert_eq!(unsafe { libc::munmap(mapped, LENGTH) }, 0);
+}
+
+/// A placed no-copy buffer whose import fails over pages the process cannot read is refused, and
+/// the refusal gives its range of the address space back: a buffer placed at the same address
+/// next is made, as after Metal's nil.
+#[cfg(unix)]
+#[test]
+fn a_refused_copy_gives_back_its_placed_range() {
+    let Some((device, _heard)) = device() else {
+        return;
+    };
+    let at = AddressPlacement::At(GpuAddress(0x100_0001_8000));
+    // SAFETY: a new private anonymous mapping without access, at an address the kernel chooses.
+    let mapped = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            LENGTH,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    assert_ne!(mapped, libc::MAP_FAILED);
+    let pointer = NonNull::new(mapped.cast::<u8>()).unwrap();
+    // The import fails on every device, so the call tries a copy, which the pages refuse.
+    device.fail_next_host_imports(1);
+    let contents = BufferContents::NoCopy {
+        // SAFETY: the buffer is refused before anything reads the pages (the test's claim); the
+        // mapping outlives the call.
+        memory: unsafe { HostMemory::new(pointer) },
+        deallocator: None,
+        keep_alive: None,
+    };
+    let refused = device.new_buffer_with_descriptor(
+        BufferDescriptor::new(LENGTH as u64, ResourceOptions::default(), contents)
+            .with_placement(at),
+    );
+    assert!(refused.is_err(), "refused: {refused:?}");
+    let again = device.new_buffer_with_descriptor(
+        BufferDescriptor::new(
+            LENGTH as u64,
+            ResourceOptions::default(),
+            BufferContents::Zero,
+        )
+        .with_placement(at),
+    );
+    let again = again.expect("the refused buffer's range is free again");
+    assert_eq!(again.gpu_address(), GpuAddress(0x100_0001_8000));
+    drop(again);
     // SAFETY: the mapping made above, which nothing uses.
     assert_eq!(unsafe { libc::munmap(mapped, LENGTH) }, 0);
 }

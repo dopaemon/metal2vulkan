@@ -1321,10 +1321,13 @@ impl Device {
                 return Err(error);
             }
         };
+        // A refusal from here gives back what the placement took: the buffer, its memory and its
+        // range of the address space, as a refused import's call holds none of them.
         let discard = |memory: &Placement| {
             // SAFETY: the buffer is unused.
             unsafe { release::object(raw_device, raw) };
             lock(&shared.memory).free(raw_device, memory);
+            lock(&shared.addresses).free(reserved);
         };
         let Some(copy) = memory
             .mapped
