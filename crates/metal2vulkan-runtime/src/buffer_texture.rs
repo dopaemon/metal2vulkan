@@ -1370,14 +1370,15 @@ impl Texels {
     /// the copy in a log decides.
     pub(super) fn device_copy(&self, device: &Device) -> bool {
         let layout = &self.layout;
-        let (_, at) = self.buffer.at_for(layout.offset, ReadApart::Texture);
-        let logged = (self.buffer.host_pages()).is_some_and(|pages| pages.dirty().is_some());
+        // The looks at the pages last: each takes their lock (`WorkCounts::no_copy_lies_read`),
+        // which a texture on any other GPU never needs.
         device.properties().kind == crate::DeviceKind::Discrete
             && self.tracked()
             && layout.slices == 1
             && layout.shared_bytes() == 0
-            && at.is_multiple_of(self.texel_bytes)
-            && logged
+            && (self.buffer.at_for(layout.offset, ReadApart::Texture).1)
+                .is_multiple_of(self.texel_bytes)
+            && (self.buffer.host_pages()).is_some_and(|pages| pages.dirty().is_some())
     }
 
     pub(super) fn shadow_copies(

@@ -565,9 +565,12 @@ impl Device {
             #[cfg(unix)]
             again,
         });
-        // The caller's log of the pages' writes stays with them (`dirty_pages.rs`).
-        if let (Some(dirty), Some(pages)) = (dirty, buffer.host_pages()) {
-            pages.keep_dirty(dirty);
+        // The caller's log of the pages' writes stays with them (`dirty_pages.rs`). The pages are
+        // looked at (their lock, `WorkCounts::no_copy_lies_read`) only for memory that carries one.
+        if let Some(dirty) = dirty {
+            if let Some(pages) = buffer.host_pages() {
+                pages.keep_dirty(dirty);
+            }
         }
         // A buffer over the bytes another no-copy buffer covers joins it (`host_aliases.rs`), and
         // a later one lies in its import; one whose GPU writes are dropped joins none.
