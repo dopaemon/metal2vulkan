@@ -405,9 +405,8 @@ pub fn round_integer(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult
 
 /// Whether module `m` rounds to `half` through `OpQuantizeToF16` ([`round`] and [`round_texel`]
 /// in [`QuantizeForm::Device`]): the module then records `PrecisionNote::NativeHalfQuantize`
-/// ([`native_rounding`]) on every profile, whose quantize's result below the smallest normal half
-/// is the device's (`DriverDeviation::MetalHalfQuantize` measures its rounding of normal results
-/// alone).
+/// ([`native_rounding`]) on every profile: Vulkan leaves the quantize's rounding mode, and its
+/// result below the smallest normal half, to the device.
 pub fn quantizes(m: &TypedModule) -> bool {
     m.blocks().iter().any(|b| {
         b.insts.iter().any(|n| {

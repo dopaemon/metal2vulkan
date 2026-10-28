@@ -133,17 +133,6 @@ pub(crate) fn among<F: Copy + Ord>(
 /// `Ceil` keep a denormal, which the deviation does not cover: every profile leaves their
 /// denormals to the device, noted (`lower::arith::denormal`). One row per GPU, as measured.
 ///
-/// `MetalHalfQuantize`: the device's `OpQuantizeToF16` rounds an `f32` below 65520 in magnitude to
-/// nearest even, as Metal's conversion to `half` does, so 65504 to 65520 (`0x477FEFFF` among them)
-/// is 65504, not infinity. The committed rows of the NaN model's narrow, convert and half cases
-/// (`nan_narrow`, `nan_convert`, `nan_half` and their fast-math twins) match Metal's on every word
-/// whose answer is the largest `half` on MoltenVK 1.4.1 on the M3 Max and the M4, RADV (Mesa 26.2.4
-/// on the Radeon 780M) and ANV (Mesa 26.2.4 on the UHD 770 of RPL-S); the gate lane
-/// `half_quantize_*` and the owned fixture `dfl_half_edge` measure the Iris Xe of RPL-P likewise.
-/// NVIDIA's 615.71.09 rounds `0x477FEFFF` to infinity, so it is not listed; lavapipe's rows match
-/// at Mesa 26.0.8 alone, below the committed `lavapipe` profile's release, so it is not listed
-/// either. One row per GPU, as measured.
-///
 /// `MetalCenterVaryings`: MoltenVK 1.4.1 hands Metal a smooth input decorated neither `Centroid`
 /// nor `Sample` with no interpolation qualifier (SPIRV-Cross `adec7acb`, `spirv_msl.cpp`
 /// 13664-13720), which Metal reads as `center_perspective` (`NoPerspective`:
@@ -459,25 +448,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
     ),
     nvidia_on(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_3090),
     nvidia_on(DriverDeviation::MetalFloatDenormals, NVIDIA_RTX_5080_LAPTOP),
-    Measured {
-        device: Some(APPLE9),
-        ..moltenvk_on_apple(DriverDeviation::MetalHalfQuantize)
-    },
-    mesa_on(
-        DriverDeviation::MetalHalfQuantize,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
-    mesa_on(
-        DriverDeviation::MetalHalfQuantize,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
-    ),
-    mesa_on(
-        DriverDeviation::MetalHalfQuantize,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
-    ),
     Measured {
         device: Some(APPLE9),
         ..moltenvk_on_apple(DriverDeviation::MetalCenterVaryings)

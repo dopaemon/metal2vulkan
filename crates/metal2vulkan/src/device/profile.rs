@@ -260,10 +260,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalFloatDenormals),
-            DriverDeviation::MetalHalfQuantize => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalHalfQuantize),
             DriverDeviation::MetalCenterVaryings => f
                 .enabled
                 .properties

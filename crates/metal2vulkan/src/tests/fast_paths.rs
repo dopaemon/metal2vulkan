@@ -115,6 +115,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             NativeFma,
             NativeDot,
             NativeMix,
+            DevicePackConversion,
             DeviceDenormals,
             DeviceSampling,
             DeviceTexelConversion,

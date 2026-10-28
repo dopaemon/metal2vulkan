@@ -2168,25 +2168,38 @@ degradations! {
         NativeNanEncoding = "native-nan-encoding";
         /// Class: native device maths. The device's `NMin`, `NMax` or `NClamp` answers Metal's
         /// `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
-        /// `float` or `half` on a device not measured to answer Metal's operand. Recorded bound: an operand, Metal's but at three ties: of two
+        /// `float` or `half` on a device not measured to answer Metal's operand, and `median3` of
+        /// them on every device. Recorded bound: an operand, Metal's but at three ties: of two
         /// NaNs a NaN (Metal: the second operand's bits), of `+0` and `-0` either zero (Metal: the
         /// second), and an `f32` denormal beside a zero or another denormal compared by its value
         /// where the device keeps denormals (Metal compares it as a zero and answers the second).
         NativeMinMax = "native-min-max";
-        /// Class: native device maths. The device's `OpDot` answers Metal's `dot` on `float`, or on
-        /// `half` where its fused multiply-add is not the measured 16-bit one (summed in `float`,
-        /// rounded once to `half`), where Metal's is the fused chain of its products. Recorded
+        /// Class: native device maths. The device's `OpDot` answers Metal's `dot` on `float` and
+        /// `half` (summed in `float`, rounded once to `half`) on every device but for a `float` one
+        /// on MoltenVK, where Metal's is the fused chain of its products. Recorded
         /// bound: a `float` `dot` of `n` lanes within `(3n - 1) * 2^-24 * sum |a_i * b_i|` of
         /// Metal's chain, plus `n * 2^-126` where a product is an `f32` denormal the device keeps;
         /// a `half` one within `(n + 3) * 2^-11 * sum |a_i * b_i| + (n + 2) * 2^-25`.
         NativeDot = "native-dot";
         /// Class: native device maths. The device's `FMix` answers Metal's `mix(x, y, t)` on
-        /// `float`, or on `half` where its fused multiply-add is not the measured 16-bit one
-        /// (computed in `float`, rounded once to `half`), where Metal's is
+        /// `float` and `half` (computed in `float`, rounded once to `half`) on every device but for
+        /// a `float` one on MoltenVK, where Metal's is
         /// `fma(t, y, fma(-t, x, x))`. Recorded bound: a `float` result within `2^-21 * (|x *
         /// (1 - t)| + |y * t|)` of Metal's; a `half` one within `3 * 2^-10 * (|x * (1 - t)| + |y *
         /// t|) + 2^-23`.
         NativeMix = "native-mix";
+        /// Class: native device maths (a conversion). The device's conversion answers
+        /// `air.pack` and `air.unpack` of a normalized format: `GLSL.std.450`'s `Pack` and
+        /// `Unpack` instructions for `unorm4x8`, `snorm4x8`, `unorm2x16` and `snorm2x16`, their
+        /// definition by the device's clamp, multiply, `RoundEven` and reciprocal for `rgb10a2`
+        /// and `rgb565`, and the MSL transfer functions by the device's `Pow` for
+        /// `unorm4x8_srgb`'s colour, where Metal rounds the exact product, divides correctly
+        /// rounded and takes an sRGB colour through its twelve-bit table. Recorded bound: a packed
+        /// code within one of Metal's, apart only near a half-integer; an unpacked value within
+        /// 2.5 ulp of the correctly rounded quotient; a decoded sRGB colour within half a
+        /// twelve-bit step (`1 / 8190`) of Metal's step `k / 4095`, beyond its division's and
+        /// `Pow`'s bounds; a NaN channel's code the device's, where Metal's is 0.
+        DevicePackConversion = "device-pack-conversion";
         /// A render pipeline whose color attachments the device draws in more than one group:
         /// each draw runs once per group, each group's variant over its own copy of the pass's
         /// depth and stencil. Recorded bound: groups past the first may differ at discard or

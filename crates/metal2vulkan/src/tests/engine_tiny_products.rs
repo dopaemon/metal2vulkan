@@ -1,6 +1,7 @@
 //! Metal's `float` multiply flushes a product whose exact value lies below `2^-126` to the zero of
 //! its sign before rounding it (tininess before rounding), on vector and scalar lanes, with and
-//! without fast math, and as the first product of `dot`'s fused chain: the owned fixtures
+//! without fast math, and as the first product of its `dot` (the module's `dot` is the device's
+//! `OpDot`): the owned fixtures
 //! `tiny_products_flush` and `tiny_products_flush_fast`, whose words on an Apple M3 Max under
 //! macOS 27.0.1 are `tiny_products_m3.txt` (the authored cases of the fixtures,
 //! `float-products-flushed-before-rounding` and its fast-math twin).

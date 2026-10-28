@@ -325,6 +325,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::NativeMinMax
         | N::NativeDot
         | N::NativeMix
+        | N::DevicePackConversion
         | N::DiscardDropsSimdgroupStores
         | N::HelperBranchDropsSimdgroupStores => Allowance::Unbounded,
     }

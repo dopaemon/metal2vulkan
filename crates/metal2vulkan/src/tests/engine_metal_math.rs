@@ -1,25 +1,32 @@
-//! Metal's math where `GLSL.std.450` is a different function, end to end: a call's `air` symbol
-//! variant and fast-math flags select what it computes. On every committed M1 profile each kernel
-//! compiles, links, and passes L3, and its module holds the instructions of the function Metal
-//! computes:
+//! Metal's math functions end to end: a call's `air` symbol variant and fast-math flags select
+//! what it computes, the device's instruction where one is the function and a definition of the
+//! device's instructions where none is. On every committed M1 profile each kernel compiles, links,
+//! and passes L3, and its module holds the instructions of the form it takes:
 //!
 //! - `air.fast_tanh` on `float` is the MSL fast-math formula `(t - 1) / (t + 1)`,
 //!   `t = exp2(x * 2 log2 e)` of the device's `Exp2` (no `Tanh`), every step of it
 //!   `NoContraction`, its quotient the device's division (`OpFDiv`); the precise `air.tanh` is the
-//!   device's `Tanh`, and a `half` `fast_tanh` Metal's `half` `tanh`, `(t - 1) · (1 / (t + 1))` of
-//!   the same `t` (no `Tanh`);
-//! - `air.sign` is Metal's `sign` with and without fast math (no `FSign`, which keeps the sign
-//!   of a zero where Metal answers `+0`), and both answer `-1` for `-3` on the interpreter;
+//!   device's `Tanh`. A `half` `fast_tanh` is Metal's `half` `tanh` (Metal's `half` functions are
+//!   the same in both math modes, and MSL's fast-math formulas are its `float` ones), so it is the
+//!   device's `Tanh` too (no `Exp2`, no division), noted `NativeTranscendentals` wherever the
+//!   device's functions are not Metal's own, and on MoltenVK MSL's `float` `tanh` rounded to
+//!   `half` (`DeviceTranscendentals`);
+//! - `air.sign` is the device's `FSign` with and without fast math (it keeps the sign of a zero
+//!   where Metal answers `+0`), noted `NativeTranscendentals` wherever the device's functions are
+//!   not Metal's own (on MoltenVK it is MSL's own `sign`), and both answer `-1` for `-3` on the
+//!   interpreter;
 //! - `air.sinpi` and `air.fast_sinpi` reduce their argument (`RoundEven`) and take the sine of the
 //!   residue from the device's `Sin` on every profile.
 //!
 //! The values of these functions are the unit tests' (`lower::arith::tests`); no GPU is used.
 //!
-//! The sRGB conversions of `unorm4x8_srgb` run end to end on the interpreter: A1's committed
-//! fixtures `a1_srgb_decode_all_bytes` (every byte in every channel, `float` and `half` results)
-//! and `a1_srgb_encode_sweep` (every multiple of 2⁻¹⁴ in `[0, 1.0078]` and every `half` up to 2.25)
-//! compile on every profile above, declare Metal's twelve-bit table once per module, read no `Pow`,
-//! note no device transcendentals, and write the table's word for every thread.
+//! The sRGB conversions of `unorm4x8_srgb` compile end to end: A1's committed fixtures
+//! `a1_srgb_decode_all_bytes` (every byte in every channel, `float` and `half` results) and
+//! `a1_srgb_encode_sweep` (every multiple of 2⁻¹⁴ in `[0, 1.0078]` and every `half` up to 2.25)
+//! compile on every profile above, take the MSL transfer functions by the device's `Pow` around
+//! the 8-bit instruction, declare no table, and note `DevicePackConversion`. The interpreter models
+//! no `Pow`, so their values are the device lanes' (the validation crate's authored cases of the
+//! same fixtures).
 //!
 //! `llvm-as` assembles the modules; without it the tests skip visibly.
 
@@ -29,8 +36,7 @@ use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, exact_maths, link_and_validate, llvm_assemble, meter, profile,
     typed_module, AssembleError, Scratch,
@@ -47,6 +53,8 @@ const TANH: u32 = 21;
 const EXP2: u32 = 29;
 const ROUND_EVEN: u32 = 2;
 const POW: u32 = 26;
+const PACK_UNORM_4X8: u32 = 55;
+const UNPACK_UNORM_4X8: u32 = 64;
 
 /// One kernel: its body defines `%r` (`float`), which it stores.
 struct Kernel {
@@ -57,6 +65,9 @@ struct Kernel {
     lacks: &'static [u32],
     /// Whether the module divides (`OpFDiv`): `fast::tanh`'s quotient.
     divides: bool,
+    /// Whether the module takes the device's instruction for a function Metal defines otherwise,
+    /// recording `NativeTranscendentals` wherever the device's functions are not Metal's own.
+    native: bool,
     /// The stored word on the interpreter, when it models the kernel.
     want: Option<u32>,
 }
@@ -68,6 +79,7 @@ const KERNELS: [Kernel; 8] = [
         has: &[EXP2],
         lacks: &[TANH],
         divides: true,
+        native: false,
         want: None,
     },
     // RC3 cases e72f550f and 2d5f3949's GELU tail at x = -8: 0.5 * x * (1 + tanh(...)).
@@ -77,6 +89,7 @@ const KERNELS: [Kernel; 8] = [
         has: &[EXP2],
         lacks: &[TANH],
         divides: true,
+        native: false,
         want: None,
     },
     Kernel {
@@ -85,30 +98,34 @@ const KERNELS: [Kernel; 8] = [
         has: &[TANH],
         lacks: &[EXP2],
         divides: false,
+        native: false,
         want: None,
     },
     Kernel {
         name: "fast_tanh_half",
         body: "  %a = fadd fast float 0x4000000000000000, -0.0\n  %h = fptrunc float %a to half\n  %t = call fast half @air.fast_tanh.f16(half %h)\n  %r = fpext half %t to float\n",
-        has: &[EXP2],
-        lacks: &[TANH],
-        divides: true,
+        has: &[TANH],
+        lacks: &[EXP2],
+        divides: false,
+        native: true,
         want: None,
     },
     Kernel {
         name: "fast_sign",
         body: "  %a = fadd fast float 0xC008000000000000, -0.0\n  %r = call fast float @air.sign.f32(float %a)\n",
-        has: &[],
-        lacks: &[FSIGN],
+        has: &[FSIGN],
+        lacks: &[],
         divides: false,
+        native: true,
         want: Some(0xBF80_0000),
     },
     Kernel {
         name: "precise_sign",
         body: "  %a = fadd float 0xC008000000000000, -0.0\n  %r = call float @air.sign.f32(float %a)\n",
-        has: &[],
-        lacks: &[FSIGN],
+        has: &[FSIGN],
+        lacks: &[],
         divides: false,
+        native: true,
         want: Some(0xBF80_0000),
     },
     Kernel {
@@ -117,6 +134,7 @@ const KERNELS: [Kernel; 8] = [
         has: &[SIN, ROUND_EVEN],
         lacks: &[],
         divides: false,
+        native: false,
         want: None,
     },
     Kernel {
@@ -125,6 +143,7 @@ const KERNELS: [Kernel; 8] = [
         has: &[SIN, ROUND_EVEN],
         lacks: &[],
         divides: false,
+        native: false,
         want: None,
     },
 ];
@@ -225,7 +244,7 @@ fn interpret(bitcode: &[u8], entry: &str, stem: &str) -> u32 {
 }
 
 #[test]
-fn metal_math_variants_select_metals_functions() {
+fn metal_math_variants_select_their_forms() {
     let Some(bitcode) = assemble() else {
         return;
     };
@@ -254,13 +273,29 @@ fn metal_math_variants_select_metals_functions() {
             // The fast-math entry's `fast_tanh` notes its steps' precision (the device's
             // `Exp2` and division), except where every step is Metal's own function on the device
             // (`FloatFunctions::Metal`), which notes nothing in such an entry.
-            // A `half` one's division is its reciprocal, a function of its own.
             if k.divides {
-                let half = k.name.ends_with("_half");
                 assert_eq!(
-                    (half || a.precision.contains(&PrecisionNote::DeviceArithmetic))
+                    a.precision.contains(&PrecisionNote::DeviceArithmetic)
                         && a.precision.contains(&PrecisionNote::NativeTranscendentals),
                     !metal,
+                    "{what}: {:?}",
+                    a.precision
+                );
+            }
+            // The device's instruction: noted `NativeTranscendentals` wherever the device's
+            // functions are not Metal's own. On MoltenVK `sign` is MSL's own; a `half` `tanh` is
+            // MSL's `float` one rounded to `half`, within Apple's bound.
+            if k.native {
+                assert_eq!(
+                    a.precision.contains(&PrecisionNote::NativeTranscendentals),
+                    !metal,
+                    "{what}: {:?}",
+                    a.precision
+                );
+                let half = k.name.ends_with("_half");
+                assert_eq!(
+                    a.precision.contains(&PrecisionNote::DeviceTranscendentals),
+                    metal && half,
                     "{what}: {:?}",
                     a.precision
                 );
@@ -363,137 +398,13 @@ fn fast_tanh_is_one_operation() {
     }
 }
 
-/// The byte Metal's twelve-bit table encodes `x` to: the index `i = round(x * 4095)` of the exact
-/// product, then the MSL transfer with the exponent `0.41666` (which reproduces every one of A1's
-/// 4096 observed indices; `1/2.4` misses four), rounded to nearest even.
-fn srgb_encode(x: f64) -> u32 {
-    let i = (x.clamp(0.0, 1.0) * 4095.0).round_ties_even();
-    let c = i / 4095.0;
-    let v = if c < 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(0.41666) - 0.055
-    };
-    (255.0 * v).round_ties_even() as u32
-}
-
-/// A linear (alpha) channel: the exact product `x * 255` rounded to nearest even.
-fn unorm_encode(x: f64) -> u32 {
-    (x.clamp(0.0, 1.0) * 255.0).round_ties_even() as u32
-}
-
-/// Metal's decode of color byte `b`: the table step `k = round(decode(b / 255) * 4095)` of the MSL
-/// transfer, answered as `k / 4095` correctly rounded.
-fn srgb_decode(b: u32) -> f32 {
-    let c = f64::from(b) / 255.0;
-    let v = if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    };
-    ((v * 4095.0).round_ties_even() / 4095.0) as f32
-}
-
-/// The `half` nearest `x` (ties to even), for `x` in `[0, 65504]`.
-fn half_bits(x: f32) -> u32 {
-    let v = f64::from(x);
-    assert!((0.0..=65504.0).contains(&v), "{x}");
-    if v < 2f64.powi(-14) {
-        // Subnormal: multiples of 2^-24 (1024 is the least normal, 0x400).
-        return (v * 2f64.powi(24)).round_ties_even() as u32;
-    }
-    let mut e = ((x.to_bits() >> 23) & 0xff) as i32 - 127;
-    let mut m = (v / 2f64.powi(e - 10)).round_ties_even() as u32;
-    if m == 2048 {
-        e += 1;
-        m = 1024;
-    }
-    (((e + 15) as u32) << 10) | (m - 1024)
-}
-
-/// The value of `half` bit pattern `h` (finite, non-negative).
-fn half_value(h: u32) -> f64 {
-    let (e, m) = ((h >> 10) & 0x1f, h & 0x3ff);
-    if e == 0 {
-        f64::from(m) * 2f64.powi(-24)
-    } else {
-        f64::from(1024 + m) * 2f64.powi(e as i32 - 25)
-    }
-}
-
-/// The words fixture `entry` writes to `[[buffer(0)]]` over `threads` threads (32-lane
-/// threadgroups), `per_thread` words each, on the interpreter.
-fn run_fixture(bc: &[u8], entry: &str, stem: &str, threads: u32, per_thread: u32) -> Vec<u32> {
-    let p = profile(stem, exact_maths()).expect("profile");
-    let (plan, m) = typed_module(bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
-    // Zero push bytes: a zero bind residual and a dispatch region based at the origin.
-    for f in &plan.push.fields {
-        assert!(
-            matches!(
-                (f.field, f.loc),
-                (
-                    PushField::SlotBindOffset(_)
-                        | PushField::DispatchRegion
-                        | PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(
-                            _
-                        )),
-                    PushLoc::Push { .. }
-                )
-            ),
-            "{entry}: {:?}",
-            f.field
-        );
-    }
-    // One `Private` variable with an initializer: the table, declared once however many
-    // conversions read it (float and half).
-    let tables = m
-        .globals()
-        .iter()
-        .filter(|g| g.class == StorageClass::Private && g.init.is_some())
-        .count();
-    assert_eq!(tables, 1, "{entry} on {stem}: the sRGB table");
-    let mut res = Resources {
-        buffers: vec![Buffer {
-            slot: Some(ResourceSlot {
-                stage: Stage::Kernel,
-                kind: ResourceKind::Buffer,
-                index: 0,
-            }),
-            address: None,
-            bytes: vec![0xab; 4 * (threads * per_thread) as usize],
-        }],
-        push: vec![0; plan.push.push_range.map_or(0, |(_, len)| len as usize)],
-        spec: Default::default(),
-    };
-    for (axis, n) in [(Axis::X, 32u32), (Axis::Y, 1), (Axis::Z, 1)] {
-        res.spec.insert(SpecKey::LocalSize(axis), n.into());
-    }
-    res.spec.insert(SpecKey::FlatLocalSize, 32u32.into());
-    let config = Config {
-        workgroups: [threads / 32, 1, 1],
-        ..Config::default()
-    };
-    let out = run(&m, &config, res).unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
-    out.buffers[0]
-        .chunks(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
-}
-
 /// End to end: the sRGB fixtures through select, emit, and link on every profile above: L3 passes,
-/// the module reads no `Pow` and notes no device transcendentals, and on the interpreter every
-/// thread writes Metal's table words.
-///
-/// - `a1_srgb_decode_all_bytes`: thread `t` unpacks the word of bytes `t`, `255 - t`,
-///   `t ^ 0x5a`, `(7t + 3) & 255` and writes the four `float` results, then the four `half`
-///   results (each rounded from the `float` quotient) as two words. Metal's own steps of bytes 1,
-///   137, and 255 (`0x39800801`, `0x3E800801`, `1.0`) are among them.
-/// - `a1_srgb_encode_sweep`: thread `t` packs `3t`, `3t + 1`, `3t + 2` times 2⁻¹⁴ (alpha `3t`
-///   times 2⁻¹⁴, linear), then the `half` patterns `3t`, `3t + 1`, `3t + 2` (alpha `3t`).
+/// and each module takes the MSL transfer functions by the device's `Pow` around the 8-bit
+/// instruction (`a1_srgb_decode_all_bytes`: `UnpackUnorm4x8`, its `float` and `half` results;
+/// `a1_srgb_encode_sweep`: `PackUnorm4x8`, from `float` and `half` colours), declares no table
+/// (no initialized `Private` variable), and records `DevicePackConversion`.
 #[test]
-fn srgb_fixtures_answer_with_metals_tables_on_the_interpreter() {
-    const DECODE: u32 = 256;
-    const ENCODE: u32 = 5504;
+fn srgb_fixtures_take_the_transfer_by_the_devices_pow() {
     let assembled = |stem: &str| match llvm_assemble(&engine_dir().join(format!("{stem}.ll"))) {
         Ok(b) => Some(b),
         Err(AssembleError::Missing(t)) => {
@@ -508,76 +419,35 @@ fn srgb_fixtures_answer_with_metals_tables_on_the_interpreter() {
     ) else {
         return;
     };
-
-    let mut decoded = Vec::new();
-    for t in 0..DECODE {
-        let bytes = [t, 255 - t, t ^ 0x5a, (7 * t + 3) & 255];
-        let lanes = [
-            srgb_decode(bytes[0]),
-            srgb_decode(bytes[1]),
-            srgb_decode(bytes[2]),
-            bytes[3] as f32 / 255.0,
-        ];
-        decoded.extend(lanes.iter().map(|x| x.to_bits()));
-        decoded.push(half_bits(lanes[0]) | (half_bits(lanes[1]) << 16));
-        decoded.push(half_bits(lanes[2]) | (half_bits(lanes[3]) << 16));
-    }
-    // Metal's steps (authored case `srgb-transfer-and-its-twelve-bit-table`): bytes 1, 137, and
-    // 255 in the red channel of threads 1, 137, and 255.
-    for (t, want) in [
-        (1usize, 0x3980_0801u32),
-        (137, 0x3E80_0801),
-        (255, 0x3F80_0000),
-    ] {
-        assert_eq!(decoded[6 * t], want, "byte {t}");
-    }
-    let mut encoded = Vec::new();
-    for t in 0..ENCODE {
-        let k = 3 * t;
-        let x = |j: u32| f64::from(k + j) * 2f64.powi(-14);
-        encoded.push(
-            srgb_encode(x(0))
-                | (srgb_encode(x(1)) << 8)
-                | (srgb_encode(x(2)) << 16)
-                | (unorm_encode(x(0)) << 24),
-        );
-        let h = |j: u32| half_value(k + j);
-        encoded.push(
-            srgb_encode(h(0))
-                | (srgb_encode(h(1)) << 8)
-                | (srgb_encode(h(2)) << 16)
-                | (unorm_encode(h(0)) << 24),
-        );
-    }
-
     for stem in PROFILES {
         let p = profile(stem, exact_maths()).expect("profile");
-        for (bc, entry, threads, per_thread, want) in [
-            (&decode_bc, "a1_srgb_decode_all_bytes", DECODE, 6, &decoded),
-            (&encode_bc, "a1_srgb_encode_sweep", ENCODE, 2, &encoded),
+        for (bc, entry, instruction) in [
+            (&decode_bc, "a1_srgb_decode_all_bytes", UNPACK_UNORM_4X8),
+            (&encode_bc, "a1_srgb_encode_sweep", PACK_UNORM_4X8),
         ] {
             let what = format!("{entry} on {stem}");
             let a = compile(bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let (ext, _) = ext_insts(&words);
-            assert!(!ext.contains(&POW), "{what}: reads Pow ({ext:?})");
+            for i in [POW, instruction] {
+                assert!(
+                    ext.contains(&i),
+                    "{what}: GLSL.std.450 {i} missing ({ext:?})"
+                );
+            }
             assert!(
-                !a.precision.contains(&PrecisionNote::DeviceTranscendentals),
+                a.precision.contains(&PrecisionNote::DevicePackConversion),
                 "{what}: {:?}",
                 a.precision
             );
-            let got = run_fixture(bc, entry, stem, threads, per_thread);
-            for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
-                assert_eq!(
-                    g,
-                    w,
-                    "{what}: thread {} word {}: {g:#010x} != {w:#010x}",
-                    i as u32 / per_thread,
-                    i as u32 % per_thread
-                );
-            }
-            assert_eq!(got.len(), want.len(), "{what}");
+            let (_, m) = typed_module(bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let tables = m
+                .globals()
+                .iter()
+                .filter(|g| g.class == StorageClass::Private && g.init.is_some())
+                .count();
+            assert_eq!(tables, 0, "{what}: a table");
         }
     }
 }

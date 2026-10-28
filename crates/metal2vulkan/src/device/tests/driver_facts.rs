@@ -82,10 +82,6 @@ fn taken(p: &crate::device::DeviceProfile) -> Vec<crate::error::DriverDeviation>
             property(VkProperty::MetalFloatDenormals),
         ),
         (
-            D::MetalHalfQuantize,
-            property(VkProperty::MetalHalfQuantize),
-        ),
-        (
             D::MetalCenterVaryings,
             property(VkProperty::MetalCenterVaryings),
         ),
@@ -197,7 +193,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         D::MetalColorWrites,
         D::MetalHalfFma,
         D::MetalFloatDenormals,
-        D::MetalHalfQuantize,
         D::MetalCenterVaryings,
         D::MetalMinMax,
         D::MetalHalfArithmetic,
@@ -273,7 +268,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
             // `deviceID` and Hawk Point's alike.
             (false, "amd-780m-radv" | "amd-780m-hawkpoint-radv") => vec![
                 D::MetalFloatDenormals,
-                D::MetalHalfQuantize,
                 D::MetalSmallFloatColorWrites,
                 D::MetalNorm16ColorWrites,
                 D::MetalHalfStorageWrites,
@@ -286,14 +280,12 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
             ],
             (false, "intel-irisxe-rplp-anv") => vec![
                 D::MetalFloatDenormals,
-                D::MetalHalfQuantize,
                 D::MetalSmallFloatColorWrites,
                 D::MetalHalfStorageWrites,
                 D::MetalDepth16Stores,
             ],
             (false, "intel-uhd770-rpls-anv") => vec![
                 D::MetalFloatDenormals,
-                D::MetalHalfQuantize,
                 D::MetalSmallFloatColorWrites,
                 D::MetalHalfStorageWrites,
                 D::MetalDepth16Stores,

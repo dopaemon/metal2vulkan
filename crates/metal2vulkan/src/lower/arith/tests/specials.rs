@@ -1,8 +1,8 @@
-//! Metal's `sign`, `fract`, `saturate`, `median3`, and `pow` at their special operands, on the
-//! interpreter against Metal's recorded answers (Apple M3 Max, ORACLE_ABI v34), bit for bit: every
-//! distinct lane of the A1 cases `fract-saturate-and-median3-at-nan-infinity-and-signed-zero`
-//! (aed3faaa) and `sign-of-zero-and-division-range-{without,under}-fast-math` (87d13612, f9a12252,
-//! whose `sign` answers agree lane for lane), and the lanes of `pow-at-every-c99-special-operand`
+//! Metal's `saturate`, `median3`, and `pow` at their special operands, on the interpreter against
+//! Metal's recorded answers (Apple M3 Max, ORACLE_ABI v34), bit for bit: every distinct lane of the
+//! A1 case `fract-saturate-and-median3-at-nan-infinity-and-signed-zero` (aed3faaa) but those whose
+//! answer is the device's instruction's (`median3`'s ties), and the lanes of
+//! `pow-at-every-c99-special-operand`
 //! (116e052a) with a NaN operand, the exponent one, a denormal exponent, or a negative denormal
 //! base to a non-integral exponent. The operands are signed zeros, `f32` and `half` denormals, the
 //! smallest normals, values beside the integers, the largest finite values, infinities, and NaNs
@@ -10,126 +10,48 @@
 
 use super::*;
 
-/// `(x, precise::fract, fast::fract, saturate, hx, half fract, half saturate)`: `float` then
-/// `half` operands and answers (`precise::saturate` and `fast::saturate` agree on every lane).
-const FRACT_SATURATE: [(u32, u32, u32, u32, u16, u16, u16); 39] = [
-    (
-        0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x0000, 0x0000, 0x0000,
-    ),
-    (
-        0x80000000, 0x00000000, 0x00000000, 0x00000000, 0x8000, 0x0000, 0x0000,
-    ),
-    (
-        0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x0001, 0x0001, 0x0001,
-    ),
-    (
-        0x80000001, 0x00000000, 0x00000000, 0x00000000, 0x8001, 0x3BFF, 0x0000,
-    ),
-    (
-        0x007FFFFF, 0x00000000, 0x00000000, 0x00000000, 0x03FF, 0x03FF, 0x03FF,
-    ),
-    (
-        0x807FFFFF, 0x00000000, 0x00000000, 0x00000000, 0x83FF, 0x3BFF, 0x0000,
-    ),
-    (
-        0x00800000, 0x00800000, 0x00800000, 0x00800000, 0x0400, 0x0400, 0x0400,
-    ),
-    (
-        0x80800000, 0x3F7FFFFF, 0x3F800000, 0x00000000, 0x8400, 0x3BFF, 0x0000,
-    ),
-    (
-        0xB3000000, 0x3F7FFFFF, 0x3F800000, 0x00000000, 0x8C00, 0x3BFF, 0x0000,
-    ),
-    (
-        0xB3800000, 0x3F7FFFFF, 0x3F7FFFFF, 0x00000000, 0x9000, 0x3BFF, 0x0000,
-    ),
-    (
-        0xAEDBE6FF, 0x3F7FFFFF, 0x3F800000, 0x00000000, 0x868E, 0x3BFF, 0x0000,
-    ),
-    (
-        0x3F000000, 0x3F000000, 0x3F000000, 0x3F000000, 0x3800, 0x3800, 0x3800,
-    ),
-    (
-        0xBF000000, 0x3F000000, 0x3F000000, 0x00000000, 0xB800, 0x3800, 0x0000,
-    ),
-    (
-        0x3FC00000, 0x3F000000, 0x3F000000, 0x3F800000, 0x3E00, 0x3800, 0x3C00,
-    ),
-    (
-        0xBFC00000, 0x3F000000, 0x3F000000, 0x00000000, 0xBE00, 0x3800, 0x0000,
-    ),
-    (
-        0x3F800000, 0x00000000, 0x00000000, 0x3F800000, 0x3C00, 0x0000, 0x3C00,
-    ),
-    (
-        0xBF800000, 0x00000000, 0x00000000, 0x00000000, 0xBC00, 0x0000, 0x0000,
-    ),
-    (
-        0x3F7FFFFF, 0x3F7FFFFF, 0x3F7FFFFF, 0x3F7FFFFF, 0x3BFF, 0x3BFF, 0x3BFF,
-    ),
-    (
-        0xBF7FFFFF, 0x33800000, 0x33800000, 0x00000000, 0xBBFF, 0x1000, 0x0000,
-    ),
-    (
-        0x3F800001, 0x34000000, 0x34000000, 0x3F800000, 0x3C01, 0x1400, 0x3C00,
-    ),
-    (
-        0xBF800001, 0x3F7FFFFE, 0x3F7FFFFE, 0x00000000, 0xBC01, 0x3BFE, 0x0000,
-    ),
-    (
-        0x4A800001, 0x3F000000, 0x3F000000, 0x3F800000, 0x6001, 0x3800, 0x3C00,
-    ),
-    (
-        0xCA800001, 0x3F000000, 0x3F000000, 0x00000000, 0xE001, 0x3800, 0x0000,
-    ),
-    (
-        0x4B800000, 0x00000000, 0x00000000, 0x3F800000, 0x6800, 0x0000, 0x3C00,
-    ),
-    (
-        0xCB800000, 0x00000000, 0x00000000, 0x00000000, 0xE800, 0x0000, 0x0000,
-    ),
-    (
-        0x7F7FFFFF, 0x00000000, 0x00000000, 0x3F800000, 0x7BFF, 0x0000, 0x3C00,
-    ),
-    (
-        0xFF7FFFFF, 0x00000000, 0x00000000, 0x00000000, 0xFBFF, 0x0000, 0x0000,
-    ),
-    (
-        0x7F800000, 0x00000000, 0x00000000, 0x3F800000, 0x7C00, 0x0000, 0x3C00,
-    ),
-    (
-        0xFF800000, 0x00000000, 0x00000000, 0x00000000, 0xFC00, 0x0000, 0x0000,
-    ),
-    (
-        0x7FC00000, 0x7FC00000, 0x7FC00000, 0x00000000, 0x7E00, 0x7E00, 0x0000,
-    ),
-    (
-        0xFFC00000, 0x7FC00000, 0x7FC00000, 0x00000000, 0xFE00, 0xFE00, 0x0000,
-    ),
-    (
-        0x7F800001, 0x7FC00000, 0x7FC00000, 0x00000000, 0x7C01, 0x7C01, 0x0000,
-    ),
-    (
-        0xFF800001, 0x7FC00000, 0x7FC00000, 0x00000000, 0xFC01, 0xFC01, 0x0000,
-    ),
-    (
-        0x7FBFFFFF, 0x7FC00000, 0x7FC00000, 0x00000000, 0x7DFF, 0x7DFF, 0x0000,
-    ),
-    (
-        0x40300000, 0x3F400000, 0x3F400000, 0x3F800000, 0x4180, 0x3A00, 0x3C00,
-    ),
-    (
-        0xC0300000, 0x3E800000, 0x3E800000, 0x00000000, 0xC180, 0x3400, 0x0000,
-    ),
-    (
-        0x3F8CCCCD, 0x3DCCCCD0, 0x3DCCCCD0, 0x3F800000, 0x3C66, 0x2E60, 0x3C00,
-    ),
-    (
-        0x40000000, 0x00000000, 0x00000000, 0x3F800000, 0x4000, 0x0000, 0x3C00,
-    ),
-    (
-        0x3E800000, 0x3E800000, 0x3E800000, 0x3E800000, 0x3400, 0x3400, 0x3400,
-    ),
+/// `(x, saturate, hx, half saturate)`: `float` then `half` operands and answers
+/// (`precise::saturate` and `fast::saturate` agree on every lane).
+const SATURATE: [(u32, u32, u16, u16); 39] = [
+    (0x00000000, 0x00000000, 0x0000, 0x0000),
+    (0x80000000, 0x00000000, 0x8000, 0x0000),
+    (0x00000001, 0x00000000, 0x0001, 0x0001),
+    (0x80000001, 0x00000000, 0x8001, 0x0000),
+    (0x007FFFFF, 0x00000000, 0x03FF, 0x03FF),
+    (0x807FFFFF, 0x00000000, 0x83FF, 0x0000),
+    (0x00800000, 0x00800000, 0x0400, 0x0400),
+    (0x80800000, 0x00000000, 0x8400, 0x0000),
+    (0xB3000000, 0x00000000, 0x8C00, 0x0000),
+    (0xB3800000, 0x00000000, 0x9000, 0x0000),
+    (0xAEDBE6FF, 0x00000000, 0x868E, 0x0000),
+    (0x3F000000, 0x3F000000, 0x3800, 0x3800),
+    (0xBF000000, 0x00000000, 0xB800, 0x0000),
+    (0x3FC00000, 0x3F800000, 0x3E00, 0x3C00),
+    (0xBFC00000, 0x00000000, 0xBE00, 0x0000),
+    (0x3F800000, 0x3F800000, 0x3C00, 0x3C00),
+    (0xBF800000, 0x00000000, 0xBC00, 0x0000),
+    (0x3F7FFFFF, 0x3F7FFFFF, 0x3BFF, 0x3BFF),
+    (0xBF7FFFFF, 0x00000000, 0xBBFF, 0x0000),
+    (0x3F800001, 0x3F800000, 0x3C01, 0x3C00),
+    (0xBF800001, 0x00000000, 0xBC01, 0x0000),
+    (0x4A800001, 0x3F800000, 0x6001, 0x3C00),
+    (0xCA800001, 0x00000000, 0xE001, 0x0000),
+    (0x4B800000, 0x3F800000, 0x6800, 0x3C00),
+    (0xCB800000, 0x00000000, 0xE800, 0x0000),
+    (0x7F7FFFFF, 0x3F800000, 0x7BFF, 0x3C00),
+    (0xFF7FFFFF, 0x00000000, 0xFBFF, 0x0000),
+    (0x7F800000, 0x3F800000, 0x7C00, 0x3C00),
+    (0xFF800000, 0x00000000, 0xFC00, 0x0000),
+    (0x7FC00000, 0x00000000, 0x7E00, 0x0000),
+    (0xFFC00000, 0x00000000, 0xFE00, 0x0000),
+    (0x7F800001, 0x00000000, 0x7C01, 0x0000),
+    (0xFF800001, 0x00000000, 0xFC01, 0x0000),
+    (0x7FBFFFFF, 0x00000000, 0x7DFF, 0x0000),
+    (0x40300000, 0x3F800000, 0x4180, 0x3C00),
+    (0xC0300000, 0x00000000, 0xC180, 0x0000),
+    (0x3F8CCCCD, 0x3F800000, 0x3C66, 0x3C00),
+    (0x40000000, 0x3F800000, 0x4000, 0x3C00),
+    (0x3E800000, 0x3E800000, 0x3400, 0x3400),
 ];
 
 /// `(a, b, c, precise::median3, fast::median3, ha, hb, hc, half median3)`.
@@ -284,48 +206,6 @@ const MEDIAN3: [(u32, u32, u32, u32, u32, u16, u16, u16, u16); 50] = [
     (
         0x3F800000, 0x40000000, 0x40400000, 0x40000000, 0x40000000, 0x3C00, 0x4000, 0x4200, 0x4000,
     ),
-];
-
-/// `(x, sign(x))` of `float`, precise and fast alike.
-const SIGN_F32: [(u32, u32); 17] = [
-    (0x00000000, 0x00000000),
-    (0x80000000, 0x00000000),
-    (0x00000001, 0x00000000),
-    (0x80000001, 0x00000000),
-    (0x3F800000, 0x3F800000),
-    (0xBF800000, 0xBF800000),
-    (0x3F000000, 0x3F800000),
-    (0xBF000000, 0xBF800000),
-    (0x7F800000, 0x3F800000),
-    (0xFF800000, 0xBF800000),
-    (0x7FC00000, 0x00000000),
-    (0xFFC00000, 0x00000000),
-    (0x7F7FFFFF, 0x3F800000),
-    (0xFF7FFFFF, 0xBF800000),
-    (0x00800000, 0x3F800000),
-    (0x80800000, 0xBF800000),
-    (0x40000000, 0x3F800000),
-];
-
-/// `(x, sign(x))` of `half`.
-const SIGN_HALF: [(u16, u16); 17] = [
-    (0x0000, 0x0000),
-    (0x8000, 0x0000),
-    (0x0001, 0x3C00),
-    (0x8001, 0xBC00),
-    (0x3C00, 0x3C00),
-    (0xBC00, 0xBC00),
-    (0x3800, 0x3C00),
-    (0xB800, 0xBC00),
-    (0x7C00, 0x3C00),
-    (0xFC00, 0xBC00),
-    (0x7E00, 0x0000),
-    (0xFE00, 0x0000),
-    (0x7BFF, 0x3C00),
-    (0xFBFF, 0xBC00),
-    (0x0400, 0x3C00),
-    (0x8400, 0xBC00),
-    (0x4000, 0x3C00),
 ];
 
 /// `(x, y, precise::pow, fast::pow, hx, hy, half pow)`.
@@ -616,17 +496,7 @@ fn metal_answers(op: FloatFn, f: Form, rows: &[Row]) {
         &format!("{op:?} {f:?} against Metal"),
         &vec![f; op.arity()],
         f,
-        &|fb, x| {
-            math::float_fn(
-                fb,
-                op,
-                f,
-                Contraction::Forbidden,
-                NanTest::IsNan,
-                x,
-                &Lib::instructions(),
-            )
-        },
+        &|fb, x| math::float_fn(fb, op, f, Contraction::Forbidden, x, &Lib::instructions()),
         &cases,
         &|c| {
             let ops: Vec<u64> = c.iter().map(|l| l[0]).collect();
@@ -639,112 +509,54 @@ fn metal_answers(op: FloatFn, f: Form, rows: &[Row]) {
 }
 
 #[test]
-fn fract_and_saturate_answer_as_metal() {
-    let rows = |x: fn(&(u32, u32, u32, u32, u16, u16, u16)) -> [u64; 2]| -> Vec<Row> {
-        FRACT_SATURATE
-            .iter()
-            .map(|r| {
-                let [x, want] = x(r);
-                (vec![x], want)
-            })
-            .collect()
-    };
-    let (f32_, half) = (float(32), float(16));
-    metal_answers(
-        FloatFn::Fract,
-        f32_,
-        &rows(|r| [u64::from(r.0), u64::from(r.1)]),
-    );
-    metal_answers(
-        // A1 case aed3faaa calls `fast::fract` without fast-math flags.
-        FloatFn::FastFract {
-            infinite_nan: false,
-        },
-        f32_,
-        &rows(|r| [u64::from(r.0), u64::from(r.2)]),
-    );
+fn saturate_answers_as_metal() {
     // `saturate` is the device's `NClamp(x, 0, 1)`: an `f32` denormal operand is the device's
     // (Metal flushes it to `+0`), every other lane Metal's.
     let normal = |(x, _): &Row| x[0] & 0x7F80_0000 != 0 || x[0] & 0x007F_FFFF == 0;
-    let saturate: Vec<Row> = rows(|r| [u64::from(r.0), u64::from(r.3)])
-        .into_iter()
+    let f32_: Vec<Row> = SATURATE
+        .iter()
+        .map(|r| (vec![u64::from(r.0)], u64::from(r.1)))
         .filter(normal)
         .collect();
-    metal_answers(FloatFn::Saturate, f32_, &saturate);
-    metal_answers(
-        FloatFn::Fract,
-        half,
-        &rows(|r| [u64::from(r.4), u64::from(r.5)]),
-    );
-    metal_answers(
-        FloatFn::Saturate,
-        half,
-        &rows(|r| [u64::from(r.4), u64::from(r.6)]),
-    );
+    metal_answers(FloatFn::Saturate, float(32), &f32_);
+    let half: Vec<Row> = SATURATE
+        .iter()
+        .map(|r| (vec![u64::from(r.2)], u64::from(r.3)))
+        .collect();
+    metal_answers(FloatFn::Saturate, float(16), &half);
 }
 
+/// `median3` is `min(max(c, min(a, b)), max(a, b))` of the device's `NMin` and `NMax`, which the
+/// interpreter answers as Metal's `fmin` and `fmax`: Metal's own answer at every lane where fewer
+/// than two operands are NaN and, on `float`, none is an `f32` denormal (the device's reading of
+/// one, and its pick of two NaNs, are `PrecisionNote::NativeMinMax`'s; `fast::median3`'s `b` of two
+/// NaN first operands among them).
 #[test]
-fn median3_answers_as_metal() {
-    type M = (u32, u32, u32, u32, u32, u16, u16, u16, u16);
-    let rows = |x: fn(&M) -> [u64; 4]| -> Vec<Row> {
-        MEDIAN3
-            .iter()
-            .map(|r| {
-                let [a, b, c, want] = x(r);
-                (vec![a, b, c], want)
-            })
-            .collect()
+fn median3_answers_as_metal_but_at_its_recorded_ties() {
+    let f32_nan = |b: u64| b & 0x7FFF_FFFF > 0x7F80_0000;
+    let f32_denormal = |b: u64| b & 0x7F80_0000 == 0 && b & 0x007F_FFFF != 0;
+    let half_nan = |b: u64| b & 0x7FFF > 0x7C00;
+    let keep = |ops: &[u64], nan: &dyn Fn(u64) -> bool, denormal: &dyn Fn(u64) -> bool| {
+        ops.iter().filter(|b| nan(**b)).count() < 2 && !ops.iter().any(|b| denormal(*b))
     };
-    metal_answers(
-        FloatFn::Median3,
-        float(32),
-        &rows(|r| {
-            [
-                u64::from(r.0),
-                u64::from(r.1),
-                u64::from(r.2),
-                u64::from(r.3),
-            ]
-        }),
-    );
-    metal_answers(
-        FloatFn::FastMedian3,
-        float(32),
-        &rows(|r| {
-            [
-                u64::from(r.0),
-                u64::from(r.1),
-                u64::from(r.2),
-                u64::from(r.4),
-            ]
-        }),
-    );
-    metal_answers(
-        FloatFn::Median3,
-        float(16),
-        &rows(|r| {
-            [
-                u64::from(r.5),
-                u64::from(r.6),
-                u64::from(r.7),
-                u64::from(r.8),
-            ]
-        }),
-    );
-}
-
-#[test]
-fn sign_answers_as_metal() {
-    let f: Vec<Row> = SIGN_F32
-        .iter()
-        .map(|(x, s)| (vec![u64::from(*x)], u64::from(*s)))
-        .collect();
-    metal_answers(FloatFn::Sign, float(32), &f);
-    let h: Vec<Row> = SIGN_HALF
-        .iter()
-        .map(|(x, s)| (vec![u64::from(*x)], u64::from(*s)))
-        .collect();
-    metal_answers(FloatFn::Sign, float(16), &h);
+    let mut precise = Vec::new();
+    let mut fast = Vec::new();
+    let mut half = Vec::new();
+    for r in MEDIAN3 {
+        let ops = vec![u64::from(r.0), u64::from(r.1), u64::from(r.2)];
+        if keep(&ops, &f32_nan, &f32_denormal) {
+            precise.push((ops.clone(), u64::from(r.3)));
+            fast.push((ops, u64::from(r.4)));
+        }
+        let ops = vec![u64::from(r.5), u64::from(r.6), u64::from(r.7)];
+        if keep(&ops, &half_nan, &|_| false) {
+            half.push((ops, u64::from(r.8)));
+        }
+    }
+    assert!(precise.len() > 20, "{} rows", precise.len());
+    metal_answers(FloatFn::Median3, float(32), &precise);
+    metal_answers(FloatFn::FastMedian3, float(32), &fast);
+    metal_answers(FloatFn::Median3, float(16), &half);
 }
 
 /// `pow`'s special cases (`math::pow_special`) at the lanes of [`POW`], each decided by a special

@@ -2596,12 +2596,12 @@ bound.
   measured to read them as Metal does: `+ - *`, the comparisons, `fma`, `dot`, `sqrt`, `rsqrt`,
   `trunc` and `rint` but on a device that takes the measured
   `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and the remainder,
-  `floor` and `ceil`, the device's maths functions (`fast::fmod`'s fused multiply-add among them),
-  `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of vectors of other than two to four lanes, whose
-  chunks' products the device sums where Metal flushes each one below `2^-126`, and a conversion
-  to or from `double`, where Metal's reading is not measured. The operations that read a denormal
-  on its bits answer Metal on every device: `ldexp`, `sign`, `fract`, `copysign`, `fabs` and
-  `atan2`; and so do the functions the device answers as Metal's own. Where the minimum and maximum
+  `floor`, `ceil` and `fneg`, the device's maths functions (`fast::fmod`'s fused multiply-add,
+  `fabs`, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of
+  vectors of other than two to four lanes, whose chunks' products the device sums where Metal
+  flushes each one below `2^-126`, and a conversion to or from `double`, where Metal's reading is
+  not measured. The operations that read a denormal on its bits answer Metal on every device:
+  `ldexp`, `copysign` and `atan2`; and so do the functions the device answers as Metal's own. Where the minimum and maximum
   functions and `saturate` are the device's `NMin`, `NMax` and `NClamp`, their pick of a denormal
   is `NativeMinMax`'s. Off MoltenVK the device's multiply and fused multiply-add round a result whose
   exact value is below `2^-126` up to `2^-126`, which Metal flushes
@@ -2992,9 +2992,13 @@ bound.
   binding such a texture makes no pipeline of its own.
 - `metal2vulkan-degrade-native-transcendentals` (precision). `PrecisionNote::NativeTranscendentals`:
   Native device maths: the module computes a `float` or `half` math-library function by the device's
-  own `GLSL.std.450` instruction (or Metal's composition of the device's `Exp2` and `Log2`) where
-  Metal's function is not the device's own; and `fast::sqrt` the device's `Sqrt` on a device whose
-  functions are not Metal's own.
+  own `GLSL.std.450` instruction (`exp`, `log`, `pow`, `sinh`, `cosh` and `tanh` among them; a
+  composition of the device's `Exp2` and `Log2` only for `exp10` and `log10`, which no instruction
+  is) where Metal's function is not the device's own; `fast::sqrt` the device's `Sqrt`; `fabs`,
+  `sign` and `fract` the device's `FAbs`, `FSign` and `Fract`, their special operands the
+  instruction's (Metal's `sign` of a NaN, a zero and an `f32` denormal is `+0`, its `fract` of an
+  infinity `+0`); and `round` C99's from the device's `Trunc` on every device (`round(-0.3)` is
+  `-0`, where Metal answers `+0`).
 - `metal2vulkan-degrade-native-division` (precision). `PrecisionNote::NativeDivision`: Native device
   maths: a precise `float` or `half` division, or Metal's fast division or reciprocal, is the
   device's `OpFDiv` where the device's division is not Metal's own: within Vulkan's 2.5 ulp, where
@@ -3042,7 +3046,9 @@ bound.
 - `metal2vulkan-degrade-native-nan-encoding` (precision). `PrecisionNote::NativeNanEncoding`: Native
   device maths: a `float` or `half` operation's NaN result is the device's, its sign and payload
   unselected, where Metal answers a NaN the device is not measured to answer (every NaN but
-  Metal's canonical one on a device measured to answer that, MoltenVK on an Apple GPU). Also
+  Metal's canonical one on a device measured to answer that, MoltenVK on an Apple GPU): a `float`
+  `fneg` and `fabs`, which keep a NaN operand's payload on Metal, and a `half` `fract`, which
+  returns it, among them. Also
   recorded wherever a `half` is read from its bits, on every device, since the read is the
   device's widening (its conversion with `shaderFloat16`, `UnpackHalf2x16` without): a NaN's bits
   the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not
@@ -3050,15 +3056,27 @@ bound.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, on a device not
-  measured to answer Metal's operand.
+  measured to answer Metal's operand; and `median3` on every device, `min(max(c, min(a, b)),
+  max(a, b))` of the device's `NMin` and `NMax`, whose pick of two NaNs and of an `f32` denormal is
+  the device's (Metal's `fast::median3` answers `b` for two NaN first operands).
 - `metal2vulkan-degrade-native-dot` (precision). `PrecisionNote::NativeDot`: Native device maths:
-  Metal's `dot` on `float`, or on `half` where its fused multiply-add is not the measured 16-bit
-  one, is the device's `OpDot` (a `half` one summed in `float` and rounded once to `half`), not
-  Metal's fused chain of its products, on a device whose functions are not Metal's own.
+  Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half` one summed in `float` and
+  rounded once to `half`), not Metal's fused chain of its products, on every device but for a
+  `float` one where the device's functions are Metal's own (MoltenVK).
 - `metal2vulkan-degrade-native-mix` (precision). `PrecisionNote::NativeMix`: Native device maths:
-  Metal's `mix(x, y, t)` on `float`, or on `half` where its fused multiply-add is not the measured
-  16-bit one, is the device's `FMix` (a `half` one computed in `float` and rounded once to `half`),
-  not Metal's `fma(t, y, fma(-t, x, x))`, on a device whose functions are not Metal's own.
+  Metal's `mix(x, y, t)` on `float` and `half` is the device's `FMix` (a `half` one computed in
+  `float` and rounded once to `half`), not Metal's `fma(t, y, fma(-t, x, x))`, on every device but
+  for a `float` one where the device's functions are Metal's own (MoltenVK).
+- `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
+  Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
+  device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,
+  their definition by the device's `NClamp`, multiply, `RoundEven` and reciprocal for `rgb10a2` and
+  `rgb565`, and the MSL transfer functions by the device's `Pow` for `unorm4x8_srgb`'s colour. Metal
+  rounds the exact product and divides correctly rounded, answers code 0 for a NaN channel, and
+  takes an sRGB colour through its twelve-bit table; a packed code is within one of Metal's, an
+  unpacked value within 2.5 ulp, a decoded sRGB colour within half a twelve-bit step (`1 / 8190`)
+  of Metal's step beyond its `Pow`'s bound. Not recorded for a
+  `float` conversion of the four named formats on MoltenVK, Metal's own there.
 - `metal2vulkan-degrade-color-attachment-groups` (precision).
   `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
   draws in more than one group (more than the lesser of its `maxColorAttachments` and

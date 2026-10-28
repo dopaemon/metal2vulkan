@@ -2,8 +2,9 @@
 //! the validation layer (`candidate::runtime_case::validated_options`, whose policy changes no
 //! translation: the device's forms are the only ones). The maths functions, divisions and fused
 //! multiply-adds (`PrecisionNote::NativeTranscendentals`, `NativeDivision`, `NativeFma`) and
-//! `dot`, `mix` and `fast::sqrt` (`NativeDot`, `NativeMix`, and `NativeTranscendentals` for
-//! `fast::sqrt`) are the device's on every device whose functions are not Metal's own, and the NaN
+//! `float` `dot`, `mix` and `fast::sqrt` (`NativeDot`, `NativeMix`, and `NativeTranscendentals`
+//! for `fast::sqrt`) are the device's on every device whose functions are not Metal's own (a
+//! `half` `dot` or `mix` records its note on every device), and the NaN
 //! and minimum and maximum (`NativeNanEncoding`, `NativeMinMax`) on every device not measured to
 //! answer Metal's.
 //! The stage records exactly the kinds of the forms it takes (where the device's answer is not
@@ -571,7 +572,7 @@ fn half_operands() -> Vec<[f32; 2]> {
 
 /// On a device whose float controls do not make its conversion to 16 bits Metal's, the stage
 /// records `NativeHalfConversion` (or `NativeHalfQuantize` without `shaderFloat16`, whose narrowing
-/// and sum are the bare quantize, measured or not) and the pipeline state announces it, and each
+/// and sum are the bare quantize) and the pipeline state announces it, and each
 /// `half` narrowing and sum is within the bound the note records: one unit in the last place of the
 /// `half`, 65504 where Metal answers infinity from 65520 up on a device that rounds toward zero,
 /// and the zero of its sign below `2^-14` on one that flushes 16-bit denormals (or whose quantize
@@ -625,13 +626,9 @@ fn half_rounding_answers_within_its_recorded_bound() {
                 .filter_map(|kind| kind.precision_note())
                 .filter(|note| kinds.contains(note))
                 .collect();
-            // A rounding by the bare quantize leaves a result below the smallest normal `half` to
-            // the device, measured quantize or not: only the float controls answer Metal's.
+            // A rounding by the bare quantize is the device's: only the float controls answer
+            // Metal's.
             let metal_s = controlled;
-            assert!(
-                !required.contains(&VkProperty::MetalHalfQuantize),
-                "{name}: a quantize requires no fact"
-            );
             eprintln!("{name}: float controls {controlled}; announced {announced:?}");
             assert_eq!(announced.len(), usize::from(!metal_s), "{name}");
             let operands = half_operands();

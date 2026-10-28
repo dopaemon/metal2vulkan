@@ -1,5 +1,5 @@
 //! The exact subset of `GLSL.std.450`: rounding, sign, min/max/clamp, `Fma`, `Sqrt`, `Length`,
-//! `Ldexp`, `Modf`/`Frexp`, bit finding, `Cross`, and the half packs. Every float result is rounded once
+//! `Ldexp`, `Modf`/`Frexp`, bit finding, `Cross`, the half packs and the normalized packs. Every float result is rounded once
 //! per IEEE operation; the transcendental and approximate instructions are [`Unmodelled`].
 
 use crate::spirv::ids::Value;
@@ -232,8 +232,64 @@ pub(super) fn eval(p: &Prog<'_>, op: GlslOp, args: &[Value], vals: &[Val]) -> IR
             let hi = float::from_f64(float::f16_to_f64((x >> 16) as u16), 32)?;
             Ok(Val::from_comps(vec![lo, hi]))
         }
+        GlslOp::PackUnorm4x8 => pack_norm(&comps(0)?, 8, false),
+        GlslOp::PackSnorm4x8 => pack_norm(&comps(0)?, 8, true),
+        GlslOp::PackUnorm2x16 => pack_norm(&comps(0)?, 16, false),
+        GlslOp::PackSnorm2x16 => pack_norm(&comps(0)?, 16, true),
+        GlslOp::UnpackUnorm4x8 => unpack_norm(&comps(0)?, 4, 8, false),
+        GlslOp::UnpackSnorm4x8 => unpack_norm(&comps(0)?, 4, 8, true),
+        GlslOp::UnpackUnorm2x16 => unpack_norm(&comps(0)?, 2, 16, false),
+        GlslOp::UnpackSnorm2x16 => unpack_norm(&comps(0)?, 2, 16, true),
         other => Err(Unmodelled::Glsl(other).err()),
     }
+}
+
+/// The scale of a normalized field of `bits` bits: `2^bits - 1`, or `2^(bits-1) - 1` signed.
+fn norm_scale(bits: u32, signed: bool) -> f32 {
+    let n = if signed { bits - 1 } else { bits };
+    ((1u32 << n) - 1) as f32
+}
+
+/// `PackUnorm4x8` and its kin of the `float` components `c`: each `round(clamp(c, 0, 1) * s)`
+/// (`[-1, 1]` signed), its product rounded to `float` and its tie to even (Vulkan leaves `Round`'s
+/// tie to the implementation; this is one answer it allows), the first component in the low bits.
+/// A NaN's clamp is undefined.
+fn pack_norm(c: &[u64], bits: u32, signed: bool) -> IResult<Val> {
+    let s = norm_scale(bits, signed);
+    let lo = if signed { -1.0f32 } else { 0.0 };
+    let mut out = 0u64;
+    for (i, x) in c.iter().enumerate() {
+        let v = f32::from_bits(*x as u32);
+        if v.is_nan() {
+            return Err(TrapKind::Undefined("a normalized pack of NaN").err());
+        }
+        let code = (v.clamp(lo, 1.0) * s).round_ties_even() as i32;
+        out |= (u64::from(code as u32) & mask(bits as u8)) << (bits as usize * i);
+    }
+    Ok(Val::S(out & mask(32)))
+}
+
+/// `UnpackUnorm4x8` and its kin of the word `w`'s first component: `n` fields of `bits` bits, low
+/// first, each `f / s` correctly rounded (signed: sign-extended, `clamp(f / s, -1, 1)`).
+fn unpack_norm(w: &[u64], n: u32, bits: u32, signed: bool) -> IResult<Val> {
+    let w = w
+        .first()
+        .copied()
+        .ok_or_else(|| malformed("unpack operand"))?;
+    let s = norm_scale(bits, signed);
+    let mut out = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let field = (w >> (bits * i)) & mask(bits as u8);
+        let code = if signed {
+            sext(field, bits as u8) as f32
+        } else {
+            field as f32
+        };
+        let q = code / s;
+        let q = if signed { q.max(-1.0) } else { q };
+        out.push(u64::from(q.to_bits()));
+    }
+    Ok(Val::from_comps(out))
 }
 
 /// `v = m * 2^e` with `0.5 <= |m| < 1` (and `(0, 0)` for zero), exactly.

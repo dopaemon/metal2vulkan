@@ -615,13 +615,13 @@ pub enum PrecisionNote {
     /// operation's denormals to a device not measured to read them as Metal does: `+ - *`, the
     /// comparisons, `fma`, `dot`, `sqrt`, `rsqrt`, `trunc` and `rint` but on a device that takes
     /// the measured `DriverDeviation::MetalFloatDenormals`; and on every device the divisions and
-    /// the remainder, `floor` and `ceil`, the device's maths functions (`fast::fmod`'s fused
-    /// multiply-add among them), `mix` by `FMix`, `fast::sqrt` by `Sqrt`, `dot` of vectors of other
-    /// than two to four lanes, whose chunks' products the device sums where Metal flushes each one
-    /// below `2^-126`, beside their own notes, and a conversion to or from `double`, whose reading
-    /// Metal's is not measured. The operations that read a denormal on its bits answer Metal on
-    /// every device: `ldexp`, `sign`, `fract`, `copysign`, `fabs` and `atan2`; and so do the
-    /// functions the device answers as Metal's own. Where the minimum and maximum functions
+    /// the remainder, `floor`, `ceil` and `fneg`, the device's maths functions (`fast::fmod`'s
+    /// fused multiply-add, `fabs`, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt`
+    /// by `Sqrt`, `dot` of vectors of other than two to four lanes, whose chunks' products the
+    /// device sums where Metal flushes each one below `2^-126`, beside their own notes, and a
+    /// conversion to or from `double`, whose reading Metal's is not measured. The operations that
+    /// read a denormal on its bits answer Metal on every device: `ldexp`, `copysign` and `atan2`;
+    /// and so do the functions the device answers as Metal's own. Where the minimum and maximum functions
     /// (`llvm.minnum` and `llvm.maxnum` among them, with any flags) and `saturate` are the device's
     /// `NMin`, `NMax` and `NClamp`, their pick of a denormal is
     /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from
@@ -1520,14 +1520,20 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it.
     DeviceSampling,
     /// Native device maths: the module computes a `float` or `half` math-library function by the
-    /// device's own `GLSL.std.450` instruction (or Metal's composition of the device's `Exp2` and
-    /// `Log2`) where Metal's function is not the device's own; and `fast::sqrt` the device's
-    /// `Sqrt` on a device whose functions are not Metal's own.
+    /// device's own `GLSL.std.450` instruction (`Exp`, `Log`, `Pow`, `Sinh`, `Cosh` and `Tanh`
+    /// among them; a composition of the device's `Exp2` and `Log2` only for `exp10` and `log10`,
+    /// which no instruction is) where Metal's function is not the device's own; `fast::sqrt` the
+    /// device's `Sqrt`; `fabs`, `sign` and `fract` the device's `FAbs`, `FSign` and `Fract`, their
+    /// special operands the instruction's (Metal's `sign` of a NaN, a zero and an `f32` denormal is
+    /// `+0`, its `fract` of an infinity `+0`, where `FSign` keeps a zero's sign and leaves a NaN's
+    /// answer undefined and `Fract` of an infinity is a NaN); and `round` C99's, from the
+    /// device's `Trunc`, on every device (`round(-0.3)` is `-0`, where Metal answers `+0`).
     /// **Recorded bound:** Vulkan's precision table for the instruction, where Metal promises 4 to
     /// 6 ulp precise and its fast-math table fast (MSL Tables 8.1, 8.2): `Exp2` and `Exp` 3 + 2·|x|
     /// ulp; `Log2` and `Log` 3 ulp outside `[0.5, 2]` and `2^-21` absolute inside; `Pow` inherited
     /// from `Exp2(y · Log2(x))`; `Sqrt` inherited from `1 / InverseSqrt` (`fast::sqrt`'s too, where
-    /// Metal's is `x · rsqrt(x)`); `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in `[-π,
+    /// Metal's is `x · rsqrt(x)`); `FAbs` and `FSign` the correct result, `Fract` and `Trunc`
+    /// correctly rounded, `round`'s zero of either sign; `InverseSqrt` 2 ulp; `Sin` and `Cos` `2^-11` absolute in `[-π,
     /// π]` (both answers in `[-1, 1]` beyond); `Tan` inherited from `Sin / Cos`; `Asin`, `Acos`,
     /// `Atan` and `Atan2` 4096 ulp; the hyperbolic functions inherited from their `Exp` and `Log`
     /// formulas. A denormal operand and a NaN's encoding are the device's (`DeviceDenormals`,
@@ -1656,13 +1662,11 @@ pub enum PrecisionNote {
     NativeHalfConversion,
     /// Native half rounding (a quantize): the module rounds a `half` result it computes in
     /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by the
-    /// device's `OpQuantizeToF16` alone, on every device without `shaderFloat16`, its quantize
-    /// measured or not (`DriverDeviation::MetalHalfQuantize` measures its rounding of normal
-    /// results alone). An integer's `half` is not this rounding: it rounds by integer arithmetic,
-    /// exactly, around NVIDIA's 615.71.09 keeping an integer conversion unrounded under the
-    /// quantize. Vulkan leaves the quantize's rounding mode to the device, and the SPIR-V
-    /// specification lets it answer a zero for a magnitude too small for a normal `half`. The
-    /// recorded bound, against Metal's `half(float)`: a finite result within one unit in the last
+    /// device's `OpQuantizeToF16` alone, on every device without `shaderFloat16`. An integer's
+    /// `half` is not this rounding: it rounds by integer arithmetic, exactly, around NVIDIA's
+    /// 615.71.09 keeping an integer conversion unrounded under the quantize. Vulkan leaves the
+    /// quantize's rounding mode to the device, and the SPIR-V specification lets it answer a zero
+    /// for a magnitude too small for a normal `half`. The recorded bound, against Metal's `half(float)`: a finite result within one unit in the last
     /// place of the `half`; a value from 65504 up to 65520 may be infinity where Metal's is 65504
     /// (NVIDIA's 615.71.09 rounds `0x477FEFFF` to infinity); a value below the smallest normal
     /// `half` (`2^-14`) may round to a zero, of either sign, where Metal answers the half denormal,
@@ -1680,8 +1684,9 @@ pub enum PrecisionNote {
     /// `SignedZeroInfNanPreserve` where Metal's entry keeps NaNs), its sign and payload the
     /// device's own (llvmpipe: `0xffc00000`), where Metal answers its canonical `0x7fc00000`
     /// (`0x7e00` as `half`), an operand's bits (`round`, `ldexp`, `fast::tan`), or the canonical
-    /// NaN with an operand's sign (`asin`, `atan`, `asinh`, `atanh`). Every non-NaN result is as
-    /// without it. Also recorded by every module that reads a `half` from its bits (a load, a
+    /// NaN with an operand's sign (`asin`, `atan`, `asinh`, `atanh`); a `float` `fneg` and `fabs`
+    /// keep a NaN operand's payload on Metal, and a `half` `fract` returns it. Every non-NaN result
+    /// is as without it. Also recorded by every module that reads a `half` from its bits (a load, a
     /// reinterpretation, a texel's bits), on every device: the read is the device's widening (an
     /// `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `UnpackHalf2x16`
     /// without it), and a NaN widens to a NaN whose bits are the device's, where Metal widens
@@ -1693,8 +1698,11 @@ pub enum PrecisionNote {
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its
     /// `clamp(x, +0, 1)`) on `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or
-    /// `NClamp`, on a device not measured to answer Metal's operand; and a `saturate` of a format
-    /// whose operand Metal's other functions do not pick (`bfloat`, `double`) on every device.
+    /// `NClamp`, on a device not measured to answer Metal's operand; a `saturate` of a format
+    /// whose operand Metal's other functions do not pick (`bfloat`, `double`) on every device; and
+    /// `median3` on every device, `min(max(c, min(a, b)), max(a, b))` of the device's `NMin` and
+    /// `NMax`, whose pick of two NaNs and of an `f32` denormal is the device's (Metal's
+    /// `fast::median3` answers `b` for two NaN first operands).
     /// **Recorded bound:** the
     /// result is one of the operands, the one Metal answers but at three ties: of two NaNs a NaN
     /// (its bits the device's), where Metal answers the second operand's; of `+0` and `-0` either
@@ -1702,25 +1710,46 @@ pub enum PrecisionNote {
     /// denormal compared by its value where the device keeps denormals, where Metal compares it as
     /// a zero and answers the second. Validation derives no tolerance from it.
     NativeMinMax,
-    /// Native device maths: Metal's `dot` on `float`, or on `half` where its fused multiply-add is
-    /// not the measured 16-bit one, is the device's `OpDot` (a `half` one summed in `float` and
-    /// rounded once to `half`), not Metal's fused chain of its products, on a device whose
-    /// functions are not Metal's own. **Recorded bound:** a `float` `dot` of `n`
+    /// Native device maths: Metal's `dot` on `float` and `half` is the device's `OpDot` (a `half`
+    /// one summed in `float` and rounded once to `half`), not Metal's fused chain of its products,
+    /// on every device but for a `float` one where the device's functions are Metal's own
+    /// (MoltenVK, Metal's own `dot`). **Recorded bound:** a `float` `dot` of `n`
     /// lanes within `(3n - 1) * 2^-24 * sum |a_i * b_i|` of Metal's chain, plus `n * 2^-126` where
     /// a product is an `f32` denormal the device keeps (Vulkan's `OpDot` inherits `OpFMul`'s and
     /// `OpFAdd`'s rounding, `2n - 1` roundings, where Metal's chain rounds `n` times); a `half`
     /// one within `(n + 3) * 2^-11 * sum |a_i * b_i| + (n + 2) * 2^-25` of Metal's chain of `half`
     /// fused multiply-adds. Validation derives no tolerance from it.
     NativeDot,
-    /// Native device maths: Metal's `mix(x, y, t)` on `float`, or on `half` where its fused
-    /// multiply-add is not the measured 16-bit one, is the device's `FMix` (a `half` one computed
-    /// in `float` and rounded once to `half`), not Metal's `fma(t, y, fma(-t, x, x))`, on a device
-    /// whose functions are not Metal's own. **Recorded bound:** a `float` result within
-    /// `2^-21 * (|x * (1 - t)| + |y * t|)` of Metal's (Vulkan's `FMix` inherits
+    /// Native device maths: Metal's `mix(x, y, t)` on `float` and `half` is the device's `FMix`
+    /// (a `half` one computed in `float` and rounded once to `half`), not Metal's
+    /// `fma(t, y, fma(-t, x, x))`, on every device but for a `float` one where the device's
+    /// functions are Metal's own (MoltenVK, Metal's own `mix`). **Recorded bound:** a `float`
+    /// result within `2^-21 * (|x * (1 - t)| + |y * t|)` of Metal's (Vulkan's `FMix` inherits
     /// `x * (1 - t) + y * t`'s rounding, four roundings, where Metal's rounds twice); a `half`
     /// one within `3 * 2^-10 * (|x * (1 - t)| + |y * t|) + 2^-23`. Validation derives no
     /// tolerance from it.
     NativeMix,
+    /// Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is
+    /// the device's: `GLSL.std.450`'s `PackUnorm4x8`, `PackSnorm4x8`, `PackUnorm2x16` and
+    /// `PackSnorm2x16` (and their `Unpack`s) for the four formats it names, and for `rgb10a2` and
+    /// `rgb565` those instructions' definition on each field, the device's `NClamp`, multiply,
+    /// `RoundEven` and conversion (a pack) or its multiply by the scale's reciprocal (an unpack);
+    /// `unorm4x8_srgb`'s colour channels take the MSL transfer functions by the device's multiply,
+    /// division and `Pow` around the 8-bit instruction. Metal rounds the exact product to its code
+    /// and divides correctly rounded, answers code 0 for a NaN channel, and takes an sRGB colour
+    /// through its twelve-bit table: a decode answers its step `k / 4095` nearest the transfer, an
+    /// encode the byte of that table's step. Recorded on every device but for
+    /// a `float` conversion of the four named formats on a device whose functions are Metal's own
+    /// (MoltenVK: Metal's own `pack_float_to_*` and `unpack_*_to_float`). **Recorded bound:**
+    /// Vulkan bounds the instructions by their definition (`round(clamp(c) * scale)` and
+    /// `c / scale`): a packed code within one of Metal's, apart only where `clamp(c) * scale` lies
+    /// within its `float` rounding of a half-integer (`Round` may tie either way); an unpacked
+    /// value within `OpFDiv`'s 2.5 ulp of the correctly rounded quotient; an sRGB code within one of
+    /// Metal's (the transfer's `Pow` inherited from `Exp2(y * Log2(x))`), and a decoded sRGB
+    /// colour within half a twelve-bit step (`1 / 8190`) of Metal's step, beyond its division's
+    /// and `Pow`'s bounds; a NaN channel's code, and a `half` result rounded once more to `half`,
+    /// the device's. Validation derives no tolerance from it.
+    DevicePackConversion,
     /// A render pipeline whose color attachments the device draws in more than one group
     /// (`GraphicsState::color_group`, the module docs of `pipeline::compile::color_group`): a
     /// device without Metal's eight color attachments draws each of its draws once per group,

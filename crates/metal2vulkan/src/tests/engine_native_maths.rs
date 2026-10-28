@@ -8,8 +8,10 @@
 //! The kernels read three `float`s from buffer 0 and store one result after them: a precise
 //! `sin`, `exp`, `atan2` and `pow`, a precise and an `arcp` division, a `half` `fma`, an addition,
 //! an `fmin`, a `saturate`, a `fast::sqrt`, a `dot` and a `float` and a `half` `mix`. On lavapipe
-//! each records its kind; the interpreter's answers stay within the bound the kind's docs state,
-//! and are Metal's on MoltenVK. `llvm-as` assembles the module; without it the tests skip visibly.
+//! each records its kind; the interpreter's answers stay within the bound the kind's docs state.
+//! `dot`, `mix` and `fast::sqrt` are the device's instructions on MoltenVK too, where a `float`
+//! one is MSL's own function and records no note. `llvm-as` assembles the module; without it the
+//! tests skip visibly.
 
 use crate::air::{self, SpecRequest};
 use crate::device::profile::{DeviceProfile, FloatFunctions};
@@ -299,55 +301,102 @@ fn the_nan_and_min_max_are_the_device_s() {
     assert_eq!(saturate(-0.0), 0.0);
 }
 
-/// On lavapipe `dot` is the device's `OpDot` and `mix` its `FMix` (a `half` one rounded once), each
-/// within the bound its note states, and `fast::sqrt` the device's `Sqrt`, within Vulkan's
-/// `1 / InverseSqrt` (4.5 ulp); on MoltenVK, whose functions are Metal's, `dot` is Metal's fused
-/// chain and `mix` its `fma(t, y, fma(-t, x, x))`, word for word.
+/// The `GLSL.std.450` instruction numbers and the opcodes of `words`' instructions.
+fn instructions(words: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let (mut ext, mut ops) = (Vec::new(), Vec::new());
+    let mut i = 5;
+    while i < words.len() {
+        let (len, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
+        assert!(len > 0 && i + len <= words.len(), "malformed module");
+        if op == crate::spv::Op::ExtInst as u32 {
+            ext.push(words[i + 4]);
+        }
+        ops.push(op);
+        i += len;
+    }
+    (ext, ops)
+}
+
+/// `dot` is the device's `OpDot` and `mix` its `FMix` (a `half` one rounded once), with no fused
+/// multiply-add, and `fast::sqrt` the device's `Sqrt`, on lavapipe and on MoltenVK alike. On
+/// lavapipe each records its note; on MoltenVK a `float` `dot` and `mix` are MSL's own and record
+/// none, and a `half` `mix` records `NativeMix`. On the interpreter's model of the instructions each
+/// answer is within the bound its note states (`fast::sqrt` within Vulkan's `1 / InverseSqrt`, 4.5
+/// ulp, on lavapipe).
 #[test]
-fn dot_mix_and_fast_sqrt_are_the_device_s_and_metal_s_on_moltenvk() {
+fn dot_mix_and_fast_sqrt_are_the_device_s_on_every_profile() {
     let Some(bc) = bitcode() else {
         return;
     };
     let on = profile("lavapipe", DevicePolicy::default()).expect("lavapipe");
     let metal = profile("moltenvk-m3", DevicePolicy::default()).expect("moltenvk-m3");
-    for [a, b, c] in [
-        [1.0f32, 3.0, 0.5],
-        [-3.0, 0.7, 1.9],
-        [0.75, -4.1, 2.5e-3],
-        [1e-3, 3e7, -0.25],
-    ] {
-        let (a64, b64, c64) = (f64::from(a), f64::from(b), f64::from(c));
-        // `dot(float2(a, b), float2(c, a))`: two lanes, `(3n - 1) * 2^-24 * sum |a_i * b_i|`.
-        let sum = (a64 * c64).abs() + (b64 * a64).abs();
-        let dot = interpret(&bc, "native_dot", &on, [a, b, c]);
-        assert!(
-            (f64::from(dot) - (a64 * c64 + b64 * a64)).abs() <= 5.0 * 2f64.powi(-24) * sum,
-            "dot({a}, {b}, {c}) = {dot}"
-        );
-        assert_eq!(
-            interpret(&bc, "native_dot", &metal, [a, b, c]),
-            b.mul_add(a, a * c),
-            "Metal's dot({a}, {b}, {c})"
-        );
-        // `mix(a, b, c)`: within `2^-21 * (|a * (1 - c)| + |b * c|)`.
-        let scale = (a64 * (1.0 - c64)).abs() + (b64 * c64).abs();
-        let mix = interpret(&bc, "native_mix", &on, [a, b, c]);
-        assert!(
-            (f64::from(mix) - (a64 + c64 * (b64 - a64))).abs() <= 2f64.powi(-21) * scale,
-            "mix({a}, {b}, {c}) = {mix}"
-        );
-        assert_eq!(
-            interpret(&bc, "native_mix", &metal, [a, b, c]),
-            c.mul_add(b, (-c).mul_add(a, a)),
-            "Metal's mix({a}, {b}, {c})"
-        );
+    let (fma, fmix, sqrt) = (
+        crate::spv::GlslStd450Op::Fma as u32,
+        crate::spv::GlslStd450Op::FMix as u32,
+        crate::spv::GlslStd450Op::Sqrt as u32,
+    );
+    for (p, stem) in [(&on, "lavapipe"), (&metal, "moltenvk-m3")] {
+        let own = p.fields().float_functions == FloatFunctions::Metal;
+        for (name, note, float) in [
+            ("native_dot", PrecisionNote::NativeDot, true),
+            ("native_mix", PrecisionNote::NativeMix, true),
+            ("native_half_mix", PrecisionNote::NativeMix, false),
+            (
+                "native_fast_sqrt",
+                PrecisionNote::NativeTranscendentals,
+                true,
+            ),
+        ] {
+            let what = format!("{name} on {stem}");
+            let a = compile(&bc, name, p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let (ext, ops) = instructions(&words);
+            assert!(
+                !ext.contains(&fma),
+                "{what}: a fused multiply-add ({ext:?})"
+            );
+            match name {
+                "native_dot" => assert!(ops.contains(&(crate::spv::Op::Dot as u32)), "{what}"),
+                "native_fast_sqrt" => assert!(ext.contains(&sqrt), "{what}: {ext:?}"),
+                _ => assert!(ext.contains(&fmix), "{what}: {ext:?}"),
+            }
+            assert_eq!(
+                a.precision.contains(&note),
+                !(own && float),
+                "{what}: {:?}",
+                a.precision
+            );
+        }
+    }
+    for p in [&on, &metal] {
+        for [a, b, c] in [
+            [1.0f32, 3.0, 0.5],
+            [-3.0, 0.7, 1.9],
+            [0.75, -4.1, 2.5e-3],
+            [1e-3, 3e7, -0.25],
+        ] {
+            let (a64, b64, c64) = (f64::from(a), f64::from(b), f64::from(c));
+            // `dot(float2(a, b), float2(c, a))`: two lanes, `(3n - 1) * 2^-24 * sum |a_i * b_i|`.
+            let sum = (a64 * c64).abs() + (b64 * a64).abs();
+            let dot = interpret(&bc, "native_dot", p, [a, b, c]);
+            assert!(
+                (f64::from(dot) - (a64 * c64 + b64 * a64)).abs() <= 5.0 * 2f64.powi(-24) * sum,
+                "dot({a}, {b}, {c}) = {dot}"
+            );
+            // `mix(a, b, c)`: within `2^-21 * (|a * (1 - c)| + |b * c|)`.
+            let scale = (a64 * (1.0 - c64)).abs() + (b64 * c64).abs();
+            let mix = interpret(&bc, "native_mix", p, [a, b, c]);
+            assert!(
+                (f64::from(mix) - (a64 + c64 * (b64 - a64))).abs() <= 2f64.powi(-21) * scale,
+                "mix({a}, {b}, {c}) = {mix}"
+            );
+        }
     }
     // `half` `mix(0.5, 1.5, 0.25)` is exact: 0.75.
     for p in [&on, &metal] {
         assert_eq!(interpret(&bc, "native_half_mix", p, [0.5, 1.5, 0.25]), 0.75);
     }
-    // `fast::sqrt`'s zero and `+inf` are IEEE's, as Metal's (the interpreter leaves MoltenVK's
-    // `InverseSqrt` unmodelled).
+    // `fast::sqrt`'s zero and `+inf` are IEEE's, as Metal's.
     let sqrt = |x: f32| interpret(&bc, "native_fast_sqrt", &on, [x, 0.0, 0.0]);
     for x in [2.0f32, 0.75, 1e-30, 3e30] {
         assert!(ulps(sqrt(x), f64::from(x).sqrt()) <= 4.5, "fast::sqrt({x})");

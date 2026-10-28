@@ -414,6 +414,7 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::NativeFma,
         D::NativeDot,
         D::NativeMix,
+        D::DevicePackConversion,
         D::NativeMinMax,
         D::NativeNanEncoding,
         D::DeviceTranscendentals,

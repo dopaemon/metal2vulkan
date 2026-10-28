@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 936 |
+| ledger rows (a case whose gap is recorded) | 937 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2770,8 +2770,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
 | `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
 | `norm-storage-codes-rgba8unorm` | A `float` the function writes to a normalized storage texture at a tie between two codes: Metal stores the exact product rounded with a tie away from zero, and … |
-| `pass-bytes-half-tanh-regimes` | Each word holds two `half` results of `tanh` over its regimes, which the device computes by its own functions and rounds to `half` by its own conversion (`nativ… |
-| `pass-bytes-srgb-decode-all-bytes` | Each word holds two `half` results of an sRGB decode of a byte, and they differ by at most one `half` ulp in each half (the site's largest difference, 0x0001000… |
+| `pass-bytes-half-tanh-regimes` | Each word holds two `half` results of `tanh` over its regimes, which the device computes by its own `Tanh` (a `half` held as `float`, on every device) and round… |
+| `pass-bytes-srgb-decode-all-bytes` | Each thread holds four `float` and two words of two `half` results of an sRGB decode of a byte. Metal decodes through its twelve-bit table, answering the step `… |
+| `pass-bytes-srgb-encode-sweep` | Each word holds an sRGB encode of a `float` or a `half` colour packed to four bytes. Metal encodes through its twelve-bit table; the module encodes by the MSL t… |
 | `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |

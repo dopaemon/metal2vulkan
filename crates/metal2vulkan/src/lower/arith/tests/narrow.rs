@@ -746,10 +746,6 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
         FloatFn::MulAdd,
         FloatFn::Sqrt,
     ] {
-        // A `half` `mix` is its own strategy, Metal's fused form (`tests::fused`).
-        if op == FloatFn::Mix && is_half {
-            continue;
-        }
         let arity = op.arity();
         let cases: Vec<Case> = if arity == 1 {
             vals.iter().map(|v| vec![vec![*v]]).collect()
@@ -784,17 +780,7 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
             &format!("{op:?} {f:?}"),
             &vec![f; arity],
             f,
-            &|fb, x| {
-                math::float_fn(
-                    fb,
-                    op,
-                    f,
-                    Contraction::Forbidden,
-                    NanTest::IsNan,
-                    x,
-                    &Lib::instructions(),
-                )
-            },
+            &|fb, x| math::float_fn(fb, op, f, Contraction::Forbidden, x, &Lib::instructions()),
             &cases,
             &|c| {
                 let x = |i: usize| nval(f, c[i][0]);
@@ -805,17 +791,19 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                     FloatFn::Floor => x(0).floor(),
                     FloatFn::Ceil => x(0).ceil(),
                     FloatFn::Trunc => x(0).trunc(),
-                    FloatFn::Round => metal_round(is_half, x(0)),
+                    FloatFn::Round => c99_round(x(0)),
                     FloatFn::Rint => x(0).round_ties_even(),
-                    FloatFn::Fract if x(0).is_nan() => f64::NAN,
-                    FloatFn::Fract if x(0).is_infinite() => 0.0,
+                    // The device's `Fract`: a NaN at a NaN and an infinity.
+                    FloatFn::Fract if !x(0).is_finite() => f64::NAN,
                     FloatFn::Fract => {
                         let below = 1.0 - 2f64.powi(if is_half { -11 } else { -8 });
                         q(x(0) - x(0).floor()).min(below)
                     }
+                    // The device's `FSign`, undefined at a NaN; a zero keeps its sign.
+                    FloatFn::Sign if x(0).is_nan() => return None,
                     FloatFn::Sign if x(0) > 0.0 => 1.0,
                     FloatFn::Sign if x(0) < 0.0 => -1.0,
-                    FloatFn::Sign => 0.0,
+                    FloatFn::Sign => x(0),
                     FloatFn::Saturate if x(0) > 0.0 => x(0).min(1.0),
                     FloatFn::Saturate => 0.0,
                     FloatFn::Min => x(0).min(x(1)),
@@ -825,7 +813,12 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
                     FloatFn::Max3 => x(0).max(x(1)).max(x(2)),
                     FloatFn::Median3 => {
                         let b = [c[0][0], c[1][0], c[2][0]];
-                        return Some(vec![median3_ref(b, &|v| nval(f, v), false)]);
+                        return Some(vec![median3_ref(b, &|v| nval(f, v))]);
+                    }
+                    // A `half` one the device's `FMix` in `float`, rounded once.
+                    FloatFn::Mix if is_half => {
+                        let (p, y, t) = (x(0) as f32, x(1) as f32, x(2) as f32);
+                        f64::from(p * (1.0 - t) + y * t)
                     }
                     FloatFn::Mix => q(x(0) * q(1.0 - x(2))) + q(x(1) * x(2)),
                     FloatFn::MulAdd => q(q(x(0) * x(1)) + x(2)),
@@ -835,58 +828,6 @@ fn narrow_float_functions_on(f: Form, vals: &[u64]) {
             },
             &accept,
         );
-    }
-}
-
-/// Class K: Metal's `half` `fract` with every fast-math flag (`nan_half_fast`) answers the largest
-/// `half` below one, `0x3BFF`, for a NaN and for either infinity, where without flags (`nan_half`)
-/// a NaN is a NaN (its bits the device's widening's) and an infinity `+0`; every finite lane is the
-/// precise one's, its difference rounded once.
-#[test]
-fn flagged_half_fract_answers_below_one_at_nans_and_infinities() {
-    let mut halves: Vec<u64> = (0..0x10000u64).step_by(97).collect();
-    halves.extend([
-        0, 0x8000, 0x7C00, 0xFC00, 0x7C01, 0xFE00, 0x7E00, 0x3BFF, 0xBC00, 0x8001,
-    ]);
-    for lanes in [1u8, 3] {
-        let f = vec(float(16), lanes);
-        let n = usize::from(lanes);
-        let cases: Vec<Case> = halves.iter().map(|&x| vec![vec![x; n]]).collect();
-        let run = |op: FloatFn, c: &Case| {
-            let x = f16_to_f64(c[0][0] as u16);
-            let r = if x.is_nan() || x.is_infinite() {
-                match op {
-                    FloatFn::FlaggedFract => 0x3BFF,
-                    _ if x.is_nan() => c[0][0],
-                    _ => 0,
-                }
-            } else {
-                let d = f16_to_f64(nbits(half(), x - x.floor()) as u16);
-                u64::from(f64_to_f16(d.min(1.0 - 2f64.powi(-11))))
-            };
-            Some(vec![r; n])
-        };
-        for op in [FloatFn::Fract, FloatFn::FlaggedFract] {
-            check_accept(
-                &format!("{op:?} x{lanes}"),
-                &[f],
-                f,
-                &|fb, x| {
-                    math::float_fn(
-                        fb,
-                        op,
-                        f,
-                        Contraction::Forbidden,
-                        NanTest::Bits,
-                        x,
-                        &Lib::instructions(),
-                    )
-                },
-                &cases,
-                &|c| run(op, c),
-                &exact_ok(f),
-            );
-        }
     }
 }
 
@@ -1517,7 +1458,6 @@ fn bfloat_fma_rounds_once() {
                     FloatFn::Fma,
                     f,
                     Contraction::Forbidden,
-                    NanTest::IsNan,
                     x,
                     &Lib::instructions(),
                 )
@@ -2606,13 +2546,15 @@ fn a_vector_unpack_reads_every_field_value_of_every_channel() {
     }
 }
 
-/// The census names the sRGB conversions apart from the other normalized formats, and charges the
-/// module's table once, to the direction that first reads it: an output-size exception for the sRGB
-/// conversions excuses no word of another pack or unpack.
+/// `air.pack` and `air.unpack` of `unorm4x8_srgb` read no table: the census names them as the
+/// other normalized formats, and charges Metal's sRGB table, which a tile's, attachment's or
+/// texture's conversion reads, once, to the direction that first reads it.
 #[test]
-fn srgb_conversions_are_named_apart_and_charge_their_table_once() {
+fn srgb_packs_read_no_table_and_the_table_charges_once() {
     use crate::air::intrinsics::{PackDir, PackFormat as P};
-    use crate::lower::arith::{routine_words, srgb, ArithPlan, ArithStrategy};
+    use crate::lower::arith::{
+        routine_words, srgb, ArithPlan, ArithStrategy, SRGB_PACK, SRGB_UNPACK,
+    };
     use crate::lower::select::FamilyPlans;
     use crate::lower::strategy::FamilyStrategy;
     let name = |dir, format| {
@@ -2624,11 +2566,11 @@ fn srgb_conversions_are_named_apart_and_charge_their_table_once() {
         .name(&FamilyPlans::default())
         .into_owned()
     };
-    assert_eq!(name(PackDir::Pack, P::Unorm4x8Srgb), "arith.pack.srgb");
-    assert_eq!(name(PackDir::Unpack, P::Unorm4x8Srgb), "arith.unpack.srgb");
+    assert_eq!(name(PackDir::Pack, P::Unorm4x8Srgb), "arith.pack");
+    assert_eq!(name(PackDir::Unpack, P::Unorm4x8Srgb), "arith.unpack");
     assert_eq!(name(PackDir::Pack, P::Unorm4x8), "arith.pack");
     assert_eq!(name(PackDir::Unpack, P::UnormRgb10a2), "arith.unpack");
-    for dir in [PackDir::Pack, PackDir::Unpack] {
+    for (dir, table) in [(PackDir::Pack, SRGB_PACK), (PackDir::Unpack, SRGB_UNPACK)] {
         let plan = ArithPlan {
             srgb: Some(dir),
             ..ArithPlan::default()
@@ -2638,7 +2580,7 @@ fn srgb_conversions_are_named_apart_and_charge_their_table_once() {
             .collect();
         assert_eq!(
             charged,
-            vec![(name(dir, P::Unorm4x8Srgb), u64::from(srgb::TABLE_WORDS))]
+            vec![(table.to_owned(), u64::from(srgb::TABLE_WORDS))]
         );
     }
     assert_eq!(routine_words(&ArithPlan::default()).count(), 0);

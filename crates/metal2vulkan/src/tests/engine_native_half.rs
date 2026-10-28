@@ -205,12 +205,6 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let noted: Vec<_> = natives.iter().filter(|n| a.precision.contains(n)).collect();
             assert_eq!(noted, note.iter().collect::<Vec<_>>(), "{what}");
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfQuantize),
-                "{what}"
-            );
         }
     }
     // Metal's `half(float)` on the interpreter's nearest-even conversion and quantize: a tie to
@@ -263,12 +257,6 @@ fn a_half_below_the_smallest_normal_takes_the_devices_quantize() {
                 a.precision.contains(&PrecisionNote::NativeHalfQuantize),
                 "{what}: {:?}",
                 a.precision
-            );
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfQuantize),
-                "{what}"
             );
         }
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, p, x);
@@ -777,12 +765,6 @@ fn a_controlled_conversion_rounds_half_where_the_float_controls_allow() {
                     "{what}: {kind:?} {width:?}"
                 );
             }
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfQuantize),
-                "{what}"
-            );
             for note in [
                 PrecisionNote::NativeHalfConversion,
                 PrecisionNote::NativeHalfQuantize,

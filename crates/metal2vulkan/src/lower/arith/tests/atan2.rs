@@ -612,15 +612,7 @@ fn special_value_functions_stay_within_their_word_estimate() {
                 continue;
             }
             let used = module_words(f, &|fb, x| {
-                math::float_fn(
-                    fb,
-                    g,
-                    f,
-                    Contraction::Allowed,
-                    NanTest::IsNan,
-                    x,
-                    &Lib::instructions(),
-                )
+                math::float_fn(fb, g, f, Contraction::Allowed, x, &Lib::instructions())
             });
             let (emitted, bound) = (used - bare, g.words(f) as usize);
             if emitted > bound || 2 * emitted < bound {

@@ -584,8 +584,9 @@ fn call_kernel(name: &str, symbol: &str, arity: usize, fmf: FastMath) -> Kernel 
 /// division, which is Metal's own there, nor for a call the device answers as Metal's own
 /// function, `fast::atan2` among them; an entry Metal compiles without fast math (a division
 /// without `nnan` and `ninf`, a call without flags) still records them, and `fast::sinpi`, the
-/// device's near-equivalent, records its note in either. `mix` and `fast::sinpi` record no
-/// `DeviceDenormals` there and require the measured fact. Off MoltenVK `mix` is the device's
+/// device's near-equivalent, records its note in either. `fast::sinpi` records no
+/// `DeviceDenormals` there and requires the measured fact; `mix` is the device's `FMix`, which
+/// reaches Metal's own `mix` there, with no note and no fact. Off MoltenVK `mix` is the device's
 /// `FMix`, with or without Metal's denormals: noted `NativeMix` and `DeviceDenormals`, requiring
 /// no fact.
 #[test]
@@ -699,10 +700,11 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
                 && requires,
             "sinpi_fast on {stem}: {sinpi:?}, requires the fact: {requires}"
         );
-        let (mix, requires) = notes_of(p, "mix_fast");
+        let (mix, _) = notes_of(p, "mix_fast");
         assert!(
-            !mix.contains(&PrecisionNote::DeviceDenormals) && requires,
-            "mix_fast on {stem}: {mix:?}, requires the fact: {requires}"
+            !mix.contains(&PrecisionNote::DeviceDenormals)
+                && !mix.contains(&PrecisionNote::NativeMix),
+            "mix_fast on {stem}: {mix:?}"
         );
     }
     // Without Metal's functions, with or without Metal's denormals, `mix` is the device's `FMix`,

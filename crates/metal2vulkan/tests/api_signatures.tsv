@@ -4938,6 +4938,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals 
 macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncoding = "device-nan-encoding";
+macro-member	metal2vulkan-runtime::Degradation::DevicePackConversion	DevicePackConversion = "device-pack-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
 macro-member	metal2vulkan-runtime::Degradation::DeviceRayIntersection	DeviceRayIntersection = "device-ray-intersection";
 macro-member	metal2vulkan-runtime::Degradation::DeviceRoundedResolve	DeviceRoundedResolve = "device-rounded-resolve", Precision,
@@ -12806,7 +12807,6 @@ variant	metal2vulkan::device::VkProperty::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::device::VkProperty::MetalHalfArithmetic	MetalHalfArithmetic
 variant	metal2vulkan::device::VkProperty::MetalHalfColorNans	MetalHalfColorNans
 variant	metal2vulkan::device::VkProperty::MetalHalfFma	MetalHalfFma
-variant	metal2vulkan::device::VkProperty::MetalHalfQuantize	MetalHalfQuantize
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageNans	MetalHalfStorageNans
 variant	metal2vulkan::device::VkProperty::MetalHalfStorageWrites	MetalHalfStorageWrites
 variant	metal2vulkan::device::VkProperty::MetalHalfTexelWrites	MetalHalfTexelWrites
@@ -12962,7 +12962,6 @@ variant	metal2vulkan::error::DriverDeviation::MetalFullQuads	MetalFullQuads
 variant	metal2vulkan::error::DriverDeviation::MetalHalfArithmetic	MetalHalfArithmetic
 variant	metal2vulkan::error::DriverDeviation::MetalHalfColorNans	MetalHalfColorNans
 variant	metal2vulkan::error::DriverDeviation::MetalHalfFma	MetalHalfFma
-variant	metal2vulkan::error::DriverDeviation::MetalHalfQuantize	MetalHalfQuantize
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageNans	MetalHalfStorageNans
 variant	metal2vulkan::error::DriverDeviation::MetalHalfStorageWrites	MetalHalfStorageWrites
 variant	metal2vulkan::error::DriverDeviation::MetalHalfTexelWrites	MetalHalfTexelWrites
@@ -13433,6 +13432,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceColorConversion	DeviceColor
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceDenormals	DeviceDenormals
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
+variant	metal2vulkan::pipeline::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePointSize	DevicePointSize
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceRayIntersection	DeviceRayIntersection
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSampleLevel	DeviceSampleLevel

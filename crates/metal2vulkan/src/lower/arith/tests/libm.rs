@@ -63,7 +63,6 @@ fn fmod_module(f: Form) -> TypedModule {
                 FloatFn::Fmod,
                 f,
                 Contraction::Forbidden,
-                NanTest::IsNan,
                 x,
                 &Lib::new(None, funcs.first().copied()),
             )

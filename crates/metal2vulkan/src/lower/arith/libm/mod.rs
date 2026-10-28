@@ -4,10 +4,13 @@
 //!
 //! Vulkan's precision table bounds `Atan`, `Asin`, and `Acos` at 4096 ulp and `Sin` and `Cos` at
 //! `2^-11` absolute, about what Metal's fast-math table allows, while Metal's precise functions are
-//! bounded at 4 to 6 ulp (MSL Table 8.1). Every call takes the device's instruction, or Metal's
-//! composition of the device's instructions where no instruction is the function (`exp10`, `log10`,
-//! `sinpi`, `cospi`, `tanpi`), and records the device's precision where its functions are not
-//! Metal's own (`PrecisionNote::NativeTranscendentals`). Where the device is Metal's own
+//! bounded at 4 to 6 ulp (MSL Table 8.1). Every call, on `float` and on a `half` held as `float`,
+//! takes the device's instruction where one is the function (`exp`, `log`, `pow`, `sinh`, `cosh`
+//! and `tanh` among them), and a composition of the device's instructions only where none is
+//! (`exp10`, `log10`, `sinpi`, `cospi`, `tanpi`, and the fast functions' formulas of MSL Table
+//! 8.2), and records the device's precision where its functions are not Metal's own
+//! (`PrecisionNote::NativeTranscendentals`). No routine computes Metal's answer where the device
+//! has an instruction. Where the device is Metal's own
 //! (`FloatFunctions::Metal`: MoltenVK on an Apple GPU), its instruction is Metal's function in the
 //! math mode Metal compiles the module with ([`module_mode`]), so a call in that mode is Metal's
 //! own answer there ([`Fun::device_answers`]), which the notes read.
@@ -138,6 +141,21 @@ pub enum Fun {
     HalfCos,
     /// Metal's `half` `asinh` before its rounding, its own form.
     HalfAsinh,
+    /// Metal's `half` `exp`, `log`, `powr` (and `pow`'s magnitude), `sinh`, `cosh` and `tanh`
+    /// before their rounding, which the device's `float` instruction on the widened operand
+    /// answers at its own precision: Metal's are its fast `float` functions rounded (`tanh` its own
+    /// formula), which no instruction SPIRV-Cross emits is in every module.
+    HalfExp,
+    /// See [`Fun::HalfExp`].
+    HalfLog,
+    /// See [`Fun::HalfExp`].
+    HalfPowr,
+    /// See [`Fun::HalfExp`].
+    HalfSinh,
+    /// See [`Fun::HalfExp`].
+    HalfCosh,
+    /// See [`Fun::HalfExp`].
+    HalfTanh,
 }
 
 impl Fun {
@@ -157,10 +175,10 @@ impl Fun {
     ///
     /// `exp2` and `log2` are Metal's in either mode (Metal's fast ones are its precise ones), and
     /// so is `tanh` (SPIRV-Cross emits `precise::tanh` whatever the flags); `powr` and the other
-    /// hyperbolic functions only in a precise module. No `GLSL.std.450` instruction reaches
-    /// Metal's `exp10` and `log10`, but Metal's own compositions of its `exp2` and `log2` do, in
-    /// either mode (`math::metal_exp`, `math::metal_log`), and so do they for its precise `exp`
-    /// and `log`. Its reciprocal is the device's `1 / y` in a fast-math module, where Metal
+    /// hyperbolic functions, `exp` and `log` only in a precise module. No `GLSL.std.450`
+    /// instruction reaches Metal's `exp10` and `log10`, but Metal's own compositions of its `exp2`
+    /// and `log2` do, in either mode (`math::exp10`, `math::log10`). Its reciprocal is the
+    /// device's `1 / y` in a fast-math module, where Metal
     /// compiles the division with its fast reciprocal, and not in a precise one, whose quotient is
     /// correctly rounded. The device's instruction on a `half` held as `float` is its `float`
     /// function, never Metal's `half` form.
@@ -176,6 +194,8 @@ impl Fun {
             | Fun::Rsqrt
             | Fun::Fmod
             | Fun::Powr
+            | Fun::Exp
+            | Fun::Log
             | Fun::Sinh
             | Fun::Cosh
             | Fun::Asinh
@@ -189,15 +209,14 @@ impl Fun {
             | Fun::HalfTan
             | Fun::HalfSin
             | Fun::HalfCos
-            | Fun::HalfAsinh => false,
-            Fun::Atan2
-            | Fun::Exp2
-            | Fun::Log2
-            | Fun::Tanh
-            | Fun::Exp
-            | Fun::Exp10
-            | Fun::Log
-            | Fun::Log10 => true,
+            | Fun::HalfAsinh
+            | Fun::HalfExp
+            | Fun::HalfLog
+            | Fun::HalfPowr
+            | Fun::HalfSinh
+            | Fun::HalfCosh
+            | Fun::HalfTanh => false,
+            Fun::Atan2 | Fun::Exp2 | Fun::Log2 | Fun::Tanh | Fun::Exp10 | Fun::Log10 => true,
         }
     }
 
@@ -232,7 +251,7 @@ impl Fun {
     /// The function's operands.
     pub fn arity(self) -> usize {
         match self {
-            Fun::Atan2 | Fun::Fmod | Fun::Powr | Fun::HalfAtan2 => 2,
+            Fun::Atan2 | Fun::Fmod | Fun::Powr | Fun::HalfAtan2 | Fun::HalfPowr => 2,
             _ => 1,
         }
     }
@@ -243,17 +262,23 @@ impl Fun {
 /// `float` and computed by a `float` function before their rounding: Metal's `half` functions are
 /// the same in both math modes (the half probe, cases dc0fee8f and 3ef7c1c5; every `half` of our
 /// probe), so `refine_float` refines only `float` calls, and the `float` function of a `half` one
-/// is `math::metal_half`'s, whose `tanh` takes Metal's `exp2` and reciprocal (`math::half_tanh`);
-/// its `atan`, `atan2`, `tan`, `sin`, `cos`, and `asinh` are Metal's own `half` forms
-/// ([`Fun::HalfAtan`], [`Fun::HalfAtan2`], [`Fun::HalfTan`]; [`Fun::HalfSin`], [`Fun::HalfCos`],
-/// [`Fun::HalfAsinh`]). Another format takes none.
+/// is `math::half_form`'s (`exp10` and `log10` their fast formulas, which Metal's `half` ones
+/// are); its `atan`, `atan2`, `tan`, `sin`, `cos`, `asinh`, `exp`, `log`, `pow`, `powr`, `sinh`,
+/// `cosh` and `tanh` are Metal's own `half` forms, which the device's `float` instruction answers
+/// at its precision ([`Fun::HalfAtan`], [`Fun::HalfAtan2`], [`Fun::HalfTan`], [`Fun::HalfSin`],
+/// [`Fun::HalfCos`], [`Fun::HalfAsinh`], [`Fun::HalfExp`]). Another format takes none.
 pub fn uses(op: FloatFn, f: Form) -> &'static [Fun] {
     if !matches!(f.float_fmt(), Some(FloatFmt::F32 | FloatFmt::Half)) {
         return &[];
     }
     if f.float_fmt() == Some(FloatFmt::Half) {
         match op {
-            FloatFn::Tanh => return &[Fun::Exp2, Fun::Recip],
+            FloatFn::Exp => return &[Fun::HalfExp],
+            FloatFn::Log => return &[Fun::HalfLog],
+            FloatFn::Pow | FloatFn::Powr => return &[Fun::HalfPowr],
+            FloatFn::Sinh => return &[Fun::HalfSinh],
+            FloatFn::Cosh => return &[Fun::HalfCosh],
+            FloatFn::Tanh => return &[Fun::HalfTanh],
             FloatFn::Atan => return &[Fun::HalfAtan],
             FloatFn::Atan2 => return &[Fun::HalfAtan2],
             FloatFn::Tan => return &[Fun::HalfTan],
@@ -263,7 +288,7 @@ pub fn uses(op: FloatFn, f: Form) -> &'static [Fun] {
             _ => {}
         }
     }
-    match crate::lower::arith::math::metal_half(op, f) {
+    match crate::lower::arith::math::half_form(op, f) {
         FloatFn::Atan => &[Fun::Atan(Mode::Precise)],
         FloatFn::FastAtan => &[Fun::Atan(Mode::Fast)],
         FloatFn::Asin => &[Fun::Asin(Mode::Precise)],
@@ -371,13 +396,6 @@ impl Lib {
         self.metal_in(Mode::Fast)
     }
 
-    /// Whether `mix` and `fast::sqrt` round in the device's order, its `FMix` and `Sqrt`: on every
-    /// device whose functions are not Metal's. Where they are (MoltenVK), Metal's own forms of its
-    /// own fused multiply-add and `rsqrt` are Metal's answer and stay.
-    pub fn orders_natively(&self) -> bool {
-        self.metal.is_none()
-    }
-
     /// Metal's precise `fmod` of `x` and `y` (`float` lanes of form `f`) by its routine, one call
     /// per lane; `None` where the module takes the device's `OpFRem` ([`Fun::device_answers`]).
     pub fn fmod(
@@ -434,27 +452,16 @@ pub(crate) fn split(v: f64) -> (f32, f32) {
     (hi, (v - f64::from(hi)) as f32)
 }
 
-/// Metal's precise `log` or `log10` next to 1: for `x` strictly between the bits `low` and `end`,
+/// Metal's precise `log10` next to 1: for `x` strictly between the bits `low` and `end`,
 /// `RN(f fma(p(f), f, lead))` of `f = x - 1` (exact there), `p` by Horner's rule with fused steps,
 /// `f32` coefficients by their bits, lowest first: Metal's word at every `float` of its range
-/// (`math::metal_log`).
+/// (`math::log10`).
 pub(crate) struct Near {
     pub low: u32,
     pub end: u32,
     pub lead: u32,
     pub p: &'static [u32],
 }
-
-/// `log`'s.
-pub(crate) const LOG_NEAR: Near = Near {
-    low: 0x3F74_0000,
-    end: 0x3F88_0000,
-    lead: 0x3F80_0000,
-    p: &[0xBEFF_FFF4, 0x3EAA_AC4E, 0xBE80_449E, 0x3E47_04F8],
-};
-
-/// `RN(ln(2))`, by its bits: Metal's `log` away from 1 is its `log2` times it.
-pub(crate) const LN_2_BITS: u32 = 0x3F31_7218;
 
 /// `log10`'s: `(495/512, 543/512)`, `lead` `log10(e)` rounded down.
 pub(crate) const LOG10_NEAR: Near = Near {

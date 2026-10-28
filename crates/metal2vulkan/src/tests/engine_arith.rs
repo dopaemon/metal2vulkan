@@ -20,7 +20,6 @@ use crate::device::profile::{DeviceProfile, DriverWorkaround, FloatFunctions};
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Needs};
-use crate::float16::f16_bits_to_f32;
 use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
@@ -468,16 +467,19 @@ fn kernels() -> Vec<Kernel> {
         needs: &[],
         note: Some(PrecisionNote::DeviceTranscendentals),
     });
-    // `rgb565` rounds the float product with ties to even (0.5 * 63 = 31.5 -> 32, exact in f32),
-    // and `rg11b10f` unpacks the half with the field's bits (0x3C0 -> red 1.0).
-    v.push(k(
-        "rgb565_pack_rounds_the_exact_product",
-        format!(
-            "{}  %v = insertelement <3 x float> <float 0.0, float 0.5, float 0.0>, float %a, i32 0\n  %p = call i16 @air.pack.unorm.rgb565.v3f32(<3 x float> %v)\n  %r = zext i16 %p to i32\n",
-            of("a", 1.0)
-        ),
-        31 | (32 << 5),
-    ));
+    // `rgb565` is the device's product rounded by `RoundEven` (0.5 * 63 = 31.5 -> 32, exact in
+    // f32), noted, and `rg11b10f` unpacks the half with the field's bits (0x3C0 -> red 1.0).
+    v.push(Kernel {
+        note: Some(PrecisionNote::DevicePackConversion),
+        ..k(
+            "rgb565_pack_rounds_the_float_product_to_even",
+            format!(
+                "{}  %v = insertelement <3 x float> <float 0.0, float 0.5, float 0.0>, float %a, i32 0\n  %p = call i16 @air.pack.unorm.rgb565.v3f32(<3 x float> %v)\n  %r = zext i16 %p to i32\n",
+                of("a", 1.0)
+            ),
+            31 | (32 << 5),
+        )
+    });
     v.push(Kernel {
         name: "rg11b10f_unpacks_half_fields",
         body: format!(
@@ -605,9 +607,8 @@ fn kernels() -> Vec<Kernel> {
         needs: &[],
         note: None,
     });
-    // `dot` of chunked vectors is Metal's fused chain over every lane where the profile's `float`
-    // functions are Metal's, and each chunk's `OpDot` elsewhere
-    // (`wide_dot_is_metals_fused_chain_in_metals_order`), exact on these lanes; `sincos` of one
+    // `dot` of chunked vectors is each chunk's `OpDot` on every profile
+    // (`dot_is_the_devices_op_dot_on_every_profile`), exact on these lanes; `sincos` of one
     // computes per chunk and stores its cosine as one chunked leaf.
     v.push(Kernel {
         name: "chunked_dot_sums_every_chunk",
@@ -793,16 +794,19 @@ fn kernels() -> Vec<Kernel> {
             want,
         ));
     }
-    // Metal's sRGB tables decode every byte to a step that encodes back to the byte (the alpha byte
-    // through `a / 255` and the exact product), exactly on every device.
-    v.push(k(
-        "srgb_unpack_and_pack_round_trip",
-        format!(
+    // The sRGB conversions are the MSL transfer functions by the device's `Pow` around the 8-bit
+    // instructions, noted on every device (the interpreter models no `Pow`).
+    v.push(Kernel {
+        name: "srgb_unpack_and_pack_take_the_transfer_functions",
+        body: format!(
             "{}  %u = call <4 x float> @air.unpack.unorm4x8.srgb.v4f32(i32 %b)\n  %r = call i32 @air.pack.unorm4x8.srgb.v4f32(<4 x float> %u)\n",
             oi("b", 0x8901_37FF)
         ),
-        0x8901_37FF,
-    ));
+        float: false,
+        want: None,
+        needs: &[],
+        note: Some(PrecisionNote::DevicePackConversion),
+    });
     v.push(Kernel {
         name: "double_needs_float64",
         body: format!(
@@ -1348,54 +1352,39 @@ fn opaque_vector(name: &str, half: bool, vals: &[f32]) -> String {
     s
 }
 
-/// Metal's `dot` on `float` and `half` is the products' fused chain, `fma(x[n-1], y[n-1], ...
-/// fma(x[1], y[1], x[0] * y[0]))`, with and without fast math. On moltenvk-m3, whose `float`
-/// functions are Metal's, `dot` on `float` is the device's `OpDot`, which reaches Metal's own
-/// `dot`, and on `half` the chain of the device's 16-bit fused multiply-add, Metal's own: the words
-/// are Metal's (a probe, the M3 Max and the M4 alike, at lanes where no other order, tree, unfused
-/// or exact sum gives them), and fast math's zero signs where a device that regroups
-/// `dot(float2(a, b), float2(b, c))` as `b * (a + c)` misses them (`nan_denormals_fast` with zeros
-/// for its denormals; `nan_functions_fast`'s `dot((-0, +0), (+0, -0))`), with no
-/// `DeviceArithmetic` or `DeviceDenormals`. Every other profile takes the device's `OpDot`, noted
-/// `NativeDot`.
+/// `dot` on `float` and `half` is the device's `OpDot` on every profile, with and without fast
+/// math, on two to four lanes; of more, each chunk's `OpDot` summed. Metal's is the products' fused
+/// chain: a `float` one on a profile whose `float` functions are Metal's (moltenvk-m3) reaches
+/// Metal's own `dot`, with no note; every other records `NativeDot` (a `half` one summed in its
+/// `float` container), and a chunked one `DeviceArithmetic`. No fused multiply-add is emitted.
 #[test]
-fn dot_is_metals_fused_chain_on_moltenvk_and_the_devices_op_dot_elsewhere() {
-    let f = |b: u32| f32::from_bits(b);
-    let x = [0x3F2121E3, 0xC1504426, 0x40D96C9D, 0x3EC6C559].map(f);
-    let y = [0xBFD689B8, 0xC0608ADE, 0xC0D7159F, 0x402DE9ED].map(f);
-    let hx = [0xB3DD, 0xB0C3, 0xBB51, 0x3CD8].map(f16_bits_to_f32);
-    let hy = [0xC76B, 0x4A20, 0x31C7, 0xBA80].map(f16_bits_to_f32);
+fn dot_is_the_devices_op_dot_on_every_profile() {
+    let vals = |n: usize, k: f32| (0..n).map(|i| k * (i as f32 + 1.5)).collect::<Vec<_>>();
     let mut ks = Vec::new();
-    let names = [
+    let float_names = [
         ["dot2_float", "dot3_float", "dot4_float"],
         ["dot2_float_fast", "dot3_float_fast", "dot4_float_fast"],
     ];
-    for (fast, row) in names.iter().enumerate() {
-        for (k, (name, want)) in row
-            .iter()
-            .copied()
-            .zip([0x42327452u32, 0xBF87085A, 0x37A4C7B4])
-            .enumerate()
-        {
+    for (fast, row) in float_names.iter().enumerate() {
+        for (k, name) in row.iter().copied().enumerate() {
             let n = k + 2;
             let flag = if fast == 1 { "fast " } else { "" };
             ks.push(Kernel {
                 name,
                 body: format!(
                     "{}{}  %d = call {flag}float @air.dot.v{n}f32(<{n} x float> %x, <{n} x float> %y)\n  %r = bitcast float %d to i32\n",
-                    opaque_vector("x", false, &x[..n]),
-                    opaque_vector("y", false, &y[..n])
+                    opaque_vector("x", false, &vals(n, 0.75)),
+                    opaque_vector("y", false, &vals(n, -1.25))
                 ),
                 float: false,
-                want: Some(want),
+                want: None,
                 needs: &[],
                 note: None,
             });
         }
     }
-    for (k, (name, want)) in ["dot2_half", "dot3_half", "dot4_half"]
+    for (k, name) in ["dot2_half", "dot3_half", "dot4_half"]
         .into_iter()
-        .zip([0x0E80u32, 0xB145, 0xBC98])
         .enumerate()
     {
         let n = k + 2;
@@ -1403,42 +1392,43 @@ fn dot_is_metals_fused_chain_on_moltenvk_and_the_devices_op_dot_elsewhere() {
             name,
             body: format!(
                 "{}{}  %d = call half @air.dot.v{n}f16(<{n} x half> %x, <{n} x half> %y)\n  %u = bitcast half %d to i16\n  %r = zext i16 %u to i32\n",
-                opaque_vector("x", true, &hx[..n]),
-                opaque_vector("y", true, &hy[..n])
+                opaque_vector("x", true, &vals(n, 0.75)),
+                opaque_vector("y", true, &vals(n, -1.25))
             ),
             float: false,
-            want: Some(want),
+            want: None,
             needs: &[],
             note: None,
         });
     }
-    // fma(-2^-126, -0, +0 * -2^-126) is +0; `b * (a + c)` is -0.
-    let tiny = f(0x8080_0000);
-    ks.push(Kernel {
-        name: "dot_fast_zero_sign",
-        body: format!(
-            "{}{}  %d = call fast float @air.dot.v2f32(<2 x float> %x, <2 x float> %y)\n  %r = bitcast float %d to i32\n",
-            opaque_vector("x", false, &[0.0, tiny]),
-            opaque_vector("y", false, &[tiny, -0.0])
-        ),
-        float: false,
-        want: Some(0),
-        needs: &[],
-        note: None,
-    });
-    // fma(+0, -0, -0 * +0) is -0.
-    ks.push(Kernel {
-        name: "dot_fast_negative_zero",
-        body: format!(
-            "{}{}  %d = call fast float @air.dot.v2f32(<2 x float> %x, <2 x float> %y)\n  %r = bitcast float %d to i32\n",
-            opaque_vector("x", false, &[-0.0, 0.0]),
-            opaque_vector("y", false, &[0.0, -0.0])
-        ),
-        float: false,
-        want: Some(0x8000_0000),
-        needs: &[],
-        note: None,
-    });
+    for (name, n, half) in [
+        ("dot8_float_chunked", 8usize, false),
+        ("dot16_half_chunked", 16, true),
+    ] {
+        let (ty, sym) = if half {
+            ("half", "f16")
+        } else {
+            ("float", "f32")
+        };
+        let store = if half {
+            "  %u = bitcast half %d to i16\n  %r = zext i16 %u to i32\n"
+        } else {
+            "  %r = bitcast float %d to i32\n"
+        };
+        ks.push(Kernel {
+            name,
+            body: format!(
+                "{}{}  %d = call {ty} @air.dot.v{n}{sym}(<{n} x {ty}> %x, <{n} x {ty}> %y)\n{store}",
+                opaque_vector("x", half, &vals(n, 0.75)),
+                opaque_vector("y", half, &vals(n, -1.25))
+            ),
+            float: false,
+            want: None,
+            needs: &[],
+            note: None,
+        });
+    }
+    // `DECLS` declares the dots of 5 and 8 `float` lanes.
     let decls: String = [2, 3, 4]
         .iter()
         .map(|n| {
@@ -1446,10 +1436,17 @@ fn dot_is_metals_fused_chain_on_moltenvk_and_the_devices_op_dot_elsewhere() {
                 "declare float @air.dot.v{n}f32(<{n} x float>, <{n} x float>)\ndeclare half @air.dot.v{n}f16(<{n} x half>, <{n} x half>)\n"
             )
         })
+        .chain(["declare half @air.dot.v16f16(<16 x half>, <16 x half>)\n".to_owned()])
         .collect();
     let text = module(&ks).replace(DECLS, &format!("{DECLS}{decls}"));
-    let Some(bitcode) = assemble("dot-chain", &text) else {
+    let Some(bitcode) = assemble("dot-native", &text) else {
         return;
+    };
+    let fma = |words: &[u32]| {
+        count_ops(words, |w| {
+            w[0] & 0xFFFF == crate::spv::Op::ExtInst as u32
+                && w.get(4) == Some(&(crate::spv::GlslStd450Op::Fma as u32))
+        }) + count_op(words, crate::spv::Op::FmaKHR)
     };
     for stem in [
         "moltenvk-m3",
@@ -1458,169 +1455,28 @@ fn dot_is_metals_fused_chain_on_moltenvk_and_the_devices_op_dot_elsewhere() {
         "vk12-floor",
         "lunarg-desktop-baseline-2023",
     ] {
-        let p = profile(stem, exact_maths()).expect("profile");
-        let metal = p.fields().float_functions == FloatFunctions::Metal;
-        for kk in &ks {
-            let what = format!("{} on {stem}", kk.name);
-            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let (_, words) =
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            if !metal {
-                assert!(
-                    count_op(&words, crate::spv::Op::Dot) > 0
-                        && a.precision.contains(&PrecisionNote::NativeDot),
-                    "{what}: OpDot, {:?}",
-                    a.precision
-                );
-                continue;
-            }
-            for n in [
-                PrecisionNote::DeviceArithmetic,
-                PrecisionNote::DeviceDenormals,
-            ] {
-                assert!(!a.precision.contains(&n), "{what}: {:?}", a.precision);
-            }
-            let device_dot = !kk.name.ends_with("_half");
-            assert_eq!(
-                count_op(&words, crate::spv::Op::Dot) > 0,
-                device_dot,
-                "{what}: OpDot"
-            );
-            // The interpreter is no Metal: moltenvk-m3's `OpDot` is its device's.
-            if !device_dot {
-                let got = interpret(&bitcode, kk.name, &p);
-                assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
-            }
-        }
-    }
-}
-
-/// Metal's `dot` of more than four lanes, on `float` and `half`, is the same fused chain over
-/// every lane in order, with and without fast math: an Apple M3 Max under macOS
-/// 27.0.1, 16,384 rows of seeded random lanes each on 5, 8 and 16 `float` lanes and 8 and 16 `half`
-/// lanes, every answer the chain's. Each row here is one where the chain backwards, the chunks'
-/// sums added and the exact sum rounded once all miss Metal's word. Where Metal's order is the
-/// profile's (moltenvk-m3) it answers it by the chain ([`ArithStrategy::ChunkedChain`]): no
-/// `OpDot`, no `DeviceArithmetic` and no `DeviceDenormals`. Every other profile keeps each chunk's
-/// `OpDot`, noted `DeviceArithmetic`.
-///
-/// [`ArithStrategy::ChunkedChain`]: crate::lower::arith::ArithStrategy::ChunkedChain
-#[test]
-fn wide_dot_is_metals_fused_chain_in_metals_order() {
-    let f = |b: &[u32]| b.iter().map(|&w| f32::from_bits(w)).collect::<Vec<_>>();
-    let h = |b: &[u16]| b.iter().map(|&w| f16_bits_to_f32(w)).collect::<Vec<_>>();
-    let x5 = f(&[0x3C4706A1, 0xC5D9EEB5, 0x3D6EA9B2, 0x3A2F23BF, 0xC603B91B]);
-    let y5 = f(&[0x40986206, 0xBE6B6C10, 0xBC124CDB, 0xB8E3B629, 0x3E3C8570]);
-    let x8 = f(&[
-        0xBFC457BC, 0xBD86A520, 0x35B57EFC, 0x43A8E94D, 0x3ABA1FAF, 0xBF68F7B9, 0x411A7DC7,
-        0xC0010B78,
-    ]);
-    let y8 = f(&[
-        0xBAC18975, 0xB7E5CCAA, 0x3DCAA0D4, 0xB6B402AC, 0xC2D6EDAA, 0x397CD0F5, 0xC0DB6522,
-        0xC2007DCD,
-    ]);
-    let x16 = f(&[
-        0x3E0AEC21, 0xBDE4C98F, 0x48F7CE82, 0xC74A1CB5, 0x3FEFB46A, 0xB8CDB9CA, 0x367C7539,
-        0xB7A71EB2, 0xC8A058F0, 0x41F42DA4, 0xBC9A925A, 0xC66A6596, 0xC0E26B92, 0x42AA4631,
-        0x433758BE, 0xB93AF022,
-    ]);
-    let y16 = f(&[
-        0x448360E6, 0xBC3FB11E, 0xBFED97A2, 0x3BBB547E, 0x3C051C11, 0xC4EE106E, 0x4521C04F,
-        0x3B630B77, 0x3A529217, 0xC2FE1081, 0xC656A359, 0xC6FFF097, 0x3EB192E9, 0xC2147C43,
-        0xC20B70CB, 0x40D2FDA7,
-    ]);
-    let hx8 = h(&[
-        0x32B2, 0xC743, 0xAD26, 0x36C6, 0xC7E3, 0xBFF2, 0x43C1, 0x4AA1,
-    ]);
-    let hy8 = h(&[
-        0xBD37, 0x321E, 0x3C57, 0x4039, 0xCC4E, 0x4F9E, 0xB7DC, 0xAC3B,
-    ]);
-    let hx16 = h(&[
-        0x4391, 0x403F, 0xBC34, 0xC571, 0xB6BC, 0xB7B3, 0xB7EF, 0x3BA4, 0x2FD5, 0xB227, 0xB58C,
-        0x2AFB, 0xAACF, 0x357C, 0x4DB6, 0xB40F,
-    ]);
-    let hy16 = h(&[
-        0x2D47, 0xB043, 0xB15B, 0xAB19, 0x36CE, 0x3634, 0x45F8, 0x4F21, 0xAF75, 0xC50E, 0x2B33,
-        0x2BFF, 0xCBB9, 0x3595, 0x3C83, 0xACEA,
-    ]);
-    let float = |name: &'static str, fast: bool, x: &[f32], y: &[f32], want: u32| {
-        let n = x.len();
-        let flag = if fast { "fast " } else { "" };
-        Kernel {
-            name,
-            body: format!(
-                "{}{}  %d = call {flag}float @air.dot.v{n}f32(<{n} x float> %x, <{n} x float> %y)\n  %r = bitcast float %d to i32\n",
-                opaque_vector("x", false, x),
-                opaque_vector("y", false, y)
-            ),
-            float: false,
-            want: Some(want),
-            needs: &[],
-            note: None,
-        }
-    };
-    let half = |name: &'static str, x: &[f32], y: &[f32], want: u32| {
-        let n = x.len();
-        Kernel {
-            name,
-            body: format!(
-                "{}{}  %d = call half @air.dot.v{n}f16(<{n} x half> %x, <{n} x half> %y)\n  %u = bitcast half %d to i16\n  %r = zext i16 %u to i32\n",
-                opaque_vector("x", true, x),
-                opaque_vector("y", true, y)
-            ),
-            float: false,
-            want: Some(want),
-            needs: &[],
-            note: None,
-        }
-    };
-    let ks = [
-        float("dot5_float", false, &x5, &y5, 0x424D5858),
-        float("dot8_float", false, &x8, &y8, 0xBFCA9608),
-        float("dot8_float_fast", true, &x8, &y8, 0xBFCA9608),
-        float("dot16_float", false, &x16, &y16, 0x4DE9E2D2),
-        half("dot8_half", &hx8, &hy8, 0x547C),
-        half("dot16_half", &hx16, &hy16, 0x5284),
-    ];
-    // `DECLS` declares the dots of 5 and 8 `float` lanes.
-    let decls = "declare float @air.dot.v16f32(<16 x float>, <16 x float>)\n\
-                 declare half @air.dot.v8f16(<8 x half>, <8 x half>)\n\
-                 declare half @air.dot.v16f16(<16 x half>, <16 x half>)\n";
-    let text = module(&ks).replace(DECLS, &format!("{DECLS}{decls}"));
-    let Some(bitcode) = assemble("wide-dot-chain", &text) else {
-        return;
-    };
-    let device = [
-        PrecisionNote::DeviceArithmetic,
-        PrecisionNote::DeviceDenormals,
-    ];
-    for stem in [
-        "moltenvk-m3",
-        "amd-rdna3-radv",
-        "lavapipe",
-        "vk12-floor",
-        "lunarg-desktop-baseline-2023",
-    ] {
-        for (policy, exact) in [(exact_maths(), true), (DevicePolicy::default(), false)] {
+        for policy in [exact_maths(), DevicePolicy::default()] {
             let p = profile(stem, policy).expect("profile");
-            let chain = p.fields().float_functions == FloatFunctions::Metal;
+            let metal = p.fields().float_functions == FloatFunctions::Metal;
             for kk in &ks {
-                let what = format!("{} on {stem} (exact forms: {exact})", kk.name);
+                let what = format!("{} on {stem}", kk.name);
                 let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let (_, words) =
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                let device_dot = count_op(&words, crate::spv::Op::Dot) > 0;
-                if chain {
-                    assert!(!device_dot, "{what}: OpDot");
-                    for n in device {
-                        assert!(!a.precision.contains(&n), "{what}: {:?}", a.precision);
-                    }
-                    let got = interpret(&bitcode, kk.name, &p);
-                    assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
-                } else {
-                    assert!(device_dot, "{what}: OpDot");
+                assert!(count_op(&words, crate::spv::Op::Dot) > 0, "{what}: OpDot");
+                assert_eq!(fma(&words), 0, "{what}: a fused chain");
+                let chunked = kk.name.ends_with("_chunked");
+                let float = kk.name.contains("_float");
+                if chunked {
                     assert!(
                         a.precision.contains(&PrecisionNote::DeviceArithmetic),
+                        "{what}: {:?}",
+                        a.precision
+                    );
+                } else {
+                    assert_eq!(
+                        a.precision.contains(&PrecisionNote::NativeDot),
+                        !(metal && float),
                         "{what}: {:?}",
                         a.precision
                     );
@@ -2057,8 +1913,9 @@ fn fast_sincos_flushes_past_the_last_quadrant() {
 /// `float` `+ - *`, a comparison and `OpFmaKHR` record `DeviceDenormals` exactly where the
 /// profile does not take `DriverDeviation::MetalFloatDenormals` (lavapipe), whose device keeps or
 /// flushes them by its own controls; a remainder, the device's `OpFRem`, records it on every
-/// profile; `sign`, which answers Metal at denormals itself, and `half` arithmetic record it on
-/// none; `fast::atan2`, whose quotient is the device's division, records it off the deviation.
+/// profile; `sign`, the device's `FSign`, records it off Metal's own functions, and `half`
+/// arithmetic on none; `fast::atan2`, whose quotient is the device's division, records it off the
+/// deviation.
 /// None records `DeviceNanEncoding`: the NaN is Metal's, the device's where the profile states it
 /// and selected elsewhere. The operands come from bits (`llvm.umin` of constants, bitcast), not
 /// from `float` arithmetic.
@@ -2088,7 +1945,7 @@ fn device_float_environment_notes_follow_the_operations() {
     let notes: [(&[PrecisionNote], &[PrecisionNote]); 7] = [
         (none, dd),
         (dd, dd),
-        (none, none),
+        (none, dd),
         (none, dd),
         (none, none),
         (none, dd),
@@ -2514,8 +2371,7 @@ fn narrow_float_module_growth_is_bounded() {
 /// `NoContraction`, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
 /// `SignedZeroInfNanPreserve` for 16 bits and the modes its independence ties to them
 /// (`narrow::controlled_modes`). No other module declares a 16-bit float mode or
-/// `RoundingModeRTE` for it. No module requires `DriverDeviation::MetalHalfQuantize`'s fact: a
-/// quantize records `NativeHalfQuantize` on every profile.
+/// `RoundingModeRTE` for it. A quantize records `NativeHalfQuantize` on every profile.
 ///
 /// The chain: one `fptrunc`, eight `fadd`, and eight `fmul` on `half`, strict and `fast`. Nothing
 /// is fused: the `fast` chain's operations are the strict chain's, each in the AIR's order, so
@@ -2637,13 +2493,6 @@ fn half_rounding_follows_the_operation() {
                 ),
                 (controlled, rte),
                 "{what}: a 16-bit float mode and RoundingModeRTE"
-            );
-            // No module requires the quantize's measured fact, nor the conversion's.
-            assert!(
-                !a.requirements
-                    .properties
-                    .contains(&crate::device::requirements::VkProperty::MetalHalfQuantize),
-                "{what}"
             );
         }
     }
@@ -3604,7 +3453,7 @@ fn sincos_answers_the_device_s_nan() {
     nans_are_the_device_s(&bitcode, &ks, false, &unread, &|_, fact| !fact);
 }
 
-/// A NaN test (Metal's `median3`'s) is `OpIsNan` only in an entry that declares
+/// A NaN test (Metal's saturating conversion's) is `OpIsNan` only in an entry that declares
 /// `SignedZeroInfNanPreserve 32`; where every float operation carries `nnan`/`ninf`/`nsz` the entry
 /// declares nothing, a device may fold `OpIsNan`, and the test is the bits instead, which still
 /// answers Metal's NaN. No module
@@ -3630,29 +3479,17 @@ fn a_nan_test_no_float_mode_folds() {
             format!("{x}  %s = call fast float @air.fast_round.f32(float %x)\n"),
             None,
         ),
-        // Metal's `median3` returns an operand, a NaN losing, and `sign` `+0` for a NaN, which
-        // the module tests for.
-        nan_kernel(
-            "strict_median3",
-            format!("{x}  %s = call float @air.fmedian3.f32(float %x, float 1.0, float 2.0)\n"),
-            Some(0x3F80_0000),
+        // Metal's saturating conversion answers 0 for a NaN, which the module tests for; the
+        // `fabs` before it, with or without flags, decides the entry's mode.
+        k(
+            "strict_convert",
+            format!("{x}  %a = call float @air.fabs.f32(float %x)\n  %r = call i32 @air.convert.s.i32.f.f32(float %a)\n"),
+            0,
         ),
-        nan_kernel(
-            "fast_median3",
-            format!(
-                "{x}  %s = call fast float @air.fmedian3.f32(float %x, float 1.0, float 2.0)\n"
-            ),
-            Some(0x3F80_0000),
-        ),
-        nan_kernel(
-            "strict_sign",
-            format!("{x}  %s = call float @air.sign.f32(float %x)\n"),
-            Some(0),
-        ),
-        nan_kernel(
-            "fast_sign",
-            format!("{x}  %s = call fast float @air.sign.f32(float %x)\n"),
-            Some(0),
+        k(
+            "fast_convert",
+            format!("{x}  %a = call fast float @air.fast_fabs.f32(float %x)\n  %r = call i32 @air.convert.s.i32.f.f32(float %a)\n"),
+            0,
         ),
         // The device's `asin` and `tan`, which the interpreter does not evaluate.
         nan_kernel(
@@ -3671,7 +3508,10 @@ fn a_nan_test_no_float_mode_folds() {
             None,
         ),
     ];
-    let text = module(&ks).replace(DECLS, &format!("{DECLS}{NAN_DECLS}"));
+    let text = module(&ks).replace(
+        DECLS,
+        &format!("{DECLS}{NAN_DECLS}declare float @air.fabs.f32(float)\ndeclare float @air.fast_fabs.f32(float)\n"),
+    );
     let Some(bitcode) = assemble("nan-test", &text) else {
         return;
     };
@@ -3906,13 +3746,13 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
 
 /// Class E: Metal's `float` `fneg` and `fabs` (`air.fabs`, `air.fast_fabs`, and `llvm.fabs`, which
 /// takes `air.fabs`'s answer) flip or clear the sign bit alone, with and without fast-math flags: a
-/// NaN keeps its payload, signaling or not, and a denormal stays. The lowering moves the sign as an
-/// integer on the bits, so no device's `OpFNegate` or `FAbs` (RADV's `fneg` keeps a NaN's sign,
-/// NVIDIA's `fabs` answers `0x7FFFFFFF`, RADV and ANV flush a denormal) decides it, on every
-/// profile: no float negation or absolute value is emitted, no NaN is selected, and no device note
-/// is recorded.
+/// NaN keeps its payload, signaling or not, and a denormal stays. The lowering is the device's
+/// `OpFNegate` and `FAbs` on every profile (RADV's `fneg` keeps a NaN's sign, NVIDIA's `fabs`
+/// answers `0x7FFFFFFF`, RADV and ANV flush a denormal): no NaN is selected and nothing moves on
+/// the bits, the NaN noted `NativeNanEncoding` and `fneg`'s denormal `DeviceDenormals`. The
+/// interpreter keeps the payload and the denormal, as a device may.
 #[test]
-fn float_sign_operations_move_the_bits_on_every_profile() {
+fn float_sign_operations_are_the_devices_on_every_profile() {
     let snan = ob("x", 0x7F80_0001);
     let neg_snan = ob("x", 0xFF80_0001);
     let ks = [
@@ -3988,14 +3828,24 @@ fn float_sign_operations_move_the_bits_on_every_profile() {
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(count_op(&words, crate::spv::Op::FNegate), 0, "{what}");
-            assert_eq!(fabs(&words), 0, "{what}");
+            let neg = kk.name.contains("fneg");
+            let abs = kk.name.contains("fabs");
+            assert_eq!(count_op(&words, crate::spv::Op::FNegate) > 0, neg, "{what}");
+            assert_eq!(fabs(&words) > 0, abs, "{what}");
             assert_eq!(nan_tests(&words), (0, 0), "{what}");
-            for note in [
-                PrecisionNote::DeviceDenormals,
-                PrecisionNote::DeviceNanEncoding,
-            ] {
-                assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
+            if neg || abs {
+                assert!(
+                    a.precision.contains(&PrecisionNote::NativeNanEncoding),
+                    "{what}: {:?}",
+                    a.precision
+                );
+            }
+            if neg {
+                assert!(
+                    a.precision.contains(&PrecisionNote::DeviceDenormals),
+                    "{what}: {:?}",
+                    a.precision
+                );
             }
             let got = interpret(&bitcode, kk.name, &p);
             assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
@@ -4265,16 +4115,13 @@ fn half_fmod_answers_metals_zero_remainder_on_every_profile() {
 }
 
 /// Class I: Metal's `mix(x, y, t)` on `float` and `half` is `fma(t, y, fma(-t, x, x))`, with and
-/// without fast-math flags. On a profile whose `float` functions are Metal's (moltenvk-m3), and on
-/// `half` where its fused multiply-add is the measured 16-bit one, the module keeps that form: no
-/// `FMix` is emitted, and the interpreter answers Metal's recorded words (`nan_functions`:
-/// `mix(inf, 1, 0)` is the canonical NaN, `mix(-0, -0, 0)` is `+0`; `nan_half`:
-/// `mix(-0.3, 0.7, 0.2)` is `0xAE68`, where the blend gives `0xAE66`). The driver's deviation
-/// `MetalCanonicalNans` is not taken, so a device that leaves the NaN to `OpFmaKHR` (MoltenVK's,
-/// whose arithmetic answers Metal's) shows the select here too. Every other profile takes the
-/// device's `FMix`, noted `NativeMix`.
+/// without fast-math flags (`nan_functions`: `mix(inf, 1, 0)` is the canonical NaN; `nan_half`:
+/// `mix(-0.3, 0.7, 0.2)` is `0xAE68`, where the blend gives `0xAE66`). On every profile the module
+/// takes the device's `FMix` and no fused multiply-add: a `float` one on a profile whose `float`
+/// functions are Metal's (moltenvk-m3) reaches Metal's own `mix`, with no note; every other records
+/// `NativeMix` (a `half` one the blend in its `float` container, rounded once).
 #[test]
-fn mix_is_metals_fused_form_on_moltenvk_and_the_devices_fmix_elsewhere() {
+fn mix_is_the_devices_fmix_on_every_profile() {
     let three = |a: u32, b: u32, c: u32| format!("{}{}{}", ob("x", a), ob("y", b), ob("z", c));
     let halves = |a: u16, b: u16, c: u16| format!("{}{}{}", oh("hx", a), oh("hy", b), oh("hz", c));
     let ks = [
@@ -4334,27 +4181,33 @@ fn mix_is_metals_fused_form_on_moltenvk_and_the_devices_fmix_elsewhere() {
                 && w.get(4) == Some(&(crate::spv::GlslStd450Op::FMix as u32))
         })
     };
-    for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
+    let fma = |words: &[u32]| {
+        count_ops(words, |w| {
+            w[0] & 0xFFFF == crate::spv::Op::ExtInst as u32
+                && w.get(4) == Some(&(crate::spv::GlslStd450Op::Fma as u32))
+        }) + count_op(words, crate::spv::Op::FmaKHR)
+    };
+    for stem in PROFILES
+        .iter()
+        .copied()
+        .chain(["lavapipe", "amd-rdna3-radv"])
+    {
         let p = profile_with_canonical_nans(stem, false);
         let metal = p.fields().float_functions == FloatFunctions::Metal;
-        let f16 = crate::lower::arith::fma::half_route(&p) == crate::lower::arith::fma::Route::F16;
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let chain = metal || (kk.name.starts_with("half_") && f16);
-            if !chain {
-                assert!(
-                    blend(&words) > 0 && a.precision.contains(&PrecisionNote::NativeMix),
-                    "{what}: FMix, {:?}",
-                    a.precision
-                );
-                continue;
-            }
-            assert_eq!(blend(&words), 0, "{what}");
-            let got = interpret(&bitcode, kk.name, &p);
-            assert_eq!(Some(got), kk.want, "{what}: {got:#x}");
+            assert!(blend(&words) > 0, "{what}: FMix");
+            assert_eq!(fma(&words), 0, "{what}: a fused form");
+            let half = kk.name.starts_with("half_");
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeMix),
+                !(metal && !half),
+                "{what}: {:?}",
+                a.precision
+            );
         }
     }
 }
@@ -4363,10 +4216,10 @@ fn mix_is_metals_fused_form_on_moltenvk_and_the_devices_fmix_elsewhere() {
 /// fast-math flags (`nan_half`, `nan_half_fast`): `llvm.fmuladd`, `ldexp` (unlike `float`'s, which
 /// returns the operand), and `sqrt`, which the device answers where the profile takes
 /// `MetalCanonicalNans` and which are noted `PrecisionNote::NativeNanEncoding` elsewhere. `round`
-/// returns a NaN operand itself on Metal, and `asin`'s domain error takes the operand's sign: both
-/// the device's NaN on every profile, noted whatever the fact. None is selected. `round` answers
-/// `+0` for a zero result, and `fract` with every flag answers `0x3BFF` for an infinity, where
-/// without flags it answers `+0`.
+/// and `fract` return a NaN operand itself on Metal, and `asin`'s domain error takes the operand's
+/// sign: each the device's NaN on every profile, noted whatever the fact. None is selected.
+/// `round`'s zero is C99's (`-0` for `round(-0.3)`, where Metal answers `+0`), and `fract` of an
+/// infinity the device's `Fract`'s NaN (Metal's: `+0`, and `0x3BFF` with every flag).
 #[test]
 fn half_functions_answer_the_device_s_nan() {
     let hx = oh("hx", 0xFE01);
@@ -4399,17 +4252,17 @@ fn half_functions_answer_the_device_s_nan() {
         half_nan_kernel(
             "half_round_to_zero",
             format!("{tenth}  %s = call fast half @air.round.f16(half %hx)\n"),
-            Some(0),
+            Some(0x8000),
         ),
         half_nan_kernel(
             "half_fract_flagged",
             format!("{inf}  %s = call fast half @air.fract.f16(half %hx)\n"),
-            Some(0x3BFF),
+            None,
         ),
         half_nan_kernel(
             "half_fract",
             format!("{inf}  %s = call half @air.fract.f16(half %hx)\n"),
-            Some(0),
+            None,
         ),
         half_nan_kernel(
             "half_asin",
@@ -4428,7 +4281,8 @@ fn half_functions_answer_the_device_s_nan() {
     };
     nans_are_the_device_s(&bitcode, &ks, true, &["half_asin"], &|name, fact| {
         name.starts_with("half_round")
+            || name.starts_with("half_fract")
             || name == "half_asin"
-            || (!name.starts_with("half_fract") && !fact)
+            || !fact
     });
 }

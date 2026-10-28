@@ -747,9 +747,6 @@ fn enabled_caps(desc: &DeviceDescription, deviations: &BTreeSet<DriverDeviation>
     if deviations.contains(&DriverDeviation::MetalFloatDenormals) {
         properties.insert(VkProperty::MetalFloatDenormals);
     }
-    if deviations.contains(&DriverDeviation::MetalHalfQuantize) {
-        properties.insert(VkProperty::MetalHalfQuantize);
-    }
     if deviations.contains(&DriverDeviation::MetalCenterVaryings) {
         properties.insert(VkProperty::MetalCenterVaryings);
     }

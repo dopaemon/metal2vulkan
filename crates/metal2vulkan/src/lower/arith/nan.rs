@@ -11,8 +11,8 @@
 //! `float` to `half` (`fptrunc` and `air.convert`), answer the canonical `half` NaN `0x7E00`, held
 //! widened as `0x7FC00000`; its widening of a `half` NaN to `float`, and its `half` `fneg` and
 //! `fabs`, answer the canonical NaN too ([`NanAnswer::CanonicalExact`]). Its `float` `fneg` and
-//! `fabs` keep a NaN operand's payload, which the lowering moves on the bits
-//! (`math::sign_on_bits`). Vulkan states no NaN encoding, and the devices
+//! `fabs` keep a NaN operand's payload, the sign flipped or cleared, and its `half` `fract` a NaN
+//! operand itself ([`NanAnswer::Operand`]). Vulkan states no NaN encoding, and the devices
 //! measured answer their own:
 //! an operand's bits, quieted or not, `0xFFC00000`, or `0x7FFFFFFF`, and for `half` `0xFE00`, the
 //! operand's payload, or `0x7FFF`. Each device answers a NaN on exactly the lanes Metal does for
@@ -58,8 +58,9 @@ pub enum NanAnswer {
     /// The canonical NaN, `+` for a NaN first operand and with the first operand's sign for a
     /// domain error: `fast::asin`.
     DomainSign,
-    /// A NaN first operand itself, bit for bit, and the canonical NaN for a NaN of another
-    /// origin: `round`, `ldexp`, `fast::tan`.
+    /// A NaN first operand itself, bit for bit (its sign flipped by `fneg` and cleared by `fabs`),
+    /// and the canonical NaN for a NaN of another origin: `round`, `ldexp`, `fast::tan`, `float`
+    /// `fneg` and `fabs`, and `half` `fract`.
     Operand,
 }
 
@@ -156,7 +157,7 @@ fn precise_of(op: FloatFn) -> FloatFn {
         F::FastAtanh => F::Atanh,
         F::FastExp10 => F::Exp10,
         F::FastLog10 => F::Log10,
-        F::FastFract { .. } => F::Fract,
+        F::FastFract => F::Fract,
         F::FastMedian3 => F::Median3,
         F::FastPow => F::Pow,
         F::FastSin => F::Sin,
@@ -182,9 +183,11 @@ fn precise_of(op: FloatFn) -> FloatFn {
 /// The answer Metal gives for a NaN result of `float` function `op` (refined as in
 /// [`function_answer`]) in the state measured: a precise symbol without fast-math flags
 /// (`nan_functions`), a `fast_` one (`fast`) with every flag (`nan_functions_fast`). Functions
-/// whose lowering answers it itself ([`FloatFn::metal_nans`]) are listed too. `None` where Metal answers a number for a NaN
-/// operand (`sign`, `saturate`, `fast::sin`, `fast::cos`), where the result is an operand
-/// (`fmin`, `fmax`, `median3`, `copysign`, `fabs`, and precise `pow`, whose `pow(x, 1)` is `x`).
+/// whose lowering answers it itself ([`FloatFn::metal_nans`]) are listed too. `None` where Metal
+/// answers a number for a NaN operand (`sign`, `saturate`, `fast::sin`, `fast::cos`), where the
+/// result is an operand the device's picks or bit moves return (`fmin`, `fmax`, `median3`,
+/// `copysign`, and precise `pow`, whose `pow(x, 1)` is `x`). `fabs` keeps its operand's payload
+/// with the sign cleared ([`NanAnswer::Operand`]).
 /// `sinpi`, `cospi`, and `tanpi` answer the canonical NaN in both modes for an infinity or a NaN.
 /// The math-library branch's refinements of `fast_tan`, `fast_asin`, `fast_acos`,
 /// `fast_atan`, and `fast_rsqrt` answer as those calls were measured: a `fast_` symbol's state
@@ -227,7 +230,7 @@ fn measured(op: FloatFn, fast: bool) -> Option<NanAnswer> {
         | F::Trunc
         | F::Rint
         | F::Fract
-        | F::FastFract { .. }
+        | F::FastFract
         | F::Atan2
         | F::FastAtan2 { .. }
         | F::FastPow
@@ -251,7 +254,7 @@ fn measured(op: FloatFn, fast: bool) -> Option<NanAnswer> {
         F::Atan | F::Asinh | F::Atanh if fast => A::Canonical,
         F::FastAtan => A::Canonical,
         F::Asin | F::Atan | F::Asinh | F::Atanh => A::OperandSign,
-        F::Round | F::Ldexp => A::Operand,
+        F::Round | F::Ldexp | F::Abs => A::Operand,
         _ => return None,
     })
 }
@@ -263,10 +266,11 @@ fn measured(op: FloatFn, fast: bool) -> Option<NanAnswer> {
 /// of `mix`, `dot`, `ldexp`, `fmod`, `sqrt`, `rsqrt`, `floor`, `ceil`, `trunc`, `rint`, `pow`,
 /// `powr`, and the transcendental functions but `asin` (`atan`, `asinh`, `atanh`, and `ldexp`
 /// unlike `float`'s), and of `fabs`, which the device computes exactly (class D); `asin`'s domain
-/// error with the operand's sign (`0xFE00` below `-1`); and `round`'s NaN operand itself, a
-/// signaling one kept. Metal has no `fast_` `half` function, so none is answered. `None` for the
-/// functions that answer a number or an operand for a NaN (`fract`, `sign`, `saturate`, `fmin` and
-/// its family, `median3`, `copysign`). `sinpi`, `cospi`, and `tanpi` answer the canonical `half`
+/// error with the operand's sign (`0xFE00` below `-1`); and `round`'s and `fract`'s NaN operand
+/// itself, a signaling one kept (`0x7c01` stays `0x7c01`). Metal has no `fast_` `half` function,
+/// so none is answered. `None` for the functions that answer a number or an operand the device's
+/// picks or bit moves return for a NaN (`sign`, `saturate`, `fmin` and its family, `median3`,
+/// `copysign`). `sinpi`, `cospi`, and `tanpi` answer the canonical `half`
 /// NaN for an infinity or a NaN.
 fn half_function_answer(op: FloatFn, fast: bool) -> Option<NanAnswer> {
     use FloatFn as F;
@@ -311,7 +315,7 @@ fn half_function_answer(op: FloatFn, fast: bool) -> Option<NanAnswer> {
         | F::CosPi
         | F::TanPi => A::Canonical,
         F::Asin => A::DomainSign,
-        F::Round => A::Operand,
+        F::Round | F::Fract => A::Operand,
         F::Abs => A::CanonicalExact,
         _ => return None,
     })
@@ -320,11 +324,14 @@ fn half_function_answer(op: FloatFn, fast: bool) -> Option<NanAnswer> {
 /// The answer Metal gives for a NaN result of `fneg` on lanes of format `fmt`: the canonical
 /// `half` NaN for `half`, with and without fast-math flags (`nan_narrow`, `nan_narrow_fast`,
 /// `nan_half`, `nan_half_fast`), which the device computes exactly, flipping the held value's
-/// sign (class D). A `float` `fneg` keeps its operand's NaN with the sign flipped, which the
-/// lowering moves on the bits (`math::sign_on_bits`, class E); the other formats are not
-/// measured.
+/// sign (class D). A `float` `fneg` keeps its operand's NaN with the sign flipped (class E,
+/// [`NanAnswer::Operand`]); the other formats are not measured.
 pub fn fneg_answer(fmt: FloatFmt) -> Option<NanAnswer> {
-    (fmt == FloatFmt::Half).then_some(NanAnswer::CanonicalExact)
+    match fmt {
+        FloatFmt::Half => Some(NanAnswer::CanonicalExact),
+        FloatFmt::F32 => Some(NanAnswer::Operand),
+        FloatFmt::BFloat | FloatFmt::F64 => None,
+    }
 }
 
 /// The answer Metal gives for a NaN result of the float binary operator `op` on lanes of format

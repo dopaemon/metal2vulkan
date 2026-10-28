@@ -652,14 +652,6 @@ pub enum VkProperty {
     /// operation's denormals to the device, recording no `PrecisionNote::DeviceDenormals` for it,
     /// requires it; without it, they are the device's own, and the module records that note.
     MetalFloatDenormals,
-    /// The device's `OpQuantizeToF16` rounds as Metal's conversion to `half` does, to nearest
-    /// even below 65520 (the driver's measured deviation
-    /// [`DriverDeviation::MetalHalfQuantize`](crate::error::DriverDeviation::MetalHalfQuantize)).
-    /// No Vulkan query reports it: the quantize's rounding mode is the device's. No module
-    /// requires it: a module that rounds to `half` through the quantize records
-    /// `PrecisionNote::NativeHalfQuantize` on every profile, its result below the smallest normal
-    /// `half` the device's.
-    MetalHalfQuantize,
     /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center
     /// in every fragment invocation, a sample-rate one's included, as Metal does (the driver's
     /// measured deviation
