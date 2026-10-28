@@ -3,7 +3,7 @@
 //! Max under macOS 27.0.1), and the formats a fill has a unit for.
 
 use crate::blit_fill::{fill_unit, read_pattern, sample_units, words, StreamFill};
-use crate::blit_fill::{unit_of, TEXTURE_BUFFER_PATTERN_BYTES};
+use crate::blit_fill::{tile_copies, tile_extent, unit_of, TEXTURE_BUFFER_PATTERN_BYTES};
 use metal2vulkan::metal::{PixelFormat, TextureType};
 use std::ops::Range;
 
@@ -348,4 +348,64 @@ fn a_fill_s_pattern_length_separates_the_runtime_s_gap_from_misuse() {
             "{ty:?} of a long one"
         );
     }
+}
+
+/// A plain color fill's tile is the region's extent rounded up to a power of two of at least 16
+/// texels, no larger than the texture's first level, its longer side then halved until it holds a
+/// MiB at most, whatever the texel's bytes and samples (`blit_fill.rs`).
+#[test]
+fn a_fill_tile_is_the_region_rounded_up_to_a_mib() {
+    // `RGBA8Unorm`: a 256 x 256 region and a 16 x 16 one whole, a 2048 x 2048 one 512 x 512.
+    assert_eq!(tile_extent([256, 256], 4, [256, 256]), [256, 256]);
+    assert_eq!(tile_extent([16, 16], 4, [256, 256]), [16, 16]);
+    assert_eq!(tile_extent([2048, 2048], 4, [2048, 2048]), [512, 512]);
+    // Near sizes take one extent, which the texture's first level bounds.
+    assert_eq!(tile_extent([1, 1], 4, [256, 256]), [16, 16]);
+    assert_eq!(tile_extent([17, 9], 4, [256, 256]), [32, 16]);
+    assert_eq!(tile_extent([200, 33], 4, [300, 300]), [256, 64]);
+    assert_eq!(tile_extent([260, 10], 4, [300, 300]), [300, 16]);
+    assert_eq!(tile_extent([5, 1], 4, [8, 1]), [8, 1]);
+    // `RGBA32Float` at 4 samples: 64 bytes a texel.
+    assert_eq!(tile_extent([2048, 2048], 64, [2048, 2048]), [128, 128]);
+    // A 1D row, and a narrow column, halved along their length (rounded up).
+    assert_eq!(tile_extent([16384, 1], 16, [16384, 1]), [16384, 1]);
+    assert_eq!(tile_extent([3, 100_000], 16, [3, 100_000]), [3, 12500]);
+    assert_eq!(tile_extent([1, 1], 128, [1, 1]), [1, 1]);
+    for (size, bytes) in [([2048, 2048], 16), ([1000, 777], 8), ([16384, 16384], 128)] {
+        let [w, h] = tile_extent(size, bytes, size);
+        assert!(
+            u64::from(w) * u64::from(h) * bytes <= 1 << 20,
+            "{size:?} {bytes}"
+        );
+    }
+}
+
+/// The copies out of a tile cover the fill's region once, from its origin, each part from the
+/// tile's origin and no larger than the tile, in the image's level and layer.
+#[test]
+fn fill_tile_copies_cover_the_region_once() {
+    let copies = tile_copies([512, 512], [3, 5, 2], [1100, 600], (4, 7));
+    assert_eq!(copies.len(), 3 * 2);
+    let mut texels = 0u64;
+    for copy in &copies {
+        assert_eq!(
+            (copy.src.level, copy.src.layer, copy.src.origin),
+            (0, 0, [0, 0, 0])
+        );
+        assert_eq!((copy.dst.level, copy.dst.layer, copy.dst.layers), (4, 7, 1));
+        assert_eq!(copy.src.size, copy.dst.size);
+        let [w, h, d] = copy.dst.size;
+        assert!(w <= 512 && h <= 512 && d == 1);
+        let [x, y, z] = copy.dst.origin;
+        assert!(x >= 3 && y >= 5 && z == 2 && x + w <= 1103 && y + h <= 605);
+        texels += u64::from(w) * u64::from(h);
+    }
+    assert_eq!(texels, 1100 * 600);
+    // A region inside the tile is one copy of its size.
+    let one = tile_copies([16, 16], [32, 48, 0], [16, 16], (0, 0));
+    assert_eq!(one.len(), 1);
+    assert_eq!(
+        (one[0].dst.origin, one[0].dst.size),
+        ([32, 48, 0], [16, 16, 1])
+    );
 }

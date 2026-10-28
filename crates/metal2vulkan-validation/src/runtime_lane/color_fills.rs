@@ -379,6 +379,65 @@ fn filled(
     Some(texels(lane, &texture, texel, colors.len() as u64))
 }
 
+/// Each color of `colors` filled plain (no `pixelFormat:`) into the whole of its own slice of new
+/// 2D arrays of 1 x 1 texels of `pf` (256 slices each): a fill of a whole subresource, which makes
+/// no image and takes none from the recycler (asserted, [`images_of`]). The texels' bytes, in
+/// color order; `each` runs after each fill is encoded.
+fn filled_whole(
+    lane: &Lane,
+    (pf, texel): (PixelFormat, u64),
+    colors: &[[f64; 4]],
+    mut each: impl FnMut(usize),
+) -> Vec<u8> {
+    let name = lane.device.name().to_owned();
+    let mut bytes = Vec::with_capacity(colors.len() * texel as usize);
+    for (batch, chunk) in colors.chunks(256).enumerate() {
+        let mut descriptor = TextureDescriptor::texture_2d(pf, 1, 1, false);
+        descriptor.texture_type = TextureType::Type2DArray;
+        descriptor.array_length = chunk.len() as u64;
+        descriptor.usage = USAGE;
+        descriptor.resource_options = ResourceOptions::private();
+        let slices = lane.device.new_texture(&descriptor).unwrap();
+        let taken = images_of(lane, |blit| {
+            for (slice, &[r, g, b, a]) in chunk.iter().enumerate() {
+                let (color, region) = (ClearColor::new(r, g, b, a), Region::new_2d(0, 0, 1, 1));
+                blit.fill_texture_color(&slices, 0, slice as u64, region, color, None)
+                    .unwrap_or_else(|e| panic!("{pf:?}: a fill: {e}"));
+                each(256 * batch + slice);
+            }
+        });
+        assert_eq!(
+            taken, 0,
+            "{name}: {pf:?}: fills of whole slices made or took an image"
+        );
+        let length = chunk.len() as u64 * texel;
+        let back = buffer_with(&lane.device, &vec![0xab; length as usize]).unwrap();
+        let command_buffer = lane.queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        for slice in 0..chunk.len() as u64 {
+            blit.copy_from_texture_to_buffer(
+                &slices,
+                slice,
+                0,
+                Origin::new(0, 0, 0),
+                Size::new(1, 1, 1),
+                &back,
+                slice * texel,
+                texel,
+                texel,
+                BlitOption::None,
+            )
+            .unwrap();
+        }
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+        bytes.extend(read_buffer(&back, 0, length).unwrap());
+    }
+    bytes
+}
+
 /// The SHA-256 of the colors the probes filled with: the sweep's first 512 and the edges, each
 /// color's four `f64` bits little-endian.
 const SWEEP_SHA: &str = "8716c326453d2df7c2cbbc815322c70c718dba866028dafb2f0db04af4109d9d";
@@ -447,8 +506,12 @@ fn color_fills_write_metal_s_texels() {
 /// one code of it in each field where its fill announced `device-color-conversion` (a shared
 /// exponent's within one step of the coarser exponent), or a NaN for Metal's NaN where it
 /// announced `device-nan-encoding`; both are asked for at each fill. What stands apart is printed,
-/// a measurement. An `RGBA8Unorm_sRGB` fill announces `device-color-conversion` (its color
-/// channels inside `(0, 1)`), which the host's packing never does: the device's clear ran.
+/// a measurement. Each color is filled twice: into a texel of a larger level (the copy of a tile
+/// the device cleared), and into the whole of a 1 x 1 slice (the device's clear of the texture's
+/// own image, which makes no image, [`filled_whole`]); the device's clear may store another code
+/// in each (MoltenVK's of a 1 x 1 image and of a larger one), both held to Metal's alike. An
+/// `RGBA8Unorm_sRGB` fill announces `device-color-conversion` (its color channels inside
+/// `(0, 1)`), which the host's packing never does: the device's clear ran.
 #[test]
 fn plain_color_fills_are_the_device_s_clear() {
     let (messages, _cache, lane) = super::resolves::lane_with(|options| {
@@ -473,43 +536,56 @@ fn plain_color_fills_are_the_device_s_clear() {
             println!("COLOR-FILLS-SKIPPED {name}: {pf:?}: the device holds no such texture");
             continue;
         };
-        let _ = messages.take_notices();
-        let mut notes = vec![BTreeSet::new(); colors.len()];
-        let plain = filled(&lane, (pf, texel), &colors, None, |i| {
-            notes[i] = counts(&messages.take_notices()).into_keys().collect();
-        })
-        .unwrap();
-        let (mut apart, mut nans) = (0usize, 0usize);
-        let mut examples = Vec::new();
-        let bytes = texel as usize;
-        for (i, (got, want)) in plain.chunks(bytes).zip(metal.chunks(bytes)).enumerate() {
-            let converted = notes[i].contains(&Degradation::DeviceColorConversion);
-            let nan = notes[i].contains(&Degradation::DeviceNanEncoding);
-            srgb_converted |= pf == PixelFormat::RGBA8UnormSRGB && converted;
-            if got == want {
-                continue;
-            }
-            match fields_apart(pf, got, want) {
-                Some(Apart { codes, nans: n }) if (codes == 0 || converted) && (!n || nan) => {
-                    apart += usize::from(codes > 0);
-                    nans += usize::from(n);
-                    if examples.len() < 3 {
-                        examples.push(format!("{:?}: {got:02x?}, Metal's {want:02x?}", colors[i]));
-                    }
+        for whole in [false, true] {
+            let placed = if whole {
+                "whole 1 x 1 slices"
+            } else {
+                "texels of a level"
+            };
+            let _ = messages.take_notices();
+            let mut notes = vec![BTreeSet::new(); colors.len()];
+            let plain = {
+                let note = |i: usize| {
+                    notes[i] = counts(&messages.take_notices()).into_keys().collect();
+                };
+                match whole {
+                    false => filled(&lane, (pf, texel), &colors, None, note).unwrap(),
+                    true => filled_whole(&lane, (pf, texel), &colors, note),
                 }
-                _ => wrong.push(format!(
-                    "{pf:?} {:?}: {got:02x?}, Metal's {want:02x?}, announced {:?}",
-                    colors[i], notes[i]
-                )),
+            };
+            let (mut apart, mut nans) = (0usize, 0usize);
+            let mut examples = Vec::new();
+            let bytes = texel as usize;
+            for (i, (got, want)) in plain.chunks(bytes).zip(metal.chunks(bytes)).enumerate() {
+                let converted = notes[i].contains(&Degradation::DeviceColorConversion);
+                let nan = notes[i].contains(&Degradation::DeviceNanEncoding);
+                srgb_converted |= pf == PixelFormat::RGBA8UnormSRGB && converted;
+                if got == want {
+                    continue;
+                }
+                match fields_apart(pf, got, want) {
+                    Some(Apart { codes, nans: n }) if (codes == 0 || converted) && (!n || nan) => {
+                        apart += usize::from(codes > 0);
+                        nans += usize::from(n);
+                        if examples.len() < 3 {
+                            examples
+                                .push(format!("{:?}: {got:02x?}, Metal's {want:02x?}", colors[i]));
+                        }
+                    }
+                    _ => wrong.push(format!(
+                        "{pf:?} ({placed}) {:?}: {got:02x?}, Metal's {want:02x?}, announced {:?}",
+                        colors[i], notes[i]
+                    )),
+                }
             }
-        }
-        if apart > 0 || nans > 0 {
-            println!(
-                "COLOR-FILLS-DEVICE {name}: {pf:?}: {apart} of {} texels a code from Metal's, \
-                 {nans} a NaN the device's: {}",
-                colors.len(),
-                examples.join("; ")
-            );
+            if apart > 0 || nans > 0 {
+                println!(
+                    "COLOR-FILLS-DEVICE {name}: {pf:?} ({placed}): {apart} of {} texels a code \
+                     from Metal's, {nans} a NaN the device's: {}",
+                    colors.len(),
+                    examples.join("; ")
+                );
+            }
         }
     }
     for line in &wrong {
@@ -1215,6 +1291,199 @@ fn plain_color_fills_land_where_packed_ones_land() {
         wrong.is_empty(),
         "plain color fills not where packed ones land: {wrong:?}"
     );
+    quiet(lane, &messages);
+}
+
+/// The images the device made (`vkCreateImage`) or took from its recycler so far.
+fn images_taken(lane: &Lane) -> u64 {
+    let churn = lane.device.work_counts().object_churn;
+    churn.vk_images_made + churn.images_recycled
+}
+
+/// The bytes of `size` texels of `texture`'s `level` and `slice`, 4 bytes each.
+fn level_bytes(lane: &Lane, texture: &Texture, (level, slice): (u64, u64), size: Size) -> Vec<u8> {
+    let length = size.width * size.height * size.depth * 4;
+    let back = buffer_with(&lane.device, &vec![0xab; length as usize]).unwrap();
+    let command_buffer = lane.queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_texture_to_buffer(
+        texture,
+        slice,
+        level,
+        Origin::new(0, 0, 0),
+        size,
+        &back,
+        0,
+        size.width * 4,
+        size.width * size.height * 4,
+        BlitOption::None,
+    )
+    .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    read_buffer(&back, 0, length).unwrap()
+}
+
+/// Run the plain `RGBA8Unorm` fills `fills` encodes in one command buffer of `lane`'s queue: the
+/// images it made or took from the recycler ([`images_taken`]).
+fn images_of(
+    lane: &Lane,
+    fills: impl FnOnce(&mut metal2vulkan_runtime::BlitCommandEncoder),
+) -> u64 {
+    let before = images_taken(lane);
+    let command_buffer = lane.queue.command_buffer().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    fills(&mut blit);
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.error(), None);
+    images_taken(lane) - before
+}
+
+/// A plain color fill of whole subresources is the device's clear of the texture's own image
+/// (`blit_fill.rs`): it makes no image and takes none from the recycler (`WorkCounts`'
+/// `vkCreateImage` calls and recycled images), into a 2D texture's second level, a 2D array's
+/// slice and a 3D texture's level, each texel then the color's (`RGBA8Unorm`, codes no rounding
+/// is in question for) and the other level and slices kept. A command buffer of 64 fills of parts
+/// of a level takes one tile for all of them where they fill one color, and one a color where
+/// they fill two in turn, each part then its color's.
+#[test]
+fn whole_subresource_fills_make_no_image() {
+    let (messages, _cache, lane) = lane();
+    let name = lane.device.name().to_owned();
+    let pf = PixelFormat::RGBA8Unorm;
+    let color = ClearColor::new(1.0, 0.0, 0.2, 1.0);
+    let texel = [255u8, 0, 51, 255];
+    let other = ClearColor::new(0.0, 0.6, 1.0, 0.4);
+    let other_texel = [0u8, 153, 255, 102];
+    let made = |descriptor: &mut TextureDescriptor| {
+        descriptor.usage = USAGE;
+        descriptor.resource_options = ResourceOptions::private();
+        lane.device.new_texture(descriptor).unwrap()
+    };
+    let solid = |bytes: &[u8], texel: [u8; 4]| bytes.chunks(4).all(|t| t == texel);
+    // A texture's every byte `0x11` first.
+    let set = |texture: &Texture, levels: u64, slices: u64| {
+        let command_buffer = lane.queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        for level in 0..levels {
+            for slice in 0..slices {
+                let region = Region::new_3d(0, 0, 0, 64, 64, 64);
+                blit.fill_texture(texture, level, slice, region, &[0x11])
+                    .unwrap();
+            }
+        }
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+    };
+
+    let mut descriptor = TextureDescriptor::texture_2d(pf, 64, 64, false);
+    descriptor.mipmap_level_count = 2;
+    let mipmapped = made(&mut descriptor);
+    set(&mipmapped, 2, 1);
+    let taken = images_of(&lane, |blit| {
+        let region = Region::new_2d(0, 0, 32, 32);
+        blit.fill_texture_color(&mipmapped, 1, 0, region, color, None)
+            .unwrap();
+    });
+    assert_eq!(
+        taken, 0,
+        "{name}: a 2D level's whole fill made or took an image"
+    );
+    assert!(solid(
+        &level_bytes(&lane, &mipmapped, (1, 0), Size::new(32, 32, 1)),
+        texel
+    ));
+    let level_0 = level_bytes(&lane, &mipmapped, (0, 0), Size::new(64, 64, 1));
+    assert!(
+        level_0.iter().all(|&b| b == 0x11),
+        "{name}: level 0 changed"
+    );
+
+    let mut descriptor = TextureDescriptor::texture_2d(pf, 32, 32, false);
+    descriptor.texture_type = TextureType::Type2DArray;
+    descriptor.array_length = 3;
+    let array = made(&mut descriptor);
+    set(&array, 1, 3);
+    let taken = images_of(&lane, |blit| {
+        let region = Region::new_2d(0, 0, 32, 32);
+        blit.fill_texture_color(&array, 0, 1, region, color, None)
+            .unwrap();
+    });
+    assert_eq!(
+        taken, 0,
+        "{name}: a 2D array slice's whole fill made or took an image"
+    );
+    for slice in 0..3 {
+        let bytes = level_bytes(&lane, &array, (0, slice), Size::new(32, 32, 1));
+        match slice {
+            1 => assert!(solid(&bytes, texel), "{name}: slice 1"),
+            _ => assert!(
+                bytes.iter().all(|&b| b == 0x11),
+                "{name}: slice {slice} changed"
+            ),
+        }
+    }
+
+    let mut descriptor = TextureDescriptor::texture_2d(pf, 16, 16, false);
+    descriptor.texture_type = TextureType::Type3D;
+    descriptor.depth = 4;
+    let volume = made(&mut descriptor);
+    set(&volume, 1, 1);
+    let taken = images_of(&lane, |blit| {
+        let region = Region::new_3d(0, 0, 0, 16, 16, 4);
+        blit.fill_texture_color(&volume, 0, 0, region, color, None)
+            .unwrap();
+    });
+    assert_eq!(
+        taken, 0,
+        "{name}: a 3D level's whole fill made or took an image"
+    );
+    assert!(solid(
+        &level_bytes(&lane, &volume, (0, 0), Size::new(16, 16, 4)),
+        texel
+    ));
+
+    // Parts: 64 fills of 8 x 8 texels, one color, then two in turn; one tile a color.
+    let parts = made(&mut TextureDescriptor::texture_2d(pf, 64, 64, false));
+    for alternate in [false, true] {
+        let taken = images_of(&lane, |blit| {
+            for i in 0..64u64 {
+                let region = Region::new_2d(i % 8 * 8, i / 8 * 8, 8, 8);
+                let color = if alternate && i % 2 == 1 {
+                    other
+                } else {
+                    color
+                };
+                blit.fill_texture_color(&parts, 0, 0, region, color, None)
+                    .unwrap();
+            }
+        });
+        let tiles = 1 + u64::from(alternate);
+        assert_eq!(
+            taken, tiles,
+            "{name}: 64 fills of parts (alternating {alternate})"
+        );
+        let bytes = level_bytes(&lane, &parts, (0, 0), Size::new(64, 64, 1));
+        for (at, got) in bytes.chunks(4).enumerate() {
+            let (x, y) = (at as u64 % 64, at as u64 / 64);
+            let i = y / 8 * 8 + x / 8;
+            let want = if alternate && i % 2 == 1 {
+                other_texel
+            } else {
+                texel
+            };
+            assert_eq!(
+                got, want,
+                "{name}: texel ({x}, {y}), alternating {alternate}"
+            );
+        }
+    }
     quiet(lane, &messages);
 }
 

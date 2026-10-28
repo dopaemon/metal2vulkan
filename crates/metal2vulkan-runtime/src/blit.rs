@@ -21,6 +21,7 @@
 //!   texture replaces them (`shadow::overwritten`): it takes no copy in and no keep. A blit writes
 //!   one destination, so none writes such a texture's bytes two ways.
 
+use super::blit_fill::FillTiles;
 use super::buffer::Buffer;
 use super::command_buffer::CommandBuffer;
 use super::degradation::Degradation;
@@ -167,6 +168,9 @@ pub struct BlitCommandEncoder {
     /// The protection options it was made under where they end Metal's process at its first
     /// command (`command_buffer/protection.rs`): each command is refused.
     aborts: Option<u64>,
+    /// The tiles its plain color fills cleared, which its later ones copy from again
+    /// (`blit_fill.rs`). An encoding again starts with none, so it clears them again.
+    fill_tiles: FillTiles,
 }
 
 impl std::fmt::Debug for BlitCommandEncoder {
@@ -187,6 +191,7 @@ impl CommandBuffer {
             log: (self.device().shared().rebinds.any())
                 .then(|| self.device().shared().scheduler.spare_logs().blit()),
             aborts: self.protected_blit(),
+            fill_tiles: FillTiles::default(),
         })
     }
 }
@@ -201,6 +206,7 @@ impl BlitCommandEncoder {
             shadows: Vec::new(),
             log: None,
             aborts: None,
+            fill_tiles: FillTiles::default(),
         })
     }
 
@@ -270,6 +276,11 @@ impl BlitCommandEncoder {
     /// The encoder's core.
     pub(super) fn core(&mut self) -> &mut EncoderCore {
         &mut self.core
+    }
+
+    /// The tiles its plain color fills keep (`blit_fill.rs`).
+    pub(super) fn fill_tiles(&mut self) -> &mut FillTiles {
+        &mut self.fill_tiles
     }
 
     /// Record one blit command that reads and writes `uses`: the copies into the heap shadows
@@ -636,13 +647,15 @@ impl BlitCommandEncoder {
 
     /// `endEncoding`.
     pub fn end_encoding(self) -> Result<(), Error> {
-        // The core's shadows copy back what the blits wrote through heap shadows.
+        // The core's shadows copy back what the blits wrote through heap shadows. The fill tiles
+        // are their command buffer's, which holds them until it completes.
         let BlitCommandEncoder {
             mut core,
             pattern,
             shadows: _,
             log,
             aborts: _,
+            fill_tiles: _,
         } = self;
         if let Some(pattern) = pattern {
             core.retain(pattern);

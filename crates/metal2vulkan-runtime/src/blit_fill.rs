@@ -56,13 +56,23 @@
 //! Metal's packing in another format). A **plain** fill of a texture of a format whose fill
 //! converts a `float` (normalized, sRGB, half, float, small float, shared exponent;
 //! `fill_value::device_converts`) and that the device renders, its image holding Metal's bytes,
-//! is the device's own conversion of the color instead, as the native-arithmetic rule asks: a
-//! scratch image of the region in the texture's image format and samples, cleared whole by the
-//! device (`vkCmdClearColorImage`), copied into the region of each image the fill writes as a
-//! blit copy between the textures moves it. It is announced where the device's conversion may
-//! store another texel than Metal's packing (`fill_value::device_apart`,
-//! `device-color-conversion`; a half or small-float NaN, `device-nan-encoding`). A texture buffer
-//! and every other format are packed on the host. Metal fills the packed texel's bytes, repeated
+//! is the device's own conversion of the color instead, as the native-arithmetic rule asks: the
+//! device's clear of a color value (`vkCmdClearColorImage`). A fill of whole subresources (every
+//! texel of a level's layer, or of a 3D level's depth images) whose image is the texture's own (not
+//! a buffer's bytes), made with transfer-destination usage in a format that takes transfer writes
+//! in its tiling, is the clear of that image there, and makes nothing. Any other region copies a
+//! **tile** the device cleared to the color, of the texture's image format, samples and dimension,
+//! into the region of each image the fill writes, side by side from the region's origin, as a
+//! blit copy between the textures moves it. The encoder keeps its last 4 tiles for its later
+//! fills (each side the power of two at least the region's and 16 texels, no larger than the
+//! texture's first level, the longer one halved to hold 1 MiB at most): a fill of a color a kept
+//! tile holds copies it; one of another color makes a tile while fewer are kept and clears the
+//! least recently used one again past that. So a burst of fills of a few colors makes one tile a
+//! color, which the device's recycler gives where an earlier command buffer's went. The clear is
+//! announced where the device's conversion may store another texel than Metal's packing
+//! (`fill_value::device_apart`, `device-color-conversion`; a half or small-float NaN,
+//! `device-nan-encoding`). A texture buffer and every other format are packed on the host. Metal
+//! fills the packed texel's bytes, repeated
 //! or cut at the texture's texel (12 pairs of formats, 256 colors each: 128 colors packed in each
 //! of 70 formats into textures of 18 formats of 1 to 16 bytes; on the M3 Max the 88 formats Metal
 //! packs a color in, 1,144 colors each, into `RGBA32Uint` texels). In every other format (213: compressed, 4:2:2, depth, stencil,
@@ -137,7 +147,9 @@
 //! multiple of 16 bytes of the buffer: byte `k` of the range takes the pattern's byte `k - start`
 //! modulo 4 before the first such multiple, and byte `k` modulo 4 from it on.
 //!
-//! **How.** Each fill is copies the encoder already makes: a staging buffer of the pattern's units
+//! **How.** A plain color fill the device clears is the clear above, of the texture's image or of a
+//! tile copied from. Every other fill is copies the encoder already makes: a staging buffer of the
+//! pattern's units
 //! (4 MiB at most, copied again for a larger region) and `copy_from_buffer_to_texture` into the
 //! region's units of each image, so shadows, twins, carriers and two planes take their own paths;
 //! a heap's two-plane texture, one copy of the color words into the heap's bytes; a two-plane
@@ -161,6 +173,7 @@ use super::blit_texture;
 use super::chroma_pairs::{is_four_two_two, TEXEL_BYTES};
 use super::clear_value;
 use super::clear_value::has_channels;
+use super::compressed_blit::degrade_compressed_blit;
 use super::copy_plan::{
     block_bytes, block_extent, level_extent, BlitOption, CopyUnit, ImageRegion,
 };
@@ -171,6 +184,8 @@ use super::image_plan::{sample_count, ImagePlan};
 use super::render_values::ClearColor;
 use super::replay::BlitCall;
 use super::sample_planes::{BitsCopy, BITS_COPY_STAGES};
+use super::shadow::Covered;
+use super::sparse::emulated::Written;
 use super::texture::Texture;
 use super::texture_descriptor::TextureDescriptor;
 use super::tracker::Access;
@@ -563,6 +578,170 @@ fn degrade_fill_conversion(device: &Device, pf: PixelFormat, color: [f64; 4]) {
     }
 }
 
+/// The most bytes of a plain color fill's tile (the module docs): a larger region takes copies of
+/// it side by side.
+const TILE_BYTES: u64 = 1 << 20;
+
+/// The most tiles an encoder keeps for its later plain color fills (the module docs).
+const KEPT_TILES: usize = 4;
+
+/// The least side of a plain color fill's tile, where its texture's first level is as large.
+const TILE_SIDE: u32 = 16;
+
+/// What a plain color fill's tile is made as: the pixel format, image format, samples and
+/// dimension (a 1D image's, or 2D) of the textures it fills.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TileShape {
+    pixel_format: PixelFormat,
+    format: Format,
+    samples: u32,
+    one_row: bool,
+}
+
+/// A tile the device cleared to a color, which plain color fills copy from (the module docs).
+pub(super) struct FillTile {
+    shape: TileShape,
+    extent: [u32; 2],
+    /// The color it holds, its channels' bits.
+    color: [u64; 4],
+    texture: Texture,
+}
+
+/// A kept tile, taken for a fill.
+enum Taken {
+    /// One holding the fill's color.
+    Cleared(FillTile),
+    /// One of another color, for the fill to clear again.
+    Other(FillTile),
+}
+
+/// The tiles an encoder keeps for its later plain color fills (the module docs), the one used
+/// latest last: at most [`KEPT_TILES`].
+#[derive(Default)]
+pub(super) struct FillTiles(Vec<FillTile>);
+
+impl FillTiles {
+    /// The kept tile of `shape` at least `width` by `height` texels for a fill of `color`, taken
+    /// out until it is kept again: one holding the color where there is one; else, where it keeps
+    /// [`KEPT_TILES`] already, the one used least recently, to clear again; else none, and the
+    /// fill makes one (so as many colors in turn clear each tile once).
+    fn take(
+        &mut self,
+        shape: TileShape,
+        [width, height]: [u32; 2],
+        color: [u64; 4],
+    ) -> Option<Taken> {
+        let fits = |tile: &FillTile| {
+            tile.shape == shape && tile.extent[0] >= width && tile.extent[1] >= height
+        };
+        if let Some(at) = (self.0.iter()).position(|tile| fits(tile) && tile.color == color) {
+            return Some(Taken::Cleared(self.0.remove(at)));
+        }
+        if self.0.len() < KEPT_TILES {
+            return None;
+        }
+        let at = self.0.iter().position(fits)?;
+        Some(Taken::Other(self.0.remove(at)))
+    }
+
+    /// Keep `tile`, the one used latest: past [`KEPT_TILES`] the one used least recently goes
+    /// (its command buffer holds it until it completes all the same).
+    fn keep(&mut self, tile: FillTile) {
+        self.0.push(tile);
+        if self.0.len() > KEPT_TILES {
+            self.0.remove(0);
+        }
+    }
+}
+
+/// The extent of the tile that a plain color fill of `width` by `height` texels, of `bytes` bytes
+/// each (a texel's samples' together), copies from, in a texture whose first level is `limit`
+/// texels: each side the power of two at least the region's and [`TILE_SIDE`], no larger than the
+/// first level's (where the device made an image), then the longer side halved (rounded up) until
+/// it holds [`TILE_BYTES`] at most. Fills of near sizes take one tile, and an encoder's fills of
+/// growing regions make few.
+pub(super) fn tile_extent(
+    [width, height]: [u32; 2],
+    bytes: u64,
+    [wide, high]: [u32; 2],
+) -> [u32; 2] {
+    let side = |side: u32, limit: u32| {
+        let rounded = side.max(TILE_SIDE).checked_next_power_of_two();
+        rounded
+            .map_or(limit, |rounded| rounded.min(limit))
+            .max(side)
+            .max(1)
+    };
+    let mut extent = [side(width, wide), side(height, high)];
+    while u64::from(extent[0]) * u64::from(extent[1]) * bytes > TILE_BYTES && extent != [1, 1] {
+        let longer = usize::from(extent[1] > extent[0]);
+        extent[longer] = extent[longer].div_ceil(2);
+    }
+    extent
+}
+
+/// The copies out of a tile of `tile` texels that write the `size` texels from `origin` (its
+/// depth image's third) of the image's `level` and `layer`: the region cut into parts of the
+/// tile's extent from its origin, each copied from the tile's origin.
+pub(super) fn tile_copies(
+    tile: [u32; 2],
+    origin: [u32; 3],
+    size: [u32; 2],
+    (level, layer): (u32, u32),
+) -> Vec<ImageCopyRegion> {
+    let at = |level, layer, origin, [width, height]: [u32; 2]| ImageRegion {
+        aspect: ImageAspectFlags::COLOR,
+        level,
+        layer,
+        layers: 1,
+        origin,
+        size: [width, height, 1],
+    };
+    let mut copies = Vec::new();
+    for top in (0..size[1]).step_by(tile[1].max(1) as usize) {
+        for left in (0..size[0]).step_by(tile[0].max(1) as usize) {
+            let part = [tile[0].min(size[0] - left), tile[1].min(size[1] - top)];
+            let to = [origin[0] + left, origin[1] + top, origin[2]];
+            copies.push(ImageCopyRegion {
+                src: at(0, 0, [0, 0, 0], part),
+                dst: at(level, layer, to, part),
+            });
+        }
+    }
+    copies
+}
+
+/// Whether a plain color fill of every texel of `texture`'s image at its `level` (`extent`
+/// texels) is the device's clear of that image there (the module docs): an image of its own (not
+/// a buffer's bytes) of that extent at the level, made with transfer-destination usage
+/// ("`image` must have been created with the `VK_IMAGE_USAGE_TRANSFER_DST_BIT` usage flag set",
+/// `VUID-vkCmdClearColorImage-image-00002`), whose format takes transfer writes in the image's
+/// tiling ("The format features of `image` must contain `VK_FORMAT_FEATURE_TRANSFER_DST_BIT`",
+/// `VUID-vkCmdClearColorImage-image-01993`). The fill's formats are color formats, neither
+/// compressed nor YCbCr nor of 64-bit channels (`VUID-vkCmdClearColorImage-image-00007`,
+/// `-01545`, `-09678`), and every image rests in `GENERAL`
+/// (`VUID-vkCmdClearColorImage-imageLayout-01394`: "`imageLayout` must be
+/// `VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR`, `VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL` or
+/// `VK_IMAGE_LAYOUT_GENERAL`").
+fn in_place(texture: &Texture, level: u32, extent: [u32; 3]) -> Result<bool, Error> {
+    if texture.over_buffer() {
+        return Ok(false);
+    }
+    let plan = texture.image_plan()?;
+    let planned = plan.extent.map(|axis| (axis >> level.min(31)).max(1));
+    if planned != extent || !plan.usage.contains(ImageUsageFlags::TRANSFER_DST) {
+        return Ok(false);
+    }
+    let device = texture.device();
+    let profile = device.compile_device().profile();
+    let facts = device.shared().textures.facts(profile);
+    let features = match texture.linear_image()? {
+        true => facts.linear(plan.format),
+        false => facts.optimal(plan.format),
+    };
+    Ok(features.contains(FormatFeatureFlags2::TRANSFER_DST))
+}
+
 impl BlitCommandEncoder {
     /// `fillTexture:level:slice:region:bytes:length:` (Apple SPI): every unit of `region` of the
     /// texture's `level` and `slice` becomes `pattern`, repeated from its start and cut at the
@@ -822,10 +1001,13 @@ impl BlitCommandEncoder {
     }
 
     /// The device's clear of `color` (its clear value `value`) into `region` of `texture`'s `level`
-    /// and `slice`, placed as a fill (the module docs): a scratch image of the region cleared whole
-    /// by the device ([`cleared_scratch`](Self::cleared_scratch)), copied into the region of each
-    /// depth image the fill writes as a blit copy between the two textures moves it. Announced
-    /// where the device's conversion may store another texel than Metal's fill packs.
+    /// and `slice`, placed as a fill (the module docs). A fill of whole subresources whose image
+    /// takes a transfer write is the clear of the texture's own image there
+    /// ([`clear_in_place`](Self::clear_in_place)); any other copies a tile the device cleared to
+    /// the color ([`cleared_tile`](Self::cleared_tile)) into the region of each depth image the
+    /// fill writes, side by side from the region's origin, as a blit copy between the two textures
+    /// moves it. Announced where the device's conversion may store another texel than Metal's
+    /// fill packs.
     fn cleared_fill(
         &mut self,
         call: &'static str,
@@ -849,7 +1031,8 @@ impl BlitCommandEncoder {
         };
         let level = u32::try_from(level).map_err(|_| internal("a fill's level"))?;
         let record = texture.record();
-        let [w, h, _] = level_extent(record, level).map(u64::from);
+        let extent = level_extent(record, level);
+        let [w, h, d] = extent.map(u64::from);
         let x = cut(region.origin.x, width, w);
         let y = cut(region.origin.y, height, h);
         if x.is_empty() || y.is_empty() {
@@ -858,44 +1041,160 @@ impl BlitCommandEncoder {
         let narrow = |v: u64| u32::try_from(v).map_err(|_| internal("a fill's region"));
         let [left, top] = [narrow(x.start)?, narrow(y.start)?];
         let size = [narrow(x.end - x.start)?, narrow(y.end - y.start)?];
-        let scratch = self.cleared_scratch(texture, size, value)?;
-        let layer = record.base_layer + narrow(slice)?;
-        let mut copies = Vec::new();
-        for z in images {
-            let at = |level, layer, origin| ImageRegion {
-                aspect: ImageAspectFlags::COLOR,
-                level,
-                layer,
-                layers: 1,
-                origin,
-                size: [size[0], size[1], 1],
-            };
-            copies.push(ImageCopyRegion {
-                src: at(0, 0, [0, 0, 0]),
-                dst: at(record.base_level + level, layer, [left, top, narrow(z)?]),
-            });
+        let (level, layer) = (
+            record.base_level + level,
+            record.base_layer + narrow(slice)?,
+        );
+        // Every texel of the level's layer, or of a 3D level's depth images.
+        let whole = x == (0..w) && y == (0..h) && images == (0..d);
+        if whole && in_place(texture, level, extent)? {
+            self.clear_in_place(call, texture, (level, layer), extent, value)?;
+        } else {
+            let (tile, held) = self.cleared_tile(texture, size, (value, color))?;
+            let mut copies = Vec::new();
+            for z in images {
+                copies.extend(tile_copies(
+                    held,
+                    [left, top, narrow(z)?],
+                    size,
+                    (level, layer),
+                ));
+            }
+            self.texture_copies(call, &tile, texture, &copies)?;
         }
-        self.texture_copies(call, &scratch, texture, &copies)?;
         degrade_fill_conversion(self.core().device(), texture.pixel_format(), color);
         Ok(())
     }
 
-    /// A scratch image of `texture`'s image format, samples and dimension (a 1D image's, or 2D)
-    /// over `width` by `height` texels, cleared whole by the device to `value`
-    /// (`vkCmdClearColorImage`, the device's conversion of a clear value): a texture the command
-    /// buffer holds until it completes.
-    fn cleared_scratch(
+    /// The device's clear of `value` into every texel of `texture`'s own image at `level` and
+    /// `layer` (the image's, `extent` texels), one `vkCmdClearColorImage`: nothing is made. Written
+    /// as a blit's copy into the subresource writes it (a heap shadow's every texel, a sparse
+    /// texture's scrub), the note of a texture Metal keeps compressed announced as there.
+    fn clear_in_place(
+        &mut self,
+        call: &'static str,
+        texture: &Texture,
+        (level, layer): (u32, u32),
+        [width, height, depth]: [u32; 3],
+        value: vk::ClearColorValue,
+    ) -> Result<(), Error> {
+        let image = texture.raw_image()?;
+        let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
+        let uses = [texture.image_use(level..level + 1, layer..layer + 1, write, true)?];
+        let range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: level,
+            level_count: 1,
+            base_array_layer: layer,
+            layer_count: 1,
+        };
+        let covered = [Covered {
+            image,
+            subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: level,
+                base_array_layer: layer,
+                layer_count: 1,
+            },
+            offset: vk::Offset3D::default(),
+            extent: vk::Extent3D {
+                width,
+                height,
+                depth,
+            },
+        }];
+        self.command_reading(&uses, (&[], &covered), |device, raw| {
+            // SAFETY: the encoder's command buffer is recording outside a render pass; the image
+            // is live and retained until it completes, rests in `GENERAL` and was made with
+            // transfer-destination usage, its format (a color format, neither compressed nor
+            // YCbCr, nor of 64-bit channels) taking transfer writes in its tiling (`in_place`);
+            // the range is one of its levels and layers (a 3D image's one).
+            unsafe {
+                device.cmd_clear_color_image(raw, image, vk::ImageLayout::GENERAL, &value, &[range])
+            };
+        })?;
+        self.core().retain(texture.clone());
+        let written = ImageRegion {
+            aspect: ImageAspectFlags::COLOR,
+            level,
+            layer,
+            layers: 1,
+            origin: [0, 0, 0],
+            size: [width, height, depth],
+        };
+        self.decode_twin(texture, &[written])?;
+        self.scrub(
+            texture,
+            vec![(vk::ImageAspectFlags::COLOR, Written::of(&written))],
+        )?;
+        degrade_compressed_blit(call, texture)
+    }
+
+    /// A tile the device cleared to `color` (its clear value `value`), of `texture`'s image
+    /// format, samples and dimension (a 1D image's, or 2D), to copy the region of `size` texels
+    /// from (the module docs), and its extent: the encoder's tile of that shape and color where
+    /// it keeps one as large as [`tile_extent`] asks; else, where it keeps [`KEPT_TILES`], its
+    /// least recently used such tile of another color, cleared again; else a new one, which its
+    /// command buffer holds until it completes. A tile is cleared whole by the device
+    /// (`vkCmdClearColorImage`, the device's conversion of a clear value). Kept by the encoder for
+    /// its later fills ([`FillTiles`]).
+    fn cleared_tile(
         &mut self,
         texture: &Texture,
-        [width, height]: [u32; 2],
-        value: vk::ClearColorValue,
-    ) -> Result<Texture, Error> {
+        size: [u32; 2],
+        (value, color): (vk::ClearColorValue, [f64; 4]),
+    ) -> Result<(Texture, [u32; 2]), Error> {
         let pf = texture.pixel_format();
         let (format, one_row) = {
             let plan = texture.image_plan()?;
             (plan.format, plan.image_type == ImageType::TYPE_1D)
         };
         let samples = texture.record().samples;
+        let shape = TileShape {
+            pixel_format: pf,
+            format,
+            samples,
+            one_row,
+        };
+        let texel = block_bytes(pf).ok_or_else(|| internal("a fill tile of no texel's bytes"))?;
+        let first = level_extent(texture.record(), 0);
+        let extent = tile_extent(
+            size,
+            u64::from(texel) * u64::from(samples),
+            [first[0], first[1]],
+        );
+        let color = color.map(f64::to_bits);
+        let tile = match self.fill_tiles().take(shape, extent, color) {
+            Some(Taken::Cleared(tile)) => tile,
+            Some(Taken::Other(tile)) => {
+                self.clear_tile(&tile.texture, value)?;
+                FillTile { color, ..tile }
+            }
+            None => {
+                let texture = self.new_tile(shape, extent)?;
+                self.clear_tile(&texture, value)?;
+                FillTile {
+                    shape,
+                    extent,
+                    color,
+                    texture,
+                }
+            }
+        };
+        let made = (tile.texture.clone(), tile.extent);
+        self.fill_tiles().keep(tile);
+        Ok(made)
+    }
+
+    /// A tile of `shape` over `width` by `height` texels: a texture the command buffer holds
+    /// until it completes.
+    fn new_tile(&mut self, shape: TileShape, [width, height]: [u32; 2]) -> Result<Texture, Error> {
+        let TileShape {
+            pixel_format: pf,
+            format,
+            samples,
+            one_row,
+        } = shape;
         let texture_type = match (one_row, samples > 1) {
             (true, _) => TextureType::Type1D,
             (false, false) => TextureType::Type2D,
@@ -935,10 +1234,15 @@ impl BlitCommandEncoder {
                 | TextureUsage::SHADER_ATOMIC
                 | TextureUsage::PIXEL_FORMAT_VIEW,
         };
-        let scratch = Device::new_planned_texture(self.core().command_buffer(), &descriptor, plan)?;
-        let image = scratch.raw_image()?;
+        Device::new_planned_texture(self.core().command_buffer(), &descriptor, plan)
+    }
+
+    /// The device's clear of the whole `tile` to `value` (`vkCmdClearColorImage`), after its
+    /// earlier copies out read it.
+    fn clear_tile(&mut self, tile: &Texture, value: vk::ClearColorValue) -> Result<(), Error> {
+        let image = tile.raw_image()?;
         let write = Access::new(TRANSFER, vk::AccessFlags2::TRANSFER_WRITE);
-        let uses = [scratch.image_use(0..1, 0..1, write, true)?];
+        let uses = [tile.image_use(0..1, 0..1, write, true)?];
         let range = vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             base_mip_level: 0,
@@ -948,14 +1252,13 @@ impl BlitCommandEncoder {
         };
         self.command(&uses, |device, raw| {
             // SAFETY: the encoder's command buffer is recording outside a render pass; the image
-            // is live until it completes (the command buffer holds the scratch), rests in
-            // `GENERAL` and has transfer-destination usage; the range is its one level and layer,
-            // and its format, one the device renders, takes transfer writes.
+            // is live until it completes (the command buffer holds the tile), rests in `GENERAL`
+            // and has transfer-destination usage; the range is its one level and layer, and its
+            // format, one the device renders, takes transfer writes.
             unsafe {
                 device.cmd_clear_color_image(raw, image, vk::ImageLayout::GENERAL, &value, &[range])
             };
-        })?;
-        Ok(scratch)
+        })
     }
 
     /// The fill of `pattern` into `region` of `texture`'s `level` and `slice` (the module docs).
