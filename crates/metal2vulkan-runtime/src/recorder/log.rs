@@ -18,6 +18,7 @@
 use super::handles;
 use super::replays::{real_of, Replays};
 use super::thunks::{real, Command};
+use crate::dirty_pages::CopyInGate;
 use crate::exit_guard::{self, Call};
 use crate::generated_commands::GeneratedCommandsInfo;
 use ash::vk::{self, Handle};
@@ -81,6 +82,11 @@ impl<T: Copy> Arena<T> {
             start,
             len: self.0.len() as u32 - start,
         }
+    }
+
+    fn push_slice(&mut self, values: &[T]) -> Span {
+        // SAFETY: the slice's elements, as many as its length.
+        unsafe { self.push(values.as_ptr(), values.len() as u32) }
     }
 
     fn one(&mut self, value: T) -> Span {
@@ -187,6 +193,15 @@ enum Logged {
         layout: vk::ImageLayout,
         dst: vk::Buffer,
         regions: Span,
+    },
+    /// A shadow's copy in whose regions its gate decides at the replay (`dirty_pages.rs`):
+    /// `regions` are every region, `gate` the gate's place in [`Log::gates`].
+    GatedCopyBufferToImage {
+        src: vk::Buffer,
+        dst: vk::Image,
+        layout: vk::ImageLayout,
+        regions: Span,
+        gate: u32,
     },
     UpdateBuffer(vk::Buffer, vk::DeviceSize, Span),
     FillBuffer(vk::Buffer, vk::DeviceSize, vk::DeviceSize, u32),
@@ -327,6 +342,8 @@ pub(super) struct Log {
     views: Arena<vk::BufferView>,
     masks: Arena<vk::ColorComponentFlags>,
     generated: Arena<GeneratedCommandsInfo>,
+    /// The gates of its gated copies in, which decide their regions as it replays.
+    gates: Vec<Arc<CopyInGate>>,
 }
 
 impl Log {
@@ -366,6 +383,7 @@ impl Log {
             views: Arena::new(),
             masks: Arena::new(),
             generated: Arena::new(),
+            gates: Vec::new(),
         }
     }
 
@@ -401,6 +419,7 @@ impl Log {
         self.views.0.clear();
         self.masks.0.clear();
         self.generated.0.clear();
+        self.gates.clear();
     }
 
     /// It is handle `index`'s, of a command buffer's `replays`.
@@ -740,6 +759,26 @@ impl Log {
             dst,
             layout,
             regions,
+        });
+    }
+
+    /// Log a shadow's copy in of `regions` from `src` into `dst` whose gate decides, at the
+    /// replay, which of them it records (`dirty_pages.rs`).
+    pub(super) fn copy_buffer_to_image_gated(
+        &mut self,
+        gate: Arc<CopyInGate>,
+        (src, dst, layout): (vk::Buffer, vk::Image, vk::ImageLayout),
+        regions: &[vk::BufferImageCopy],
+    ) {
+        let regions = (self.buffer_images).push_slice(regions);
+        let gate_at = self.gates.len() as u32;
+        self.gates.push(gate);
+        self.op(Logged::GatedCopyBufferToImage {
+            src,
+            dst,
+            layout,
+            regions,
+            gate: gate_at,
         });
     }
 
@@ -1448,6 +1487,28 @@ impl Log {
                         regions.len,
                         self.buffer_images.get_ptr(regions)
                     ),
+                    Logged::GatedCopyBufferToImage {
+                        src,
+                        dst,
+                        layout,
+                        regions,
+                        gate,
+                    } => {
+                        let whole = self.buffer_images.get(regions);
+                        let mut chosen = Vec::new();
+                        self.gates[gate as usize].regions(whole, &mut chosen);
+                        if !chosen.is_empty() {
+                            call!(
+                                CmdCopyBufferToImage,
+                                vk::PFN_vkCmdCopyBufferToImage,
+                                src,
+                                dst,
+                                layout,
+                                chosen.len() as u32,
+                                chosen.as_ptr()
+                            )
+                        }
+                    }
                     Logged::CopyImageToBuffer {
                         src,
                         layout,

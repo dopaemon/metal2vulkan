@@ -67,6 +67,7 @@ use super::degradation::Degradation;
 use super::descriptor_arena::DescriptorArena;
 use super::device::lock;
 use super::device::relay::Relayed;
+use super::dirty_pages::DirtyCommit;
 use super::encoder::{Recorded, Segment};
 use super::error::{
     internal, invalid, vulkan, CommandBufferError, DeadlockCause, EncoderCall, Error,
@@ -100,7 +101,7 @@ use super::sparse::encoder::SparseUpdate;
 use super::sparse::indirect;
 use super::texture::storage_form::Riding;
 use super::texture::Texture;
-use super::tracker::Footprint;
+use super::tracker::{Footprint, Use};
 use super::unique_identifier::ScheduledWork;
 use super::upload::{Upload, Uploads};
 use super::used_resources::{names_any, EncoderKind, EncoderRecord, Reached, ReadRecord};
@@ -242,6 +243,10 @@ pub(super) struct CommandBufferShared {
     /// step records: the recordings after its commit into its pool take turns, as Vulkan
     /// synchronizes a pool's command buffers' recording externally.
     reencoding: Mutex<()>,
+    /// What its commands did that the device's logs of host pages hear of at its commit
+    /// (`dirty_pages.rs`): collected only once the device copied a shadow over logged pages in.
+    /// Apart from the state, which no encoder holds while it records.
+    pub(super) dirty: Mutex<DirtyCommit>,
     /// The `VkCommandBuffer`s of its pool its recordings ended ([`CommandBuffer::end_raw`]):
     /// where they are every one the pool handed out and it completed, it gives the pool back
     /// with none recording (`spares.rs`).
@@ -1864,6 +1869,7 @@ impl CommandBuffer {
             fill_slot: Mutex::new([0; 16]),
             reencode: AtomicU64::new(0),
             reencoding: Mutex::new(()),
+            dirty: Mutex::new(DirtyCommit::default()),
             raws_ended: AtomicU64::new(0),
             kernel: KernelTimes::default(),
             status: AtomicU8::new(status_word(CommandBufferStatus::NotEnqueued)),
@@ -1910,6 +1916,19 @@ impl CommandBuffer {
 
     pub(super) fn state(&self) -> MutexGuard<'_, State> {
         lock(&self.0.state)
+    }
+
+    /// Note a command's `uses` for the device's logs of host pages, where it keeps any
+    /// (`dirty_pages.rs`): its writes let go, at the commit, of the holds of the shadows they meet.
+    pub(super) fn note_dirty(&self, uses: &[Use<ResourceKey>]) {
+        if self.0.device.shared().dirty.any() {
+            lock(&self.0.dirty).note(uses);
+        }
+    }
+
+    /// What its commands did so far that the device's logs of host pages hear of at its commit.
+    pub(super) fn dirty(&self) -> MutexGuard<'_, DirtyCommit> {
+        lock(&self.0.dirty)
     }
 
     /// Whether a buffer over host pages a command of its ended encoder at `encoder` named lies
@@ -2656,6 +2675,22 @@ impl CommandBuffer {
             // What of it the live buffers list once used, held weakly: the device's registries'
             // locks, which take no other, inside this one.
             let reached = state.reached(device.shared(), runs);
+            // The device's logs of host pages hear of its writes and gated copies in, in commit
+            // order, and of the shadows its end left holding their truth (`dirty_pages.rs`).
+            // One that waits for an event or a semaphore may run after work committed later,
+            // whose writes no commit before it noted: its copies in count on no hold.
+            if device.shared().dirty.any() {
+                let held = match (&failure, &state.shadow_carry) {
+                    (None, Some(carry)) => carry.held_whole(),
+                    _ => Vec::new(),
+                };
+                let waits = (state.batches.all().iter())
+                    .any(|batch| !batch.waits.is_empty() || !batch.binary_waits.is_empty());
+                device
+                    .shared()
+                    .dirty
+                    .committed(&lock(&self.0.dirty), &held, waits);
+            }
             (segments, places, failure, reached, hangs)
         };
         // What the commands of its encoders that run use is resident from its commit on, as
@@ -4256,6 +4291,12 @@ impl CommandBufferShared {
                 }
                 (None, None) => result,
             };
+            // The logs of host pages hear of its shadows' copies back again, now they ran, and
+            // let go of the holds a failed one's copies in set (`dirty_pages.rs`).
+            if self.device.shared().dirty.any() {
+                let dirty = lock(&self.dirty);
+                (self.device.shared().dirty).completed(&dirty, result.is_err());
+            }
             match result {
                 Ok(()) => {
                     state.status = CommandBufferStatus::Completed;

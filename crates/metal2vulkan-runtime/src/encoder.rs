@@ -1106,6 +1106,7 @@ impl EncoderCore {
         // A write of a carried shadowed texture's truth another way leaves its image stale: the
         // texture is no longer carried, whatever this encoder uses (`shadow::ShadowCarry`).
         self.shadows.wrote(tracked);
+        self.open.command_buffer.note_dirty(tracked);
         let barrier = self.uses.barrier(tracked, reach);
         self.uses.record_reaching(stages, tracked, barrier, reach);
         if barrier.is_some() {
@@ -1368,6 +1369,7 @@ impl EncoderCore {
             true => &self.aliased_uses[..],
             false => uses,
         };
+        self.open.command_buffer.note_dirty(all);
         self.uses.record(stages, all, None);
     }
 
@@ -1589,6 +1591,11 @@ impl EncoderCore {
                 self.retain(both);
                 continue;
             }
+            // A copy back or merge into host pages a consumer logs is reported to the log as the
+            // shadow's own at the commit (`dirty_pages.rs`).
+            if let Some((log, bytes)) = copy.written_log(&device) {
+                self.open.command_buffer.dirty().wrote_back(log, bytes);
+            }
             // A shadow takes the view a dispatch reads on a device that dispatches alone.
             let dispatched = copy.dispatched(&device);
             let rows = match dispatched {
@@ -1605,13 +1612,22 @@ impl EncoderCore {
                     copy.uses_with(rows.as_ref()),
                 ),
             };
+            // A copy in over host pages a consumer logs takes the regions its gate decides as the
+            // command buffer replays (`dirty_pages.rs`).
+            let gate = match &dispatched {
+                Some(_) => None,
+                None => copy.gate_log(&device).map(|(log, texel)| {
+                    let shadows = &device.shared().dirty;
+                    (self.open.command_buffer.dirty()).gate((log, &copy.copies, texel), shadows)
+                }),
+            };
             let record = |device: &Vk, raw: vk::CommandBuffer| match &dispatched {
                 // SAFETY: the encoder's command buffer is recording outside a render pass; its
                 // commands retain the shadowed textures (and their views) and the dispatch until
                 // it completes, and every image rests in the `GENERAL` layout.
                 Some(back) => unsafe { back.record(device, raw) },
                 // SAFETY: as above; the rows are the copy's own, made just now.
-                None => unsafe { copy.record(device, raw, rows.as_ref()) },
+                None => unsafe { copy.record_gated(device, raw, rows.as_ref(), gate) },
             };
             self.shadow_command(&mut run, (stages, &uses, copy.writes_truth()), record);
             if let Some(back) = dispatched {
@@ -1654,6 +1670,7 @@ impl EncoderCore {
             return;
         };
         record(self.device().shared().vk(), raw);
+        self.open.command_buffer.note_dirty(tracked);
         self.uses.record(stages, tracked, None);
         self.touch(uses);
     }
@@ -1698,6 +1715,7 @@ impl EncoderCore {
                 copy.record(raw, held, rows.as_ref());
             }
             let stages = copy.stages_with(rows.as_ref());
+            self.open.command_buffer.note_dirty(tracked);
             self.uses.record(stages, tracked, None);
             self.touch(&uses);
             if let Some(sets) = rows.and_then(RowCopies::retained) {

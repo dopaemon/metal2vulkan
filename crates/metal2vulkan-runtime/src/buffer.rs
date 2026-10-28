@@ -26,6 +26,7 @@ use super::buffer_texture::TexelViews;
 use super::churn_counts::Recycled;
 use super::degradation::Degradation;
 use super::device::{lock, DeviceShared};
+use super::dirty_pages::DirtySource;
 use super::error::{internal, invalid, nil, vulkan, Error, Problem};
 use super::exit_guard;
 use super::fresh_pages;
@@ -659,6 +660,9 @@ pub(super) struct HostPages {
     /// Their buffer let go of them: its release, rebind or detach (pages lie in one buffer,
     /// once) ([`let_go_by_buffer`](Self::let_go_by_buffer)).
     let_go: AtomicBool,
+    /// The caller's log of the writes to them, where it gave one with their memory
+    /// (`HostMemory::with_dirty_pages`, `dirty_pages.rs`).
+    dirty: OnceLock<Arc<DirtySource>>,
 }
 
 impl HostPages {
@@ -675,7 +679,18 @@ impl HostPages {
             listed: AtomicUsize::new(0),
             replay_holds: Arc::new(AtomicUsize::new(0)),
             let_go: AtomicBool::new(false),
+            dirty: OnceLock::new(),
         }
+    }
+
+    /// Keep the caller's log of the writes to them (`dirty_pages.rs`), given with their memory.
+    pub(super) fn keep_dirty(&self, dirty: Arc<DirtySource>) {
+        let _kept = self.dirty.set(dirty);
+    }
+
+    /// The caller's log of the writes to them, where it gave one.
+    pub(super) fn dirty(&self) -> Option<&Arc<DirtySource>> {
+        self.dirty.get()
     }
 
     /// A command buffer's replays hold them from now on (`recorder`): counted before its commit

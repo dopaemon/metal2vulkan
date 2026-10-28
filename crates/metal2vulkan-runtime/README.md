@@ -277,6 +277,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   check looks for never calls it, and runs on the GPU alone where it can.
 - `HostMemory::with_dma_buf` and its `DmaBufSource`: dma-bufs of a no-copy object's pages, for a
   device that refuses their pointer.
+- `HostMemory::with_dirty_pages` and its `DirtyPages` (with `DirtyStamp`): the consumer's log of
+  the writes to a no-copy object's pages, by which every copy of them into memory of the device's
+  own (a shadow of a texture over them) copies in only the pages changed since its last copy, on
+  every device. The runtime's own writes into the pages are reported back, naming their writer.
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.

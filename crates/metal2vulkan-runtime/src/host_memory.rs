@@ -101,6 +101,7 @@
 //!   (held now) and `WorkCounts::host_keep_alives_covered` (dropped at the release).
 
 use super::device::lock;
+use super::dirty_pages::{hook, DirtyHook, DirtyPages, DirtySource};
 #[cfg(unix)]
 use super::dma_buf::DmaBufSource;
 use super::error::{vulkan, Error};
@@ -116,15 +117,18 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 /// Host memory a buffer or heap wraps without a copy: a pointer whose bytes the caller vouches for
-/// (the `pointer` of `newBufferWithBytesNoCopy:length:options:deallocator:`), and, as a runtime
-/// extension, a source of dma-bufs of its pages for a device that refuses the pointer itself
-/// ([`HostMemory::with_dma_buf`]).
+/// (the `pointer` of `newBufferWithBytesNoCopy:length:options:deallocator:`), and, as runtime
+/// extensions, a source of dma-bufs of its pages for a device that refuses the pointer itself
+/// ([`HostMemory::with_dma_buf`]) and a log of the writes to its pages
+/// ([`HostMemory::with_dirty_pages`]).
 pub struct HostMemory {
     pointer: NonNull<u8>,
     source: Option<Source>,
     /// The caller vouched that the process maps every page writable
     /// ([`HostMemory::assume_writable`]), so the runtime asks the kernel nothing of them.
     writable: bool,
+    /// The caller's log of the pages written ([`HostMemory::with_dirty_pages`]).
+    dirty: Option<Arc<dyn DirtyHook>>,
 }
 
 /// What a [`HostMemory`] may carry besides its pointer: a [`DmaBufSource`] where the system has
@@ -150,6 +154,7 @@ impl std::fmt::Debug for HostMemory {
             .field("pointer", &self.pointer)
             .field("dma_buf", &self.source.is_some())
             .field("writable", &self.writable)
+            .field("dirty_pages", &self.dirty.is_some())
             .finish()
     }
 }
@@ -188,6 +193,7 @@ impl HostMemory {
             pointer,
             source: None,
             writable: false,
+            dirty: None,
         }
     }
 
@@ -233,6 +239,7 @@ impl HostMemory {
             pointer,
             source: Some(source),
             writable: false,
+            dirty: None,
         }
     }
 
@@ -258,16 +265,75 @@ impl HostMemory {
         }
     }
 
+    /// This memory, with the caller's log of the writes to its pages (a runtime extension,
+    /// [`DirtyPages`], whose offsets are bytes from [`pointer`](Self::pointer)). Every import made
+    /// from this memory keeps the log, on every device, discrete and integrated alike: the
+    /// buffer's or the heap's, and the pages a rebind gives either. A tracked 2D texture's shadow
+    /// over the pages (`shadowed-texture`), whose texels a command buffer's first use copies
+    /// straight from them into its image, then copies in only the full-width bands of rows of
+    /// the pages the log reports changed since the command buffer whose end last left the image
+    /// holding every texel, where no command of the device wrote the bytes or the image since,
+    /// and nothing where no page changed (bands 8 rows apart or less are one; half the rows or
+    /// more, or more than 1024 bands, are every row). The decision is made as the command
+    /// buffer's commands are recorded for the GPU, after its commit and before its submission: a
+    /// stamp asked at the commit ([`DirtyPages::request`], once per log and commit, only where the
+    /// command buffer has such a copy in) and waited for then ([`DirtyPages::wait`], for the
+    /// latest stamp asked of the log so far, so one wait serves every command buffer committed
+    /// before it; none where the copy has no earlier copy to count on). A command buffer that
+    /// waits for an event or a semaphore, or wrote the bytes before the copy, copies every row.
+    /// The runtime reports its own writes into the pages back to the log: a shadow's copy back
+    /// or merge ([`DirtyPages::wrote_as`], the shadow its writer, at the commit and again at the
+    /// completion), which that shadow's own copies in leave out
+    /// ([`DirtyPages::changed_except`]), and a `replaceRegion` of a texture over them
+    /// ([`DirtyPages::wrote`]). A wait the log answers `false` makes the copy take every row, and
+    /// is not made again for a stamp at or below it. Such a shadow's copy in is never cut to the rectangle a pass's scissors bound, so its
+    /// image holds every texel for the next command buffer. Every other copy of the pages (a
+    /// shadow copied through a staging buffer, of another kind, or untracked) takes every byte,
+    /// as without a log. Counted:
+    /// `WorkCounts::dirty_copies_in_gated` and kin.
+    ///
+    /// `source` is any [`DirtyPages`]: a concrete type, or a trait object that names its watch
+    /// type (`Arc<dyn DirtyPages<Watch = W>>`). No Metal counterpart: Metal's GPU reads a no-copy
+    /// object's pages in place.
+    ///
+    /// Exact where the log is true: every byte a skipped copy would have moved is one the copy
+    /// holds already.
+    pub fn with_dirty_pages<D>(self, source: Arc<D>) -> HostMemory
+    where
+        D: DirtyPages + ?Sized + 'static,
+        D::Watch: 'static,
+    {
+        HostMemory {
+            dirty: Some(hook(source)),
+            ..self
+        }
+    }
+
     /// The pointer.
     pub fn pointer(&self) -> NonNull<u8> {
         self.pointer
     }
 
-    /// The pointer, the dma-buf source where the caller gave one, and whether the caller vouched
-    /// for the pages' write permission ([`HostMemory::assume_writable`]).
-    pub(super) fn into_parts(self) -> (NonNull<u8>, Option<Source>, bool) {
-        (self.pointer, self.source, self.writable)
+    /// The pointer, the dma-buf source where the caller gave one, whether the caller vouched
+    /// for the pages' write permission ([`HostMemory::assume_writable`]), and its log of the pages
+    /// written ([`HostMemory::with_dirty_pages`]), kept with the pointer its offsets count from.
+    pub(super) fn into_parts(self) -> HostParts {
+        let dirty = (self.dirty).map(|hook| DirtySource::new(hook, self.pointer.as_ptr() as u64));
+        HostParts {
+            pointer: self.pointer,
+            source: self.source,
+            writable: self.writable,
+            dirty,
+        }
     }
+}
+
+/// A [`HostMemory`]'s parts ([`HostMemory::into_parts`]).
+pub(super) struct HostParts {
+    pub(super) pointer: NonNull<u8>,
+    pub(super) source: Option<Source>,
+    pub(super) writable: bool,
+    pub(super) dirty: Option<Arc<DirtySource>>,
 }
 
 /// A no-copy buffer's deallocator (Metal's block): called once, with the pointer and the length,

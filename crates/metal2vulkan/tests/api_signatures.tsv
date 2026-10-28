@@ -2546,6 +2546,15 @@ field	metal2vulkan-runtime::WorkCounts.depth_instances_held	pub depth_instances_
 field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys_built: u64
 field	metal2vulkan-runtime::WorkCounts.detached_storage_reaches	pub detached_storage_reaches: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_allocated	pub device_memory_allocated: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_gated	pub dirty_copies_in_gated: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_skipped	pub dirty_copies_in_skipped: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_whole	pub dirty_copies_in_whole: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_copy_in_bytes_copied	pub dirty_copy_in_bytes_copied: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_copy_in_bytes_whole	pub dirty_copy_in_bytes_whole: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_stamps_asked	pub dirty_stamps_asked: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_wait_nanos	pub dirty_wait_nanos: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_waits	pub dirty_waits: u64
+field	metal2vulkan-runtime::WorkCounts.dirty_waits_unanswered	pub dirty_waits_unanswered: u64
 field	metal2vulkan-runtime::WorkCounts.dispatch_pipelines_pooled	pub dispatch_pipelines_pooled: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
@@ -7814,6 +7823,7 @@ method	metal2vulkan-runtime::HostBytes::pointer	pub fn pointer(&self) -> NonNull
 method	metal2vulkan-runtime::HostMemory::assume_writable	pub unsafe fn assume_writable(self) -> HostMemory
 method	metal2vulkan-runtime::HostMemory::new	pub unsafe fn new(pointer: NonNull<u8>) -> HostMemory
 method	metal2vulkan-runtime::HostMemory::pointer	pub fn pointer(&self) -> NonNull<u8>
+method	metal2vulkan-runtime::HostMemory::with_dirty_pages	pub fn with_dirty_pages<D>(self, source: Arc<D>) -> HostMemory where D: DirtyPages + ?Sized + 'static, D::Watch: 'static,
 method	metal2vulkan-runtime::HostMemory::with_dma_buf	#[cfg(unix)] pub unsafe fn with_dma_buf(pointer: NonNull<u8>, source: DmaBufSource) -> HostMemory
 method	metal2vulkan-runtime::IndirectBufferBinding::new	pub fn new(address: GpuAddress, attribute_stride: Option<u64>) -> IndirectBufferBinding
 method	metal2vulkan-runtime::IndirectCommandBuffer::allocated_size	pub fn allocated_size(&self) -> u64
@@ -9258,6 +9268,7 @@ struct	metal2vulkan-runtime::Device	#[derive(Clone)] pub struct Device(Arc<Devic
 struct	metal2vulkan-runtime::DeviceHandles	#[derive(Clone, Copy)] #[non_exhaustive] pub struct DeviceHandles<'a>
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Debug, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-runtime::DeviceProperties	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceProperties
+struct	metal2vulkan-runtime::DirtyStamp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct DirtyStamp(pub u64)
 struct	metal2vulkan-runtime::DmaBufChunk	#[derive(Debug)] pub struct DmaBufChunk
 struct	metal2vulkan-runtime::DmaBufRequest	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DmaBufRequest
 struct	metal2vulkan-runtime::DynamicLibrary	#[derive(Clone, Debug)] pub struct DynamicLibrary(Arc<Shared>)
@@ -9711,6 +9722,7 @@ struct	metal2vulkan::vk::SpecializationMapEntry	#[cfg_attr(feature = "serde", de
 trait	metal2vulkan-air::graph::Graph	pub trait Graph
 trait	metal2vulkan-air::graph::NodeId	pub trait NodeId: Copy + Eq + Ord + Hash + Debug
 trait	metal2vulkan-air::ir::Idx	pub trait Idx: Copy + Eq + Ord + fmt::Debug
+trait	metal2vulkan-runtime::DirtyPages	pub trait DirtyPages: Send + Sync
 trait	metal2vulkan::cache::PipelineArtifact	pub trait PipelineArtifact: Sized + Send + Sync
 trait-impl	metal2vulkan-air::error::Attachment impl fmt::Display	impl fmt::Display for Attachment
 trait-impl	metal2vulkan-air::error::DiagName impl fmt::Debug	impl fmt::Debug for DiagName
@@ -9919,6 +9931,14 @@ trait-item	metal2vulkan-air::graph::NodeId::from_node_index	fn from_node_index(i
 trait-item	metal2vulkan-air::graph::NodeId::node_index	fn node_index(self) -> u32
 trait-item	metal2vulkan-air::ir::Idx::from_index	fn from_index(index: usize) -> Option<Self>
 trait-item	metal2vulkan-air::ir::Idx::index	fn index(self) -> usize
+trait-item	metal2vulkan-runtime::DirtyPages::Watch	type Watch: Send + Sync
+trait-item	metal2vulkan-runtime::DirtyPages::changed	fn changed(&self, since: DirtyStamp, out: &mut Vec<Range<u64>>)
+trait-item	metal2vulkan-runtime::DirtyPages::changed_except	fn changed_except(&self, since: DirtyStamp, writer: NonZeroU64, out: &mut Vec<Range<u64>>)
+trait-item	metal2vulkan-runtime::DirtyPages::request	fn request(&self) -> DirtyStamp
+trait-item	metal2vulkan-runtime::DirtyPages::wait	fn wait(&self, stamp: DirtyStamp) -> bool
+trait-item	metal2vulkan-runtime::DirtyPages::watch	fn watch(&self, range: Range<u64>) -> Self::Watch
+trait-item	metal2vulkan-runtime::DirtyPages::wrote	fn wrote(&self, range: Range<u64>)
+trait-item	metal2vulkan-runtime::DirtyPages::wrote_as	fn wrote_as(&self, range: Range<u64>, writer: NonZeroU64)
 trait-item	metal2vulkan::cache::PipelineArtifact::from_bytes	fn from_bytes(bytes: &[u8], device: &Device) -> Result<Self, ArtifactError>
 trait-item	metal2vulkan::cache::PipelineArtifact::from_bytes_for_key	fn from_bytes_for_key(bytes: &[u8], key: &PipelineKey, device: &Device) -> Result<Self, ArtifactError>
 trait-item	metal2vulkan::cache::PipelineArtifact::key	fn key(&self) -> &PipelineKey

@@ -435,6 +435,9 @@ pub(super) struct DeviceShared {
     pub(super) rebinds: super::rebind::Rebinds,
     /// The no-copy buffers by the host memory they were made over (`host_aliases.rs`).
     pub(super) aliases: super::host_aliases::HostAliases,
+    /// The logs of its shadows over host pages a consumer logs the writes to
+    /// (`dirty_pages.rs`).
+    pub(super) dirty: super::dirty_pages::DirtyShadows,
     /// The new textures that read zero where Metal reads its pattern, until a command observes
     /// or covers that (`fresh_unwritten.rs`).
     pub(super) fresh: super::fresh_unwritten::FreshUnwritten,
@@ -1814,6 +1817,7 @@ impl Device {
             heap_keys: Default::default(),
             rebinds: Default::default(),
             aliases: Default::default(),
+            dirty: Default::default(),
             fresh: Default::default(),
             owners: Default::default(),
             live_buffers: Default::default(),

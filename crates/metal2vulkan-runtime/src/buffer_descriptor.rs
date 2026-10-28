@@ -21,8 +21,8 @@ use super::heap::{Heap, HeapProblem};
 use super::host_bytes::HostBytes;
 use super::host_memory::{
     based_size, binds_in, buffer_base, import_refused, import_window, not_importable,
-    refuse_unwritable, refused, Deallocator, HostMemory, HostRelease, ImportWindow, Importer,
-    KeepAlive, Source,
+    refuse_unwritable, refused, Deallocator, HostMemory, HostParts, HostRelease, ImportWindow,
+    Importer, KeepAlive, Source,
 };
 #[cfg(unix)]
 use super::host_residency::Again;
@@ -472,7 +472,12 @@ impl Device {
             .host_import
             .as_ref()
             .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
-        let (pointer, source, writable) = memory.into_parts();
+        let HostParts {
+            pointer,
+            source,
+            writable,
+            dirty,
+        } = memory.into_parts();
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
         if of_heap && window.offset != 0 {
@@ -560,6 +565,10 @@ impl Device {
             #[cfg(unix)]
             again,
         });
+        // The caller's log of the pages' writes stays with them (`dirty_pages.rs`).
+        if let (Some(dirty), Some(pages)) = (dirty, buffer.host_pages()) {
+            pages.keep_dirty(dirty);
+        }
         // A buffer over the bytes another no-copy buffer covers joins it (`host_aliases.rs`), and
         // a later one lies in its import; one whose GPU writes are dropped joins none.
         // A buffer just made lies in its pages (`HostCell::current`).
@@ -620,7 +629,12 @@ impl Device {
             .host_import
             .as_ref()
             .map_err(|unsupported| Error::Unsupported(unsupported.clone()))?;
-        let (pointer, source, writable) = memory.into_parts();
+        let HostParts {
+            pointer,
+            source,
+            writable,
+            dirty,
+        } = memory.into_parts();
         // A buffer whose GPU writes are dropped keeps them dropped over its new pages.
         let drops_writes = cell.drops_writes();
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
@@ -742,6 +756,10 @@ impl Device {
         // new pages.
         if !in_place.is_empty() {
             swaps.extend(self.rebound_in_place_images(&in_place, &pages, &mut remade)?);
+        }
+        // The caller's log of the new pages' writes stays with them (`dirty_pages.rs`).
+        if let Some(dirty) = dirty {
+            pages.keep_dirty(dirty);
         }
         let (old, again) = shared
             .rebinds

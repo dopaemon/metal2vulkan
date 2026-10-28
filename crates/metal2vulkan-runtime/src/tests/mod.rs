@@ -75,6 +75,8 @@ mod device_registry;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod direct_arguments_from_compiled;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod dirty_pages_device;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod dispatch_pending;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_shape_notices;

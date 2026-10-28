@@ -4407,6 +4407,29 @@ pub struct WorkCounts {
     /// the shadow and in the merge's scratch, where the device runs them faster so
     /// (`DriverFact::ShadowCopyInDispatchFaster`): the same bytes either way.
     pub shadow_copies_in_dispatched: u64,
+    /// The copies in of shadows over host pages a consumer logs whose regions the log decided as
+    /// their command buffer replayed (`dirty_pages.rs`).
+    pub dirty_copies_in_gated: u64,
+    /// Of those, the ones that copied every region: no hold to count on, a wait the log answered
+    /// `false`, or half the rows or more changed.
+    pub dirty_copies_in_whole: u64,
+    /// Of those, the ones that copied nothing: no page changed.
+    pub dirty_copies_in_skipped: u64,
+    /// The bytes the gated copies in would have moved copying every region.
+    pub dirty_copy_in_bytes_whole: u64,
+    /// The bytes the gated copies in moved.
+    pub dirty_copy_in_bytes_copied: u64,
+    /// The stamps the commits of command buffers with a gated copy in asked of the logs: one per
+    /// log and commit.
+    pub dirty_stamps_asked: u64,
+    /// The waits the replays made for a log's publication (`DirtyPages::wait`): one per log
+    /// serves every stamp asked of it before the wait.
+    pub dirty_waits: u64,
+    /// Of the waits, those the log answered `false`.
+    pub dirty_waits_unanswered: u64,
+    /// The nanoseconds the waits took, on the threads that replay command buffers before their
+    /// submission.
+    pub dirty_wait_nanos: u64,
     /// Of the keeps and merges among `shadow_copies`, those whose copy of the shadow's texels into
     /// the merge's scratch is the dispatch a copy back takes, where the device runs one faster
     /// than its copy (`DriverFact::ShadowCopyBackDispatchFaster`): the same bytes either way.
@@ -4712,6 +4735,7 @@ impl Device {
         };
         let replays = (self.shared().recorder())
             .map_or_else(ReplayCounts::default, |recorder| recorder.counts());
+        let dirty = self.shared().dirty.tally();
         WorkCounts {
             command_pools_made: counters.command_pools_made.load(Ordering::Relaxed)
                 + replays.pools_made,
@@ -5315,6 +5339,15 @@ impl Device {
             shadow_copies_in_dispatched: counters
                 .shadow_copies_in_dispatched
                 .load(Ordering::Relaxed),
+            dirty_copies_in_gated: dirty.gated.load(Ordering::Relaxed),
+            dirty_copies_in_whole: dirty.whole.load(Ordering::Relaxed),
+            dirty_copies_in_skipped: dirty.skipped.load(Ordering::Relaxed),
+            dirty_copy_in_bytes_whole: dirty.bytes_whole.load(Ordering::Relaxed),
+            dirty_copy_in_bytes_copied: dirty.bytes_copied.load(Ordering::Relaxed),
+            dirty_stamps_asked: dirty.stamps.load(Ordering::Relaxed),
+            dirty_waits: dirty.waits.load(Ordering::Relaxed),
+            dirty_waits_unanswered: dirty.waits_unanswered.load(Ordering::Relaxed),
+            dirty_wait_nanos: dirty.wait_nanos.load(Ordering::Relaxed),
             shadow_merge_copies_dispatched: counters
                 .shadow_merge_copies_dispatched
                 .load(Ordering::Relaxed),

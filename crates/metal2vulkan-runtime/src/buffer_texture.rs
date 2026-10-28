@@ -1614,6 +1614,17 @@ impl Texels {
             // racing the GPU's use of them is the program's, as through `contents`.
             unsafe { std::ptr::copy_nonoverlapping(packed[from..].as_ptr(), target.add(at), n) };
         }
+        // A write of host pages a consumer logs is the runtime's own, which its log does not see:
+        // reported, so the copies of the pages take it (`dirty_pages.rs`).
+        if let Some(pages) = self.buffer.host_pages() {
+            if let Some(dirty) = pages.dirty() {
+                let at = target as u64;
+                let range = dirty.offset_of(at).zip(dirty.offset_of(at + (end - start)));
+                if let Some((from, to)) = range {
+                    dirty.wrote(from..to);
+                }
+            }
+        }
         self.buffer.upload(start..end)
     }
 

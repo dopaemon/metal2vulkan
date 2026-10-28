@@ -71,8 +71,9 @@ mod derived;
 mod descriptor_arena;
 mod detach;
 mod device;
-mod dispatch_execute;
 #[cfg(unix)]
+mod dirty_pages;
+mod dispatch_execute;
 mod dma_buf;
 mod draw_source;
 mod driver_defects;
@@ -253,6 +254,7 @@ pub use device::{
     LayerSettingValue, MessageKind, MessageSeverity, MessageSink, PhysicalDeviceIdentity,
     RawDevice,
 };
+pub use dirty_pages::{DirtyPages, DirtyStamp};
 #[cfg(unix)]
 pub use dma_buf::{DmaBufChunk, DmaBufRequest, DmaBufSource};
 pub use dynamic_library::DynamicLibrary;

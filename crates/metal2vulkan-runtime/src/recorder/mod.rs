@@ -247,6 +247,29 @@ pub(crate) unsafe fn through<F: Copy>(slot: Option<&Slot>, command: Command, rea
     }
 }
 
+/// Log a shadow's copy in into `raw`, where it is a deferred command buffer, its regions decided
+/// by `gate` as it replays (`dirty_pages.rs`); `false` where `raw` is a driver's command buffer,
+/// into which the caller records every region itself.
+///
+/// # Safety
+///
+/// The caller records `raw` alone, and `raw` is recording; the command is valid with every one
+/// of `regions` (each region the gate keeps is one of them, or rows of one).
+pub(crate) unsafe fn copy_buffer_to_image_gated(
+    raw: vk::CommandBuffer,
+    gate: Arc<crate::dirty_pages::CopyInGate>,
+    copy: (vk::Buffer, vk::Image, vk::ImageLayout),
+    regions: &[vk::BufferImageCopy],
+) -> bool {
+    // SAFETY: the caller's.
+    unsafe {
+        handles::record(raw, |log| {
+            log.copy_buffer_to_image_gated(gate, copy, regions)
+        })
+    }
+    .is_some()
+}
+
 /// Room in `raw`'s log, where it is a deferred command buffer, for the end a commit may fold into
 /// it as its command buffer's tail (`CommandBufferShared::close_tail`): a barrier of one memory
 /// barrier, then a timestamp. A log made while no spare one was kept (its earlier replays'

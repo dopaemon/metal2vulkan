@@ -163,6 +163,7 @@
 //!   copy in left it.
 
 use super::buffer::{Buffer, CallerMemory, WeakBuffer};
+use super::dirty_pages::{CopyInGate, ShadowLog};
 use super::error::{Error, RuntimeGap};
 use super::resource::ResourceKey;
 use super::rotated::{RotatedCopies, Turn};
@@ -713,6 +714,39 @@ impl ShadowCopies {
         matches!(self.target(), Some(ShadowTarget::Rotated { turn, .. }) if turn.loads_apart())
     }
 
+    /// Whether the texture is tracked and its truth lies in host pages a consumer logs the writes
+    /// to (`HostMemory::with_dirty_pages`): its copies in of every texel are gated
+    /// (`dirty_pages.rs`), so none is cut to a rectangle.
+    pub(super) fn logged(&self) -> bool {
+        let ShadowSource::Bytes {
+            buffer: ShadowBuffer::Rebound(buffer),
+            ..
+        } = &self.source
+        else {
+            return false;
+        };
+        let pages = || buffer.upgrade().and_then(|buffer| buffer.host_pages());
+        self.tracked && pages().is_some_and(|pages| pages.dirty().is_some())
+    }
+
+    /// Whether the rectangle `area` (`None` every texel) covers every texel of a one-region 2D
+    /// texture's image over a buffer's bytes, or is `None`.
+    pub(super) fn covers(&self, area: Option<[u32; 4]>) -> bool {
+        let Some([x0, y0, x1, y1]) = area else {
+            return true;
+        };
+        let regions = (self.target()).and_then(|target| target.image_regions(true));
+        let Some([region]) = regions else {
+            return false;
+        };
+        let (x, y) = (region.image_offset.x, region.image_offset.y);
+        let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
+            return false;
+        };
+        let extent = region.image_extent;
+        x0 <= x && y0 <= y && x1 >= x + extent.width && y1 >= y + extent.height
+    }
+
     /// Whether `used` touches the texture's truth: its bytes, or its image's levels and layers.
     pub(super) fn meets(&self, used: &Use<ResourceKey>) -> bool {
         let (key, range) = self.truth();
@@ -1087,6 +1121,61 @@ fn image_copy_texels(region: &vk::ImageCopy) -> u64 {
 }
 
 impl ShadowCopy {
+    /// The log of a copy in of every texel of a tracked 2D texture's image straight from a
+    /// buffer over host pages a consumer logs (`dirty_pages.rs`), made or kept by `device`, and
+    /// the bytes of one texel: what may decide the copy's regions as its command buffer replays.
+    /// `None` for every other copy.
+    pub(super) fn gate_log(&self, device: &Device) -> Option<(Arc<ShadowLog>, u64)> {
+        let c = &self.copies;
+        let first = matches!(self.cause, Some(CopyCause::First));
+        if !matches!(self.step, Step::Into) || !c.covers(self.area) || !first || !c.tracked {
+            return None;
+        }
+        let ShadowSource::Bytes {
+            buffer: ShadowBuffer::Rebound(buffer),
+            target:
+                ShadowTarget::Image {
+                    regions,
+                    staging: None,
+                    texel: Some(texel),
+                    ..
+                },
+            ..
+        } = &c.source
+        else {
+            return None;
+        };
+        let buffer = buffer.upgrade()?;
+        let pages = buffer.host_pages()?;
+        let source = pages.dirty()?;
+        let contents = buffer.contents()?.as_ptr() as u64;
+        let (raw, at) = buffer.attached_at(0)?;
+        // The `VkBuffer`'s byte `v` lies at the host address `v + base`.
+        let base = contents.wrapping_sub(at);
+        let truth = copied_bytes(regions, *texel)?;
+        let log = device.shared().dirty.log(c, source, raw, base, truth)?;
+        Some((log, *texel))
+    }
+
+    /// The log of a copy back or merge of a shadow whose copies in a log decides, and the
+    /// `VkBuffer` bytes it writes (`dirty_pages.rs`): reported to the log as the shadow's own.
+    pub(super) fn written_log(&self, device: &Device) -> Option<(Arc<ShadowLog>, Range<u64>)> {
+        let c = &self.copies;
+        if !matches!(self.step, Step::Back | Step::Merge(_)) {
+            return None;
+        }
+        let ShadowSource::Bytes {
+            target: ShadowTarget::Image { regions, texel, .. },
+            ..
+        } = &c.source
+        else {
+            return None;
+        };
+        let log = device.shared().dirty.kept(c)?;
+        let bytes = copied_bytes(regions, (*texel)?)?;
+        Some((log, bytes))
+    }
+
     /// The dispatch that takes this copy where it is a copy back that dispatches
     /// (`shadow_copy_back.rs`): a one-slice 2D texture's image over a buffer's bytes, copied in
     /// place, with its integer view, of texels the copy moves, made on `device` over the buffer's
@@ -1370,6 +1459,24 @@ impl ShadowCopy {
         command_buffer: vk::CommandBuffer,
         back: Option<&RowCopies>,
     ) {
+        // SAFETY: the caller's.
+        unsafe { self.record_gated(device, command_buffer, back, None) }
+    }
+
+    /// [`record`](Self::record), a copy in of a 2D texture's image straight from the buffer
+    /// recorded under `gate` where given: its regions decided as the command buffer replays
+    /// (`dirty_pages.rs`), every region where it records into a driver's command buffer.
+    ///
+    /// # Safety
+    ///
+    /// As [`record`](Self::record).
+    pub(super) unsafe fn record_gated(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        back: Option<&RowCopies>,
+        gate: Option<Arc<CopyInGate>>,
+    ) {
         let c = &self.copies;
         let moves = self.moves.as_deref();
         let into_shadow = match &self.step {
@@ -1613,6 +1720,18 @@ impl ShadowCopy {
                     device.cmd_copy_buffer(command_buffer, buffer, texels, &[staging.into]);
                     Barrier::everything().record(device, command_buffer);
                 }
+                let gated = (gate.filter(|_| staging.is_none())).is_some_and(|gate| {
+                    let copy = (texels, image, vk::ImageLayout::GENERAL);
+                    super::recorder::copy_buffer_to_image_gated(
+                        command_buffer,
+                        gate,
+                        copy,
+                        &regions,
+                    )
+                });
+                if gated {
+                    return;
+                }
                 device.cmd_copy_buffer_to_image(
                     command_buffer,
                     texels,
@@ -1635,6 +1754,30 @@ impl ShadowCopy {
             }
         }
     }
+}
+
+/// The `VkBuffer` bytes `regions` copy, `texel` bytes a texel, from the first region's first byte
+/// to the last row's end; `None` for none, or a region of depth.
+fn copied_bytes(regions: &[vk::BufferImageCopy], texel: u64) -> Option<Range<u64>> {
+    let mut bytes: Option<Range<u64>> = None;
+    for region in regions {
+        let extent = region.image_extent;
+        if extent.depth > 1 || extent.width == 0 || extent.height == 0 {
+            return None;
+        }
+        let row = match region.buffer_row_length {
+            0 => extent.width,
+            row => row,
+        };
+        let pitch = u64::from(row) * texel;
+        let start = region.buffer_offset;
+        let end = start + u64::from(extent.height - 1) * pitch + u64::from(extent.width) * texel;
+        bytes = Some(match bytes {
+            Some(b) => b.start.min(start)..b.end.max(end),
+            None => start..end,
+        });
+    }
+    bytes
 }
 
 /// `region` (a one-level, one-slice texture's every texel, `texel` bytes each in the buffer) cut
@@ -2293,6 +2436,15 @@ impl ShadowCarry {
     pub(super) fn clear(&mut self) {
         self.entries.clear();
     }
+
+    /// The shadowed textures whose images it carries holding every texel of the truth, none
+    /// stale (`dirty_pages.rs`: what a command buffer's end leaves a later one's copy in).
+    pub(super) fn held_whole(&self) -> Vec<Arc<ShadowCopies>> {
+        (self.entries.iter())
+            .filter(|carried| carried.stale.is_none() && carried.copies.covers(carried.held))
+            .map(|carried| Arc::clone(&carried.copies))
+            .collect()
+    }
 }
 
 /// What a merge's scratch keeps of a shadow's texels (`shadow_merge.rs`): the rectangle
@@ -2512,8 +2664,11 @@ impl<M: Clone + KeptArea> ShadowSync<M> {
             // it writes (which a copy back moves), where it bounds both and the copies are cut to
             // a rectangle; every texel where it writes through a shadow whose copies back move
             // every texel, or writes the bytes two ways, as the merge after it compares every
-            // texel the keep took.
-            let needs = match two_ways || !shadow.copies.cuts() {
+            // texel the keep took; and every texel of a shadow over logged host pages, whose copy
+            // in of every texel moves only the rows the log reports changed, and leaves the image
+            // holding every texel for the next command buffer's (`dirty_pages.rs`).
+            let whole = two_ways || !shadow.copies.cuts() || shadow.copies.logged();
+            let needs = match whole {
                 true => None,
                 false if shadow.writes && !shadow.copies.cuts_back() => None,
                 false if shadow.writes => bounding(shadow.loads, shadow.area),
