@@ -221,6 +221,7 @@ mod word_fill;
 mod work_counts;
 mod wrapped_buffer;
 mod ycbcr;
+mod ycbcr_device;
 
 #[cfg(test)]
 mod tests;

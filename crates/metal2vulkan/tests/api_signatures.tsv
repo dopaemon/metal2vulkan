@@ -422,6 +422,11 @@ assoc-const	metal2vulkan::bind::YCbCrRefreshModule::ROW_WORDS	pub const ROW_WORD
 assoc-const	metal2vulkan::bind::YCbCrRefreshModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::YCbCrRefreshModule::STATE_BINDING	pub const STATE_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrRefreshModule::STATE_WORDS	pub const STATE_WORDS: u32
+assoc-const	metal2vulkan::bind::YCbCrSampleModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
+assoc-const	metal2vulkan::bind::YCbCrSampleModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
+assoc-const	metal2vulkan::bind::YCbCrSampleModule::PLANES_BINDING	pub const PLANES_BINDING: u32
+assoc-const	metal2vulkan::bind::YCbCrSampleModule::PUSH_BYTES	pub const PUSH_BYTES: u32
+assoc-const	metal2vulkan::bind::YCbCrSampleModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::YCbCrWriteModule::BYTES_BINDING	pub const BYTES_BINDING: u32
 assoc-const	metal2vulkan::bind::YCbCrWriteModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::YCbCrWriteModule::SET	pub const SET: u32
@@ -916,6 +921,11 @@ assoc-const-value	metal2vulkan::bind::YCbCrRefreshModule::ROW_WORDS	Self::LOCAL_
 assoc-const-value	metal2vulkan::bind::YCbCrRefreshModule::SET	0
 assoc-const-value	metal2vulkan::bind::YCbCrRefreshModule::STATE_BINDING	2
 assoc-const-value	metal2vulkan::bind::YCbCrRefreshModule::STATE_WORDS	4
+assoc-const-value	metal2vulkan::bind::YCbCrSampleModule::IMAGE_BINDING	1
+assoc-const-value	metal2vulkan::bind::YCbCrSampleModule::LOCAL_SIZE	8
+assoc-const-value	metal2vulkan::bind::YCbCrSampleModule::PLANES_BINDING	0
+assoc-const-value	metal2vulkan::bind::YCbCrSampleModule::PUSH_BYTES	16
+assoc-const-value	metal2vulkan::bind::YCbCrSampleModule::SET	0
 assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::BYTES_BINDING	2
 assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SET	0
@@ -2923,6 +2933,8 @@ field	metal2vulkan-runtime::WorkCounts.wakes_handler_threads	pub wakes_handler_t
 field	metal2vulkan-runtime::WorkCounts.wakes_spared	pub wakes_spared: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_buffers	pub ycbcr_conversion_scratch_buffers: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_conversion_scratch_bytes	pub ycbcr_conversion_scratch_bytes: u64
+field	metal2vulkan-runtime::WorkCounts.ycbcr_device_conversions	pub ycbcr_device_conversions: u64
+field	metal2vulkan-runtime::WorkCounts.ycbcr_device_samples	pub ycbcr_device_samples: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_images_kept_alignment	pub ycbcr_images_kept_alignment: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_images_kept_device	pub ycbcr_images_kept_device: u64
 field	metal2vulkan-runtime::WorkCounts.ycbcr_images_kept_elements	pub ycbcr_images_kept_elements: u64
@@ -3568,6 +3580,8 @@ field	metal2vulkan::bind::YCbCrPlanes.range	pub range: YCbCrRange
 field	metal2vulkan::bind::YCbCrPlanes.size	pub size: [u32; 2]
 field	metal2vulkan::bind::YCbCrRefreshModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::YCbCrRefreshModule.spirv	pub spirv: Arc<[u32]>
+field	metal2vulkan::bind::YCbCrSampleModule.requirements	pub requirements: Requirements
+field	metal2vulkan::bind::YCbCrSampleModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::YCbCrWriteModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::YCbCrWriteModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::indirect_commands::Bindings.pipeline	pub pipeline: Option<NonZeroU64>
@@ -4608,6 +4622,7 @@ fn	metal2vulkan::bind::ycbcr_convert_floats_module	pub fn ycbcr_convert_floats_m
 fn	metal2vulkan::bind::ycbcr_convert_module	pub fn ycbcr_convert_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_read	pub fn ycbcr_read(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), [y, cb, cr]: [u16; 3]) -> [u16; 3]
 fn	metal2vulkan::bind::ycbcr_refresh_module	pub fn ycbcr_refresh_module(device: &Device) -> Result<YCbCrRefreshModule, Error>
+fn	metal2vulkan::bind::ycbcr_sample_module	pub fn ycbcr_sample_module(device: &Device, codes: YCbCrCodes) -> Result<YCbCrSampleModule, Error>
 fn	metal2vulkan::bind::ycbcr_store	pub fn ycbcr_store(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), texels: &[[f32; 3]], size: [u32; 2]) -> Option<(Vec<u16>, Vec<[u16; 2]>)>
 fn	metal2vulkan::bind::ycbcr_texel	pub fn ycbcr_texel(range: YCbCrRange, matrix: YCbCrMatrix, y: u8, cb: u8, cr: u8) -> [u16; 3]
 fn	metal2vulkan::bind::ycbcr_write	pub fn ycbcr_write(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), [r, g, b]: [f32; 3]) -> Option<[u16; 3]>
@@ -8618,6 +8633,7 @@ method	metal2vulkan::bind::YCbCrPlanes::conversion	pub fn conversion(&self) -> Y
 method	metal2vulkan::bind::YCbCrPlanes::new	pub fn new(size: [u32; 2], luma: [u32; 2], chroma: [u32; 2], (range, matrix): (YCbCrRange, YCbCrMatrix), codes: YCbCrCodes) -> YCbCrPlanes
 method	metal2vulkan::bind::YCbCrRefreshModule::groups	pub fn groups(words: u32) -> [u32; 2]
 method	metal2vulkan::bind::YCbCrRefreshModule::shape	pub fn shape(firsts: [u32; 2], words: u32, groups: u32) -> [u8; 16]
+method	metal2vulkan::bind::YCbCrSampleModule::push	pub fn push(size: [u32; 2], extent: [u32; 2]) -> [u8; Self::PUSH_BYTES as usize]
 method	metal2vulkan::bind::YCbCrWriteModule::groups	pub fn groups(planes: &YCbCrPlanes) -> [u32; 2]
 method	metal2vulkan::bind::YCbCrWriteModule::shape	pub fn shape(planes: &YCbCrPlanes, all: bool) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
@@ -9536,6 +9552,7 @@ struct	metal2vulkan::bind::YCbCrConvertModule	#[derive(Clone, Debug, PartialEq, 
 struct	metal2vulkan::bind::YCbCrInPlace	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrInPlace
 struct	metal2vulkan::bind::YCbCrPlanes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrPlanes
 struct	metal2vulkan::bind::YCbCrRefreshModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrRefreshModule
+struct	metal2vulkan::bind::YCbCrSampleModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrSampleModule
 struct	metal2vulkan::bind::YCbCrWriteModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrWriteModule
 struct	metal2vulkan::bind::indirect_commands::Bindings	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct Bindings
 struct	metal2vulkan::bind::indirect_commands::BufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct BufferBinding
@@ -13235,6 +13252,8 @@ variant	metal2vulkan::error::RuntimeDriverDefect::PushedBufferSizesUnset	PushedB
 variant	metal2vulkan::error::RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds	PushedDescriptorsStaleAfterPipelineBinds
 variant	metal2vulkan::error::RuntimeDriverDefect::ReadsCommandBuffersAfterTheirSignal	ReadsCommandBuffersAfterTheirSignal
 variant	metal2vulkan::error::RuntimeDriverDefect::SetLayoutSupportUnderstated	SetLayoutSupportUnderstated
+variant	metal2vulkan::error::RuntimeDriverDefect::TenBitCodesReadAsWords	TenBitCodesReadAsWords
+variant	metal2vulkan::error::RuntimeDriverDefect::TwoPlaneChromaMisplaced	TwoPlaneChromaMisplaced
 variant	metal2vulkan::error::RuntimeDriverDefect::WaitForAnyObjectLosesASignal	WaitForAnyObjectLosesASignal
 variant	metal2vulkan::error::RuntimeInput::AlphaTest	AlphaTest
 variant	metal2vulkan::error::RuntimeInput::ColorWrites	ColorWrites

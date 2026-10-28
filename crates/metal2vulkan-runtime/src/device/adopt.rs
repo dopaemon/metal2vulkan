@@ -285,6 +285,10 @@ impl Device {
             host_image_copy,
             linear_color_attachment,
             graphics_pipeline_library,
+            // Nor whether `samplerYcbcrConversion` was: its YCbCr textures convert through
+            // Metal's arithmetic.
+            ycbcr_conversion: false,
+            ycbcr_444: false,
             sparse_features: raw.sparse_features.features(),
             memory_reads,
             owned: false,

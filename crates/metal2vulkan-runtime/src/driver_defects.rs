@@ -405,6 +405,39 @@ pub(super) struct Affected {
 ///   refused: such an image takes no host-transfer usage there (`Device::host_placed_image`), so it
 ///   stays in memory of its own class and its CPU copies go through a submission; on every other
 ///   driver a block-compressed texture's CPU copies stay on the host.
+///
+/// `TwoPlaneChromaMisplaced`:
+/// - MoltenVK (`MOLTENVK`): a sampler Y′CbCr conversion of `G8_B8R8_2PLANE_420_UNORM`,
+///   `G8_B8R8_2PLANE_422_UNORM` or their 10-bit formats, whose optimal tiling reports midpoint
+///   and cosited chroma, a linear chroma filter, separate reconstruction and forced explicit
+///   reconstruction, reconstructs the chroma off where Vulkan places it (20.2.8, "Chroma
+///   Reconstruction"). A bare Vulkan probe on an M3 Max under macOS 27.0.1 sampled 40 x 24
+///   images at every luma texel's centre and at 2048 random points, the planes random and, for
+///   the weights, one chroma pair alone set: under a nearest sampler filter, a linear chroma
+///   filter and midpoint chroma, the weights of a chroma sample have the right shape (1/4, 3/4,
+///   3/4, 1/4 across and down) but centred one luma texel up and to the left of the midpoint's
+///   (chroma sample `k` at luma `2k` where Vulkan's lies at `2k + 1`); under a linear sampler
+///   filter the chroma is filtered twice (3/16, 3/16, 10/16, 10/16, 3/16, 3/16 across) and
+///   shifted alike; forced explicit reconstruction changes nothing, and cosited chroma reads
+///   weights of no interpolation. A texel's channels lay up to 1000/2048 from Vulkan's
+///   conversion (4:2:0, the identity model) and 366/2048 (4:2:2), the luma exact. Its 4:2:2
+///   single-plane formats (`G8B8G8R8_422_UNORM`, `B8G8R8G8_422_UNORM`) reconstruct as Vulkan
+///   states. Measured on 1.4.2 (driverVersion 10402): known broken through 1.4.2. Nothing is
+///   refused: a two-plane 4:2:0 or 4:2:2 texture converts through Metal's arithmetic there
+///   (`ycbcr_device.rs`), as on a device without the conversion.
+///
+/// `TenBitCodesReadAsWords`:
+/// - Mesa's lavapipe (`MESA_LLVMPIPE`): a sampler Y′CbCr conversion of
+///   `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` and its 4:4:4 format reads each code's 16-bit
+///   word as a 16-bit unsigned normalized value, `word / 65535`, its six unused low bits included,
+///   where Vulkan converts the 10-bit code as `c / (2^10 - 1)` ("Fixed-Point Data Conversions";
+///   the format "has a 10-bit G component in the top 10 bits of each 16-bit word ... with the
+///   bottom 6 bits of each word unused"). A bare Vulkan probe read luma code 1023 (low bits 0) as
+///   0.999039 through the identity model, and the runtime's conversion of random words through it
+///   (`runtime_lane::ycbcr_textures::retyped_views_read_their_luma_codes`) read codes one low
+///   wherever the word's low bits put it below the code's value. Measured on 26.0.8 (LLVM
+///   21.1.8): known broken through 26.0.8. Nothing is refused: a 10-bit two-plane texture converts
+///   through Metal's arithmetic there (`ycbcr_device.rs`).
 pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::HostTransferImagesCopiedAtBind,
@@ -521,6 +554,16 @@ pub(super) const AFFECTED: &[Affected] = &[
     Affected {
         defect: RuntimeDriverDefect::LazilyAllocatedSubresourceViews,
         driver: DriverId::MOLTENVK,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::TwoPlaneChromaMisplaced,
+        driver: DriverId::MOLTENVK,
+        clean: &[],
+    },
+    Affected {
+        defect: RuntimeDriverDefect::TenBitCodesReadAsWords,
+        driver: DriverId::MESA_LLVMPIPE,
         clean: &[],
     },
 ];

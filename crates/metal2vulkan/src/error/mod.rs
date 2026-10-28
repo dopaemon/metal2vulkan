@@ -976,6 +976,20 @@ pub enum RuntimeDriverDefect {
     /// thread sleeps on its condition variable, woken by the completion turns, in place of
     /// waiting for the signals its held batches wait for to land on the GPU itself.
     WaitForAnyObjectLosesASignal,
+    /// A sampler Y′CbCr conversion of a two-plane 4:2:0 or 4:2:2 format reconstructs the chroma
+    /// away from where its chroma offsets place it: each chroma sample's weights, of the right
+    /// shape, lie one luma texel up and to the left of the midpoint's (or, cosited, are no
+    /// interpolation at all), and a linear filter filters the chroma twice, which Vulkan's
+    /// reconstruction (`VkChromaLocation`, `VkFilter`) forbids. Nothing is refused: the runtime
+    /// converts such a texture's planes with its own kernel there, as on a device without the
+    /// conversion.
+    TwoPlaneChromaMisplaced,
+    /// A sampler Y′CbCr conversion of a 10-bit multi-planar format (`..._3PACK16`) reads each
+    /// code's 16-bit word, its six unused low bits included, as a 16-bit unsigned normalized
+    /// value, where Vulkan converts the 10-bit code as `c / 1023`: a code reads up to one code
+    /// low (1023 as 0.999039). Nothing is refused: the runtime converts such a texture's planes
+    /// with its own kernel there, as on a device without the conversion.
+    TenBitCodesReadAsWords,
 }
 
 /// One device capability a refusal can name.

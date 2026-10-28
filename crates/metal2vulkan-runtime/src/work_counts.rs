@@ -135,6 +135,8 @@ pub(crate) struct Counters {
     ycbcr_textures_in_place: AtomicU64,
     ycbcr_images_kept: [AtomicU64; 7],
     ycbcr_planes_bound: AtomicU64,
+    ycbcr_device_conversions: AtomicU64,
+    ycbcr_device_samples: AtomicU64,
     attachment_clears_recorded: AtomicU64,
     image_blits_recorded: AtomicU64,
     query_result_copies_recorded: AtomicU64,
@@ -671,6 +673,19 @@ impl Counters {
     /// (`binding.rs`).
     pub(crate) fn ycbcr_planes_bound(&self) {
         self.ycbcr_planes_bound.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A YCbCr texture's conversion, or a render shadow's load, was made to sample its planes'
+    /// image through the device's own Y′CbCr conversion (`ycbcr_device.rs`).
+    pub(crate) fn ycbcr_device_conversion(&self) {
+        self.ycbcr_device_conversions
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A sampling of a YCbCr texture's planes' image through the device's own Y′CbCr conversion
+    /// was recorded (`ycbcr_device.rs`).
+    pub(crate) fn ycbcr_device_sampled(&self) {
+        self.ycbcr_device_samples.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A `VkCommandPool` was made for a command buffer, none of the device's spares taken.
@@ -3272,6 +3287,14 @@ pub struct WorkCounts {
     pub ycbcr_images_kept_view: u64,
     /// Bindings of two-plane YCbCr textures' planes read in place written into descriptor sets.
     pub ycbcr_planes_bound: u64,
+    /// Two-plane YCbCr textures' conversions, and render shadows' loads, made to sample the
+    /// planes' image through the device's own Y′CbCr conversion where it converts their format
+    /// (`ycbcr_device.rs`), in place of Metal's arithmetic.
+    pub ycbcr_device_conversions: u64,
+    /// Samplings of two-plane YCbCr textures' planes' images through the device's own Y′CbCr
+    /// conversion recorded: one per conversion or load of such a texture, run through the
+    /// refresh's indirect arguments where it has one.
+    pub ycbcr_device_samples: u64,
     // The commands MoltenVK 1.4.1 compiles a pipeline for per command pool on Apple's GPUs
     // (`PoolCompiled`), each counted as the runtime records it: a run's survey of which can
     // stall a commit behind a compile storm, as the fill did.
@@ -4875,6 +4898,8 @@ impl Device {
             ycbcr_images_kept_reach: counters.ycbcr_images_kept[5].load(Ordering::Relaxed),
             ycbcr_images_kept_view: counters.ycbcr_images_kept[6].load(Ordering::Relaxed),
             ycbcr_planes_bound: counters.ycbcr_planes_bound.load(Ordering::Relaxed),
+            ycbcr_device_conversions: counters.ycbcr_device_conversions.load(Ordering::Relaxed),
+            ycbcr_device_samples: counters.ycbcr_device_samples.load(Ordering::Relaxed),
             attachment_clears_recorded: counters.attachment_clears_recorded.load(Ordering::Relaxed),
             image_blits_recorded: counters.image_blits_recorded.load(Ordering::Relaxed),
             query_result_copies_recorded: counters

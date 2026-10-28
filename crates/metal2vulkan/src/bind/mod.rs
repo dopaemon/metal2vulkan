@@ -186,6 +186,7 @@ pub(crate) mod visibility_resolve;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
 pub(crate) mod ycbcr_refresh;
+pub(crate) mod ycbcr_sample;
 pub(crate) mod ycbcr_write;
 
 pub use acceleration::{
@@ -347,4 +348,5 @@ pub use ycbcr_convert::{
 };
 pub use ycbcr_in_place::YCbCrInPlace;
 pub use ycbcr_refresh::{ycbcr_refresh_module, YCbCrRefreshModule};
+pub use ycbcr_sample::{ycbcr_sample_module, YCbCrSampleModule};
 pub use ycbcr_write::{ycbcr_store, ycbcr_write, ycbcr_write_module, YCbCrWriteModule};

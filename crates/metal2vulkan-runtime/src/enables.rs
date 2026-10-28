@@ -408,6 +408,9 @@ pub(super) enum Structure {
     /// `VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT`, outside the vocabulary: linked only
     /// by [`Enables::enable_graphics_pipeline_library`].
     GraphicsPipelineLibrary,
+    /// `VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT`, outside the vocabulary: linked only by
+    /// [`Enables::enable_ycbcr_2plane_444`], below Vulkan 1.3.
+    Ycbcr2Plane444,
 }
 
 /// Vulkan 1.4.
@@ -483,7 +486,8 @@ impl Structure {
             | Structure::LinearColorAttachment
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
-            | Structure::GraphicsPipelineLibrary => None,
+            | Structure::GraphicsPipelineLibrary
+            | Structure::Ycbcr2Plane444 => None,
         }
     }
 
@@ -540,7 +544,8 @@ impl Structure {
             | Structure::LinearColorAttachment
             | Structure::PipelineBinary
             | Structure::InternalCacheControl
-            | Structure::GraphicsPipelineLibrary => &[],
+            | Structure::GraphicsPipelineLibrary
+            | Structure::Ycbcr2Plane444 => &[],
         }
     }
 }
@@ -603,6 +608,7 @@ struct FeatureChain {
     pipeline_binary: PipelineBinaryFeatures,
     internal_cache_control: InternalCacheControl,
     graphics_pipeline_library: vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT<'static>,
+    ycbcr_2plane_444: vk::PhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT<'static>,
 }
 
 /// One `VkBool32` member of a [`FeatureChain`] structure, named by the vocabulary.
@@ -1123,7 +1129,8 @@ macro_rules! link_extensions {
             LinearColorAttachment => linear_color_attachment,
             PipelineBinary => pipeline_binary,
             InternalCacheControl => internal_cache_control,
-            GraphicsPipelineLibrary => graphics_pipeline_library
+            GraphicsPipelineLibrary => graphics_pipeline_library,
+            Ycbcr2Plane444 => ycbcr_2plane_444
         )
     };
     (@ $info:ident, $chain:ident, $linked:ident; $($variant:ident => $field:ident),*) => {
@@ -1211,6 +1218,23 @@ impl Enables {
             *(member.write)(&mut enables.chain) = vk::TRUE;
         }
         Ok(enables)
+    }
+
+    /// Enables `samplerYcbcrConversion`, core in Vulkan 1.1, the runtime's own need outside the
+    /// vocabulary: a two-plane YCbCr texture's planes convert through the device's own conversion
+    /// where it converts their format (`ycbcr_device.rs`), on a device that has the feature.
+    pub(super) fn enable_ycbcr_conversion(&mut self) {
+        self.chain.v11.sampler_ycbcr_conversion = vk::TRUE;
+    }
+
+    /// Enables `VK_EXT_ycbcr_2plane_444_formats` and its `ycbcr2plane444Formats`, the runtime's
+    /// own need outside the vocabulary below Vulkan 1.3, where the two-plane 4:4:4 formats are
+    /// core: a two-plane 4:4:4 YCbCr texture converts through the device's own conversion
+    /// (`ycbcr_device.rs`), on a device that lists the extension and has the feature.
+    pub(super) fn enable_ycbcr_2plane_444(&mut self) {
+        self.chain.ycbcr_2plane_444.ycbcr2plane444_formats = vk::TRUE;
+        self.linked.insert(Structure::Ycbcr2Plane444);
+        self.push_name(ash::ext::ycbcr_2plane_444_formats::NAME.to_owned());
     }
 
     /// Enables the portability subset's `imageViewFormatReinterpretation`, the runtime's own need

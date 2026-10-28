@@ -1337,8 +1337,19 @@ degradations! {
              ID of the state set on it runs its program, as Metal runs a command the CPU encoded, \
              where for a record the GPU wrote while another state held the ID Metal runs that \
              state (nothing, for a state of the other kind)";
-        /// A pipeline stage's filtered sample of a texture slot bound to a two-plane YCbCr texture,
-        /// on a device that samples through Metal's own sampler (MoltenVK,
+        /// A two-plane YCbCr texture's texels are the device's own sampler Y′CbCr conversion of
+        /// its planes where the device converts their format (`ycbcr_device.rs`): Vulkan's chroma
+        /// reconstruction at Metal's midpoint through a linear chroma filter, and the range
+        /// expansion and model conversion at the device's precision, unclamped where the device
+        /// does not clamp. Each channel lies within the device's precision of Vulkan's conversion
+        /// and off Metal's fixed-point read (lavapipe, Mesa 26.0.8, its 8-bit 4:4:4 layout,
+        /// random planes, every texel: within 0.04/2048 of Vulkan's conversion past the `half`
+        /// its image stores, and of Metal's within 6/2048 where the result lies in `[0, 1]`;
+        /// outside it by what Metal's clamp takes off). Announced where the texture is made,
+        /// naming its layout.
+        ///
+        /// And a pipeline stage's filtered sample of a texture slot bound to a two-plane YCbCr
+        /// texture, on a device that samples through Metal's own sampler (MoltenVK,
         /// `VkProperty::MetalSampler`), does not take Metal's exact filter of the format: the stage
         /// records `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` under any two-plane
         /// YCbCr format bound there (`lower::sampler::linear`), whose converted texels Metal's
@@ -1351,9 +1362,12 @@ degradations! {
         /// pipeline is made, or at a draw or dispatch that binds such a texture there (through a
         /// runtime sampler, whatever its word states), naming the slot and the format.
         YCbCrFilterNotExact = "ycbcr-filter-not-exact", Precision,
-            "the texels hold Metal's reads exactly, but the sample filters them as the device \
-             does, off the grid Metal sums the format's steps on, so a filtered result can miss \
-             Metal's by a step of that grid or more";
+            "where the device converts the planes' format, the texels are its own Y′CbCr \
+             conversion's, at its precision and unclamped where it does not clamp, not Metal's \
+             fixed-point read; elsewhere the texels \
+             hold Metal's reads exactly, but the sample filters them as the device does, off the \
+             grid Metal sums the format's steps on, so a filtered result can miss Metal's by a \
+             step of that grid or more";
         /// A render pass that draws loads and stores a rotated texture of rotation 4, whose load
         /// is the plane transposed and whose store is rotation 1's (`rotated.rs`): every tile of
         /// the frame lands mirrored, where Metal loads and stores only the 32x32 tiles a draw's

@@ -29,6 +29,8 @@ const SET_SUPPORT: RuntimeDriverDefect = RuntimeDriverDefect::SetLayoutSupportUn
 const PART_VIEWS: RuntimeDriverDefect = RuntimeDriverDefect::LazilyAllocatedSubresourceViews;
 const BIND_COPIES: RuntimeDriverDefect = RuntimeDriverDefect::HostTransferImagesCopiedAtBind;
 const LOST_SIGNALS: RuntimeDriverDefect = RuntimeDriverDefect::WaitForAnyObjectLosesASignal;
+const CHROMA: RuntimeDriverDefect = RuntimeDriverDefect::TwoPlaneChromaMisplaced;
+const TEN_BIT_WORDS: RuntimeDriverDefect = RuntimeDriverDefect::TenBitCodesReadAsWords;
 
 /// Every committed profile's driver has its defects at every release and GPU but those a probe
 /// found clean: MoltenVK the multisampled depth/stencil colour copies, the inexact depths past
@@ -38,9 +40,11 @@ const LOST_SIGNALS: RuntimeDriverDefect = RuntimeDriverDefect::WaitForAnyObjectL
 /// submission encoding meanwhile, the pushed sets' unset buffer sizes, the set layouts its support
 /// query refuses though it runs them, the textureless views of some of a lazily allocated image's
 /// levels or layers, the block-compressed image it copies out of host memory at bind time with a
-/// one-block row pitch and the signal its wait for any of several objects loses; lavapipe the
+/// one-block row pitch, the signal its wait for any of several objects loses and the misplaced
+/// chroma of its two-plane Y′CbCr conversions; lavapipe the
 /// colour copies, the depth/stencil resolve of the first layer and level, the explicit plane's
-/// rows past its height and the baked samplers lost after a copy;
+/// rows past its height, the baked samplers lost after a copy and the 10-bit codes its Y′CbCr
+/// conversion reads as words;
 /// RADV the multisampled copies that convert float NaNs, and the implicit
 /// preprocessing after an execution set on every GPU but the 780M (Phoenix's and Hawk Point's),
 /// measured clean; ANV
@@ -76,9 +80,12 @@ fn the_committed_profiles_drivers_have_their_defects() {
                     PART_VIEWS,
                     BIND_COPIES,
                     LOST_SIGNALS,
+                    CHROMA,
                 ]
             }
-            Some(DriverId::MESA_LLVMPIPE) => vec![COPIES, RESOLVES, PAST_HEIGHT, BAKED_SAMPLERS],
+            Some(DriverId::MESA_LLVMPIPE) => {
+                vec![COPIES, RESOLVES, PAST_HEIGHT, BAKED_SAMPLERS, TEN_BIT_WORDS]
+            }
             // The 780M, under Phoenix's `deviceID` and Hawk Point's.
             Some(DriverId::MESA_RADV) if matches!(desc.device_id, 0x15bf | 0x1900) => {
                 vec![NAN_COPIES]

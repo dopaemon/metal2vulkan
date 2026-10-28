@@ -182,6 +182,10 @@ pub(crate) const DEPTH_BIAS_CALLS: [Call; 1] = [Call::CmdSetDepthBias2];
 /// buffer bound with its size (`draw_source.rs`).
 pub(crate) const SIZED_INDEX_BIND_CALLS: [Call; 1] = [Call::CmdBindIndexBuffer2];
 
+/// The table's entry points a device that converts no YCbCr format itself never calls, nor
+/// primes: the release of a YCbCr sample kernel's conversion (`ycbcr_device.rs`).
+pub(crate) const YCBCR_CONVERSION_CALLS: [Call; 1] = [Call::DestroySamplerYcbcrConversion];
+
 /// The debug name of a render host step's pipeline that priming makes, where the instance reports
 /// messages ([`NAMING_CALLS`]).
 const PRIMING_PIPELINE: &std::ffi::CStr =
@@ -377,6 +381,7 @@ pub(crate) struct Has {
     pub(crate) color_write_masks: bool,
     pub(crate) depth_bias: bool,
     pub(crate) sized_index_bind: bool,
+    pub(crate) ycbcr_conversion: bool,
 }
 
 /// The commands a render encoder records that the device has where it has their feature or
@@ -409,15 +414,16 @@ impl PrimedDraws {
 /// Prime `device` of `physical`, made from `instance`, whose queues are `queues`, the first of
 /// its primary family `queue_family`, its buffers and images shared as `sharing` says, on this
 /// thread; `has` says what the device has, `generated` holds the commands of
-/// `VK_EXT_device_generated_commands` where it has them, and `drawn` the render encoder's
-/// commands it has.
+/// `VK_EXT_device_generated_commands` where it has them, `drawn` the render encoder's commands
+/// it has, and `ycbcr` a Y′CbCr conversion of a format it converts, where it converts one.
 ///
 /// # Safety
 ///
 /// The device is live and enables timeline semaphores, and `bufferDeviceAddress` where `has`
 /// says it has device addresses; `queues` holds at least one of its queues, which nothing else
 /// uses yet; `generated` is the device's, which enables the extension and `maintenance5`;
-/// `loader_word` is the device's loader word.
+/// `loader_word` is the device's loader word; the device enables `samplerYcbcrConversion` and
+/// converts `ycbcr`'s format with its chroma location where `ycbcr` is given.
 pub(super) unsafe fn prime(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
@@ -431,6 +437,7 @@ pub(super) unsafe fn prime(
     push: Option<vk::PFN_vkCmdPushDescriptorSetKHR>,
     calibration: Option<Calibration>,
     drawn: PrimedDraws,
+    ycbcr: Option<vk::SamplerYcbcrConversionCreateInfo<'static>>,
 ) -> Result<(), Error> {
     let mut primer = Primer {
         device,
@@ -454,6 +461,7 @@ pub(super) unsafe fn prime(
                 None => Ok(()),
             })
             .and_then(|()| primer.sparse(queues, has.sparse_binding))
+            .and_then(|()| primer.ycbcr(ycbcr))
     };
     // SAFETY: the submission completed, or was never made, or the device is lost; nothing else
     // uses the objects held.
@@ -484,7 +492,8 @@ pub(super) unsafe fn prime(
 /// of [`NAMING_CALLS`] where its instance reports no messages, and those of
 /// [`EXTENDED_DYNAMIC_STATE_CALLS`], [`PRIMITIVE_RESTART_CALLS`],
 /// [`COLOR_WRITE_MASK_CALLS`], [`DEPTH_BIAS_CALLS`] and [`SIZED_INDEX_BIND_CALLS`] where it has
-/// not their commands, that `calls` (one bit each) does not hold.
+/// not their commands, and those of [`YCBCR_CONVERSION_CALLS`] where it converts no YCbCr format,
+/// that `calls` (one bit each) does not hold.
 pub(crate) fn missing(calls: u128, has: Has) -> Vec<Call> {
     Call::ALL
         .iter()
@@ -506,6 +515,7 @@ pub(crate) fn missing(calls: u128, has: Has) -> Vec<Call> {
                 && (has.color_write_masks || !COLOR_WRITE_MASK_CALLS.contains(&call))
                 && (has.depth_bias || !DEPTH_BIAS_CALLS.contains(&call))
                 && (has.sized_index_bind || !SIZED_INDEX_BIND_CALLS.contains(&call))
+                && (has.ycbcr_conversion || !YCBCR_CONVERSION_CALLS.contains(&call))
         })
         .collect()
 }
@@ -865,6 +875,27 @@ impl Primer<'_> {
                 .map_err(vulkan)?;
             self.hold_generated(*commands, Generated::CommandsLayout(commands_layout));
         }
+        Ok(())
+    }
+
+    /// A Y′CbCr conversion of `info`, a format the device converts, where it converts one
+    /// ([`YCBCR_CONVERSION_CALLS`]).
+    ///
+    /// # Safety
+    ///
+    /// As [`prime`]'s; the device enables `samplerYcbcrConversion` where `info` is given, and
+    /// converts its format with its chroma location.
+    unsafe fn ycbcr(
+        &mut self,
+        info: Option<vk::SamplerYcbcrConversionCreateInfo<'static>>,
+    ) -> Result<(), Error> {
+        let Some(info) = info else {
+            return Ok(());
+        };
+        // SAFETY: the caller's.
+        let conversion =
+            unsafe { self.device.create_sampler_ycbcr_conversion(&info, None) }.map_err(vulkan)?;
+        self.hold(conversion);
         Ok(())
     }
 

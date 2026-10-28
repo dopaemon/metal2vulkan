@@ -1035,6 +1035,36 @@ pub(super) unsafe fn graphics_pipeline_library_supported(
         && linking.graphics_pipeline_library_independent_interpolation_decoration == vk::TRUE
 }
 
+/// Whether `physical` has `samplerYcbcrConversion` (Vulkan 1.1's).
+///
+/// # Safety
+///
+/// `physical` was enumerated from `instance`, made at Vulkan 1.2 or later.
+unsafe fn ycbcr_conversion_supported(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+) -> bool {
+    let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut v11);
+    // SAFETY: the caller's contract; the chain lives for the call.
+    unsafe { instance.get_physical_device_features2(physical, &mut features) };
+    v11.sampler_ycbcr_conversion == vk::TRUE
+}
+
+/// Whether `physical` has `VK_EXT_ycbcr_2plane_444_formats`' `ycbcr2plane444Formats`.
+///
+/// # Safety
+///
+/// `physical` was enumerated from `instance`, made at Vulkan 1.2 or later, and lists the
+/// extension.
+unsafe fn ycbcr_444_supported(instance: &ash::Instance, physical: vk::PhysicalDevice) -> bool {
+    let mut formats = vk::PhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut formats);
+    // SAFETY: the caller's contract; the chain lives for the call.
+    unsafe { instance.get_physical_device_features2(physical, &mut features) };
+    formats.ycbcr2plane444_formats == vk::TRUE
+}
+
 /// Whether a device of version `api` (its own, capped by the instance's) that lists `listed`
 /// enables `VK_NV_linear_color_attachment` and its `linearColorAttachment`: it lists the
 /// extension and has what it requires, `VK_KHR_format_feature_flags2` or Vulkan 1.3, where that
@@ -1344,6 +1374,24 @@ fn create_on(
     if graphics_pipeline_library {
         enables.enable_graphics_pipeline_library();
     }
+    // The runtime's own need, outside the vocabulary, where the device has it: two-plane YCbCr
+    // textures convert through the device's own conversion (`ycbcr_device.rs`).
+    // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2.
+    let ycbcr_conversion = unsafe { ycbcr_conversion_supported(&instance.raw, physical) };
+    if ycbcr_conversion {
+        enables.enable_ycbcr_conversion();
+    }
+    // And its two-plane 4:4:4 formats: core from Vulkan 1.3, else where the device lists
+    // `VK_EXT_ycbcr_2plane_444_formats` with its feature.
+    let ycbcr_444 = ycbcr_conversion
+        && (api >= ApiVersion::V1_3
+            || listed.contains(ash::ext::ycbcr_2plane_444_formats::NAME)
+                // SAFETY: `physical` was enumerated from the instance, made at Vulkan 1.2, and
+                // lists the extension.
+                && unsafe { ycbcr_444_supported(&instance.raw, physical) });
+    if ycbcr_444 && api < ApiVersion::V1_3 {
+        enables.enable_ycbcr_2plane_444();
+    }
     // The runtime's own need, outside the vocabulary: the device's pipelines are cached in the
     // shader cache's records alone, the driver's internal cache off where it allows; else the
     // device says once that the driver keeps it.
@@ -1431,6 +1479,8 @@ fn create_on(
         host_image_copy,
         linear_color_attachment,
         graphics_pipeline_library,
+        ycbcr_conversion,
+        ycbcr_444,
         creation_feedback: creation_feedback || feedback_asked,
         dma_buf: dma_buf.is_some(),
         dma_buf_images: dma_buf_images.is_some(),

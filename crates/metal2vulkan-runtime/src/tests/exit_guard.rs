@@ -2087,7 +2087,7 @@ fn the_priming_check_names_what_was_not_made() {
         missing, Has, CALIBRATION_CALLS, COLOR_WRITE_MASK_CALLS, DEPTH_BIAS_CALLS,
         DEVICE_ADDRESS_CALLS, EXTENDED_DYNAMIC_STATE_CALLS, GENERATED_COMMANDS_CALLS,
         HOST_QUERY_RESET_CALLS, NAMING_CALLS, PRIMITIVE_RESTART_CALLS, PUSH_DESCRIPTOR_CALLS,
-        SIZED_INDEX_BIND_CALLS, SPARSE_CALLS, TIMESTAMP_CALLS, UNPRIMED,
+        SIZED_INDEX_BIND_CALLS, SPARSE_CALLS, TIMESTAMP_CALLS, UNPRIMED, YCBCR_CONVERSION_CALLS,
     };
     let has = |timestamps, device_addresses| Has {
         timestamps,
@@ -2103,6 +2103,7 @@ fn the_priming_check_names_what_was_not_made() {
         color_write_masks: true,
         depth_bias: true,
         sized_index_bind: true,
+        ycbcr_conversion: true,
     };
     let all = Call::ALL.iter().fold(0, |bits, call| bits | call.bit());
     assert!(missing(all, has(true, true)).is_empty());
@@ -2199,7 +2200,7 @@ fn the_priming_check_names_what_was_not_made() {
     assert!(missing(unnamed, without).is_empty());
     assert_eq!(missing(unnamed, has(true, true)), NAMING_CALLS);
     // Without a render encoder's command of an extension or of Vulkan 1.3, nor is that command.
-    let groups: [(&[Call], fn(Has) -> Has); 5] = [
+    let groups: [(&[Call], fn(Has) -> Has); 6] = [
         (&EXTENDED_DYNAMIC_STATE_CALLS, |has| Has {
             extended_dynamic_state: false,
             ..has
@@ -2218,6 +2219,11 @@ fn the_priming_check_names_what_was_not_made() {
         }),
         (&SIZED_INDEX_BIND_CALLS, |has| Has {
             sized_index_bind: false,
+            ..has
+        }),
+        // Without a YCbCr format the device converts, nor is a conversion's release.
+        (&YCBCR_CONVERSION_CALLS, |has| Has {
+            ycbcr_conversion: false,
             ..has
         }),
     ];

@@ -368,6 +368,8 @@ calls! {
     DestroyFence => c"vkDestroyFence",
     DestroySemaphore => c"vkDestroySemaphore",
     DestroySampler => c"vkDestroySampler",
+    // A YCbCr sample kernel's conversion (`ycbcr_device.rs`), released with the kernel.
+    DestroySamplerYcbcrConversion => c"vkDestroySamplerYcbcrConversion",
     DestroyBuffer => c"vkDestroyBuffer",
     DestroyBufferView => c"vkDestroyBufferView",
     DestroyImage => c"vkDestroyImage",

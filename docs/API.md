@@ -2084,18 +2084,28 @@ bound.
   of the state set on it runs its program, as Metal runs a command the CPU encoded, where for a
   record the GPU wrote while another state held the ID Metal runs that state (nothing, for a
   state of the other kind).
-- `metal2vulkan-degrade-ycbcr-filter-not-exact` (precision). `YCbCrFilterNotExact`: A pipeline
-  stage's filtered sample of a texture slot bound to a two-plane YCbCr texture, through Metal's own
-  sampler (MoltenVK), does not take Metal's exact filter of the format: the stage records
-  `PrecisionNote::HalfSampleFilter` or `FloatSampleFilter` under the slot's bound format. Cost:
-  the texels hold Metal's reads exactly, but the sample filters them as the device does, off
-  the grid Metal sums the format's steps on, so a filtered result can miss Metal's by a step of that
-  grid or more. A device that samples natively answers the device's filter,
-  `metal2vulkan-degrade-device-sampling`; on MoltenVK, Metal's own sampler
-  filters the converted texels as an `RGBA16Float` or `RGBA32Float` texture's, within one step of
-  the grid (a `half` result within one `half` ulp, measured in plain Metal on an Apple M3 Max under
-  macOS 27.0.1 for `YCBCR8_420_2P` and its sRGB twin against such a texture of the same texels),
-  announced at a draw that binds such a texture.
+- `metal2vulkan-degrade-ycbcr-filter-not-exact` (precision). `YCbCrFilterNotExact`: A two-plane
+  YCbCr texture whose planes' format the device converts itself (its sampler Y′CbCr conversion:
+  unpacked 8- or 10-bit codes of a 4:2:0, 4:2:2 or 4:4:4 layout over plane 0, a 4:4:4 one read as
+  codes aside, on a device that reports the format's conversion features, Metal's midpoint chroma
+  through a linear chroma filter among them for a 4:2:0 or 4:2:2 one, and has no defect in it:
+  MoltenVK's 4:2:0 and 4:2:2 formats and lavapipe's 10-bit ones aside) reads the device's conversion
+  of its planes, announced where the texture is made; and a pipeline stage's filtered sample of a
+  texture slot bound to a two-plane YCbCr texture, through Metal's own sampler (MoltenVK), does not
+  take Metal's exact filter of the format: the stage records `PrecisionNote::HalfSampleFilter` or
+  `FloatSampleFilter` under the slot's bound format. Cost: where the device converts the planes'
+  format, the texels are its own Y′CbCr conversion's, at its precision and unclamped where it does
+  not clamp, not Metal's fixed-point read; elsewhere the texels hold Metal's reads exactly, but the
+  sample filters them as the device does, off the grid Metal sums the format's steps on, so a
+  filtered result can miss Metal's by a step of that grid or more. Measured on lavapipe (Mesa
+  26.0.8; random planes, every texel), which converts the 8-bit 4:4:4 layout here: each channel
+  within 0.04/2048 of Vulkan's conversion past the `half` its image stores, and of Metal's read
+  within 6/2048 where the result lies in `[0, 1]`; outside it by what Metal's clamp takes off. A
+  device that samples natively answers the device's filter, `metal2vulkan-degrade-device-sampling`;
+  on MoltenVK, Metal's own sampler filters the converted texels as an `RGBA16Float` or `RGBA32Float`
+  texture's, within one step of the grid (a `half` result within one `half` ulp, measured in plain
+  Metal on an Apple M3 Max under macOS 27.0.1 for `YCBCR8_420_2P` and its sRGB twin against such a
+  texture of the same texels), announced at a draw that binds such a texture.
 - `metal2vulkan-degrade-rotated-load-tiles` (precision). `RotatedLoadTiles`: A render pass that
   draws loads and stores a rotated texture of rotation 4, whose load is the plane transposed and
   whose store is rotation 1's: every tile of the frame lands mirrored, where Metal loads and stores

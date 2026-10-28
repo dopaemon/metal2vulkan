@@ -387,6 +387,8 @@ pub(super) struct DeviceShared {
     /// The crate-owned compute kernels the runtime dispatches for itself, made on first use
     /// (`owned_kernel.rs`).
     pub(super) owned_kernels: Mutex<OwnedKernels>,
+    /// The two-plane YCbCr formats the device converts itself (`ycbcr_device.rs`).
+    pub(super) ycbcr_formats: crate::ycbcr_device::YCbCrFormats,
     /// The spare scratch block of `generate_mipmaps`' filter chains (`mipmap_scratch.rs`).
     pub(super) mipmap_scratch: Mutex<MipmapScratch>,
     /// The sample planes' copy kernels and merge pipelines, made on first use
@@ -1108,6 +1110,14 @@ pub(super) struct Parts {
     /// `adopt.rs`, where the consumer lists it), outside `enabled`'s vocabulary: its render
     /// pipelines are linked from libraries (`pipeline/libraries.rs`).
     pub(super) graphics_pipeline_library: bool,
+    /// It enables `samplerYcbcrConversion` (`create.rs`), outside `enabled`'s vocabulary: a
+    /// two-plane YCbCr texture's planes convert through the device's own conversion where it
+    /// converts their format (`ycbcr_device.rs`). An adopted device's consumer does not say, so
+    /// it is false there.
+    pub(super) ycbcr_conversion: bool,
+    /// It takes the two-plane 4:4:4 formats with that conversion: Vulkan 1.3, or
+    /// `VK_EXT_ycbcr_2plane_444_formats` enabled with its feature (`create.rs`).
+    pub(super) ycbcr_444: bool,
     /// It enables `VK_EXT_pipeline_creation_feedback` (`create.rs`), outside `enabled`'s
     /// vocabulary, wherever listed: each making of a program's pipeline reads whether its cache
     /// held the pipeline (`shader_cache/mod.rs`).
@@ -1162,6 +1172,8 @@ impl Device {
             host_image_copy,
             linear_color_attachment,
             graphics_pipeline_library,
+            ycbcr_conversion,
+            ycbcr_444,
             creation_feedback,
             dma_buf,
             dma_buf_images,
@@ -1412,6 +1424,15 @@ impl Device {
                 crate::recorder::through(recording.as_ref(), Command::CmdSetColorWriteMask, masks)
             })
         });
+        // The YCbCr formats the device converts itself, where it enables the conversion.
+        let ycbcr_formats = match ycbcr_conversion {
+            // SAFETY: `physical` belongs to `instance`, created at Vulkan 1.2 or later, and the
+            // device enables `samplerYcbcrConversion`.
+            true => unsafe {
+                crate::ycbcr_device::YCbCrFormats::of(&instance.raw, physical, ycbcr_444)
+            },
+            false => crate::ycbcr_device::YCbCrFormats::default(),
+        };
         let drawn = prime::PrimedDraws {
             dynamic: extended_dynamic_state,
             color_write_masks,
@@ -1453,11 +1474,13 @@ impl Device {
                     color_write_masks: false,
                     depth_bias: false,
                     sized_index_bind: false,
+                    ycbcr_conversion: ycbcr_formats.primer().is_some(),
                 }),
                 generated_commands.as_ref(),
                 push_descriptor,
                 calibrated,
                 drawn,
+                ycbcr_formats.primer(),
             )
         } {
             scheduler.stop();
@@ -1773,6 +1796,7 @@ impl Device {
             gpu_work: AtomicU64::new(0),
             dynamic_multi_variable: OnceLock::new(),
             owned_kernels: Mutex::new(OwnedKernels::default()),
+            ycbcr_formats,
             mipmap_scratch: Mutex::default(),
             planes: Mutex::new(PlanesObjects::default()),
             interleave: Mutex::default(),

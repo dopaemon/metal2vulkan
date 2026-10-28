@@ -30,13 +30,14 @@ use super::device::lock;
 use super::error::{internal, vulkan, Error};
 use super::release;
 use super::texture::decoded_twin::TwinDecode;
+use super::ycbcr_device::YCbCrSampler;
 use super::Device;
 use crate::device::functions::Vk;
 use crate::shader_cache::driver::Making;
 use ash::vk;
 use metal2vulkan::bind::{
     CompressedBlit, MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead,
-    ShadowTexelView, TessellationScanKernel, TexelWords, YCbCrConversion,
+    ShadowTexelView, TessellationScanKernel, TexelWords, YCbCrCodes, YCbCrConversion,
 };
 use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::PixelFormat;
@@ -144,6 +145,11 @@ pub(super) enum OwnedModule {
     /// the device reads through, within the two-plane formats' layouts and the ranges and
     /// matrices they convert under.
     YCbCrConvert(YCbCrConversion, bool),
+    /// `bind::ycbcr_sample_module`: a YCbCr texture's planes' image sampled through the device's
+    /// own Y′CbCr conversion into its image, the output of the codes; its layout bakes the
+    /// conversion's sampler, made with the first kernel of it and released with the device
+    /// (`ycbcr_device.rs`). One per sampler and output a texture of the device reads through.
+    YCbCrSample(YCbCrSampler, YCbCrCodes),
     /// `bind::ycbcr_refresh_module`: a YCbCr texture's planes compared with the copy its last
     /// conversion read, the changed words stored over it, and the conversion's indirect group
     /// count written where any changed (`ycbcr.rs`).
@@ -203,6 +209,8 @@ impl OwnedModule {
             OwnedModule::MipmapFilter(kernel) => u32::from(kernel.fetches()),
             OwnedModule::ShadowCopyBack(_) | OwnedModule::ShadowMergeImage(_) => 1,
             OwnedModule::ShadowMergeKeptImage(_) => 2,
+            // The combined image sampler of the planes' image.
+            OwnedModule::YCbCrSample(..) => 1,
             _ => 0,
         }
     }
@@ -227,6 +235,7 @@ impl OwnedModule {
     fn storage_images(self) -> u32 {
         match self {
             OwnedModule::YCbCrConvert(..)
+            | OwnedModule::YCbCrSample(..)
             | OwnedModule::YCbCrWrite
             | OwnedModule::ShadowCopyIn(_) => 1,
             OwnedModule::ExtendedShadowLoad(_) => 2,
@@ -410,6 +419,13 @@ impl OwnedModule {
                 .map_err(Error::Compile)?;
                 Ok((module.spirv.to_vec(), 2, 0))
             }
+            OwnedModule::YCbCrSample(_, codes) => {
+                let module =
+                    metal2vulkan::bind::ycbcr_sample_module(device.compile_device(), codes)
+                        .map_err(Error::Compile)?;
+                let push_bytes = metal2vulkan::bind::YCbCrSampleModule::PUSH_BYTES;
+                Ok((module.spirv.to_vec(), 0, push_bytes))
+            }
             OwnedModule::RotateTexels => {
                 let module = metal2vulkan::bind::rotate_texels_module(device.compile_device())
                     .map_err(Error::Compile)?;
@@ -516,6 +532,10 @@ pub(super) struct OwnedKernel {
     /// Whether set 0's layout is a push descriptor set's: its dispatches push their descriptors
     /// (`vkCmdPushDescriptorSetKHR`) in place of a set from a pool.
     pub(super) pushed: bool,
+    /// The descriptors its first binding takes from a pool where that binding is the combined
+    /// image sampler of a sampler of the device's Y′CbCr conversion its layout bakes
+    /// (`combinedImageSamplerDescriptorCount`, `ycbcr_device.rs`); 0 for every other kernel.
+    combined: u8,
 }
 
 impl OwnedKernel {
@@ -567,6 +587,10 @@ pub(super) struct OwnedKernels {
     rows_copy: Option<OwnedKernel>,
     ycbcr_refresh: Option<OwnedKernel>,
     ycbcr_converts: HashMap<(YCbCrConversion, bool), OwnedKernel>,
+    ycbcr_samples: HashMap<(YCbCrSampler, YCbCrCodes), OwnedKernel>,
+    /// The conversions and samplers the YCbCr sample kernels' layouts bake, made with the first
+    /// kernel of each and released with the device.
+    ycbcr_samplers: HashMap<YCbCrSampler, (vk::SamplerYcbcrConversion, vk::Sampler)>,
     two_plane_texels: Option<OwnedKernel>,
     plane_bytes_copy: Option<OwnedKernel>,
     ycbcr_write: Option<OwnedKernel>,
@@ -629,6 +653,7 @@ impl OwnedKernels {
         .chain(self.index_rewrites.values().copied())
         .chain(self.index_rewrite_runs.values().copied())
         .chain(self.ycbcr_converts.values().copied())
+        .chain(self.ycbcr_samples.values().copied())
         .chain(self.unused_bits.values().copied())
         .chain(self.compressed_blits.values().copied())
         .chain(self.extended_shadow_loads.values().copied())
@@ -637,6 +662,28 @@ impl OwnedKernels {
         {
             kernel.destroy(raw);
         }
+        for &(conversion, sampler) in self.ycbcr_samplers.values() {
+            // SAFETY: as above; the kernels whose layouts bake them are destroyed.
+            unsafe {
+                release::object(raw, sampler);
+                release::object(raw, conversion);
+            }
+        }
+    }
+
+    /// The device's conversion of `sampler` and the sampler of it that the YCbCr sample kernels
+    /// of `sampler` bake, made on first use; the sampler counted against the device's samplers.
+    fn ycbcr_sampler(
+        &mut self,
+        device: &Device,
+        sampler: YCbCrSampler,
+    ) -> Result<(vk::SamplerYcbcrConversion, vk::Sampler), Error> {
+        if let Some(&made) = self.ycbcr_samplers.get(&sampler) {
+            return Ok(made);
+        }
+        let made = sampler.make(device)?;
+        self.ycbcr_samplers.insert(sampler, made);
+        Ok(made)
     }
 
     /// The kernel of `which`, where the device has made it.
@@ -655,6 +702,9 @@ impl OwnedKernels {
             OwnedModule::IndexRewriteRun(program) => self.index_rewrite_runs.get(&program).copied(),
             OwnedModule::YCbCrConvert(conversion, floats) => {
                 self.ycbcr_converts.get(&(conversion, floats)).copied()
+            }
+            OwnedModule::YCbCrSample(sampler, codes) => {
+                self.ycbcr_samples.get(&(sampler, codes)).copied()
             }
             OwnedModule::UnusedBits(format, words) => {
                 self.unused_bits.get(&(format, words)).copied()
@@ -693,6 +743,9 @@ impl OwnedKernels {
             }
             OwnedModule::YCbCrConvert(conversion, floats) => {
                 self.ycbcr_converts.insert((conversion, floats), kernel);
+            }
+            OwnedModule::YCbCrSample(sampler, codes) => {
+                self.ycbcr_samples.insert((sampler, codes), kernel);
             }
             OwnedModule::UnusedBits(format, words) => {
                 self.unused_bits.insert((format, words), kernel);
@@ -749,6 +802,7 @@ impl OwnedKernels {
             | OwnedModule::IndexRewrite(..)
             | OwnedModule::IndexRewriteRun(_)
             | OwnedModule::YCbCrConvert(..)
+            | OwnedModule::YCbCrSample(..)
             | OwnedModule::UnusedBits(..)
             | OwnedModule::CompressedBlit(_)
             | OwnedModule::ExtendedShadowLoad(_)
@@ -784,6 +838,18 @@ impl OwnedKernels {
 }
 
 impl Device {
+    /// The device's Y′CbCr conversion of `sampler` that its YCbCr sample kernels bake, where a
+    /// kernel of it was made ([`OwnedKernels::ycbcr_sampler`]): an image view such a kernel
+    /// samples is made with it.
+    pub(super) fn ycbcr_conversion(
+        &self,
+        sampler: YCbCrSampler,
+    ) -> Option<vk::SamplerYcbcrConversion> {
+        let kernels = lock(&self.shared().owned_kernels);
+        let made = kernels.ycbcr_samplers.get(&sampler);
+        made.map(|&(conversion, _)| conversion)
+    }
+
     /// The kernel of `which`, made on first use.
     pub(super) fn owned_kernel(&self, which: OwnedModule) -> Result<OwnedKernel, Error> {
         // A making's turn before the lock (`budget::helper_turn`): none where it is made.
@@ -796,7 +862,20 @@ impl Device {
         }
         let (spirv, buffers, push_bytes) = which.build(self)?;
         let bindings = (which.images(), which.storage_images(), buffers);
-        let kernel = make(self, &spirv, bindings, (push_bytes, which.pushed(self)))?;
+        let baked = match which {
+            OwnedModule::YCbCrSample(sampler, ..) => {
+                let (_, made) = kernels.ycbcr_sampler(self, sampler)?;
+                Some((made, sampler.descriptors))
+            }
+            _ => None,
+        };
+        let kernel = make(
+            self,
+            &spirv,
+            bindings,
+            (push_bytes, which.pushed(self)),
+            baked,
+        )?;
         // Counted here, so the build attributes to the call that first needed the kernel rather
         // than to whichever path the kernel serves (`WorkCounts::owned_kernels_made`).
         self.shared().counts.owned_kernel_made(spirv.len());
@@ -807,15 +886,21 @@ impl Device {
 
 /// The objects of a kernel of `spirv` (entry point `main`) with `images` sampled images, then
 /// `storage_images` storage images and then `buffers` storage buffers in set 0, a push descriptor
-/// set's where `pushed`, and `push_bytes` of `COMPUTE` push constants.
+/// set's where `pushed`, and `push_bytes` of `COMPUTE` push constants. With `baked`, a sampler
+/// of a Y′CbCr conversion and the descriptors a combined image sampler of it takes, its first
+/// binding is that combined image sampler, the sampler immutable.
 fn make(
     device: &Device,
     spirv: &[u32],
     (images, storage_images, buffers): (u32, u32, u32),
     (push_bytes, pushed): (u32, bool),
+    baked: Option<(vk::Sampler, u32)>,
 ) -> Result<OwnedKernel, Error> {
     let shared = device.shared();
     let raw = shared.vk();
+    let (sampler, combined) = baked.unwrap_or((vk::Sampler::null(), 0));
+    let combined =
+        u8::try_from(combined).map_err(|_| internal("a YCbCr format of too many planes"))?;
     let mut kernel = OwnedKernel {
         module: vk::ShaderModule::null(),
         set_layout: vk::DescriptorSetLayout::null(),
@@ -825,7 +910,9 @@ fn make(
         storage_images,
         buffers,
         pushed,
+        combined,
     };
+    let immutable = [sampler];
     let made = (|| {
         let info = vk::ShaderModuleCreateInfo::default().code(spirv);
         // SAFETY: the code is live SPIR-V words for the call.
@@ -833,11 +920,15 @@ fn make(
         let bindings: Vec<vk::DescriptorSetLayoutBinding<'_>> =
             (0..images + storage_images + buffers)
                 .map(|binding| {
-                    vk::DescriptorSetLayoutBinding::default()
+                    let info = vk::DescriptorSetLayoutBinding::default()
                         .binding(binding)
-                        .descriptor_type(descriptor_type(binding, images, storage_images))
+                        .descriptor_type(kernel.descriptor_type(binding))
                         .descriptor_count(1)
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE);
+                    match kernel.baked(binding) {
+                        true => info.immutable_samplers(&immutable),
+                        false => info,
+                    }
                 })
                 .collect();
         let mut info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
@@ -908,6 +999,23 @@ fn descriptor_type(binding: u32, images: u32, storage_images: u32) -> vk::Descri
     }
 }
 
+impl OwnedKernel {
+    /// Whether binding `binding` of its set 0 is the combined image sampler of a baked Y′CbCr
+    /// conversion's sampler.
+    fn baked(&self, binding: u32) -> bool {
+        binding == 0 && self.combined > 0
+    }
+
+    /// The type of binding `binding` of its set 0: [`descriptor_type`]'s, but the combined image
+    /// sampler of a baked sampler.
+    fn descriptor_type(&self, binding: u32) -> vk::DescriptorType {
+        match self.baked(binding) {
+            true => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            false => descriptor_type(binding, self.images, self.storage_images),
+        }
+    }
+}
+
 /// What one set of an [`OwnedKernel`] binds: its sampled images' views, then its storage images'
 /// views, each in the `GENERAL` layout, then its storage buffers' `(buffer, offset, range)`.
 pub(super) struct OwnedSet {
@@ -935,8 +1043,13 @@ impl OwnedKernel {
     /// What one set of its set 0 takes from a pool: its sampled images, storage images and
     /// storage buffers (`SetNeeds`, by raw type ascending, each count above 0).
     fn set_needs(&self) -> SetNeeds {
+        let baked = u32::from(self.combined > 0);
         let counts = [
-            (vk::DescriptorType::SAMPLED_IMAGE, self.images),
+            (
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                u32::from(self.combined),
+            ),
+            (vk::DescriptorType::SAMPLED_IMAGE, self.images - baked),
             (vk::DescriptorType::STORAGE_IMAGE, self.storage_images),
             (vk::DescriptorType::STORAGE_BUFFER, self.buffers),
         ];
@@ -1031,13 +1144,15 @@ impl OwnedSets {
             .collect();
         let mut writes = Vec::new();
         let infos = image_infos.iter().zip(&storage_infos).zip(&buffer_infos);
-        for (set, ((images, storage), buffers)) in owned.sets.iter().zip(infos) {
+        for ((set, ((images, storage), buffers)), kernel) in
+            owned.sets.iter().zip(infos).zip(kernels)
+        {
             for (binding, info) in images.iter().enumerate() {
                 writes.push(
                     vk::WriteDescriptorSet::default()
                         .dst_set(*set)
                         .dst_binding(binding as u32)
-                        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                        .descriptor_type(kernel.descriptor_type(binding as u32))
                         .image_info(std::slice::from_ref(info)),
                 );
             }

@@ -34,6 +34,7 @@ use super::depth_compares::{pipeline_of, run_held, Held, Through};
 use super::driver_deviations::stage_notes;
 use super::host_memory::{self, host_page, Mapping};
 use super::pixel_samplers::{metal_sampler, own_sampler};
+use super::ycbcr_device_reads::{assert_device_reads, device_conversions, vulkan_read};
 use super::{buffer_with, converted_holds, half_within, read_buffer};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{
@@ -1260,9 +1261,12 @@ fn made_in_place(device: &Device) -> u64 {
 /// (`VkProperty::MetalSampler`) within one step of the grid, a `half` result within one `half` unit
 /// in the last place (`ycbcr-filter-not-exact`); on any other device by its own filter, within
 /// [`DEVICE_FILTER_BOUND`] (`device-sampling`). The values off Metal's step are counted, with the
-/// largest distance in codes of `1/255`.
+/// largest distance in codes of `1/255`. The textures the device converts itself while it runs
+/// are counted too (`ycbcr_device_reads`), each announced as `ycbcr-filter-not-exact`.
 struct Between {
     metal: bool,
+    /// The device's conversions before the run ([`device_conversions`]).
+    converted: u64,
     /// Samples of textures that keep their image.
     kept: usize,
     checked: usize,
@@ -1274,6 +1278,7 @@ impl Between {
     fn new(device: &Device) -> Between {
         Between {
             metal: metal_sampler(device),
+            converted: device_conversions(device),
             kept: 0,
             checked: 0,
             differ: 0,
@@ -1343,17 +1348,23 @@ impl Between {
                 self.most
             );
         }
-        assert_filter_notices(device, announced, self.kept > 0);
+        let by_device = device_conversions(device) > self.converted;
+        assert_filter_notices(device, announced, (self.kept > 0, by_device));
     }
 }
 
 /// The filter notices `announced` of a run on `device` whose samples of converted two-plane
-/// YCbCr textures read a texture that keeps its image where `kept`: `ycbcr-filter-not-exact` once
-/// where one did on a device that samples through Metal's own sampler (a runtime sampler's slot
-/// bound to such a texture records its filter note whatever the sampler's word,
-/// `lower::sampler::linear`), none elsewhere; no generic filter notice; `device-sampling` on
-/// every device that samples natively, and only there.
-fn assert_filter_notices(device: &Device, announced: &BTreeMap<Degradation, usize>, kept: bool) {
+/// YCbCr textures read a texture that keeps its image where `kept`, and that made a texture the
+/// device converts itself where `by_device`: `ycbcr-filter-not-exact` once where one did on a
+/// device that samples through Metal's own sampler (a runtime sampler's slot bound to such a
+/// texture records its filter note whatever the sampler's word, `lower::sampler::linear`), or
+/// where the device converted one (`ycbcr_device_reads`), none elsewhere; no generic filter
+/// notice; `device-sampling` on every device that samples natively, and only there.
+fn assert_filter_notices(
+    device: &Device,
+    announced: &BTreeMap<Degradation, usize>,
+    (kept, by_device): (bool, bool),
+) {
     let metal = metal_sampler(device);
     for kind in [
         Degradation::FloatSampleFilter,
@@ -1362,7 +1373,11 @@ fn assert_filter_notices(device: &Device, announced: &BTreeMap<Degradation, usiz
         assert_eq!(announced.get(&kind), None, "{announced:?}");
     }
     let ycbcr = announced.get(&Degradation::YCbCrFilterNotExact);
-    assert_eq!(ycbcr, (metal && kept).then_some(&1), "{announced:?}");
+    assert_eq!(
+        ycbcr,
+        ((metal && kept) || by_device).then_some(&1),
+        "{announced:?}"
+    );
     assert_eq!(
         announced.contains_key(&Degradation::DeviceSampling),
         !metal,
@@ -2312,9 +2327,11 @@ fn write_then_read(
 /// about two texels in three, over both ranges and each matrix: the surface's bytes are those codes
 /// and otherwise as they were, the rows' padding and the bytes past the planes among them. A
 /// `read()` of the texture in the same encoder after the writes, and one in a later command buffer,
-/// read the planes as written. A dispatch writing no texel keeps every byte. Nothing is announced
-/// past the lane's pipeline states' own notes and, on a device without unified memory, the first
-/// `Shared` buffer's `shared-in-system-memory`.
+/// read the planes as written (where the device converts the texture, its conversion of them:
+/// `ycbcr_device_reads`). A dispatch writing no texel keeps every byte. Nothing is announced
+/// past the lane's pipeline states' own notes, on a device without unified memory the first
+/// `Shared` buffer's `shared-in-system-memory`, and where the device converts a texture itself
+/// `ycbcr-filter-not-exact`.
 #[test]
 fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
     use PixelFormat as P;
@@ -2331,6 +2348,7 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
             Some(SurfaceYCbCrMatrix::Itu2020),
         );
         let mut seed = 640;
+        let mut by_devices = false;
         for (pf, ostype, matrix, conversion) in [
             (P::YCBCR84442P, "444v", None, (Video, Bt601)),
             (P::YCBCR84442P, "444f", b709, (Full, Bt709)),
@@ -2348,7 +2366,10 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
                 let mut random = Random(seed);
                 let bytes = family_bytes(seed, codes);
                 let surface = buffer_with(device, &bytes).unwrap();
+                let converted = device_conversions(device);
                 let texture = written_texture(&surface, pf, ostype, matrix).unwrap();
+                let by_device = device_conversions(device) > converted;
+                by_devices |= by_device;
                 let (mut values, mut mask, mut texels) = (Vec::new(), Vec::new(), Vec::new());
                 for _ in 0..W * H {
                     let written = !random.next().is_multiple_of(3);
@@ -2380,15 +2401,19 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
                 );
                 // The converted formats' reads, of the planes as written.
                 if codes.output == YCbCrOutput::Converted {
-                    let read = family_modelled(&want, codes, conversion);
+                    let planes = (&want[..], codes, conversion);
                     let same = read_buffer(&out, 0, 16 * W * H).unwrap();
-                    assert_eq!(grid(&same), read, "{case}: read() in the same encoder");
                     let later = texels_of(device, &kernels.read, &texture, None);
-                    assert_eq!(
-                        grid(&later),
-                        read,
-                        "{case}: read() in a later command buffer"
-                    );
+                    for (texels, when) in [(same, "in the same encoder"), (later, "later")] {
+                        let case = format!("{case}: read() {when}");
+                        assert_family_read(
+                            &kernels,
+                            &texels,
+                            planes,
+                            (2048, false, by_device),
+                            &case,
+                        );
+                    }
                 }
             }
         }
@@ -2419,11 +2444,16 @@ fn a_four_four_four_texture_s_writes_store_metal_s_codes() {
         }
         // Nothing but, on a device without unified memory, the first `Shared` buffer the case made
         // (`blits::SYSTEM_MEMORY`, announced as that buffer is made), as
-        // `blits::shared_buffers_follow_the_memory_model` expects it.
-        let expected: &[Degradation] = match device.properties().has_unified_memory {
-            true => &[],
-            false => &SYSTEM_MEMORY,
+        // `blits::shared_buffers_follow_the_memory_model` expects it, and the device's own
+        // conversion where it converted a texture (`ycbcr_device_reads`).
+        let mut expected: Vec<Degradation> = match device.properties().has_unified_memory {
+            true => Vec::new(),
+            false => SYSTEM_MEMORY.to_vec(),
         };
+        if by_devices {
+            expected.push(Degradation::YCbCrFilterNotExact);
+        }
+        let expected = &expected[..];
         let notices = assert_once(&messages.take_notices(), expected);
         assert!(
             notices.keys().all(|kind| expected.contains(kind)),
@@ -2816,8 +2846,40 @@ fn read_anywhere(
     bytes: &[u8],
     codes: YCbCrCodes,
     conversion: (YCbCrRange, YCbCrMatrix),
-    (luma, chroma): ([u64; 2], Option<[u64; 2]>),
+    planes: ([u64; 2], Option<[u64; 2]>),
 ) -> Vec<[u16; 3]> {
+    anywhere_sums(bytes, codes, planes)
+        .into_iter()
+        .map(|(y, sums)| {
+            let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
+            ycbcr_read(codes, conversion, [y, cb, cr])
+        })
+        .collect()
+}
+
+/// What [`read_anywhere`] reads, through the device's conversion
+/// (`ycbcr_device_reads::vulkan_read`): the chroma sums over 16, unrounded.
+fn anywhere_vulkan(
+    bytes: &[u8],
+    codes: YCbCrCodes,
+    conversion: (YCbCrRange, YCbCrMatrix),
+    planes: ([u64; 2], Option<[u64; 2]>),
+) -> Vec<[f64; 3]> {
+    anywhere_sums(bytes, codes, planes)
+        .into_iter()
+        .map(|(y, sums)| {
+            let [cb, cr] = sums.map(|s| f64::from(s) / 16.0);
+            vulkan_read(codes, conversion, [f64::from(y), cb, cr])
+        })
+        .collect()
+}
+
+/// Each texel's luma code and its chroma sums of 16 weights, as [`read_anywhere`] reads them.
+fn anywhere_sums(
+    bytes: &[u8],
+    codes: YCbCrCodes,
+    (luma, chroma): ([u64; 2], Option<[u64; 2]>),
+) -> Vec<(u16, [u32; 2])> {
     let byte = |at: u64| bytes.get(at as usize).copied().unwrap_or(0);
     let unit = u64::from(codes.bytes);
     let code = |at: u64| match unit {
@@ -2847,9 +2909,7 @@ fn read_anywhere(
                     }
                 }
             }
-            let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
-            let y_code = code(luma[0] + y * luma[1] + unit * x);
-            out.push(ycbcr_read(codes, conversion, [y_code, cb, cr]));
+            out.push((code(luma[0] + y * luma[1] + unit * x), sums));
         }
     }
     out
@@ -2880,7 +2940,8 @@ fn assert_codes_read(kernels: &Kernels, texels: &[u8], want: &[[u16; 3]], max: u
 /// lossless compressed OSType, plane 1 of a surface without planes, an `_sRGB` twin over a P3
 /// surface, rows of codes that overlap (a 10-bit format over 8-bit rows narrower than its codes)
 /// and luma rows past the buffer, the last two the runtime's gaps. Metal makes no render target of
-/// a 4:2:0 format of odd width: its nil.
+/// a 4:2:0 format of odd width: its nil. A texture the device converts itself reads its conversion
+/// of the same codes, within its bound (`ycbcr_device_reads`).
 #[test]
 fn textures_over_any_surface_read_what_metal_reads() {
     use PixelFormat as P;
@@ -2971,16 +3032,27 @@ fn textures_over_any_surface_read_what_metal_reads() {
                 "{pf:?} over {:?}",
                 (String::from_utf8_lossy(at.0), at.1, at.2)
             );
+            let converted = device_conversions(device);
             let made = texture(buffer, pf, at, planes, matrix);
             let made = made.unwrap_or_else(|e| panic!("{case}: {e:?}"));
+            let by_device = device_conversions(device) > converted;
             let source = match buffer.length() {
                 2000 => short_bytes,
                 _ => &bytes[..],
             };
             let chroma = read_chroma.then_some(planes.1);
-            let want = read_anywhere(source, codes(pf), (range, Bt601), (planes.0, chroma));
-            let got = grid(&texels_of(device, &kernels.read, &made, None));
-            assert_eq!(got, want, "{case}");
+            let read = texels_of(device, &kernels.read, &made, None);
+            let (codes, planes) = (codes(pf), (planes.0, chroma));
+            match by_device {
+                true => {
+                    let want = anywhere_vulkan(source, codes, (range, Bt601), planes);
+                    assert_device_reads(&read, &want, (codes.output, false), &case);
+                }
+                false => {
+                    let want = read_anywhere(source, codes, (range, Bt601), planes);
+                    assert_eq!(grid(&read), want, "{case}");
+                }
+            }
         }
         // P3: a converted format reads its luma, Cb and Cr codes alone, a code format its codes.
         for (pf, matrix) in [
@@ -3767,15 +3839,10 @@ fn chroma_size(codes: YCbCrCodes) -> [u64; 2] {
     [(W, halved[0]), (H, halved[1])].map(|(n, halved)| if halved { n.div_ceil(2) } else { n })
 }
 
-/// Each texel `codes` reads of the surface `bytes` (laid out as [`family_bytes`] lays them)
-/// under `conversion` (`metal2vulkan::bind::ycbcr_read`): along a halved axis the two nearest
-/// chroma pairs weighted 3 and 1, along a direct one the texel's own pair weighted 4, the sum `S`
-/// of the 16 weights rounded `(S + 8) >> 4`.
-fn family_modelled(
-    bytes: &[u8],
-    codes: YCbCrCodes,
-    conversion: (YCbCrRange, YCbCrMatrix),
-) -> Vec<[u16; 3]> {
+/// Each texel's luma code and the sums `S` of its chroma codes Cb and Cr, `codes` of the surface
+/// `bytes` (laid out as [`family_bytes`] lays them): along a halved axis the two nearest chroma
+/// pairs weighted 3 and 1, along a direct one the texel's own pair weighted 4, 16 in all.
+fn family_sums(bytes: &[u8], codes: YCbCrCodes) -> Vec<(u16, [u32; 2])> {
     let code = |row: u64, index: u64| code_of(bytes, codes, row, index);
     let [cw, ch] = chroma_size(codes);
     let halved = codes.subsampling.halved();
@@ -3800,11 +3867,72 @@ fn family_modelled(
                     sums[1] += wx * wy * u32::from(code(row, 2 * cx + 1));
                 }
             }
-            let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
-            out.push(ycbcr_read(codes, conversion, [code(y * ROWQ, x), cb, cr]));
+            out.push((code(y * ROWQ, x), sums));
         }
     }
     out
+}
+
+/// Each texel `codes` reads of the surface `bytes` (laid out as [`family_bytes`] lays them)
+/// under `conversion` (`metal2vulkan::bind::ycbcr_read`): [`family_sums`]' chroma sums rounded
+/// `(S + 8) >> 4`.
+fn family_modelled(
+    bytes: &[u8],
+    codes: YCbCrCodes,
+    conversion: (YCbCrRange, YCbCrMatrix),
+) -> Vec<[u16; 3]> {
+    family_sums(bytes, codes)
+        .into_iter()
+        .map(|(y, sums)| {
+            let [cb, cr] = sums.map(|s| ((s + 8) >> 4) as u16);
+            ycbcr_read(codes, conversion, [y, cb, cr])
+        })
+        .collect()
+}
+
+/// Each texel of the surface `bytes` (laid out as [`family_bytes`] lays them) through the
+/// device's conversion of `codes` under `conversion` (`ycbcr_device_reads::vulkan_read`):
+/// [`family_sums`]' chroma sums over 16, unrounded.
+fn family_vulkan(
+    bytes: &[u8],
+    codes: YCbCrCodes,
+    conversion: (YCbCrRange, YCbCrMatrix),
+) -> Vec<[f64; 3]> {
+    family_sums(bytes, codes)
+        .into_iter()
+        .map(|(y, sums)| {
+            let [cb, cr] = sums.map(|s| f64::from(s) / 16.0);
+            vulkan_read(codes, conversion, [f64::from(y), cb, cr])
+        })
+        .collect()
+}
+
+/// Asserts a `read()` (or a sample at the centres, or, `half`, a `half` read) of a texture of
+/// `codes` over the surface `bytes` (laid out as [`family_bytes`] lays them) under `conversion`:
+/// Metal's steps of `1 / grid` exactly ([`family_modelled`]), or, where the device converted the
+/// texture (`by_device`), Vulkan's conversion within the device's bound ([`family_vulkan`],
+/// `ycbcr_device_reads`). A `half` read of Metal's steps is [`assert_half_steps`]'s.
+fn assert_family_read(
+    kernels: &Kernels,
+    texels: &[u8],
+    (bytes, codes, conversion): (&[u8], YCbCrCodes, (YCbCrRange, YCbCrMatrix)),
+    (grid, half, by_device): (u32, bool, bool),
+    case: &str,
+) {
+    match (by_device, half) {
+        (true, _) => {
+            let want = family_vulkan(bytes, codes, conversion);
+            assert_device_reads(texels, &want, (codes.output, half), case);
+        }
+        (false, true) => {
+            let want = family_modelled(bytes, codes, conversion);
+            assert_half_steps(kernels, texels, &want, grid, case);
+        }
+        (false, false) => {
+            let want = family_modelled(bytes, codes, conversion);
+            assert_eq!(grid_of(texels, grid), want, "{case}");
+        }
+    }
 }
 
 /// The texture of `pf` over plane 0 of `surface`, a surface of OSType `ostype` and `matrix` laid
@@ -3835,7 +3963,9 @@ fn family_texture(
 /// sample at each texel's centre, and a `half` read (the twins' steps rounded with ties away from
 /// zero). The filter notices are [`assert_filter_notices`]'s: no function reads these planes in
 /// place. A format over a surface whose chroma plane holds its own reads its pairs at the
-/// surface's rows, and over one whose plane is smaller the same, past the plane.
+/// surface's rows, and over one whose plane is smaller the same, past the plane. A texture the
+/// device converts itself reads Vulkan's conversion of the same codes instead, within the device's
+/// bound (`ycbcr_device_reads`; lavapipe's 8-bit 4:4:4 ones).
 #[test]
 fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
     on_device(|device, messages| {
@@ -3844,6 +3974,7 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
         let linear = sampler(device, SamplerMinMagFilter::Linear);
         let mut steps = Between::new(device);
         let mut seed = 120;
+        let mut by_devices = 0;
         for (pf, ostypes) in [
             (PixelFormat::YCBCR84222P, ["422v", "422f"]),
             (PixelFormat::YCBCR84442P, ["444v", "444f"]),
@@ -3873,28 +4004,35 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
                     let bytes = family_bytes(seed, codes);
                     let surface = buffer_with(device, &bytes).unwrap();
                     let before = made_in_place(device);
+                    let converted = device_conversions(device);
                     let texture = family_texture(&surface, pf, ostype, matrix).unwrap();
                     steps.sampled(made_in_place(device) > before);
-                    let want = family_modelled(&bytes, codes, (range, modelled));
+                    let by_device = device_conversions(device) > converted;
+                    by_devices += usize::from(by_device);
                     let case = format!("{pf:?} over {ostype}, {matrix:?}");
-                    let of = |texels: &[u8]| grid_of(texels, grid);
-                    let read = of(&texels_of(device, &kernels.read, &texture, None));
-                    assert_eq!(read, want, "{case}: read()");
+                    let surface = (&bytes[..], codes, (range, modelled));
+                    let read = texels_of(device, &kernels.read, &texture, None);
+                    let check = |texels: &[u8], half, what: &str| {
+                        let case = format!("{case}: {what}");
+                        assert_family_read(
+                            &kernels,
+                            texels,
+                            surface,
+                            (grid, half, by_device),
+                            &case,
+                        );
+                    };
+                    check(&read, false, "read()");
                     for (filter, state) in [("nearest", &nearest), ("linear", &linear)] {
                         let sampled = texels_of(device, &kernels.sample, &texture, Some(state));
-                        assert_eq!(of(&sampled), want, "{case}: a {filter} sample");
+                        check(&sampled, false, &format!("a {filter} sample"));
                     }
                     let half = texels_of(device, &kernels.read_half, &texture, None);
-                    assert_half_steps(
-                        &kernels,
-                        &half,
-                        &want,
-                        grid,
-                        &format!("{case}: a half read()"),
-                    );
+                    check(&half, true, "a half read()");
                 }
             }
         }
+        println!("YCBCR-DEVICE 4:2:2 and 4:4:4: {by_devices} textures the device's conversion");
         steps.finish(device, &counts(&messages.take_notices()), "4:2:2 and 4:4:4");
         // Over a surface whose chroma plane holds the format's (for 4:2:2 over
         // 4:4:4): the format's pairs, at the surface's rows.
@@ -3907,14 +4045,17 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
             let bytes = family_bytes(seed, codes);
             let surface = buffer_with(device, &bytes).unwrap();
+            let converted = device_conversions(device);
             let texture = family_texture(&surface, pf, ostype, None).unwrap();
+            let by_device = device_conversions(device) > converted;
             let grid = match codes.output {
                 YCbCrOutput::Srgb => 8192,
                 _ => 2048,
             };
-            let read = grid_of(&texels_of(device, &kernels.read, &texture, None), grid);
-            let want = family_modelled(&bytes, codes, (range, YCbCrMatrix::Bt601));
-            assert_eq!(read, want, "{pf:?} over {ostype}");
+            let read = texels_of(device, &kernels.read, &texture, None);
+            let surface = (&bytes[..], codes, (range, YCbCrMatrix::Bt601));
+            let case = format!("{pf:?} over {ostype}");
+            assert_family_read(&kernels, &read, surface, (grid, false, by_device), &case);
         }
         // Over a surface whose chroma plane is smaller than the format's: the format's pairs at
         // the surface's rows all the same, past the plane where it ends.
@@ -3927,18 +4068,22 @@ fn four_two_two_and_four_four_four_textures_read_what_metal_reads() {
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
             let bytes = family_bytes(1, codes);
             let surface = buffer_with(device, &bytes).unwrap();
+            let converted = device_conversions(device);
             let texture = family_texture(&surface, pf, ostype, None)
                 .unwrap_or_else(|e| panic!("{pf:?} over {ostype}: {e:?}"));
-            let read = grid_of(&texels_of(device, &kernels.read, &texture, None), 2048);
-            let want = family_modelled(&bytes, codes, (YCbCrRange::Video, YCbCrMatrix::Bt601));
-            assert_eq!(read, want, "{pf:?} over {ostype}");
+            let by_device = device_conversions(device) > converted;
+            let read = texels_of(device, &kernels.read, &texture, None);
+            let surface = (&bytes[..], codes, (YCbCrRange::Video, YCbCrMatrix::Bt601));
+            let case = format!("{pf:?} over {ostype}");
+            assert_family_read(&kernels, &read, surface, (2048, false, by_device), &case);
         }
     });
 }
 
 /// A 4:2:2 or 4:4:4 texture's view as its `_sRGB` twin reads what a texture of the twin over the
 /// same planes reads, as Metal's view does (made with `ShaderRead` alone), and the
-/// texture itself its own conversion.
+/// texture itself its own conversion: Metal's, or where the device converts it, the device's
+/// (`ycbcr_device_reads`).
 #[test]
 fn four_two_two_and_four_four_four_views_read_their_twins_texels() {
     on_device(|device, _| {
@@ -3970,18 +4115,24 @@ fn four_two_two_and_four_four_four_views_read_their_twins_texels() {
             let surface = buffer_with(device, &bytes).unwrap();
             let bt709 = (YCbCrRange::Full, YCbCrMatrix::Bt709);
             let matrix = Some(SurfaceYCbCrMatrix::Itu709);
-            let base = family_texture(&surface, pf, ostype, matrix).unwrap();
-            let view = base.new_texture_view(twin).unwrap();
-            let direct = family_texture(&surface, twin, ostype, matrix).unwrap();
-            let read = |t: &Texture, d| grid_of(&texels_of(device, &kernels.read, t, None), d);
-            let want = family_modelled(&bytes, codes(twin), bt709);
-            assert_eq!(read(&view, 8192), want, "{pf:?}'s view");
-            assert_eq!(read(&direct, 8192), want, "{twin:?}");
-            assert_eq!(
-                read(&base, 2048),
-                family_modelled(&bytes, codes(pf), bt709),
-                "{pf:?}"
-            );
+            // Each texture, and whether the device converted it as it was made.
+            let made = |make: &dyn Fn() -> Texture| {
+                let converted = device_conversions(device);
+                let texture = make();
+                (texture, device_conversions(device) > converted)
+            };
+            let base = made(&|| family_texture(&surface, pf, ostype, matrix).unwrap());
+            let view = made(&|| base.0.new_texture_view(twin).unwrap());
+            let direct = made(&|| family_texture(&surface, twin, ostype, matrix).unwrap());
+            for ((texture, by_device), of, grid, case) in [
+                (&view, twin, 8192, format!("{pf:?}'s view")),
+                (&direct, twin, 8192, format!("{twin:?}")),
+                (&base, pf, 2048, format!("{pf:?}")),
+            ] {
+                let read = texels_of(device, &kernels.read, texture, None);
+                let surface = (&bytes[..], codes(of), bt709);
+                assert_family_read(&kernels, &read, surface, (grid, false, *by_device), &case);
+            }
         }
     });
 }
@@ -4076,7 +4227,9 @@ fn is_half_tie(step: u16) -> bool {
 /// 4:4:4 twins, and `YCBCR8_420_2P`, at every texel corner under clamp-to-edge, clamp-to-zero and
 /// clamp-to-border-color: each lane the `float` gather's step of `1/8192` rounded so, ties among
 /// them. Where the stage rounds a `half` by the device's conversion (`Kernels::native_half`) the
-/// lanes that differ are counted and printed.
+/// lanes that differ are counted and printed. A texture the device converts itself lies off
+/// Metal's steps (`ycbcr_device_reads`): each `half` lane is its `float` lane's `half`, within one
+/// unit in the last place.
 #[test]
 fn ycbcr_half_gathers_round_ties_away() {
     on_device(|device, _| {
@@ -4093,7 +4246,7 @@ fn ycbcr_half_gathers_round_ties_away() {
             d.t_address_mode = mode;
             (mode, device.new_sampler_state(&d).unwrap())
         });
-        let mut textures: Vec<(PixelFormat, String, Texture)> = Vec::new();
+        let mut textures: Vec<(PixelFormat, String, Texture, bool)> = Vec::new();
         for (seed, (pf, matrix)) in (200..).zip([
             (PixelFormat::YCBCR84202PSRGB, None),
             (
@@ -4107,14 +4260,18 @@ fn ycbcr_half_gathers_round_ties_away() {
             (PixelFormat::YCBCR84202P, Some(SurfaceYCbCrMatrix::Itu709)),
         ]) {
             let surface = buffer_with(device, &surface_bytes(seed)).unwrap();
+            let converted = device_conversions(device);
             let texture = eight_bit_texture(&surface, pf, Some(facts(VIDEO, matrix)), usage);
-            textures.push((pf, format!("420v {matrix:?}"), texture.unwrap()));
+            let by_device = device_conversions(device) > converted;
+            textures.push((pf, format!("420v {matrix:?}"), texture.unwrap(), by_device));
         }
         let ten = buffer_with(device, &ten_bit_bytes(210)).unwrap();
         let pf = PixelFormat::YCBCR104202PSRGB;
         let matrix = Some(SurfaceYCbCrMatrix::Itu709);
+        let converted = device_conversions(device);
         let texture = ten_bit_texture(&ten, pf, (b"x420", 0), matrix).unwrap();
-        textures.push((pf, "x420".into(), texture));
+        let by_device = device_conversions(device) > converted;
+        textures.push((pf, "x420".into(), texture, by_device));
         for (seed, (pf, ostype)) in (220..).zip([
             (PixelFormat::YCBCR84222PSRGB, "422v"),
             (PixelFormat::YCBCR84442PSRGB, "444f"),
@@ -4125,11 +4282,13 @@ fn ycbcr_half_gathers_round_ties_away() {
         ]) {
             let codes = ycbcr_format(pf).and_then(YCbCrCodes::of).unwrap();
             let surface = buffer_with(device, &family_bytes(seed, codes)).unwrap();
+            let converted = device_conversions(device);
             let texture = family_texture(&surface, pf, ostype, None).unwrap();
-            textures.push((pf, ostype.into(), texture));
+            let by_device = device_conversions(device) > converted;
+            textures.push((pf, ostype.into(), texture, by_device));
         }
         let (mut ties, mut rounded) = (0, 0usize);
-        for (pf, over, texture) in &textures {
+        for (pf, over, texture, by_device) in &textures {
             for (mode, state) in &samplers {
                 for (channel, [float, half]) in ["red", "blue"].iter().zip(&kernels.gathers) {
                     let floats = gathered_of(device, float, texture, state);
@@ -4142,6 +4301,18 @@ fn ycbcr_half_gathers_round_ties_away() {
                     for (i, (f, h)) in lanes.enumerate() {
                         let [f, h] = [f, h].map(|b| f32::from_le_bytes(*b));
                         let case = format!("{pf:?} over {over}, {mode:?}, {channel} lane {i}");
+                        if *by_device {
+                            // The device's conversion lies off Metal's steps: the `half` gather
+                            // is the `float` one's `half` (`PrecisionNote::NativeHalfConversion`).
+                            let nearest = f64::from(f);
+                            let exponent = match nearest.abs() {
+                                v if v < 2f64.powi(-14) => -24,
+                                v => v.log2().floor() as i32 - 10,
+                            };
+                            let off = (f64::from(h) - nearest).abs();
+                            assert!(off <= 2f64.powi(exponent), "{case}: {h}, the float {f}");
+                            continue;
+                        }
                         let step = f * 8192.0;
                         assert!(
                             step.fract() == 0.0 && (0.0..=8192.0).contains(&step),

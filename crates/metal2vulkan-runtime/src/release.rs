@@ -156,6 +156,7 @@ released! {
     vk::Image => destroy_image, DestroyImage;
     vk::ImageView => destroy_image_view, DestroyImageView;
     vk::Sampler => destroy_sampler, DestroySampler;
+    vk::SamplerYcbcrConversion => destroy_sampler_ycbcr_conversion, DestroySamplerYcbcrConversion;
     vk::DeviceMemory => free_memory, FreeMemory;
     vk::Semaphore => destroy_semaphore, DestroySemaphore;
     vk::Fence => destroy_fence, DestroyFence;
