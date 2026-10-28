@@ -321,10 +321,12 @@ degradations! {
              its own way, and without depthBiasExact counts the bias in its own unit";
         /// A draw tests or writes a `Depth16Unorm` depth on a device whose driver is not measured
         /// to convert a depth to Metal's code (`DriverDeviation::MetalDepth16Stores`,
-        /// `render_state.rs`): the device converts the depth.
+        /// `render_state.rs`), or a pass clears one to a depth that a device rounding to nearest
+        /// takes above Metal's truncation (`clear_value.rs`): the device converts the depth.
         UnormDepthRounding = "unorm-depth-rounding", Precision,
-            "a depth near a code's midpoint can store the code below Metal's: the device converts \
-             the depth to the 16-bit code its own way, where Metal rounds to nearest, a tie up";
+            "a depth near a code's midpoint can store the code next to Metal's: the device \
+             converts the depth to the 16-bit code its own way, where Metal's draw rounds to \
+             nearest, a tie up, and its clear truncates";
         /// A draw of points keeps Vulkan's clipping of points, where Metal's guard band cannot be
         /// emulated: in a rate-mapped pass, on a device without `shaderClipDistance` or with too
         /// few clip distances beside the vertex function's own, or through a viewport whose
@@ -493,9 +495,9 @@ degradations! {
             "the pass resolves into a scratch image, whose render area is copied into the \
              texture after the pass";
         /// A multisample color resolve drawn after the pass by the crate-owned resolve: of an
-        /// extended-range attachment, whose codes no device's resolve averages, into the
-        /// attachment's format's sRGB twin, whose encoding no device's resolve writes, or from a
-        /// fetching pass's sample planes (`color_resolve.rs`); or a
+        /// extended-range attachment, whose codes no device's resolve averages, or into the
+        /// attachment's format's sRGB twin, whose encoding no device's resolve writes
+        /// (`color_resolve.rs`); or a
         /// stencil resolved by `DepthResolvedSample` after `Min` or `Max`, which no Vulkan
         /// resolve mode states, or a `Min` or `Max` depth on a device without the mode, drawn
         /// after the pass (`depth_stencil_resolve.rs`).
@@ -696,9 +698,10 @@ degradations! {
              and end";
         /// A multisample color resolve averages through Vulkan's `AVERAGE` mode, which leaves
         /// the rounding of the average (and the sRGB encoding) to the device, on a device not
-        /// measured to round as Metal does: any color attachment but an extended-range one, one
-        /// resolving into its format's sRGB twin, and one a fetching pass's sample planes hold as
-        /// it ends (each resolved after the pass, `color_resolve.rs`). Not where
+        /// measured to round as Metal does: any color attachment but an extended-range one and one
+        /// resolving into its format's sRGB twin (each resolved after the pass,
+        /// `color_resolve.rs`), one a fetching pass's sample planes hold as it ends included (the
+        /// planes merged back first). Not where
         /// `DriverFact::ColorResolveAverageIsMetals` holds, for any format: MoltenVK's resolve is
         /// Metal's own.
         /// Measured against Metal's rules at 2 and 4 samples
@@ -1219,14 +1222,20 @@ degradations! {
         /// fragment writes and the channels a write mask leaves out too (on an Apple M4 and an
         /// Apple M3 Max), where such an attachment keeps the bytes its draws do not write.
         /// Announced at every draw, an indirect command buffer's executed commands' too, naming
-        /// every such attachment of the pass.
+        /// every such attachment of the pass. Also a GPU blit into, out of or between textures of
+        /// which one is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly
+        /// compressed (`compressed_blit.rs`): Metal's blit moves the texels through the
+        /// compression, which clears the same bits and clamps the same alpha, where the device's
+        /// copy keeps the bytes; once per device.
         ExtendedRangeBitsKept = "extended-range-bits-kept", Precision,
             "the texels the pass's draws do not write keep their bytes; Metal's pass keeps their \
              codes but rewrites the bits they leave unused in each tile a draw reaches \
              (BGR10_XR's bits 30 and 31 to ones, BGRA10_XR's low six bits of each field to \
              zeros, the two-plane color word's top two bits to zeros) and clamps BGRA10_XR's \
              alpha code to [384, 894]: a texel whose bytes no Metal write left (uploaded bytes, \
-             or an alpha code past 894) keeps bytes Metal's pass would change";
+             or an alpha code past 894) keeps bytes Metal's pass would change, and a blit through \
+             a BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; every \
+             such texel reads the same value either way";
         /// A draw in a render pass that loads a single-sampled color attachment of a signed
         /// normalized format (`R8Snorm`, `RG8Snorm`, `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`,
         /// `RGBA16Snorm`) and does not discard it at the store (`render.rs`). Metal's pass, once
@@ -1254,12 +1263,18 @@ degradations! {
         /// normalized, none other changed), where the device's pass keeps the bytes its draws do
         /// not write. Announced at every draw, an indirect command buffer's executed commands'
         /// too, naming every such attachment of the pass. Not where `DriverFact::TileStoreIsMetals`
-        /// holds (MoltenVK's pass is a Metal pass).
+        /// holds (MoltenVK's pass is a Metal pass). Also a GPU blit into, out of or between
+        /// textures of which one is an `RGB9E5Float` texture Metal keeps losslessly compressed
+        /// (`compressed_blit.rs`): Metal's blit moves the texels through the compression, which
+        /// normalizes every word so, where the device's copy keeps the bytes; once per device, and
+        /// not where the device's copy of the compressed image is Metal's blit
+        /// (`RuntimeDriverDefect::CompressedImageCopiesRewriteTexels`: MoltenVK).
         SharedExponentKept = "shared-exponent-kept", Precision,
             "the texels the pass's draws do not write keep their words; Metal's pass normalizes \
              a word whose largest mantissa is below 256 (its exponent above 0) in each tile a \
-             draw reaches: a texel whose bytes no Metal write left (uploaded or copied words) \
-             keeps a word Metal's pass would change, of the same value";
+             draw reaches, and Metal's blit through an RGB9E5Float texture it compresses every \
+             such word: a texel whose bytes no Metal write left (uploaded or copied words) keeps \
+             a word Metal would change, of the same value";
         /// A blit between a buffer and a level of `RGB10A8_2P_XR10` or its sRGB twin whose width
         /// is not a multiple of 4 (`two_planes.rs`), where Metal's blit addresses the level's rows
         /// `⌊4 w / 16⌋ · 16` bytes apart, short of where they lie, and so moves texels into and
@@ -3725,14 +3740,9 @@ impl Device {
                                 "no device's resolve averages the codes {:?} holds",
                                 color.target.format
                             ),
-                            None if color.resolve.as_ref().is_some_and(|r| r.twin) => {
-                                "no device's resolve writes a resolve texture in another \
+                            // The twin resolve (`resolve.rs`), the only other.
+                            None => "no device's resolve writes a resolve texture in another \
                                  format's encoding"
-                                    .to_owned()
-                            }
-                            None => "a fetching pass's sample planes hold its samples as it \
-                                 ends, which the resolve reads where the device's would read \
-                                 them merged back"
                                 .to_owned(),
                         },
                         match copied {

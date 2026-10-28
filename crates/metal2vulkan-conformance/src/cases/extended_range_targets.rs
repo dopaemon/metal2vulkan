@@ -605,6 +605,15 @@ impl Case for TargetDraw {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         let mut named = vec![crate::replay::shared_memory_notice()];
+        // A copying format's target is read back by a blit, through the compression Metal keeps
+        // a `BGRA10_XR` texture in: the note of the encoding the device's copy keeps
+        // (`compressed_blits::kept_encoding_notice`). The draw stores each field in its canonical
+        // encoding, so every value still compares exactly.
+        if self.format.copies {
+            named.extend(super::compressed_blits::kept_encoding_notice(
+                self.format.format.as_raw(),
+            ));
+        }
         if !self.half {
             return named;
         }
@@ -1053,7 +1062,14 @@ impl Case for ClearRoutes {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The shapes Metal keeps compressed are read back by a blit through that compression:
+        // the note of the encoding the device's copy keeps, as the draws declare it.
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        named.extend(super::compressed_blits::kept_encoding_notice(
+            self.format.format.as_raw(),
+        ));
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -86,9 +86,6 @@ assoc-const	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	pub const BLOCK_BYTES:
 assoc-const	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	pub const TEXEL_BYTES: u32
 assoc-const	metal2vulkan::bind::ColorResolveModules::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	pub const SOURCE_BINDING: u32
-assoc-const	metal2vulkan::bind::CompressedBlitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::CompressedBlitModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::CompressedBlitModule::WORDS_BINDING	pub const WORDS_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DepthSplitModule::SET	pub const SET: u32
@@ -585,9 +582,6 @@ assoc-const-value	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	4
 assoc-const-value	metal2vulkan::bind::ColorResolveModules::SET	0
 assoc-const-value	metal2vulkan::bind::ColorResolveModules::SOURCE_BINDING	0
-assoc-const-value	metal2vulkan::bind::CompressedBlitModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::CompressedBlitModule::SET	0
-assoc-const-value	metal2vulkan::bind::CompressedBlitModule::WORDS_BINDING	0
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::DepthSplitModule::SET	0
@@ -1366,7 +1360,6 @@ enum	metal2vulkan::bind::BoundBuffer	#[cfg_attr(feature = "serde", derive(serde:
 enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundTexture
 enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
 enum	metal2vulkan::bind::ChromaDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ChromaDecode
-enum	metal2vulkan::bind::CompressedBlit	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CompressedBlit
 enum	metal2vulkan::bind::CopySource	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum CopySource
 enum	metal2vulkan::bind::DepthPick	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DepthPick
 enum	metal2vulkan::bind::DepthStandInForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum DepthStandInForm
@@ -2541,7 +2534,6 @@ field	metal2vulkan-runtime::WorkCounts.completed_where_seen	pub completed_where_
 field	metal2vulkan-runtime::WorkCounts.completion_arms	pub completion_arms: u64
 field	metal2vulkan-runtime::WorkCounts.completion_arms_after_a_wake	pub completion_arms_after_a_wake: u64
 field	metal2vulkan-runtime::WorkCounts.completion_reads_ran_ahead	pub completion_reads_ran_ahead: u64
-field	metal2vulkan-runtime::WorkCounts.compressed_rows_rewritten	pub compressed_rows_rewritten: u64
 field	metal2vulkan-runtime::WorkCounts.compute_pipeline_create_nanos	pub compute_pipeline_create_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.copy_regions_split	pub copy_regions_split: u64
 field	metal2vulkan-runtime::WorkCounts.copy_sites	pub copy_sites: [CopySite; 32]
@@ -3081,8 +3073,6 @@ field	metal2vulkan::bind::CompensatedViewport.guard	pub guard: [f32; 2]
 field	metal2vulkan::bind::CompensatedViewport.mirrors	pub mirrors: u32
 field	metal2vulkan::bind::CompensatedViewport.values	pub values: [f32; 4]
 field	metal2vulkan::bind::CompensatedViewport.vertex_clamp	pub vertex_clamp: [f32; 2]
-field	metal2vulkan::bind::CompressedBlitModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::CompressedBlitModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ContinuedResult.count	pub count: u32
 field	metal2vulkan::bind::ContinuedResult.first	pub first: u32
 field	metal2vulkan::bind::ContinuedResult.offset	pub offset: u64
@@ -4549,7 +4539,6 @@ fn	metal2vulkan::bind::capture_assembly_module	pub fn capture_assembly_module(de
 fn	metal2vulkan::bind::capture_settle_module	pub fn capture_settle_module(device: &Device) -> Result<CaptureSettleModule, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::color_resolve_modules	pub fn color_resolve_modules(device: &Device, format: ColorResolveFormat, samples: u32, source: ResolveSource, feature: Feature) -> Result<ColorResolveModules, Error>
-fn	metal2vulkan::bind::compressed_blit_module	pub fn compressed_blit_module(device: &Device, rule: CompressedBlit) -> Result<CompressedBlitModule, Error>
 fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
 fn	metal2vulkan::bind::depth_stencil_resolve_modules	pub fn depth_stencil_resolve_modules(device: &Device, draw: DepthStencilResolveDraw, feature: Feature) -> Result<DepthStencilResolveModules, Error>
@@ -8327,16 +8316,12 @@ method	metal2vulkan::bind::ColorResolveFormat::extended_range	pub fn extended_ra
 method	metal2vulkan::bind::ColorResolveFormat::format	pub fn format(self) -> Format
 method	metal2vulkan::bind::ColorResolveFormat::of	pub fn of(format: Format) -> Option<ColorResolveFormat>
 method	metal2vulkan::bind::ColorResolveFormat::raw_format	pub fn raw_format(self) -> Format
-method	metal2vulkan::bind::ColorResolveFormat::resolves	pub fn resolves(self, samples: u32) -> bool
 method	metal2vulkan::bind::ColorResolveFormat::written_format	pub fn written_format(self) -> Format
 method	metal2vulkan::bind::ColorResolveFormat::written_raw	pub fn written_raw(self) -> ColorResolveFormat
 method	metal2vulkan::bind::CompensatedViewport::new	pub fn new(compensation: ViewportCompensation, values: [f32; 4]) -> CompensatedViewport
 method	metal2vulkan::bind::CompensatedViewport::with_guard	pub fn with_guard(self, guard: [f32; 2]) -> CompensatedViewport
 method	metal2vulkan::bind::CompensatedViewport::with_mirrors	pub fn with_mirrors(self, mirrors: u32) -> CompensatedViewport
 method	metal2vulkan::bind::CompensatedViewport::with_vertex_clamp	pub fn with_vertex_clamp(self, vertex_clamp: [f32; 2]) -> CompensatedViewport
-method	metal2vulkan::bind::CompressedBlit::of	pub fn of(pf: PixelFormat) -> Option<CompressedBlit>
-method	metal2vulkan::bind::CompressedBlit::texel_bytes	pub fn texel_bytes(self) -> u32
-method	metal2vulkan::bind::CompressedBlit::word	pub fn word(self, word: u32, odd: bool) -> u32
 method	metal2vulkan::bind::ContinuedResult::new	pub fn new(offset: u64, first: u32, count: u32, sum: bool) -> ContinuedResult
 method	metal2vulkan::bind::DepthStencilResolveDraw::new	pub fn new(pick: DepthPick, samples: u32, write: ResolveWrite) -> DepthStencilResolveDraw
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
@@ -8537,8 +8522,6 @@ method	metal2vulkan::bind::ResidentSet::len	pub fn len(&self) -> u64
 method	metal2vulkan::bind::ResidentSet::new	pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet
 method	metal2vulkan::bind::ResidentSet::replay_bytes	pub fn replay_bytes(ranges: impl IntoIterator<Item = ResidentRange>) -> (Vec<u8>, u64)
 method	metal2vulkan::bind::ResidentSet::with	pub fn with(&self, ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet
-method	metal2vulkan::bind::ResolveRule::bits	pub fn bits(self) -> u8
-method	metal2vulkan::bind::ResolveRule::resolves	pub fn resolves(self, samples: u32) -> bool
 method	metal2vulkan::bind::ResolveWrite::reads_stencil	pub fn reads_stencil(self) -> bool
 method	metal2vulkan::bind::RewriteOrder::arrange	pub fn arrange<T: Copy>(self, first: &[T], last: &[T]) -> Vec<T>
 method	metal2vulkan::bind::RewriteOrder::word	pub const fn word(self) -> u32
@@ -9407,7 +9390,6 @@ struct	metal2vulkan::bind::CaptureSettleModule	#[derive(Clone, Debug, PartialEq,
 struct	metal2vulkan::bind::ColorResolveFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ColorResolveFormat
 struct	metal2vulkan::bind::ColorResolveModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ColorResolveModules
 struct	metal2vulkan::bind::CompensatedViewport	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq)] #[non_exhaustive] pub struct CompensatedViewport
-struct	metal2vulkan::bind::CompressedBlitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CompressedBlitModule
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
 struct	metal2vulkan::bind::ContinuedResult	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ContinuedResult
 struct	metal2vulkan::bind::DepthSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthSplitModule
@@ -11960,9 +11942,6 @@ variant	metal2vulkan::bind::BufferShape::Buffer	Buffer { attribute_stride: Optio
 variant	metal2vulkan::bind::BufferShape::Bytes	Bytes {  attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::ChromaDecode::Bgrg	Bgrg
 variant	metal2vulkan::bind::ChromaDecode::Gbgr	Gbgr
-variant	metal2vulkan::bind::CompressedBlit::ExtendedRangeFields	ExtendedRangeFields
-variant	metal2vulkan::bind::CompressedBlit::PackedFloatNan	PackedFloatNan
-variant	metal2vulkan::bind::CompressedBlit::SharedExponent	SharedExponent
 variant	metal2vulkan::bind::CopySource::Aspect	Aspect
 variant	metal2vulkan::bind::CopySource::Shadow	Shadow
 variant	metal2vulkan::bind::DepthPick::Max	Max
@@ -12143,14 +12122,8 @@ variant	metal2vulkan::bind::ReplayRefusal::RegionCount	RegionCount { count: u32 
 variant	metal2vulkan::bind::ReplayRefusal::TooManyCommands	TooManyCommands { count: u32 }
 variant	metal2vulkan::bind::ReplayRefusal::TooManyDispatches	TooManyDispatches { dispatches: u64 }
 variant	metal2vulkan::bind::ReplayRefusal::VariantCount	VariantCount { count: usize }
-variant	metal2vulkan::bind::ResolveRule::Float16	Float16
-variant	metal2vulkan::bind::ResolveRule::Float32	Float32
-variant	metal2vulkan::bind::ResolveRule::HalfUnorm	HalfUnorm { bits: u8 }
-variant	metal2vulkan::bind::ResolveRule::SharedExponent	SharedExponent
-variant	metal2vulkan::bind::ResolveRule::SmallFloat	SmallFloat { mantissa: u8 }
-variant	metal2vulkan::bind::ResolveRule::Snorm	Snorm { bits: u8 }
 variant	metal2vulkan::bind::ResolveRule::Srgb	Srgb
-variant	metal2vulkan::bind::ResolveRule::Unorm	Unorm { bits: u8 }
+variant	metal2vulkan::bind::ResolveRule::Unorm	Unorm
 variant	metal2vulkan::bind::ResolveSource::InputAttachment	InputAttachment
 variant	metal2vulkan::bind::ResolveSource::Planes	Planes(PlanesCopy)
 variant	metal2vulkan::bind::ResolveSource::RawInputAttachment	RawInputAttachment

@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::bind::{
-    self, CompressedBlit, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram,
-    TessellationScanKernel, TexelWords,
+    self, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram, TessellationScanKernel,
+    TexelWords,
 };
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
@@ -101,16 +101,6 @@ fn modules() -> Vec<Build> {
         |name: String, build: Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>| {
             out.push((name, build));
         };
-    for rule in [
-        CompressedBlit::ExtendedRangeFields,
-        CompressedBlit::PackedFloatNan,
-        CompressedBlit::SharedExponent,
-    ] {
-        push(
-            format!("compressed_blit_module({rule:?})"),
-            Box::new(move |d| Ok(bind::compressed_blit_module(d, rule)?.spirv)),
-        );
-    }
     for form in EXTENDED {
         push(
             format!("extended_shadow_module({form:?})"),

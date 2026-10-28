@@ -867,8 +867,8 @@ pub enum RuntimeDriverDefect {
     /// that the driver keeps losslessly compressed rewrites some texels' bytes, as Metal's GPU
     /// blits of such a texture do (its NaNs made quiet, its shared exponents renormalized),
     /// where Metal's CPU copies keep them. Nothing is refused: the runtime makes the image of a
-    /// texture a CPU copy can reach uncompressed there, and rewrites what its blits write by
-    /// Metal's rule itself.
+    /// texture a CPU copy can reach uncompressed there, whose copies keep the bytes as every
+    /// other device's do.
     CompressedImageCopiesRewriteTexels,
     /// A copy into a multisampled image of a float format draws the samples through that format,
     /// so a NaN in a 16-bit float channel lands as the device's own NaN, its sign and payload

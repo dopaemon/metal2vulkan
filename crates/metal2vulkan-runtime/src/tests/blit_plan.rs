@@ -4,7 +4,7 @@
 //! `buffer_texture_copies`).
 
 use super::super::blit_plan::{
-    block_order_position, copied_rows, plan_block_order_copy, plan_buffer_copy, plan_levels_copy,
+    block_order_position, plan_block_order_copy, plan_buffer_copy, plan_levels_copy,
     plan_region_copy, plan_rows_copy, plan_texels_rows_copy, plan_whole_copy, texel_layout,
     texel_rows, BufferCopyPlan, BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
 };
@@ -1625,11 +1625,6 @@ fn layouts_past_u64_max_lie_past_every_buffer() {
                 Err(CopyProblem::BufferRange),
                 "{l:?} into the texture: {into_texture}"
             );
-            assert_eq!(
-                copied_rows(&flat.record, &r, &u, &l, into_texture),
-                Err(CopyProblem::BufferRange),
-                "{l:?} into the texture: {into_texture}"
-            );
         }
     }
     // Images of a 3D texture whose offsets pass `u64::MAX`: on Metal's rules (a span that
@@ -1694,9 +1689,8 @@ fn layouts_past_u64_max_lie_past_every_buffer() {
 }
 
 /// A copy whose last byte is the buffer's last byte is planned, on Metal's rules and off them,
-/// and one a byte further is refused (`BufferRange`); the rows a planned copy moves
-/// ([`copied_rows`], which a texture Metal keeps compressed rewrites) are the plan's, inside its
-/// span: an offset off the unit's rows rounded down as plain Metal places them.
+/// and one a byte further is refused (`BufferRange`): an offset off the unit's rows rounded down
+/// as plain Metal places them.
 #[test]
 fn copies_reach_the_buffer_s_last_byte_and_no_further() {
     let t = tex(PixelFormat::BGRA8Unorm, TextureType::Type2D, [16, 16, 1]);
@@ -1710,14 +1704,6 @@ fn copies_reach_the_buffer_s_last_byte_and_no_further() {
             let plan = plan_buffer_copy(&t.record, &r, &u, &l, 4096, 0, into_texture).unwrap();
             let start = offset - offset % 4;
             assert_eq!(plan.span, start..4096, "{offset}");
-            let rows = copied_rows(&t.record, &r, &u, &l, into_texture).unwrap();
-            let placed: Vec<_> = (0..4)
-                .map(|y| start + y * 64..start + y * 64 + 16)
-                .collect();
-            assert_eq!(rows, placed, "{offset}");
-            assert!(rows
-                .iter()
-                .all(|row| plan.span.start <= row.start && row.end <= 4096));
         }
         for offset in [last + 4, last + 5] {
             let l = layout(offset, 64, 0);

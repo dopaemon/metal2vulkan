@@ -1360,7 +1360,15 @@ impl Case for FreshPattern {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        vec![shared_memory_notice()]
+        // The read blits out of a new `Private` 64-square texture, which Metal keeps losslessly
+        // compressed: the note of the encoding the device's copy keeps, where it is not native
+        // (`compressed_blits::kept_encoding_notice`). The pattern's bytes are each format's
+        // canonical encoding, so every value still compares exactly.
+        let mut allowances = vec![shared_memory_notice()];
+        allowances.extend(super::compressed_blits::kept_encoding_notice(
+            self.row.format,
+        ));
+        allowances
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -2062,8 +2070,11 @@ mod tests {
     ///
     /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
     /// row's; **only** the one row a venue announced something of its own for names a second
-    /// kind, and each names the kind that venue announced. A row whose notices were a guess would
-    /// show here as a row loosening a site nothing needed.
+    /// kind, and each names the kind that venue announced, and so do the three pattern rows whose
+    /// read blits out of a texture Metal keeps compressed in a format whose canonical encoding the
+    /// device's copy may keep apart from Metal's (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the
+    /// notes lavapipe announced). A row whose notices were a guess would show here as a row
+    /// loosening a site nothing needed.
     #[test]
     fn a_row_loosens_the_notices_site_alone() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
@@ -2112,7 +2123,16 @@ mod tests {
             );
         }
         for row in PATTERNS {
-            assert_eq!(FreshPattern { row }.allowances().len(), 1, "{}", row.case);
+            let kept = matches!(
+                row.case,
+                "fresh-pattern-552" | "fresh-pattern-553" | "fresh-pattern-93"
+            );
+            assert_eq!(
+                FreshPattern { row }.allowances().len(),
+                1 + usize::from(kept),
+                "{}",
+                row.case
+            );
         }
     }
 

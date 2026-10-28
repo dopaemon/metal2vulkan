@@ -3,15 +3,15 @@
 //! Metal keeps a texture losslessly compressed where `allowGPUOptimizedContents` holds, the shorter
 //! side of its level 0 is at least 16 texels, and its usage has neither `ShaderWrite` nor
 //! `PixelFormatView`. A GPU blit that reads or writes such a texture moves its texels **through**
-//! that compression, so for three families the bytes the blit writes are not the bytes it read —
-//! `bind::CompressedBlit`'s rule, fitted on an Apple M4 and an M3 Max.
+//! that compression, so for three families the bytes the blit writes are not the bytes it read:
+//! the same value in its canonical encoding. The runtime's answer is the device's copy, which keeps
+//! the bytes, announced by the note of the encoding it keeps (`compressed_blit.rs`): where the
+//! device's own copy of the compressed image is not Metal's blit, those sites are `known-gaps.tsv`
+//! rows that name the note.
 //!
-//! **The port re-measures it here.** Record mode runs the whole program on this M3 Max, because
-//! every call it makes is public Metal: a texture of any descriptor, a texture over a buffer, the
-//! blit copies, `replaceRegion:` and `getBytes:`. So each recording holds the bytes Metal's own
-//! blits wrote, and the rule becomes a committed cross-check
-//! (the test `every_recorded_blit_is_the_rules`) instead of the expectation. That is what the port
-//! adds: the lane can only say our bytes and the rule disagree, never which of the two moved.
+//! Record mode runs the whole program on this M3 Max, because every call it makes is public Metal:
+//! a texture of any descriptor, a texture over a buffer, the blit copies, `replaceRegion:` and
+//! `getBytes:`. So each recording holds the bytes Metal's own blits wrote.
 //!
 //! One case per format, so a venue that holds no texture of one answers its typed refusal and
 //! counts as lacking the feature rather than taking the other three down with it.
@@ -41,7 +41,6 @@ use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Observed, Region, Sites, Value};
 use crate::work::{Rect, Resource, Step, TextureSpec, Work};
-use metal2vulkan::bind::CompressedBlit;
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_runtime::Degradation;
 
@@ -66,10 +65,13 @@ const PAST: u64 = 12;
 /// The bytes the over-a-buffer texture's rows run past its texels'.
 const OVER_PAST: u64 = 256;
 
-/// One format with a rule: the case's name and the raw `MTLPixelFormat`.
+/// One format whose blits through the compression change bytes: the case's name, the raw
+/// `MTLPixelFormat`, and the note a blit through it announces where the device's copy keeps the
+/// bytes.
 struct Format {
     name: &'static str,
     format: PixelFormat,
+    note: Degradation,
 }
 
 /// Every format whose blits through the compression change bytes.
@@ -77,20 +79,40 @@ const FORMATS: [Format; 4] = [
     Format {
         name: "compressed-blits-bgra10xr",
         format: PixelFormat::BGRA10XR,
+        note: Degradation::ExtendedRangeBitsKept,
     },
     Format {
         name: "compressed-blits-bgra10xr-srgb",
         format: PixelFormat::BGRA10XRSRGB,
+        note: Degradation::ExtendedRangeBitsKept,
     },
     Format {
         name: "compressed-blits-rg11b10f",
         format: PixelFormat::RG11B10Float,
+        note: Degradation::DeviceNanEncoding,
     },
     Format {
         name: "compressed-blits-rgb9e5f",
         format: PixelFormat::RGB9E5Float,
+        note: Degradation::SharedExponentKept,
     },
 ];
+
+/// The declaration of the note a blit through a texture of the raw `MTLPixelFormat` `format` that
+/// Metal keeps losslessly compressed announces (the runtime's `compressed_blit.rs`: the device's
+/// copy keeps the bytes Metal's compression rewrites), where that note is not one of the device's
+/// native notes the suite declares for every case (`crate::replay::NATIVE_NOTES`):
+/// `extended-range-bits-kept` for `BGRA10_XR` and its sRGB twin, `shared-exponent-kept` for
+/// `RGB9E5Float`. Every case whose program blits through such a texture declares it, at the
+/// notices site alone: each value still compares against Metal's.
+pub(crate) fn kept_encoding_notice(format: u32) -> Option<Allowance> {
+    FORMATS
+        .iter()
+        .find(|f| f.format.as_raw() == format)
+        .map(|f| f.note)
+        .filter(|note| !crate::replay::NATIVE_NOTES.contains(note))
+        .map(|note| crate::replay::notice_allowance(note.code()))
+}
 
 /// A splitmix64 stream of bytes: the lane's own, seeded as the lane seeds it, so a case feeds the
 /// bytes the lane measured.
@@ -170,15 +192,12 @@ impl CompressedBlits {
         &FORMATS[self.at]
     }
 
-    /// The rule the format's texels follow, which every format of `FORMATS` has.
-    fn rule(&self) -> CompressedBlit {
-        CompressedBlit::of(self.format().format)
-            .expect("every format of the family has a compressed-blit rule")
-    }
-
-    /// The bytes one texel takes.
+    /// The bytes one texel takes: `BGRA10_XR`'s four 16-bit fields, the packed floats' word.
     fn texel(&self) -> u64 {
-        u64::from(self.rule().texel_bytes())
+        match self.format().format {
+            PixelFormat::BGRA10XR | PixelFormat::BGRA10XRSRGB => 8,
+            _ => 4,
+        }
     }
 
     /// Every byte the case feeds, in the order the program uses them: one stream, as the lane
@@ -630,11 +649,15 @@ impl Case for CompressedBlits {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![
+        //
+        // The note of the encoding the device's copy keeps ([`kept_encoding_notice`]).
+        let mut allowances = vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::StagedTextureCopy.code()),
             crate::replay::notice_allowance(Degradation::ShadowedTexture.code()),
-        ]
+        ];
+        allowances.extend(kept_encoding_notice(self.format().format.as_raw()));
+        allowances
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -675,19 +698,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// `bytes` as Metal's blit through a compressed texture of `rule` writes them.
-    fn blitted(rule: CompressedBlit, bytes: &[u8]) -> Vec<u8> {
-        let eight = rule.texel_bytes() == 8;
-        bytes
-            .chunks(4)
-            .enumerate()
-            .flat_map(|(at, word)| {
-                let word = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
-                rule.word(word, eight && at % 2 == 1).to_le_bytes()
-            })
-            .collect()
-    }
-
     /// The cases name distinct recordings, since a case's name is its recording's file name.
     #[test]
     fn the_formats_name_distinct_cases() {
@@ -695,24 +705,29 @@ mod tests {
         assert_eq!(named.len(), FORMATS.len());
     }
 
-    /// Every case of the family declares exactly the two notice codes it announces, and every
-    /// format declares the same two, because every row reaches its bytes the same way.
+    /// Every case of the family declares exactly the notice codes it announces: the same three
+    /// for every format, because every row reaches its bytes the same way, and the note of the
+    /// encoding its blits keep where that note is not a native one the suite declares itself.
     ///
     /// Stated as the whole set rather than as "the codes are present", because a declaration fires
     /// on its own code: a code announced and declared nowhere is a divergence at the notices site,
     /// and a code declared that no row announces fires on no venue and names nothing the run
     /// justifies. The set is the claim, in both directions.
     #[test]
-    fn every_case_declares_exactly_the_two_notices_it_announces() {
+    fn every_case_declares_exactly_the_notices_it_announces() {
         use crate::allowance::Justification;
-        let wanted = vec![
-            // The venue's own: a card without unified memory holds the `Shared` buffer each row
-            // reads its answer back through in system memory.
-            Degradation::SharedInSystemMemory.code().to_owned(),
-            Degradation::StagedTextureCopy.code().to_owned(),
-            Degradation::ShadowedTexture.code().to_owned(),
-        ];
         for case in all() {
+            let mut wanted = vec![
+                // The venue's own: a card without unified memory holds the `Shared` buffer each
+                // row reads its answer back through in system memory.
+                Degradation::SharedInSystemMemory.code().to_owned(),
+                Degradation::StagedTextureCopy.code().to_owned(),
+                Degradation::ShadowedTexture.code().to_owned(),
+            ];
+            let note = case.format().note;
+            if !crate::replay::NATIVE_NOTES.contains(&note) {
+                wanted.push(note.code().to_owned());
+            }
             let codes: Vec<String> = case
                 .allowances()
                 .iter()
@@ -733,18 +748,6 @@ mod tests {
         }
     }
 
-    /// Every format of the family has a rule, so [`CompressedBlits::rule`] cannot panic.
-    #[test]
-    fn every_format_has_a_rule() {
-        for format in &FORMATS {
-            assert!(
-                CompressedBlit::of(format.format).is_some(),
-                "{}",
-                format.name
-            );
-        }
-    }
-
     /// The program answers one read per site the case emits, so no read is left unnamed and no
     /// site reads bytes nobody asked for.
     #[test]
@@ -756,100 +759,5 @@ mod tests {
                 assert!(read.layout.extent() > 0, "{}", read.at);
             }
         }
-    }
-
-    /// Every recorded read-back is what the rule says, and the bytes the layouts call gaps stayed
-    /// as they were.
-    ///
-    /// This is the cross-check the port exists for: the recordings hold the bytes Metal's own blits
-    /// wrote on this M3 Max, and `bind::CompressedBlit` is the rule fitted on an Apple M4. A
-    /// difference means Apple's compression moved or the rule was never Metal's, and either is a
-    /// finding rather than something to edit away.
-    #[test]
-    fn every_recorded_blit_is_the_rules() {
-        let mut unrecorded = Vec::new();
-        let mut differ = Vec::new();
-        let mut checked = 0usize;
-        for (at, format) in FORMATS.iter().enumerate() {
-            let case = CompressedBlits { at };
-            let name = format.name;
-            let recording = match crate::recording::read(name) {
-                Ok(recording) => recording,
-                Err(_) => {
-                    unrecorded.push(name);
-                    continue;
-                }
-            };
-            let fed = case.fed();
-            let rule = case.rule();
-            // What each site should hold: the bytes as they were fed, or the rule's rewrite of
-            // them. A blit through the compression rewrites; a CPU copy and an uncompressed
-            // texture keep.
-            let wanted: Vec<(&str, Vec<u8>)> = vec![
-                ("tall", blitted(rule, &fed.tall)),
-                ("plain", fed.plain.clone()),
-                ("short", fed.short.clone()),
-                ("level-3-padded", blitted(rule, &fed.small)),
-                ("cpu-in-cpu-out", fed.cpu_in.clone()),
-                ("cpu-in-blit-out", blitted(rule, &fed.cpu_in)),
-                ("blit-in-cpu-out", blitted(rule, &fed.blit_in)),
-                ("out-of-compressed", blitted(rule, &fed.out_of_compressed)),
-                ("into-compressed", blitted(rule, &fed.into_compressed)),
-                ("over-a-buffer", blitted(rule, &fed.over_a_buffer)),
-            ];
-            let (_, reads) = case.program();
-            for answer in &recording.answers {
-                for outcome in &answer.outcomes {
-                    for (read, (site, want)) in reads.iter().zip(&wanted) {
-                        assert_eq!(read.at, *site, "the test's order is the program's");
-                        let Some(node) = outcome.transcript.root.child(site) else {
-                            differ.push(format!("{name}: no site {site}"));
-                            continue;
-                        };
-                        let Value::Bytes(bytes) = &node.observed.value else {
-                            differ.push(format!("{name}/{site}: no bytes"));
-                            continue;
-                        };
-                        let layout = &read.layout;
-                        for row in 0..layout.rows {
-                            let row_bytes = layout.row_elements as usize * 4;
-                            let from = layout.at(0, row, 0);
-                            let got = &bytes[from..from + row_bytes];
-                            let tight = row as usize * row_bytes;
-                            if got != &want[tight..tight + row_bytes] {
-                                checked += 1;
-                                if differ.len() < 12 {
-                                    differ.push(format!(
-                                        "{name}/{site}: row {row} is not the rule's"
-                                    ));
-                                }
-                                continue;
-                            }
-                            checked += 1;
-                            if layout.gaps == Gaps::Compared {
-                                let gap = &bytes[from + row_bytes
-                                    ..from - layout.row_offset as usize
-                                        + layout.row_pitch as usize];
-                                if gap.iter().any(|&byte| byte != BLANK) {
-                                    differ.push(format!(
-                                        "{name}/{site}: row {row}'s padding changed"
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            differ.is_empty(),
-            "{checked} rows checked; Metal's recorded blits differ from \
-             bind::CompressedBlit's rule:\n{}",
-            differ.join("\n")
-        );
-        assert!(
-            unrecorded.is_empty(),
-            "no recording yet for {unrecorded:?}: run `conformance record` on a Mac"
-        );
     }
 }

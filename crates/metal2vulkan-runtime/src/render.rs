@@ -272,7 +272,7 @@ use super::buffer::Buffer;
 use super::clear_reach::{self, ReachClears};
 use super::color_list::ColorList;
 use super::color_reformat::{self, Routing};
-use super::color_resolve::{self, ShaderResolves};
+use super::color_resolve::ShaderResolves;
 use super::command_buffer::CommandBuffer;
 use super::deferred::Deferred;
 use super::degradation::{
@@ -4369,11 +4369,6 @@ impl RenderLowering {
         if let Some(rewritten) = rewritten {
             unused_bits_load::record(&mut core, &layout, rewritten)?;
         }
-        // An attachment whose sample planes hold its samples as the pass ends resolves from them
-        // by the exact resolve where it may (`color_resolve.rs`).
-        if let Some(last) = instances.last() {
-            color_resolve::resolve_planes(&mut layout, &last.shape.storage);
-        }
         // A color attachment the last instance leaves out does not resolve there: a pass that
         // resolves one runs one more instance, of no draws, after its sample planes are merged
         // back, which resolves the pass (`sample_planes.rs`).
@@ -5959,12 +5954,11 @@ impl RenderLowering {
             // twin's, which a render target's free `STORAGE` and a writable texture list).
             let viewed_in_place = framebuffer_fetch::stores_in_place(profile, own.format, plan);
             let usable = if planes {
-                // A memoryless attachment whose samples nothing reads after the pass but the
-                // exact resolve, which reads the planes, needs no backing: the planes' copies
-                // never run on it unless the pass splits, which backs it then (below).
-                let unread = memoryless(own)
-                    && (color_resolve::from_planes(own.format, own.samples)
-                        || (color.store == StoreAction::DontCare && !color.late_store));
+                // A memoryless attachment whose samples nothing reads after the pass needs no
+                // backing: the planes' copies never run on it unless the pass splits, which backs
+                // it then (below).
+                let unread =
+                    memoryless(own) && color.store == StoreAction::DontCare && !color.late_store;
                 unread || framebuffer_fetch::planes_copies(plan)
             } else {
                 // A view of another format is read and written in its own format, which must

@@ -1450,7 +1450,6 @@ impl Gpu for Runtime {
             ("addressable_buffers_made", c.addressable_buffers_made),
             ("mipmaps_filtered", c.mipmaps_filtered),
             ("mipmap_first_levels_fetched", c.mipmap_first_levels_fetched),
-            ("compressed_rows_rewritten", c.compressed_rows_rewritten),
             ("pipelines_pooled", c.pipelines_pooled),
             ("residual_form_draws", c.residual_form_draws),
             ("residual_form_makings", c.residual_form_makings),

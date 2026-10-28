@@ -1,15 +1,14 @@
 //! The crate-owned multisample color resolve, drawn after the pass, where the device's resolve in
-//! the pass cannot write Metal's answer at all or costs more.
+//! the pass cannot write the answer at all.
 //!
-//! A color attachment resolves by the device's `AVERAGE` in its pass, which leaves the average's
-//! rounding, and an sRGB average's space, to the device: Metal's own resolve where the driver's
-//! is Metal's ([`average_is_metals`], `DriverFact::ColorResolveAverageIsMetals`: MoltenVK from
-//! 1.4.1 on Apple's GPUs resolves every format by Metal's multisample resolve store action,
-//! measured at 2 and 4 samples), elsewhere a recorded near-equivalent, announced as
-//! `device-rounded-resolve`. The crate-owned resolve (`bind::color_resolve_modules`, of Metal's
-//! closed rules for a format at its count, `bind::ColorResolveFormat::of` and `resolves`: unorm,
-//! snorm, sRGB, 32-bit float and packed 16-bit unorm formats at every count, and 16-bit float,
-//! `RG11B10Float` and `RGB9E5Float` ones at 2 and 4 samples) draws the three resolves below.
+//! A color attachment resolves by the device's `AVERAGE`, which leaves the average's rounding, and
+//! an sRGB average's space, to the device: Metal's own resolve where the driver's is Metal's
+//! ([`average_is_metals`], `DriverFact::ColorResolveAverageIsMetals`: MoltenVK from 1.4.1 on
+//! Apple's GPUs resolves every format by Metal's multisample resolve store action, measured at 2
+//! and 4 samples), elsewhere the device's native answer, announced as `device-rounded-resolve`. So
+//! does an attachment a fetching pass's sample planes hold as it ends: the planes are merged back
+//! and one more instance of no draws resolves it (`sample_planes.rs`). The crate-owned resolve
+//! (`bind::color_resolve_modules`) draws only the two resolves no device's average writes:
 //!
 //! An extended-range attachment (`BGR10_XR`, `BGRA10_XR`, their `_sRGB` twins and
 //! `RGB10A2Unorm_sRGB`, the forms Metal multisamples) is held in its raw format's codes, which no
@@ -39,15 +38,10 @@
 //! reads each pixel's samples and writes the resolve attachment (the resolve texture's level and
 //! slice, or the scratch image copied there after, `resolve.rs`):
 //!
-//! - **From the sample planes** (`sample_planes.rs`) where they hold the attachment's samples as
-//!   the pass ends (its last instance's draws fetch it): read through a sampled 2D-array view in
-//!   their copy format. The planes are not merged back into the attachment unless Metal keeps
-//!   its samples (`Store`, `StoreAndMultisampleResolve`), no instance of no draws follows to
-//!   resolve, and a memoryless attachment the pass only fetches and resolves needs no backing
-//!   (`render.rs`). This is the cheaper path on every device, a driver whose average is Metal's
-//!   included, so such an attachment whose format has Metal's rules at its count resolves from its
-//!   planes ([`resolve_planes`]): its pass has one subpass, whose resolve references render pass
-//!   compatibility ignores (`render_target.rs`).
+//! - **From the sample planes** (`sample_planes.rs`) where they hold an extended-range
+//!   attachment's samples as the pass ends (its last instance's draws fetch it): read through a
+//!   sampled 2D-array view in their copy format. The planes are not merged back into the
+//!   attachment unless Metal keeps its samples (`Store`, `StoreAndMultisampleResolve`).
 //! - **From the attachment** otherwise: its level and layer as the resolve pass's input
 //!   attachment 0, loaded and stored. An 8-bit sRGB attachment whose image takes its UNORM twin's
 //!   view (an sRGB texture's image lists its twin's formats) is read through that view
@@ -163,18 +157,16 @@ pub(super) fn of_attachment(
 }
 
 /// The crate-owned resolve of a color attachment resolving into its format's sRGB twin, whose
-/// encoding Metal resolves in (`resolve.rs`): the resolve attachment's format's rules at
-/// `samples`, on every device, since a subpass's resolve
-/// attachment is of its color attachment's own format and so no device's average writes the twin's
-/// encoding. `None` where that format has no rule at the count.
-fn twin_rules(into: &Target, samples: u32) -> Option<ColorResolveFormat> {
-    ColorResolveFormat::of(into.format).filter(|rules| rules.resolves(samples))
+/// encoding Metal resolves in (`resolve.rs`): the resolve attachment's format's rules, on every
+/// device, since a subpass's resolve attachment is of its color attachment's own format and so no
+/// device's average writes the twin's encoding. `None` where that format has no rule.
+fn twin_rules(into: &Target) -> Option<ColorResolveFormat> {
+    ColorResolveFormat::of(into.format)
 }
 
 /// The rules of the crate-owned resolve `resolve` takes from the color attachment `source`: the
 /// resolve attachment's format's where it is the attachment's format's sRGB twin
-/// ([`twin_rules`], which no device's average writes, so a format with no rule at the count is
-/// refused here and samples the resolve cannot read where it plans the pass), else the
+/// ([`twin_rules`], which no device's average writes, so a format with no rule is refused here and samples the resolve cannot read where it plans the pass), else the
 /// attachment's own ([`of_attachment`]).
 pub(super) fn of_resolve(
     device: &Device,
@@ -184,7 +176,7 @@ pub(super) fn of_resolve(
     if !resolve.twin {
         return of_attachment(device, source);
     }
-    twin_rules(&resolve.attachment, source.samples)
+    twin_rules(&resolve.attachment)
         .map(Some)
         .ok_or(Error::NotImplemented(RuntimeGap::Render))
 }
@@ -206,43 +198,9 @@ fn copied(device: &Device, source: &Target) -> Result<bool, Error> {
             .contains(copies))
 }
 
-/// Whether a multisampled color attachment of `format` at `samples` that the sample planes may
-/// hold as a pass ends resolves from them by the crate-owned resolve whatever its device's
-/// average: its format has Metal's rules at that count. Its pass is of one subpass, whose resolve
-/// references render pass compatibility ignores, so its last instance may leave the subpass's
-/// resolve out (`render_target.rs`).
-pub(super) fn from_planes(format: Format, samples: u32) -> bool {
-    ColorResolveFormat::of(format).is_some_and(|rules| rules.resolves(samples))
-}
-
-/// Resolve each color attachment of `layout` (a pass's, as it ends) whose
-/// sample planes hold its samples, its last instance leaving it out of the draws' subpass
-/// (`last_storage`), by the crate-owned resolve from them where [`from_planes`] says so: neither
-/// merged back for the device's resolve nor resolved in one more instance. Not in a layered pass:
-/// the planes hold one layer.
-pub(super) fn resolve_planes(layout: &mut PassLayout, last_storage: &[u32]) {
-    if layout.layers > 1 {
-        return;
-    }
-    for (index, color) in layout.colors.iter_mut().enumerate() {
-        let Some(color) = color else {
-            continue;
-        };
-        if color.planes.is_none() || !last_storage.contains(&(index as u32)) {
-            continue;
-        }
-        let format = color.target.format;
-        if let Some(resolve) = &mut color.resolve {
-            if resolve.shader.is_none() && from_planes(format, color.target.samples) {
-                resolve.shader = ColorResolveFormat::of(format);
-            }
-        }
-    }
-}
-
 /// Whether a multisampled color attachment of `pf` may resolve into its format's sRGB twin, which
 /// the crate-owned resolve reads it for on every device (`resolve.rs`): the twin's format has
-/// Metal's rules at `samples`. Its image, and the stand-in a pass renders it into
+/// Metal's rules (`bind::ColorResolveFormat::of`). Its image, and the stand-in a pass renders it into
 /// (`attachment_stand_in.rs`), take the input attachment usage that resolve reads them through
 /// where it is free.
 pub(super) fn twin_resolved(pf: PixelFormat, samples: u32) -> bool {
@@ -250,7 +208,7 @@ pub(super) fn twin_resolved(pf: PixelFormat, samples: u32) -> bool {
         && srgb_twin(pf)
             .and_then(metal2vulkan::metal::format::direct_format)
             .and_then(ColorResolveFormat::of)
-            .is_some_and(|rules| rules.resolves(samples))
+            .is_some()
 }
 
 /// The view format a twin resolve reads a multisampled color attachment of `pf`, held in

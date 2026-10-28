@@ -156,6 +156,17 @@ pub(super) fn hex_rows(bytes: &[u8], offset: u64, bpr: u64, n: u64) -> String {
         .join("|")
 }
 
+/// The 16-bit code a pass's clear to `depth` stores, whose first element `stored` holds: Metal's
+/// clear truncates `depth` scaled by 65535 (0.375, 0.625 and 0.875 are 24575.625, 40959.375 and
+/// 57343.125 codes), and the device converts it its own way, which can store the code above
+/// (`unorm-depth-rounding`): that code where `stored` holds it, else Metal's.
+fn depth16_cleared(depth: f64, stored: &[u8]) -> Vec<u8> {
+    let metal = (depth * 65535.0) as u16;
+    let held = u16::from_le_bytes([stored[0], stored[1]]);
+    let code = if held == metal + 1 { held } else { metal };
+    code.to_le_bytes().to_vec()
+}
+
 /// Where a case's buffers come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -1387,9 +1398,7 @@ fn a_planar_surface_s_depth_or_stencil_texture_reads_and_stores_the_plane() {
                         command_buffer.wait_until_completed_for(WAIT).unwrap();
                         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
                         let value: Vec<u8> = match pf {
-                            // 0.375 is 24575.625 units of 16-bit depth, which Metal's clear
-                            // truncates (`clear_value::depth`).
-                            PixelFormat::Depth16Unorm => 0x5fffu16.to_le_bytes().to_vec(),
+                            PixelFormat::Depth16Unorm => depth16_cleared(0.375, &held.bytes()),
                             PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8 => {
                                 0.375f32.to_le_bytes().to_vec()
                             }
@@ -1554,12 +1563,10 @@ fn a_planar_surface_s_depth_or_stencil_texture_s_passes_write_metal_s_elements_a
                         command_buffer.commit().unwrap();
                         command_buffer.wait_until_completed_for(WAIT).unwrap();
                         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-                        // 0.625 and 0.875 are 40959.375 and 57343.125 units of 16-bit depth,
-                        // which Metal's clear truncates (`clear_value::depth`).
                         let value: Vec<u8> = match pf {
                             PixelFormat::Depth16Unorm => {
-                                let code = (clear_depth * 65535.0) as u16;
-                                code.to_le_bytes().to_vec()
+                                let at = tiled_at(unit, [w, h], 0, 0) as usize;
+                                depth16_cleared(clear_depth, &held.bytes()[at..])
                             }
                             PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8 => {
                                 (clear_depth as f32).to_le_bytes().to_vec()

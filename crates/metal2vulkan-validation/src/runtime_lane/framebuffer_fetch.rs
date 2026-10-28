@@ -284,25 +284,6 @@ fn device_rounded(wrong: Vec<Differing>, device: bool) -> (Vec<Differing>, usize
     (beyond, rounded)
 }
 
-/// The kind a resolve of a 4x attachment of `pf` that a pass fetched announces on `lane`'s
-/// device: where it reads sample planes, the crate-owned resolve reads them for a format of
-/// Metal's rules and the device's average resolves any other; else as
-/// `degrade_notices::resolve_kind`.
-fn fetched_resolve(lane: &Lane, pf: PixelFormat) -> Option<Degradation> {
-    if !reads_planes(lane) {
-        return resolve_kind(&lane.device, 4);
-    }
-    let rules = metal2vulkan::metal::format::direct_format(pf)
-        .and_then(metal2vulkan::bind::ColorResolveFormat::of)
-        .is_some_and(|rules| rules.resolves(4));
-    // The device's average of a format without rules is Metal's where the fact holds, which
-    // `resolve_kind` says.
-    match rules {
-        true => Some(Degradation::ShaderResolve),
-        false => resolve_kind(&lane.device, 4),
-    }
-}
-
 /// `rt6_resolve_white` of `colors`, color 0 blended `One`, `OneMinusSourceAlpha`: 1 over any
 /// finite texel, as the plain write stores, through a blend the interlocked storage form does
 /// not build, so in the pixel interlock a pass that fetches color 0 after it splits there.
@@ -1748,8 +1729,8 @@ fn a_callers_multisampled_image_without_the_fetch_usage_fetches_through_a_scratc
     let notices = messages.take_notices();
     messages.restore_notices(notices.clone());
     // The caller's image rests out of `GENERAL`. The device's average resolves it, announced
-    // where it is not measured to be Metal's; where the device reads sample planes, the fetch's
-    // pass reads them and resolves from them by the crate-owned resolve (`shader-resolve`).
+    // where it is not measured to be Metal's; where the device reads sample planes, after they are
+    // merged back.
     let planes = reads_planes(&lane);
     let rounded = resolve_kind(&lane.device, 4).is_some();
     let mut first = made(
@@ -1764,13 +1745,12 @@ fn a_callers_multisampled_image_without_the_fetch_usage_fetches_through_a_scratc
     // Through the attachment's own multisampled storage image the fetching draw's instance
     // leaves the attachment out of its subpass, and the device's resolve needs it in one: the
     // pass splits there (the RTX 3080's two instances), announced where the
-    // device announces the interlock's splits; through sample planes the resolve reads them: one
-    // instance.
-    let split = !planes && announces_interlock_splits(&lane);
+    // device announces the interlock's splits, and through sample planes too, which the device's
+    // resolve reads merged back in one more instance.
+    let split = announces_interlock_splits(&lane);
     first.extend(forced(&[
         (Degradation::WrappedImageLayoutTransitions, true),
         (Degradation::SamplePlanes, planes),
-        (Degradation::ShaderResolve, planes),
         (Degradation::DeviceRoundedResolve, rounded),
         (Degradation::RenderPassSplit, split),
     ]));

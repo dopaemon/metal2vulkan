@@ -1582,6 +1582,26 @@ pub(super) fn layout(
             ),
         }
         .ok_or_else(not_yet)?;
+        // The device converts a float clear its own way, which can stand a code from Metal's
+        // where the rounding is in question (`clear_value::rounds_apart`); a word attachment's
+        // clear is Metal's codes.
+        let pf = texture.pixel_format();
+        if color.load_action == LoadAction::Clear
+            && word.is_none()
+            && clear_value::rounds_apart(pf, channels)
+        {
+            device.degrade(Degradation::DeviceColorConversion, || {
+                (
+                    format!("a {pf:?} color attachment's clear to {channels:?}"),
+                    "the device converts the clear color to the format's codes its own way, \
+                     where Vulkan leaves a tie, an sRGB encode and a float's rounding to it and \
+                     Metal's clear rounds each channel to nearest, a tie to even (a small \
+                     float's and a shared exponent's mantissas truncated): a channel can store \
+                     a code next to Metal's"
+                        .to_owned(),
+                )
+            });
+        }
         let straight_clear = ExtendedRange::of(texture.pixel_format()).and_then(|_| {
             clear_value::color(texture.pixel_format(), channels, ClearRoute::Straight)
         });
@@ -2215,6 +2235,23 @@ fn depth_stencil(
         d.depth_resolve_filter,
         s.stencil_resolve_filter,
     )?;
+    // A `Depth16Unorm` clear the device may round up, where Metal's clear truncates
+    // (`clear_value::depth16_rounded`).
+    let depth_pf = d.texture.as_ref().map(Texture::pixel_format);
+    if let Some(pf) = depth_pf.filter(|&pf| {
+        depth_load == LoadAction::Clear
+            && clear_value::depth16_rounded(pf, clear_depth.clamp(0.0, 1.0))
+    }) {
+        device.degrade(Degradation::UnormDepthRounding, || {
+            (
+                format!("a {pf:?} depth attachment's clear to {clear_depth}"),
+                "the device converts the clear depth to its 16-bit code its own way, where \
+                 Metal's clear truncates the depth scaled by 65535: the code can be the one \
+                 above Metal's"
+                    .to_owned(),
+            )
+        });
+    }
     Ok(Some(DepthStencilTarget {
         target,
         depth: depth.map(|_| AspectTarget {
@@ -2223,12 +2260,7 @@ fn depth_stencil(
             late_store: d.store_action == StoreAction::Unknown,
             options: d.store_action_options,
             memoryless: d.texture.as_ref().is_some_and(memoryless),
-            clear: AspectClear::Depth(clear_value::depth(
-                d.texture
-                    .as_ref()
-                    .map_or(PixelFormat::Depth32Float, Texture::pixel_format),
-                clear_depth.clamp(0.0, 1.0),
-            )),
+            clear: AspectClear::Depth(clear_value::depth(clear_depth.clamp(0.0, 1.0))),
             written_nan,
         }),
         stencil: stencil.map(|_| AspectTarget {

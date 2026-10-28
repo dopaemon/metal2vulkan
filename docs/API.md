@@ -1323,9 +1323,11 @@ bound.
   without depthBiasExact counts the bias in its own unit.
 - `metal2vulkan-degrade-unorm-depth-rounding` (precision). `UnormDepthRounding`: A draw tests or
   writes a `Depth16Unorm` depth on a device whose driver is not measured to convert a depth to
-  Metal's code (`DriverDeviation::MetalDepth16Stores`): the device converts the depth. Cost: a
-  depth near a code's midpoint can store the code below Metal's: the device converts the depth to
-  the 16-bit code its own way, where Metal rounds to nearest, a tie up.
+  Metal's code (`DriverDeviation::MetalDepth16Stores`), or a pass clears one to a depth that a
+  device rounding to nearest takes above Metal's truncation: the device converts the depth. Cost:
+  a depth near a code's midpoint can store the code next to Metal's: the device converts the depth
+  to the 16-bit code its own way, where Metal's draw rounds to nearest, a tie up, and its clear
+  truncates.
 - `metal2vulkan-degrade-point-guard-band` (precision). `PointGuardBand`: A draw of points keeps
   Vulkan's clipping of points, where Metal's guard band cannot be emulated: in a rate-mapped pass,
   on a device without `shaderClipDistance` or with too few clip distances beside the vertex
@@ -1462,8 +1464,8 @@ bound.
   resolves into a scratch image, whose render area is copied into the texture after the pass.
 - `metal2vulkan-degrade-shader-resolve` (performance). `ShaderResolve`: A multisample color resolve
   drawn after the pass by the crate-owned resolve: of an extended-range attachment, whose codes no
-  device's resolve averages, into the attachment's format's sRGB twin, whose encoding no device's
-  resolve writes, or from a fetching pass's sample planes; or a stencil resolved by `DepthResolvedSample` after `Min` or `Max`, which no
+  device's resolve averages, or into the attachment's format's sRGB twin, whose encoding no
+  device's resolve writes; or a stencil resolved by `DepthResolvedSample` after `Min` or `Max`, which no
   Vulkan resolve mode states, or a `Min` or `Max` depth on a device without the mode, drawn after
   the pass. Cost: one more render pass instance after the pass reads the stored samples (or the
   sample planes) and writes the resolve texture, where the device would resolve in the pass; where
@@ -1621,8 +1623,9 @@ bound.
 - `metal2vulkan-degrade-device-rounded-resolve` (precision). `DeviceRoundedResolve`: A multisample
   color resolve averages through Vulkan's `AVERAGE` mode, which leaves the rounding of the average
   (and the sRGB encoding) to the device, on a device not measured to round as Metal does: any
-  color attachment but an extended-range one, one resolving into its format's sRGB twin, and one a
-  fetching pass's sample planes hold as it ends (each resolved after the pass). Never, whatever the
+  color attachment but an extended-range one and one resolving into its format's sRGB twin (each
+  resolved after the pass), one a fetching pass's sample planes hold as it ends included (the
+  planes merged back first). Never, whatever the
   format, on a device whose resolve is measured to round
   as Metal does (`DriverFact::ColorResolveAverageIsMetals`: MoltenVK's resolve is Metal's own).
   Measured against Metal's rules at 2 and 4 samples on RADV (Mesa 26.0.8, the Radeon 780M and the RX
@@ -2012,12 +2015,17 @@ bound.
   (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins,
   and `RGB10A2Unorm_sRGB`) and does not discard it at the store, where the pass's load pass does
   not take it: a multisampled attachment, a texture held as a shadow of another image or of a
-  heap's bytes, a sparse one, or one whose image the device does not copy both ways (a padded format takes no multisample texture). Cost: the
+  heap's bytes, a sparse one, or one whose image the device does not copy both ways (a padded format takes no multisample texture). Also, once per device, a GPU blit
+  into, out of or between textures of which one is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal
+  keeps losslessly compressed: Metal's blit moves the texels through the compression, which clears
+  the same bits and clamps the same alpha, where the device's copy keeps the bytes. Cost: the
   texels the pass's draws do not write keep their bytes; Metal's pass keeps their codes but rewrites
   the bits they leave unused in each tile a draw reaches (BGR10_XR's bits 30 and 31 to ones,
   BGRA10_XR's low six bits of each field to zeros, the two-plane color word's top two bits to zeros)
   and clamps BGRA10_XR's alpha code to [384, 894]: a texel whose bytes no Metal write left (uploaded
-  bytes, or an alpha code past 894) keeps bytes Metal's pass would change.
+  bytes, or an alpha code past 894) keeps bytes Metal's pass would change, and a blit through a
+  BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; every such texel
+  reads the same value either way.
 - `metal2vulkan-degrade-snorm-minimum-kept` (precision). `SnormMinimumKept`: A draw in a render pass
   that loads a single-sampled color attachment of a signed normalized format (`R8Snorm`, `RG8Snorm`,
   `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`) and does not discard it at the store. Cost:
@@ -2028,11 +2036,15 @@ bound.
   (`DriverFact::TileStoreIsMetals`: MoltenVK on Apple's GPUs, whose pass is a Metal pass).
 - `metal2vulkan-degrade-shared-exponent-kept` (precision). `SharedExponentKept`: A draw in a render
   pass that loads a single-sampled `RGB9E5Float` color attachment and does not discard it at the
-  store. Cost: the texels the pass's draws do not write keep their words; Metal's pass normalizes a
-  word whose largest mantissa is below 256 (its exponent above 0) in each tile a draw reaches: a
-  texel whose bytes no Metal write left (uploaded or copied words) keeps a word Metal's pass would
-  change, of the same value. Not on a driver whose pass stores the words as Metal's
-  (`DriverFact::TileStoreIsMetals`).
+  store; and, once per device, a GPU blit into, out of or between textures of which one is an
+  `RGB9E5Float` texture Metal keeps losslessly compressed, whose compression normalizes every such
+  word, where the device's copy keeps the bytes. Cost: the texels the pass's draws do not write keep
+  their words; Metal's pass normalizes a word whose largest mantissa is below 256 (its exponent
+  above 0) in each tile a draw reaches, and Metal's blit through an RGB9E5Float texture it
+  compresses every such word: a texel whose bytes no Metal write left (uploaded or copied words)
+  keeps a word Metal would change, of the same value. Not on a driver whose pass stores the words
+  as Metal's (`DriverFact::TileStoreIsMetals`), nor, for a blit, where the device's copy of the
+  compressed image is Metal's blit (MoltenVK's).
 - `metal2vulkan-degrade-two-plane-buffer-blit` (precision). `TwoPlaneBufferBlit`: A blit between a
   buffer and a level of `RGB10A8_2P_XR10` or its sRGB twin whose width is not a multiple of 4,
   where Metal's blit addresses the level's rows `⌊4 w / 16⌋ · 16` bytes apart, short of where they
@@ -2774,7 +2786,12 @@ bound.
   floats). Near a tie between two codes the device may store the other one. Also a `float` texel a
   function writes to a storage texture that may hold a normalized or half-float format, or
   `ARGB8Unorm`, on a device not measured to store Metal's codes (or a 1-bit alpha, on one measured
-  to store every other normalized channel's).
+  to store every other normalized channel's). Also a render pass's clear of a normalized, sRGB,
+  packed 16-bit, half or small-float color attachment to a color whose conversion is in question
+  (a normalized channel within 1/1024 of a midpoint between two codes, an sRGB channel inside its
+  range, a value the format does not hold exactly): the device converts the clear color, where
+  Metal's clear rounds each channel to nearest, a tie to even, and truncates a small float's and a
+  shared exponent's mantissas.
 - `metal2vulkan-degrade-device-interpolation` (precision). `PrecisionNote::DeviceInterpolation`: A
   fragment function reads a varying the device interpolates (`center_perspective`, `centroid`,
   `sample` or `no_perspective`, not `flat`) on a device not measured to interpolate as Metal does

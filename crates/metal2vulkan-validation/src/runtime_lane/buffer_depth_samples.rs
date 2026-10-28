@@ -472,12 +472,17 @@ fn a_buffer_copies_every_sample_of_a_multisampled_depth_or_stencil_both_ways() {
         // Whether a copy into a 32-bit float depth ran, and the kinds the readbacks' state makings
         // announce.
         let mut float_depth = false;
+        // Whether a 16-bit depth texture was cleared: 0.25 is 16383.75 codes, which Metal's
+        // clear truncates and the device converts its own way (`unorm-depth-rounding`).
+        let mut cleared16 = false;
         let mut made = BTreeSet::new();
         for case in CASES {
             let supported = properties
                 .supports_texture_sample_count(case.samples.into())
                 .unwrap_or(false);
             let outcome = run(&device, case, changes);
+            cleared16 |=
+                case.pf == PixelFormat::Depth16Unorm && !matches!(outcome, Outcome::NoTexture);
             let word = match outcome {
                 Outcome::Ran => "RAN",
                 Outcome::Refused => "REFUSED",
@@ -529,6 +534,7 @@ fn a_buffer_copies_every_sample_of_a_multisampled_depth_or_stencil_both_ways() {
                 Degradation::SharedInSystemMemory,
                 shared_in_system_memory(&device),
             ),
+            (Degradation::UnormDepthRounding, cleared16),
         ]);
         first.extend(made);
         let announced = assert_made_once(&messages, &[], &first);

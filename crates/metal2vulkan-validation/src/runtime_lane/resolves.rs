@@ -21,7 +21,7 @@
 //! texture untouched, and a multisampled color attachment's resolve into its format's sRGB twin,
 //! which resolves in the resolve texture's encoding, as plain Metal's.
 
-use super::degrade_notices::assert_once;
+use super::degrade_notices::{assert_once, counts};
 use super::{
     buffer_with, layer_reported_nothing_at_all, read_buffer, validated_device_with, Messages,
     ScratchCache, WAIT,
@@ -1928,7 +1928,9 @@ enum DepthTexel {
 /// with macOS 27.0.1: `Depth32Float`, `Depth16Unorm`, `Stencil8` and `Depth32Float_Stencil8`,
 /// each aspect of the combined format attached), through a stand-in: filled first by a blit
 /// (depth 0.75, stencil 0x22), each aspect cleared (0.5, 0x11) or loaded, drawn or not, stored or
-/// `DontCare`. Stored, it holds the clear or its texels where nothing is drawn, and the draw's
+/// `DontCare`. Stored, it holds the clear (on `Depth16Unorm`, the device's code for 0.5: Metal's
+/// truncated 0x7fff or the next, announced as `UnormDepthRounding`) or its texels where nothing is
+/// drawn, and the draw's
 /// depth 0.25 (`Less`, written) and stencil 0x5a (`Always`, `Replace`) where the draw passes, as
 /// the probe's drawn pixel holds them (here every pixel: the fullscreen triangle); under
 /// `DontCare`, its texels before the pass.
@@ -2050,11 +2052,20 @@ fn a_depth_or_stencil_texture_without_render_target_usage_renders_as_metal() {
                     _ => (DepthTexel::Filled, 0x22),
                 };
                 if has_depth {
-                    assert_eq!(
-                        lane.read(&texture, (0, 0), depth_bytes, options(true)),
-                        depth_texel(pf, depth).repeat(16),
-                        "{case} depth on {name}"
-                    );
+                    let read = lane.read(&texture, (0, 0), depth_bytes, options(true));
+                    // The clear 0.5 is 32767.5 `Depth16Unorm` codes: Metal's clear truncates it
+                    // to 0x7fff, the device converts it its own way, announced as
+                    // `UnormDepthRounding` (asserted below): the code next to Metal's too.
+                    let next = matches!(depth, DepthTexel::Cleared)
+                        && pf == PixelFormat::Depth16Unorm
+                        && read == 0x8000_u16.to_le_bytes().repeat(16);
+                    if !next {
+                        assert_eq!(
+                            read,
+                            depth_texel(pf, depth).repeat(16),
+                            "{case} depth on {name}"
+                        );
+                    }
                 }
                 if has_stencil {
                     assert_eq!(
@@ -2071,6 +2082,13 @@ fn a_depth_or_stencil_texture_without_render_target_usage_renders_as_metal() {
                 );
             }
         }
+        let rounding =
+            counts(&messages.take_notices()).contains_key(&Degradation::UnormDepthRounding);
+        assert_eq!(
+            rounding,
+            pf == PixelFormat::Depth16Unorm,
+            "{pf:?} on {name}: depth rounding announced"
+        );
     }
     quiet(lane, &messages);
 }

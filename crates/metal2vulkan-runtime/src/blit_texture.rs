@@ -56,12 +56,11 @@
 
 use super::blit::{reads, reads_by, writes, writes_by, BlitCommandEncoder, TRANSFER};
 use super::blit_plan::{
-    copied_rows, plan_block_order_copy, plan_buffer_copy, plan_levels_copy, plan_region_copy,
-    plan_rows_copy, plan_texels_rows_copy, plan_whole_copy, texel_layout, texel_rows,
-    BufferCopyPlan, BufferImageRegion, BufferLayout, BufferRange, CopyPair, ImageCopyRegion,
-    RowsCopy,
+    plan_block_order_copy, plan_buffer_copy, plan_levels_copy, plan_region_copy, plan_rows_copy,
+    plan_texels_rows_copy, plan_whole_copy, texel_layout, BufferCopyPlan, BufferImageRegion,
+    BufferLayout, BufferRange, CopyPair, ImageCopyRegion, RowsCopy,
 };
-use super::compressed_blit::{rule_of, rules_of};
+use super::compressed_blit::degrade_compressed_blit;
 use super::copy_plan::{
     check_region, colour_unit, copy_unit, depth_bytes, level_extent, shape, BlitOption,
     CopyProblem, CopyRefusal, CopyUnit, ImageRegion, TextureRegion,
@@ -608,10 +607,8 @@ impl BlitCommandEncoder {
                 this.buffer_texture_copy(source_buffer, texture, plan, true)?;
                 texture.degrade_depth_upload(CALL, unit.aspect, true);
                 texture.degrade_depth_denormals(CALL, unit.aspect, false);
-                // Into a texture Metal keeps compressed: the texels its blit writes.
-                if let Some(rule) = rule_of(texture) {
-                    this.compressed_image(texture, &written, &[rule])?;
-                }
+                // Into a texture Metal keeps compressed: the device's copy keeps the bytes.
+                degrade_compressed_blit(CALL, texture)?;
                 // Into a texture with a decoded twin: the twin's texels of what the copy wrote.
                 this.decode_twin(texture, &written)
             },
@@ -780,14 +777,8 @@ impl BlitCommandEncoder {
                     false,
                 )?;
                 this.buffer_texture_copy(destination_buffer, source_texture, plan, false)?;
-                // Out of a texture Metal keeps compressed: the texels its blit writes, at the
-                // buffer's rows the copy wrote, image after image.
-                if let Some(rule) = rule_of(source_texture) {
-                    let rows = copied_rows(source_texture.record(), &region, &unit, &layout, false)
-                        .map_err(|problem| invalid(CALL, Problem::Copy(problem)))?;
-                    this.compressed_rows(destination_buffer, &rows, &[rule])?;
-                }
-                Ok(())
+                // Out of a texture Metal keeps compressed: the device's copy keeps the bytes.
+                degrade_compressed_blit(CALL, source_texture)
             },
         )
     }
@@ -1311,36 +1302,12 @@ impl BlitCommandEncoder {
         // Into a texture with a decoded twin: the twin's texels of what the copies wrote.
         let written: Vec<ImageRegion> = copies.iter().map(|copy| copy.dst).collect();
         self.decode_twin(destination, &written)?;
-        // Out of or into a texture Metal keeps compressed: the texels its blit writes, in the
-        // destination's image or its buffer's rows. A region copied onto itself records nothing.
-        let rules = rules_of(source, destination);
-        if rules.is_empty() {
-            return Ok(());
-        }
-        let one_storage = source.same_storage(destination);
-        let copies: Vec<&ImageCopyRegion> = copies
-            .iter()
-            .filter(|copy| !(one_storage && copy.src == copy.dst))
-            .collect();
-        match destination.buffer_texels() {
-            Some(texels) => {
-                let unit = texels.unit();
-                let rows: Vec<Range<u64>> = copies
-                    .iter()
-                    .flat_map(|copy| texel_rows(&texels.layout, &unit, &copy.dst))
-                    .collect();
-                let buffer = texels.buffer.clone();
-                self.compressed_rows(&buffer, &rows, &rules)
-            }
-            None => {
-                let regions: Vec<ImageRegion> = copies.iter().map(|copy| copy.dst).collect();
-                self.compressed_image(destination, &regions, &rules)
-            }
-        }
+        // Out of or into a texture Metal keeps compressed: the device's copy keeps the bytes.
+        degrade_compressed_blit(call, source)?;
+        degrade_compressed_blit(call, destination)
     }
 
-    /// Record checked copies between two textures, their bytes as the images hold them (the
-    /// texels Metal's blit through a compressed texture writes are `texture_copies`').
+    /// Record checked copies between two textures, their bytes as the images hold them.
     fn texture_copies_of_bytes(
         &mut self,
         call: &'static str,

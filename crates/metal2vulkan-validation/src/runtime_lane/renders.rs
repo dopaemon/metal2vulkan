@@ -25,9 +25,12 @@
 //!   (`kernel_textures.rs`), and the case passes only when the runtime's bytes are the candidate's.
 //!   A case with no current Metal row (one awaiting Metal qualification) goes the same way, and
 //!   says so.
-//! - **Clears** write Metal's measured bytes: each color format, depth and stencil value an M4 was
-//!   measured with, the NaNs of float formats among them (a Metal probe, the M3 Max alike); a NaN
-//!   of a half-float or small-float format is the device's conversion, announced. A format the
+//! - **Clears** are the device's conversion of the clear value, compared with Metal's measured
+//!   bytes: each color format, depth and stencil value an M4 was measured with, the NaNs of float
+//!   formats among them (a Metal probe, the M3 Max alike). A texel the device converts otherwise
+//!   than Metal is within a code (a float's adjacent value) of Metal's in each channel and
+//!   announced (`device-color-conversion`, a `Depth16Unorm` depth's `unorm-depth-rounding`), and
+//!   printed; a NaN of a half-float or small-float format is the device's, announced. A format the
 //!   device cannot render is counted.
 //! - **Load and store actions**, the encoder's late store action, the passes' order against blits
 //!   in one command buffer, and Metal's refusals of passes and draws, typed. What a `DontCare`
@@ -867,17 +870,84 @@ fn nan_for_nan(pf: PixelFormat, got: &[u8], want: &[u8]) -> bool {
             .all(|(&(g, e, m), &(w, _, _))| g == w || (small_nan(g, e, m) && small_nan(w, e, m)))
 }
 
-/// Each color clear Metal was measured with stores Metal's bytes, depth and stencil clears
-/// included, but a NaN of a half-float or small-float channel, which the device's clear converts as
-/// it likes, announced (`device-nan-encoding`) and printed; a format the device cannot render to is
-/// counted, not run.
+/// The fields of a `pf` texel (each channel's bits, signed for a snorm format's) whose codes one
+/// device's conversion may stand one apart from Metal's, or `None` for a format with no such
+/// reading here (an integer or 32-bit float format's, whose clear converts nothing).
+fn fields(pf: PixelFormat, texel: &[u8]) -> Option<Vec<i64>> {
+    use PixelFormat as P;
+    let word = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .rev()
+            .fold(0u64, |w, &b| (w << 8) | u64::from(b))
+    };
+    let packed = |widths: &[u32]| {
+        let w = word(texel);
+        let mut at = 0;
+        widths
+            .iter()
+            .map(|&bits| {
+                let field = (w >> at) & ((1 << bits) - 1);
+                at += bits;
+                field as i64
+            })
+            .collect()
+    };
+    Some(match pf {
+        P::RGBA8Unorm | P::BGRA8Unorm | P::RGBA8UnormSRGB | P::BGRA8UnormSRGB => {
+            texel.iter().map(|&b| i64::from(b)).collect()
+        }
+        P::RGBA8Snorm => texel.iter().map(|&b| i64::from(b as i8)).collect(),
+        P::RGBA16Unorm | P::R16Float | P::RG16Float | P::RGBA16Float => texel
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|h| i64::from(u16::from_le_bytes(*h)))
+            .collect(),
+        P::RG16Snorm => texel
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|h| i64::from(i16::from_le_bytes(*h)))
+            .collect(),
+        P::RGB10A2Unorm | P::BGR10A2Unorm => packed(&[10, 10, 10, 2]),
+        P::RG11B10Float => packed(&[11, 11, 10]),
+        // The mantissas under the shared exponent: one apart at the same exponent.
+        P::RGB9E5Float => packed(&[9, 9, 9, 5]),
+        P::B5G6R5Unorm => packed(&[5, 6, 5]),
+        P::A1BGR5Unorm => packed(&[1, 5, 5, 5]),
+        P::BGR5A1Unorm => packed(&[5, 5, 5, 1]),
+        P::ABGR4Unorm => packed(&[4, 4, 4, 4]),
+        P::Depth16Unorm => vec![word(texel) as i64],
+        _ => return None,
+    })
+}
+
+/// Whether texel `got` of `pf` stands at most one code (a float's adjacent value) from `want` in
+/// each field ([`fields`]): the device's conversion of a clear whose rounding is in question.
+fn a_code_apart(pf: PixelFormat, got: &[u8], want: &[u8]) -> bool {
+    match (fields(pf, got), fields(pf, want)) {
+        (Some(got), Some(want)) => {
+            got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| g.abs_diff(*w) <= 1)
+        }
+        _ => false,
+    }
+}
+
+/// Each color clear Metal was measured with is the device's conversion of the clear value, depth
+/// and stencil clears included: Metal's bytes, but a texel of a clear whose rounding is in
+/// question, within a code (a float's adjacent value) of Metal's in each field and announced
+/// (`device-color-conversion`; a `Depth16Unorm` depth's `unorm-depth-rounding`), and a NaN of a
+/// half-float or small-float channel, which the device's clear converts as it likes, announced
+/// (`device-nan-encoding`); each printed. A format the device cannot render to is counted, not
+/// run.
 #[test]
-fn clears_store_the_bytes_metal_stores() {
+fn clears_are_the_device_s_conversion_of_the_clear_value() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
     let (mut checked, mut unsupported, mut wrong) = (0usize, Vec::new(), Vec::new());
-    let mut announced = false;
+    let (mut announced, mut converted, mut rounded) = (false, false, 0usize);
     for &(pf, color, expected) in COLOR_CLEARS {
         let texture = match attachment(&device, pf, [1, 1], ResourceOptions::private()) {
             Ok(texture) => texture,
@@ -897,14 +967,22 @@ fn clears_store_the_bytes_metal_stores() {
             Err(error) => panic!("{pf:?}: {error}"),
         }
         let bytes = blit_read(&device, &texture, expected.len() as u64);
-        announced |= super::degrade_notices::counts(&messages.take_notices())
-            .contains_key(&Degradation::DeviceNanEncoding);
+        let counts = super::degrade_notices::counts(&messages.take_notices());
+        announced |= counts.contains_key(&Degradation::DeviceNanEncoding);
+        converted |= counts.contains_key(&Degradation::DeviceColorConversion);
         if bytes != expected && announced && nan_for_nan(pf, &bytes, expected) {
             eprintln!(
                 "clear {pf:?} {color:?} on {}: {bytes:02x?}, Metal {expected:02x?} \
                  (device-nan-encoding)",
                 device.name()
             );
+        } else if bytes != expected && converted && a_code_apart(pf, &bytes, expected) {
+            eprintln!(
+                "clear {pf:?} {color:?} on {}: {bytes:02x?}, Metal {expected:02x?} \
+                 (device-color-conversion)",
+                device.name()
+            );
+            rounded += 1;
         } else if bytes != expected {
             wrong.push(format!(
                 "{pf:?} {color:?}: {bytes:02x?}, Metal {expected:02x?}"
@@ -936,6 +1014,7 @@ fn clears_store_the_bytes_metal_stores() {
         ),
         (PixelFormat::Depth16Unorm, 1.0, &[0xff, 0xff]),
     ];
+    let mut converted_depth = false;
     for &(pf, depth, expected) in depth_clears {
         let texture = attachment(&device, pf, [1, 1], ResourceOptions::private()).unwrap();
         let mut pass = RenderPassDescriptor::new();
@@ -955,7 +1034,17 @@ fn clears_store_the_bytes_metal_stores() {
             .unwrap();
         run(&command_buffer);
         let bytes = blit_read(&device, &texture, expected.len() as u64);
-        if bytes != expected {
+        let depth_rounded = super::degrade_notices::counts(&messages.take_notices())
+            .contains_key(&Degradation::UnormDepthRounding);
+        converted_depth |= depth_rounded;
+        if bytes != expected && converted_depth && a_code_apart(pf, &bytes, expected) {
+            eprintln!(
+                "clear {pf:?} {depth} on {}: {bytes:02x?}, Metal {expected:02x?} \
+                 (unorm-depth-rounding)",
+                device.name()
+            );
+            rounded += 1;
+        } else if bytes != expected {
             wrong.push(format!(
                 "{pf:?} {depth}: {bytes:02x?}, Metal {expected:02x?}"
             ));
@@ -995,7 +1084,8 @@ fn clears_store_the_bytes_metal_stores() {
         checked += 1;
     }
     eprintln!(
-        "clears on {}: {checked} checked, {} formats the device cannot render to",
+        "clears on {}: {checked} checked, {rounded} a code from Metal's, {} formats the device \
+         cannot render to",
         device.name(),
         unsupported.len()
     );
@@ -1271,8 +1361,8 @@ fn passes_and_draws_are_refused_as_metal_refuses_them() {
 
     // A NaN clear depth of a format whose store of one is not measured, where the device makes
     // it (a value outside [0, 1] clears to the nearer end:
-    // `clears_store_the_bytes_metal_stores`; a NaN of a measured format clears as Metal's:
-    // `depth_denormals::a_nan_clear_depth_stores_as_metal_s`).
+    // `clears_are_the_device_s_conversion_of_the_clear_value`; a NaN of a measured format clears
+    // as Metal's: `depth_denormals::a_nan_clear_depth_stores_as_metal_s`).
     match attachment(
         &device,
         PixelFormat::Depth24UnormStencil8,

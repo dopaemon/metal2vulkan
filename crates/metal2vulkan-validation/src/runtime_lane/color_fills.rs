@@ -309,7 +309,7 @@ const METAL: [(u32, u64, u64, u64); 70] = [
 ];
 
 /// The probes' textures' usage, `ShaderRead | PixelFormatView`, which keeps Metal from
-/// compressing them: a blit into or out of a compressed `RG11B10Float`, `RGB9E5Float` or
+/// compressing them: Metal's blit into or out of a compressed `RG11B10Float`, `RGB9E5Float` or
 /// `BGRA10_XR` texture rewrites its texels (`compressed_blit.rs`), which the probes' texels leave
 /// out.
 const USAGE: TextureUsage = TextureUsage::SHADER_READ.union(TextureUsage::PIXEL_FORMAT_VIEW);

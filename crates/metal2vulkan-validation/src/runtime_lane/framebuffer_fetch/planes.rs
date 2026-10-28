@@ -29,14 +29,14 @@
 //! which reads and writes the attachment's own multisampled image. A format the device does not
 //! store, which the interlock form needs, is refused at the pipeline (`Unsupported`), printed.
 //!
-//! A pass whose last draws fetch an attachment that resolves resolves it from its sample planes
-//! by the exact resolve (`runtime::color_resolve`): the planes merge back only where the pass
-//! stores the samples, and a memoryless attachment the pass only fetches and resolves renders into
-//! no backing image.
+//! A pass whose last draws fetch an attachment that resolves resolves it by the device's average,
+//! after its sample planes merge back (`runtime::sample_planes`), never by the crate-owned
+//! resolve (`runtime::color_resolve`), a memoryless attachment the pass only fetches and resolves
+//! included.
 
-use super::{fetched_resolve, pipeline_descriptor, scratched};
 use super::{library, loading, multisampled, pass, pipeline, steps};
-use crate::runtime_lane::degrade_notices::{assert_made_once, counts, forced};
+use super::{pipeline_descriptor, scratched};
+use crate::runtime_lane::degrade_notices::{assert_made_once, counts, forced, resolve_kind};
 use crate::runtime_lane::memoryless::memoryless_msaa;
 use crate::runtime_lane::resolves::{lane, quiet, Lane, MSAA, ONE};
 use metal2vulkan::device::DriverFact;
@@ -151,7 +151,7 @@ fn sample_planes_carry_every_sample() {
                 pipeline_descriptor(vertices, (&fetch, "msf_fetch_sample"), &[pf], 4),
             ],
         ));
-        first.extend(fetched_resolve(&lane, pf));
+        first.extend(resolve_kind(&lane.device, 4));
         let msaa = target(&lane, pf);
         let zero = ClearColor::new(0.0, 0.0, 0.0, 0.0);
         let stored = lane.texture(pf, ONE, TextureUsage::RENDER_TARGET);
@@ -233,11 +233,12 @@ fn sample_planes_carry_every_sample() {
 }
 
 /// A memoryless 4x target the pass only fetches and resolves: cleared to 0 and fetched once by
-/// `msf_fetch_sample`, so each sample holds (1, s, 0, 0), resolved Metal's way on every device.
-/// Where the device reads sample planes, the exact resolve reads them: the attachment needs no
-/// backing image and the pass no second instance, so neither is announced.
+/// `msf_fetch_sample`, so each sample holds (1, s, 0, 0), resolved Metal's way on every device
+/// in the channels compared. The device's average
+/// resolves it, after its sample planes merge back where the device reads them: no device draws
+/// the crate-owned resolve (`shader-resolve`).
 #[test]
-fn a_memoryless_attachment_only_fetched_resolves_from_its_planes() {
+fn a_memoryless_attachment_only_fetched_resolves_by_the_device_s_average() {
     let (messages, cache, lane) = lane();
     let device = lane.device.name().to_owned();
     let fetch = library(&lane, "msf_fetch_ms");
@@ -267,11 +268,59 @@ fn a_memoryless_attachment_only_fetched_resolves_from_its_planes() {
     let notices = messages.take_notices();
     let counts = counts(&notices);
     eprintln!("a memoryless fetch and resolve's notices on {device}: {counts:?}");
-    if super::reads_planes(&lane) {
-        for kind in [Degradation::MemorylessBacked, Degradation::RenderPassSplit] {
-            assert!(!counts.contains_key(&kind), "{kind:?} on {device}");
+    assert!(
+        !counts.contains_key(&Degradation::ShaderResolve),
+        "shader-resolve on {device}"
+    );
+    drop(cache);
+    quiet(lane, &messages);
+}
+
+/// A 4x `RGBA8Unorm` target the pass clears to 0, fetches once by `msf_fetch_sample` (each sample
+/// (1, s, 0, 0), clamped) and resolves into its sRGB twin: `MultisampleResolve` resolves the
+/// samples as `StoreAndMultisampleResolve` does, Metal's answer either way (the store does not
+/// change what is resolved). The twin's resolve is the crate-owned one, which reads the
+/// attachment itself (`color_resolve.rs`), so where the sample planes hold the samples as the pass
+/// ends they merge back before it under either action.
+#[test]
+fn a_twin_resolve_of_a_fetched_attachment_reads_its_samples() {
+    let (messages, cache, lane) = lane();
+    let device = lane.device.name().to_owned();
+    let fetch = library(&lane, "msf_fetch_ms");
+    let vertices = &library(&lane, "rt6_resolves");
+    let pf = PixelFormat::RGBA8Unorm;
+    match pipeline(&lane, vertices, (&fetch, "msf_fetch_sample"), &[pf], 4) {
+        Ok(fetching) => {
+            let zero = ClearColor::new(0.0, 0.0, 0.0, 0.0);
+            let resolve = |store| {
+                let msaa = target(&lane, pf);
+                let usage = TextureUsage::RENDER_TARGET;
+                let resolved = lane.texture(PixelFormat::RGBA8UnormSRGB, ONE, usage);
+                let targets = [(&msaa, zero, store)];
+                steps(&lane, &pass(&targets, Some(&resolved)), &[&fetching])
+                    .map(|()| lane.read(&resolved, (0, 0), 4, BlitOption::None))
+            };
+            let stored = resolve(StoreAction::StoreAndMultisampleResolve)
+                .unwrap_or_else(|error| panic!("a stored twin resolve on {device}: {error}"));
+            // Each pixel's red is 255 in every sample and its blue 0.
+            assert!(
+                stored.chunks(4).all(|t| t[0] == 0xff && t[2] == 0),
+                "a stored twin resolve on {device}: {stored:02x?}"
+            );
+            let name = "of a fetched RGBA8Unorm resolved into its sRGB twin alone, 4x";
+            multisampled(
+                &lane,
+                name,
+                resolve(StoreAction::MultisampleResolve),
+                &stored,
+            );
         }
+        Err(error @ Error::Unsupported(_)) => {
+            eprintln!("refused: a fetched twin resolve on {device}: {error}");
+        }
+        Err(error) => panic!("a fetched twin resolve on {device}: {error}"),
     }
+    let _ = messages.take_notices();
     drop(cache);
     quiet(lane, &messages);
 }

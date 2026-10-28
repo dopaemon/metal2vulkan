@@ -57,7 +57,6 @@ fn the_forms_are_the_ones_metal_multisamples() {
         assert_eq!(rules.extended(), Some(form));
         assert_eq!(rules.channels(), [None; 4]);
         assert_eq!(rules.raw_format(), rules.format());
-        assert!(rules.resolves(2) && rules.resolves(4) && rules.resolves(8));
         assert_eq!(
             rules.exact(),
             form == ExtendedRange::Bgr10 { srgb: false },

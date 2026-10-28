@@ -41,7 +41,6 @@ mod completion;
 mod completion_here;
 mod completion_seen;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod compressed_rows_out;
 mod compute;
 mod contexts;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -437,12 +437,8 @@ fn bfloat_load(f: &mut FunctionBuilder<'_>, code: Value) -> BResult<Value> {
 
 /// `BGRA10_XR`'s `word`, the `odd` (a `bool`) word of its texel, with each field's low six bits
 /// cleared and (the odd word's high field) alpha's code clamped to `[384, 894]`: Metal's tile
-/// store and its blits through a compressed texture alike (`compressed_blit.rs`).
-pub(super) fn extended_range_fields(
-    f: &mut FunctionBuilder<'_>,
-    word: Value,
-    odd: Value,
-) -> BResult<Value> {
+/// store.
+fn extended_range_fields(f: &mut FunctionBuilder<'_>, word: Value, odd: Value) -> BResult<Value> {
     let mask = u32_value(f, FIELDS_MASK)?;
     let even = f.binary(BinOp::BitwiseAnd, word, mask)?;
     // The odd word: red's field, then alpha's code clamped.

@@ -3287,7 +3287,7 @@ impl Device {
                 Some(FreshDepth::Nan) => None,
                 _ => Some(Pattern::DepthStencil(vk::ClearDepthStencilValue {
                     depth: match depth {
-                        Some(FreshDepth::Value(value)) => clear_value::depth(pf, value),
+                        Some(FreshDepth::Value(value)) => clear_value::depth(value),
                         _ => 0.0,
                     },
                     stencil: stencil.map_or(0, clear_value::stencil),

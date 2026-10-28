@@ -657,9 +657,6 @@ surface! {
         fn capture_settle_module;
         struct CaptureSettleModule N;
         enum TexelWords N;
-        fn compressed_blit_module;
-        enum CompressedBlit N;
-        struct CompressedBlitModule N;
         struct BlockDecodeModule N;
         fn astc_decode_module;
         struct AstcDecode N;

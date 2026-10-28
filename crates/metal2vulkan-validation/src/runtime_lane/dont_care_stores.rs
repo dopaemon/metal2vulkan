@@ -27,7 +27,9 @@
 //! the stencil replaced by 0x41.
 
 use super::clear_reach::{lane, quiet, Draw, Lane, Shape, AREA, DRAWN, OLD, PLAIN, SIDE};
-use super::degrade_notices::{assert_made_once, forced, resolve_kind, shared_in_system_memory};
+use super::degrade_notices::{
+    assert_made_once, forced, resolve_kind, shared_in_system_memory, tie_cleared,
+};
 use super::{buffer_with, Messages, WAIT};
 use metal2vulkan::device::{DriverFact, VkExtension};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
@@ -393,12 +395,13 @@ fn dont_care_stores_keep_the_texels_where_the_driver_stores_them_as_metal_s() {
         (&[], (combined, combined), 1),
         (&[], (depth, None), 4),
     ];
-    let first = made(
+    let mut first = made(
         &lane,
         &pipelines,
         &[RGBA8, PixelFormat::BGRA8UnormSRGB],
         true,
     );
+    first.extend(tie_cleared());
     announces(&messages, "the kept passes", !metals(&lane), &first);
     quiet(lane, &messages);
 }
@@ -445,6 +448,7 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
             Degradation::RenderPassSplit,
             scope == BarrierScope::BUFFERS,
         )]));
+        first.extend(tie_cleared());
         announces(&messages, case, true, &first);
         quiet(lane, &messages);
     }
@@ -471,7 +475,8 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
                 "are not kept"
             }
         );
-        let first = made(&lane, &[], &[RGBA8], true);
+        let mut first = made(&lane, &[], &[RGBA8], true);
+        first.extend(tie_cleared());
         announces(&messages, case, true, &first);
         quiet(lane, &messages);
     }
@@ -507,7 +512,8 @@ fn dont_care_stores_a_driver_may_store_otherwise_are_announced() {
                     "are not kept"
                 }
             );
-            let first = made(&lane, &[(&[RGBA8], (None, None), 4)], &[RGBA8], true);
+            let mut first = made(&lane, &[(&[RGBA8], (None, None), 4)], &[RGBA8], true);
+            first.extend(tie_cleared());
             announces(&messages, case, true, &first);
         } else {
             eprintln!("{case} on {}: no sample locations", lane.device.name());
@@ -539,7 +545,8 @@ fn a_hidden_depth_announces_no_dont_care_store() {
         DRAWN.repeat((SIDE * SIDE) as usize),
         "hidden_depth: the draw passes the hidden depth of 1.0"
     );
-    let first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
+    let mut first = made(&lane, &[(&[RGBA8], (None, None), 1)], &[], true);
+    first.extend(tie_cleared());
     announces(&messages, "hidden_depth", false, &first);
     quiet(lane, &messages);
 }

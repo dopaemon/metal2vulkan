@@ -21,7 +21,7 @@ fn attachment(index: u32, load: LoadAction, store: StoreAction) -> PlanesAttachm
         index,
         load,
         store,
-        exact_resolve: false,
+        planes_resolve: false,
     }
 }
 
@@ -47,22 +47,22 @@ fn the_first_instance_loads_the_planes_and_the_last_stores_them() {
     }
 }
 
-/// An attachment resolved by the exact resolve, which reads the planes, merges after the last
-/// instance only where Metal keeps its samples: not for `MultisampleResolve`, for
+/// An attachment the crate-owned resolve reads from the planes merges after the last instance
+/// only where Metal keeps its samples: not for `MultisampleResolve`, for
 /// `StoreAndMultisampleResolve`. Where the last instance draws it, nothing merges after.
 #[test]
-fn an_exact_resolve_reads_the_planes_without_a_merge() {
+fn a_resolve_from_the_planes_reads_them_without_a_merge() {
     for (store, after) in [
         (StoreAction::MultisampleResolve, vec![]),
         (StoreAction::StoreAndMultisampleResolve, vec![Merge(0)]),
     ] {
-        let exact = PlanesAttachment {
-            exact_resolve: true,
+        let from_planes = PlanesAttachment {
+            planes_resolve: true,
             ..attachment(0, LoadAction::Clear, store)
         };
-        let steps = ordered_steps(&[exact], &[&[0]]);
+        let steps = ordered_steps(&[from_planes], &[&[0]]);
         assert_eq!(steps, vec![vec![Clear(0)], after], "{store:?}");
-        let steps = ordered_steps(&[exact], &[&[0], &[]]);
+        let steps = ordered_steps(&[from_planes], &[&[0], &[]]);
         assert_eq!(
             steps,
             vec![vec![Clear(0)], vec![Merge(0)], vec![]],

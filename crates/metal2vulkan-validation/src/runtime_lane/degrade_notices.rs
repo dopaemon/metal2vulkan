@@ -1992,6 +1992,15 @@ pub(super) fn expected_once(
     expected
 }
 
+/// The note a device announces at its first clear of a color attachment to a value at a rounding
+/// question, which the device converts its own way (`device-color-conversion`): such as 0.5 in an
+/// 8-bit unorm channel, 127.5 codes, a tie, or any value strictly between 0 and 1 in an sRGB
+/// one, whose encode Vulkan leaves to the device. A lane whose pipelines record the note has it
+/// already (`made_render_kinds`); MoltenVK's record none.
+pub(super) fn tie_cleared() -> BTreeSet<Degradation> {
+    forced(&[(Degradation::DeviceColorConversion, true)])
+}
+
 /// The kinds of `kinds` whose condition holds: each paired with the device fact, or the test's
 /// own step, that forces the runtime to announce it.
 pub(super) fn forced(kinds: &[(Degradation, bool)]) -> BTreeSet<Degradation> {

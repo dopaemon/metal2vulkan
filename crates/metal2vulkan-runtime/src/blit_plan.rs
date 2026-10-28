@@ -214,28 +214,6 @@ fn layout_rows(layout: &BufferLayout, s: &Shape) -> Option<Vec<Range<u64>>> {
     Some(rows)
 }
 
-/// The rows of the buffer that a copy [`plan_buffer_copy`] planned (of `region` of a texture
-/// presenting `record`, in `unit`s, laid out as `layout`) reads or writes, in the order it moves
-/// them: where plain Metal places them for a layout off Metal's rules ([`placed_rows`]), else the
-/// layout's own. Of a planned copy every row lies in the buffer.
-pub(super) fn copied_rows(
-    record: &ViewRecord,
-    region: &TextureRegion,
-    unit: &CopyUnit,
-    layout: &BufferLayout,
-    into_texture: bool,
-) -> Result<Vec<Range<u64>>, CopyProblem> {
-    let s = shape(region.size, unit);
-    if placed(record.pixel_format) && off_rules(layout, &s, unit) {
-        let starts = placed_rows(layout, &s, unit, into_texture)?;
-        return (starts.into_iter())
-            .map(|start| Some(start..start.checked_add(s.row_bytes)?))
-            .collect::<Option<_>>()
-            .ok_or(CopyProblem::BufferRange);
-    }
-    layout_rows(layout, &s).ok_or(CopyProblem::BufferRange)
-}
-
 /// Whether Vulkan takes `offset` as a buffer-image copy's buffer offset for `unit` (a multiple of
 /// the texel block, and of 4 for a depth/stencil aspect).
 fn vulkan_offset(offset: u64, unit: &CopyUnit) -> bool {

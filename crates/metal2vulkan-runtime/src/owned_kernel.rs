@@ -36,8 +36,8 @@ use crate::device::functions::Vk;
 use crate::shader_cache::driver::Making;
 use ash::vk;
 use metal2vulkan::bind::{
-    CompressedBlit, MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead,
-    ShadowTexelView, TessellationScanKernel, TexelWords, YCbCrCodes, YCbCrConversion,
+    MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead, ShadowTexelView,
+    TessellationScanKernel, TexelWords, YCbCrCodes, YCbCrConversion,
 };
 use metal2vulkan::metal::format::ExtendedRange;
 use metal2vulkan::metal::PixelFormat;
@@ -170,9 +170,6 @@ pub(super) enum OwnedModule {
     /// `bind::tiled_texels_module`: a heap texture's elements moved between its image's tight
     /// copy and Metal's tiles in the heap's bytes (`texture/heap_tiled.rs`).
     TiledTexels,
-    /// `bind::compressed_blit_module` of one rule: the texels a blit wrote rewritten as Metal's
-    /// blit through a losslessly compressed texture writes them (`compressed_blit.rs`).
-    CompressedBlit(CompressedBlit),
     /// `bind::capture_assembly_module`: a pass's capture records assembled into its primitives
     /// (`render/capture.rs`).
     CaptureAssembly,
@@ -463,12 +460,6 @@ impl OwnedModule {
                     .map_err(Error::Compile)?;
                 Ok((module.spirv.to_vec(), 3, 0))
             }
-            OwnedModule::CompressedBlit(rule) => {
-                let device = device.compile_device();
-                let module = metal2vulkan::bind::compressed_blit_module(device, rule)
-                    .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 1, 0))
-            }
             OwnedModule::CaptureAssembly => {
                 let module = metal2vulkan::bind::capture_assembly_module(device.compile_device())
                     .map_err(Error::Compile)?;
@@ -596,7 +587,6 @@ pub(super) struct OwnedKernels {
     ycbcr_write: Option<OwnedKernel>,
     unused_bits: HashMap<(PixelFormat, TexelWords), OwnedKernel>,
     tiled_texels: Option<OwnedKernel>,
-    compressed_blits: HashMap<CompressedBlit, OwnedKernel>,
     capture_assembly: Option<OwnedKernel>,
     tile_reach: Option<OwnedKernel>,
     capture_settle: Option<OwnedKernel>,
@@ -655,7 +645,6 @@ impl OwnedKernels {
         .chain(self.ycbcr_converts.values().copied())
         .chain(self.ycbcr_samples.values().copied())
         .chain(self.unused_bits.values().copied())
-        .chain(self.compressed_blits.values().copied())
         .chain(self.extended_shadow_loads.values().copied())
         .chain(self.twin_decodes.values().copied())
         .chain(self.tessellation_scans.values().copied())
@@ -709,7 +698,6 @@ impl OwnedKernels {
             OwnedModule::UnusedBits(format, words) => {
                 self.unused_bits.get(&(format, words)).copied()
             }
-            OwnedModule::CompressedBlit(rule) => self.compressed_blits.get(&rule).copied(),
             OwnedModule::ExtendedShadowLoad(form) => self.extended_shadow_loads.get(&form).copied(),
             OwnedModule::TwinDecode(decode) => self.twin_decodes.get(&decode).copied(),
             OwnedModule::TessellationScan(kernel) => self.tessellation_scans.get(&kernel).copied(),
@@ -749,9 +737,6 @@ impl OwnedKernels {
             }
             OwnedModule::UnusedBits(format, words) => {
                 self.unused_bits.insert((format, words), kernel);
-            }
-            OwnedModule::CompressedBlit(rule) => {
-                self.compressed_blits.insert(rule, kernel);
             }
             OwnedModule::ExtendedShadowLoad(form) => {
                 self.extended_shadow_loads.insert(form, kernel);
@@ -804,7 +789,6 @@ impl OwnedKernels {
             | OwnedModule::YCbCrConvert(..)
             | OwnedModule::YCbCrSample(..)
             | OwnedModule::UnusedBits(..)
-            | OwnedModule::CompressedBlit(_)
             | OwnedModule::ExtendedShadowLoad(_)
             | OwnedModule::TwinDecode(_)
             | OwnedModule::TessellationScan(_) => return None,

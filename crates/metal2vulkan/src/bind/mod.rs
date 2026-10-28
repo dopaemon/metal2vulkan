@@ -101,11 +101,8 @@
 //! does. The tiles a pass's draws reach, which Metal's tile store writes back, are the mask one
 //! dispatch of [`tile_reach_module`] bins its captured primitives into: [`capture_assembly_module`]
 //! assembles them from a pass's capture draws' records, and [`capture_settle_module`] widens the
-//! mask to every tile where the binning counted a primitive it cannot answer. A GPU blit that reads
-//! or writes a texture Metal keeps losslessly compressed writes the texels Metal's compression
-//! leaves of the formats whose bytes it changes ([`CompressedBlit`]), which
-//! [`compressed_blit_module`] of the rule rewrites after the copy. An ASTC LDR texture on a
-//! device without its block is read through a twin of Metal's decode of its blocks
+//! mask to every tile where the binning counted a primitive it cannot answer. An ASTC LDR texture
+//! on a device without its block is read through a twin of Metal's decode of its blocks
 //! ([`AstcDecode`], in the texels [`AstcTexels`] names), which [`astc_decode_module`] writes from
 //! the blocks each write left, each decode module of [`BlockDecodeModule`]'s shape; a
 //! PVRTC texture on a device without its format through a twin of its texels' codes
@@ -138,7 +135,6 @@ pub(crate) mod block_decode;
 pub(crate) mod capture_assembly;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
-pub(crate) mod compressed_blit;
 pub(crate) mod depth_stencil_copy;
 pub(crate) mod depth_stencil_resolve;
 pub(crate) mod dispatch;
@@ -207,7 +203,6 @@ pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
     ResolveSource, SRGB_RESOLVE_LINEAR, SRGB_RESOLVE_THRESHOLDS,
 };
-pub use compressed_blit::{compressed_blit_module, CompressedBlit, CompressedBlitModule};
 pub use depth_stencil_copy::{
     depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
     DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,

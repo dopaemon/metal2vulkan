@@ -1322,9 +1322,9 @@ fn multisample_samples_lie_where_metal_draws_them() {
     }
 }
 
-/// Each clear color `fresh_pattern` gives converts to its texel exactly, as Metal's conversion
-/// does (`clear_value::tests::texel_bytes`, which the runtime's clears match): a clear writes the
-/// pattern. Every pattern is of a whole number of bytes a texel, and every format with a pattern
+/// Each clear color `fresh_pattern` gives converts to its texel on every device: no rounding of
+/// it is in question (`clear_value::rounds_apart`), and Metal's conversion
+/// (`clear_value::tests::texel_bytes`) writes the pattern. Every pattern is of a whole number of bytes a texel, and every format with a pattern
 /// but a clear color is one whose pattern holds a NaN or an extended-range code.
 #[test]
 fn fresh_patterns_clear_colors_write_their_texels() {
@@ -1337,6 +1337,10 @@ fn fresh_patterns_clear_colors_write_their_texels() {
             }) => {
                 let bytes = crate::clear_value::tests::texel_bytes(pf, color);
                 assert_eq!(bytes.as_deref(), Some(texel), "{pf:?}: {color:?}");
+                assert!(
+                    !crate::clear_value::rounds_apart(pf, color),
+                    "{pf:?}: {color:?}"
+                );
                 cleared += 1;
             }
             Some(FreshPattern::Color { texel, color: None }) => {

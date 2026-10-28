@@ -832,8 +832,10 @@ pub enum PrecisionNote {
     /// the blend gives every NaN as `0x7fc00000`, and the device's store converts it (ANV stores
     /// `0xfe00`). Also recorded by a `float` read of a heap's texture buffer on a device without
     /// Metal's sampler: Metal hands back a half-float texel's NaN as `0x7fc00000`, and the handle
-    /// carries no class to convert it by. Validation derives no tolerance and no explanation from
-    /// it, as for `DeviceDenormals`.
+    /// carries no class to convert it by. The runtime announces it too for a GPU blit through an
+    /// `RG11B10Float` texture Metal keeps losslessly compressed: Metal's compression makes a NaN
+    /// field the quiet NaN (`0x7e0`, `0x3f0`), and the device's copy keeps its bits. Validation
+    /// derives no tolerance and no explanation from it, as for `DeviceDenormals`.
     DeviceNanEncoding,
     /// The device compares a depth texture's texels (a sample or a gather with comparison) on a
     /// device without `VK_EXT_depth_range_unrestricted` enabled whose driver is not measured to
@@ -1068,6 +1070,14 @@ pub enum PrecisionNote {
     /// (`metal::format::WordAttachment`), which under fast math also sums a few states otherwise
     /// than Metal (3,527 of 94,732,288 channels measured a code apart, none further). `RGBA8Unorm`
     /// and `RGB10A2Unorm` hold their codes there, as the device does.
+    ///
+    /// Also (the runtime announces it): a render pass clears a normalized, sRGB, packed 16-bit,
+    /// half or small-float color attachment to a color whose conversion is in question. The
+    /// device converts the clear color, which Vulkan asks it to round to nearest, leaving a tie,
+    /// an sRGB encode and a float's rounding to it, where Metal's clear rounds each channel to
+    /// nearest, a tie to even (a packed 16-bit channel through `half`) and truncates a small
+    /// float's and a shared exponent's mantissas. A normalized channel lies within 1/1024 of a
+    /// midpoint between two codes there, and stores one of the two.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.

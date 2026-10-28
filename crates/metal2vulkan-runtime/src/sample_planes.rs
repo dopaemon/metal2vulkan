@@ -22,7 +22,10 @@
 //!   sample-rate pass of `bind::planes_merge_modules` into the attachment, whose invocations each
 //!   write their own sample. A pass whose last instance leaves out an attachment that resolves
 //!   runs one more instance, of no draws, after the merge: the pass's resolve (`render.rs`).
-//!   Where Metal stores the attachment `DontCare`, nothing merges after the pass.
+//!   Where Metal stores the attachment `DontCare`, nothing merges after the pass, nor where it
+//!   only resolves an extended-range attachment, which the crate-owned resolve reads from the
+//!   planes (`color_resolve.rs`); a resolve into the attachment's sRGB twin reads the attachment,
+//!   after the merge.
 //!
 //! The fetching draws' subpass leaves the attachment out; where it would then have no
 //! attachment, it keeps the first such one, `DONT_CARE` and written by no pipeline, so that it
@@ -928,7 +931,10 @@ pub(super) fn steps(layout: &PassLayout, shapes: &[&PassShape]) -> Vec<Vec<Plane
                 index: index as u32,
                 load: color.load,
                 store: color.store,
-                exact_resolve: color.resolve.as_ref().is_some_and(|r| r.shader.is_some()),
+                planes_resolve: color
+                    .resolve
+                    .as_ref()
+                    .is_some_and(|r| r.shader.is_some() && !r.twin),
             })
         })
         .collect();
@@ -943,9 +949,10 @@ pub(super) struct PlanesAttachment {
     pub(super) index: u32,
     pub(super) load: LoadAction,
     pub(super) store: StoreAction,
-    /// It resolves by the exact resolve (`color_resolve.rs`), which reads the planes where they
-    /// hold its samples as the pass ends.
-    pub(super) exact_resolve: bool,
+    /// It resolves by the crate-owned resolve from the planes where they hold its samples as the
+    /// pass ends (`color_resolve.rs`): an extended-range attachment's. A resolve into the
+    /// attachment's sRGB twin reads the attachment itself, so its planes merge back first.
+    pub(super) planes_resolve: bool,
 }
 
 /// The planes steps of `attachments` in a pass whose render pass instances leave out of the
@@ -954,8 +961,8 @@ pub(super) struct PlanesAttachment {
 /// leaves it out: before the first instance that does, the split (at the pass's first instance,
 /// its load action on the planes); before the next that includes it, the merge; and after the
 /// last instance, the merge where Metal keeps the samples (`Store`, `StoreAndMultisampleResolve`)
-/// or the device resolves them (`MultisampleResolve` without the exact resolve, which reads the
-/// planes themselves, `color_resolve.rs`).
+/// or a resolve reads the attachment (`MultisampleResolve` without the crate-owned resolve from
+/// the planes, `color_resolve.rs`).
 pub(super) fn ordered_steps(
     attachments: &[PlanesAttachment],
     storages: &[&[u32]],
@@ -986,7 +993,7 @@ pub(super) fn ordered_steps(
         .filter(|attachment| {
             let merged = match attachment.store {
                 StoreAction::DontCare => false,
-                StoreAction::MultisampleResolve => !attachment.exact_resolve,
+                StoreAction::MultisampleResolve => !attachment.planes_resolve,
                 _ => true,
             };
             before.is_some_and(|last| last.contains(&attachment.index)) && merged

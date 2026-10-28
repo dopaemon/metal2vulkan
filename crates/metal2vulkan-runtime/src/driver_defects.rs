@@ -136,17 +136,16 @@ pub(super) struct Affected {
 ///   Metal texture, which Metal keeps losslessly compressed where its usage allows
 ///   (`texture/heap_tiled.rs`'s `metal_compresses`; an image of neither `STORAGE` usage nor
 ///   `MUTABLE_FORMAT`), and Metal's blits of a compressed `RG11B10Float` or `RGB9E5Float`
-///   texture write other bytes than they read (`bind::CompressedBlit`), so a CPU copy of a
-///   `Shared` texture of either format reads back NaNs made quiet and shared exponents
-///   renormalized, where Metal's `replaceRegion` and `getBytes` keep the bytes. Measured on
+///   texture write other bytes than they read (`compressed_blit.rs`: NaNs made quiet, shared
+///   exponents renormalized), so a CPU copy of a `Shared` texture of either format reads them
+///   back so, where Metal's `replaceRegion` and `getBytes` keep the bytes. Measured on
 ///   1.4.1 (driverVersion 10401) on an M4 under macOS 27.0.1
 ///   (`runtime_lane::compressed_blits`): known broken through 1.4.1. The
 ///   compression is Metal's, so no MoltenVK release is expected to fix it, but a probe of a
 ///   later one decides. Nothing is refused: the image of such a texture a CPU copy reaches, and
 ///   of a device's own one without `allowGPUOptimizedContents` (whose GPU blits keep the bytes
 ///   on Metal), is made of `PixelFormatView` usage (`compressed_blit::copy_exact_usage`), which
-///   Metal keeps uncompressed, and the runtime rewrites what its blits write itself
-///   (`compressed_blit.rs`).
+///   Metal keeps uncompressed, so its copies keep the bytes as every other device's do.
 ///
 /// `MultisampledCopiesConvertFloatNans`:
 /// - Mesa's RADV (`MESA_RADV`): `gfx_or_compute_copy_image` in `radv_meta_copy.c` gives the

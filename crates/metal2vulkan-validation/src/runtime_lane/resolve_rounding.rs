@@ -1278,15 +1278,16 @@ fn a_maps_form_pass_resolves_bgra8_as_announced() {
 }
 
 /// A 4x sRGB texture of `RenderTarget` usage alone, cleared in a pass of no draws that resolves
-/// it, resolves to the clear's codes, the bytes Metal stores for that clear (`renders.rs`'
-/// `COLOR_CLEARS`): every sample holds the clear, which Metal's rule and the device's average
-/// give back, whatever form the device keeps the clear in.
+/// it, resolves to the clear's codes: the bytes the device's clear of a 1x texture of the format
+/// stores (Metal's bytes, `renders.rs`' `COLOR_CLEARS`, where its conversion is Metal's, printed),
+/// as every sample holds the clear, which Metal's rule and the device's average give back,
+/// whatever form the device keeps the clear in.
 #[test]
 fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
     let (messages, _cache, lane) = lane();
     let name = lane.device.name().to_owned();
     let side = 64u32;
-    for (pf, [r, g, b, a], bytes) in [
+    for (pf, [r, g, b, a], metal) in [
         (
             PixelFormat::RGBA8UnormSRGB,
             [0.5, 0.214, 0.0031308, 1.0],
@@ -1308,22 +1309,39 @@ fn cleared_srgb_attachments_resolve_to_the_clear_s_codes() {
             d.resource_options = ResourceOptions::private();
             lane.device.new_texture(&d).unwrap()
         };
-        let (msaa, resolved) = (texture(4), texture(1));
-        let mut pass = RenderPassDescriptor::new();
-        let target = &mut pass.color_attachments[0];
-        target.texture = Some(msaa);
-        target.load_action = LoadAction::Clear;
-        target.clear_color = ClearColor::new(r, g, b, a);
-        target.store_action = StoreAction::MultisampleResolve;
-        target.resolve_texture = Some(resolved.clone());
-        let command_buffer = lane.queue.command_buffer().unwrap();
-        let encoder = command_buffer.render_command_encoder(&pass).unwrap();
-        encoder.end_encoding().unwrap();
-        command_buffer.commit().unwrap();
-        command_buffer
-            .wait_until_completed_for(super::WAIT)
-            .unwrap();
-        assert_eq!(command_buffer.error(), None);
+        let (msaa, resolved, single) = (texture(4), texture(1), texture(1));
+        let clear = |texture: &Texture, resolve: Option<&Texture>| {
+            let mut pass = RenderPassDescriptor::new();
+            let target = &mut pass.color_attachments[0];
+            target.texture = Some(texture.clone());
+            target.load_action = LoadAction::Clear;
+            target.clear_color = ClearColor::new(r, g, b, a);
+            target.store_action = match resolve {
+                Some(_) => StoreAction::MultisampleResolve,
+                None => StoreAction::Store,
+            };
+            target.resolve_texture = resolve.cloned();
+            let command_buffer = lane.queue.command_buffer().unwrap();
+            let encoder = command_buffer.render_command_encoder(&pass).unwrap();
+            encoder.end_encoding().unwrap();
+            command_buffer.commit().unwrap();
+            command_buffer
+                .wait_until_completed_for(super::WAIT)
+                .unwrap();
+            assert_eq!(command_buffer.error(), None);
+        };
+        clear(&single, None);
+        clear(&msaa, Some(&resolved));
+        let cleared = super::renders::blit_read(&lane.device, &single, 4);
+        let bytes: [u8; 4] = cleared[..4].try_into().unwrap();
+        eprintln!(
+            "cleared {pf:?} on {name}: {bytes:02x?}, Metal's {metal:02x?}{}",
+            if bytes == metal {
+                ""
+            } else {
+                " (device-color-conversion)"
+            }
+        );
         let read = super::renders::blit_read(&lane.device, &resolved, 4);
         let wrong = read.chunks(4).filter(|texel| *texel != bytes).count();
         eprintln!("cleared resolve {pf:?} x4 on {name}: {wrong} texels other than the clear's");

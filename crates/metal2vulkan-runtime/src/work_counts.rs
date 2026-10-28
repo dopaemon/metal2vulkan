@@ -65,7 +65,6 @@ pub(crate) struct Counters {
     addressable_buffers_made: AtomicU64,
     mipmaps_filtered: AtomicU64,
     mipmap_first_levels_fetched: AtomicU64,
-    compressed_rows_rewritten: AtomicU64,
     pipelines_pooled: AtomicU64,
     residual_form_draws: AtomicU64,
     residual_form_makings: AtomicU64,
@@ -845,13 +844,6 @@ impl Counters {
     pub(crate) fn mipmap_first_level_fetched(&self) {
         self.mipmap_first_levels_fetched
             .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// A blit rewrote `rows` rows of a buffer's bytes as Metal's blit through a texture it keeps
-    /// compressed writes them (`compressed_blit.rs`, `compressed_rows`).
-    pub(crate) fn compressed_rows_rewritten(&self, rows: u64) {
-        self.compressed_rows_rewritten
-            .fetch_add(rows, Ordering::Relaxed);
     }
 
     /// A draw handed the making of its `VkPipeline` to the device's pool and went on
@@ -2882,10 +2874,6 @@ pub struct WorkCounts {
     /// `generate_mipmaps` calls that read the first level in place through a sampled view, not
     /// copied in (`mipmap_filter.rs`): the lane that measures the fetch holds itself to them.
     pub mipmap_first_levels_fetched: u64,
-    /// Rows of a buffer's bytes that a blit out of (or between buffer-backed views of) a texture
-    /// Metal keeps compressed rewrote as Metal's blit writes them (`compressed_blit.rs`): the
-    /// device test of a copy out at an offset off the texel holds itself to them.
-    pub compressed_rows_rewritten: u64,
     /// Draws that handed the making of their `VkPipeline` to the device's pool and went on,
     /// rather than make it at the draw.
     pub pipelines_pooled: u64,
@@ -4767,7 +4755,6 @@ impl Device {
             mipmap_first_levels_fetched: counters
                 .mipmap_first_levels_fetched
                 .load(Ordering::Relaxed),
-            compressed_rows_rewritten: counters.compressed_rows_rewritten.load(Ordering::Relaxed),
             pipelines_pooled: counters.pipelines_pooled.load(Ordering::Relaxed),
             residual_form_draws: counters.residual_form_draws.load(Ordering::Relaxed),
             residual_form_makings: counters.residual_form_makings.load(Ordering::Relaxed),

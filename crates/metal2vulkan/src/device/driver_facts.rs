@@ -870,15 +870,17 @@ pub enum DriverFact {
     /// heap.
     DepthStencilImagesLieApart,
     /// A render pass's `AVERAGE` resolve of a multisampled colour attachment of 2 or 4 samples
-    /// writes Metal's measured resolve for every format with a crate-owned exact resolve
-    /// ([`ColorResolveFormat`](crate::bind::ColorResolveFormat)): unorm's `(sum + n/2) / n`,
-    /// snorm's `floor((2·sum + n) / 2n)`, sRGB's mean of 12-bit linear values encoded by Metal's
-    /// thresholds, and `float`'s flushed sequential sum times `1/n`. Vulkan leaves the average's
-    /// rounding to the implementation. The runtime resolves such an attachment in its pass by the
-    /// device's average on every driver; elsewhere, and at 8 samples or more, it announces it
-    /// (`color_resolve.rs`).
-    /// The fact holds for every colour format the driver resolves, those without a crate-owned
-    /// rule too (half floats, packed 16-bit, `RG11B10Float`, `RGB9E5Float`): MoltenVK 1.4.1
+    /// writes Metal's measured resolve: unorm's `(sum + n/2) / n`, snorm's
+    /// `floor((2·sum + n) / 2n)`, sRGB's mean of 12-bit linear values encoded by Metal's
+    /// thresholds, and `float`'s flushed sequential sum times `1/n` (the rules
+    /// `runtime_lane::resolve_rounding` measures each driver's average against). Vulkan leaves the
+    /// average's rounding to the implementation. The runtime resolves every colour attachment but
+    /// an extended-range one and one resolving into its format's sRGB twin by the device's average
+    /// on every driver, a fetching pass's sample planes merged back first; where the fact does not
+    /// hold, and at 8 samples or more, it announces it (`device-rounded-resolve`,
+    /// `color_resolve.rs`).
+    /// The fact holds for every colour format the driver resolves, those without a rule above too
+    /// (half floats, packed 16-bit, `RG11B10Float`, `RGB9E5Float`): MoltenVK 1.4.1
     /// resolves a subpass's colour attachment by Metal's own multisample resolve store action
     /// wherever the Metal pixel format resolves (`kMVKMTLFmtCapsResolve`, which every one of these
     /// formats has on Apple's GPUs), so its average is Metal's resolve by construction. The
