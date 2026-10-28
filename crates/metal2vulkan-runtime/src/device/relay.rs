@@ -50,6 +50,7 @@
 
 use super::functions::Functions;
 use super::lock;
+use super::submit_stalls::{Caller, Uses};
 use crate::exit_guard::{self, Call};
 use crate::loader_word::LoaderWord;
 use ash::vk::{self, Handle};
@@ -382,7 +383,8 @@ impl super::DeviceShared {
     /// batch that signals the queue's timeline to `value` notes it once submitted (the exit
     /// hook's value, and where freed memory waits for the batches in flight, theirs, under the
     /// gate's read lock: `freed_memory.rs`). The time `f` takes, the driver's, is counted
-    /// (`WorkCounts::batch_submit_nanos`).
+    /// (`WorkCounts::batch_submit_nanos`), and the call counted in the queue's place in its
+    /// driver's period of stalls (`submit_stalls.rs`): `f` makes one signalling call.
     pub(crate) fn submit_logged(
         &self,
         (queue, value): (usize, Option<u64>),
@@ -393,14 +395,19 @@ impl super::DeviceShared {
         let slot = &self.queues[queue];
         let logged = fence.zip(slot.flights.get());
         let parking = self.parking.get();
-        slot.with(|vk_queue| {
+        let (submitted, behind) = slot.with_counted(Caller::Work, |vk_queue, period| {
             let _gate = parking.map(|parking| parking.submitting());
             if let Some((fence, flights)) = logged {
                 flights.push(fence, By::Batch(Arc::clone(failed)));
             }
             let entered = crate::gpu_time::host_nanos();
             let submitted = f(vk_queue);
-            (self.counts).batch_submitted_in(crate::gpu_time::host_nanos().saturating_sub(entered));
+            let end = crate::gpu_time::host_nanos();
+            let nanos = end.saturating_sub(entered);
+            (self.counts).batch_submitted_in(nanos);
+            if submitted.is_ok() && period.called(Caller::Work, nanos, end) {
+                self.counts.submit_stall_on_work();
+            }
             match (&submitted, logged, value) {
                 (Err(_), Some((fence, flights)), _) => flights.unpush(fence),
                 (Ok(()), _, Some(value)) => {
@@ -412,7 +419,11 @@ impl super::DeviceShared {
                 _ => {}
             }
             submitted
-        })
+        });
+        if let Some(waited) = behind {
+            self.counts.submit_behind_idle_stall(waited);
+        }
+        submitted
     }
 
     /// `f` with `VkQueue` `queue` under its lock: a use outside a batch, `by`'s. Where the
@@ -423,13 +434,38 @@ impl super::DeviceShared {
     /// such marks before `f` runs, which that submission signals too (`freed_memory.rs`); should
     /// the submission fail, the value counts as reached once the queue is idle. Each reach of the
     /// device is a section of the exit guard of its own (`f` runs outside one: it may be the
-    /// program's); once the process is exiting no mark is made.
-    pub(crate) fn use_queue<R>(&self, queue: usize, by: By, f: impl FnOnce(vk::Queue) -> R) -> R {
+    /// program's); once the process is exiting no mark is made. A use of `uses`
+    /// [`Uses::OneSignalling`] is counted in the queue's place in its driver's period of stalls
+    /// (`submit_stalls.rs`); any other, or one with a mark, forgets the place.
+    pub(crate) fn use_queue<R>(
+        &self,
+        queue: usize,
+        by: By,
+        uses: Uses,
+        f: impl FnOnce(vk::Queue) -> R,
+    ) -> R {
         let slot = &self.queues[queue];
         let flights = slot.flights.get();
         let parking = (self.parking.get()).filter(|_| matches!(by, By::Program));
         if flights.is_none() && parking.is_none() {
-            return slot.with(f);
+            return match uses {
+                Uses::Unknown => slot.with(f),
+                Uses::OneSignalling => {
+                    let (used, behind) = slot.with_counted(Caller::Work, |vk_queue, period| {
+                        let entered = crate::gpu_time::host_nanos();
+                        let used = f(vk_queue);
+                        let end = crate::gpu_time::host_nanos();
+                        if period.called(Caller::Work, end.saturating_sub(entered), end) {
+                            self.counts.submit_stall_on_work();
+                        }
+                        used
+                    });
+                    if let Some(waited) = behind {
+                        self.counts.submit_behind_idle_stall(waited);
+                    }
+                    used
+                }
+            };
         }
         let fence = flights.and_then(|flights| {
             exit_guard::enter().and_then(|_busy| {

@@ -20,6 +20,7 @@
 
 use super::buffer::ReadApart;
 use super::device::relay::By;
+use super::device::submit_stalls::Uses;
 use super::event::EventRef;
 use super::texture::wrapped::Wrapped;
 use super::{Buffer, CommandQueue, Device, SharedEvent, Texture};
@@ -186,7 +187,9 @@ impl CommandQueue {
         // Where the queue's failures are relayed, a mark after `f`'s submissions keeps a failure
         // of theirs the caller's (`device/relay.rs`); where freed memory waits for the work in
         // flight, it waits for that mark (`freed_memory.rs`).
-        let used = shared.use_queue(self.vk_queue(), By::Program, |queue| f(queue, family));
+        let used = shared.use_queue(self.vk_queue(), By::Program, Uses::Unknown, |queue| {
+            f(queue, family)
+        });
         if let Some(parking) = shared.parking.get() {
             parking.watch(self.device());
         }

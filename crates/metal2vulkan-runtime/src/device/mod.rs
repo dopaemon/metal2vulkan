@@ -29,6 +29,7 @@ pub(super) mod properties;
 pub(crate) mod relay;
 mod staging;
 pub(super) mod submit;
+pub(crate) mod submit_stalls;
 
 pub use adopt::RawDevice;
 pub(crate) use compiles::holding;
@@ -191,8 +192,9 @@ pub(super) struct DeviceShared {
     /// The primary queue family: its first queue's, where internal submissions go.
     pub(super) queue_family: u32,
     /// The `VkQueue`s the runtime submits to, the primary family's first queue first: at least
-    /// one.
-    pub(super) queues: Vec<QueueSlot>,
+    /// one. Shared with the scheduler's thread where it takes the driver's stalls idle
+    /// (`submit_stalls.rs`).
+    pub(super) queues: Arc<[QueueSlot]>,
     /// The families of those queues, the primary first, each once: what the device's buffers and
     /// images are shared among (`sharing.rs`).
     pub(super) queue_families: Vec<u32>,
@@ -722,7 +724,7 @@ impl Drop for DeviceShared {
             exit_guard::called(Call::DeviceWaitIdle);
             // The scheduler's thread, which waited on its nudge, has stopped.
             release::object(self.vk(), self.nudge);
-            for queue in &self.queues {
+            for queue in self.queues.iter() {
                 release::object(self.vk(), queue.timeline);
                 // The marks after the last uses of the queue outside a batch (`relay.rs`).
                 for fence in queue.flights.get().map(|f| f.drain()).unwrap_or_default() {
@@ -739,8 +741,10 @@ impl Drop for DeviceShared {
             // with its state.
             self.timing.release(self.vk());
         }
-        // Nor a kept barrier command buffer: the queues are idle.
+        // Nor a kept barrier command buffer, nor a submission taking a driver's stall idle: the
+        // queues are idle.
         self.scheduler.release_kept(self.vk());
+        self.scheduler.release_idle(self.vk());
         // No command buffer is left to give back a spare, or to hold one.
         self.spares.release(self);
         if let Some(internal) = lock(&self.internal).take() {
@@ -812,9 +816,12 @@ impl Drop for DeviceShared {
 }
 
 /// One of the device's `VkQueue`s.
-pub(super) struct QueueSlot {
-    /// The queue, under its lock: submissions are externally synchronized.
-    raw: Mutex<vk::Queue>,
+pub(crate) struct QueueSlot {
+    /// The queue, under its lock: submissions are externally synchronized. With it, its place in
+    /// its driver's period of stalls (`submit_stalls.rs`), which each use under the lock moves.
+    raw: Mutex<(vk::Queue, submit_stalls::Period)>,
+    /// Its place's `Period::may_be_due`, as of the last use: read without the lock.
+    stall_due: AtomicBool,
     /// The queue's family, which the command pools of what it runs are made for.
     pub(super) family: u32,
     /// The family's queue flags: the commands it runs, and so the accesses a barrier recorded
@@ -841,12 +848,56 @@ pub(super) struct QueueSlot {
 }
 
 impl QueueSlot {
-    /// `f` with the queue, under its lock, its loader word put back first.
+    /// `f` with the queue, under its lock, its loader word put back first: a use whose
+    /// signalling calls are not counted, so its place in its driver's period is forgotten
+    /// (`submit_stalls.rs`).
     pub(super) fn with<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R {
-        let queue = lock(&self.raw);
+        let mut held = lock(&self.raw);
+        held.1.forget();
+        self.stall_due.store(false, Ordering::Relaxed);
         // SAFETY: the queue lives while its slot does.
         unsafe { self.word.restore() };
-        f(*queue)
+        f(held.0)
+    }
+
+    /// `f` with the queue and its place in its driver's period, under its lock, its loader word
+    /// put back first: `f` counts each signalling call it makes (`Period::called`). For a use of
+    /// `caller`'s, also the wait for the lock where it waited behind a stall taken idle
+    /// (`Period::entered`).
+    pub(crate) fn with_counted<R>(
+        &self,
+        caller: submit_stalls::Caller,
+        f: impl FnOnce(vk::Queue, &mut submit_stalls::Period) -> R,
+    ) -> (R, Option<u64>) {
+        let asked = gpu_time::host_nanos();
+        let mut held = lock(&self.raw);
+        let behind = match caller {
+            submit_stalls::Caller::Work => {
+                let waited = gpu_time::host_nanos().saturating_sub(asked);
+                held.1.entered(waited)
+            }
+            submit_stalls::Caller::Empty => None,
+        };
+        // SAFETY: the queue lives while its slot does.
+        unsafe { self.word.restore() };
+        let (queue, period) = &mut *held;
+        let used = f(*queue, period);
+        self.stall_due.store(period.may_be_due(), Ordering::Relaxed);
+        (used, behind)
+    }
+
+    /// `f` with the queue's place in its driver's period alone, under the queue's lock.
+    pub(crate) fn with_period<R>(&self, f: impl FnOnce(&mut submit_stalls::Period) -> R) -> R {
+        let mut held = lock(&self.raw);
+        let answer = f(&mut held.1);
+        self.stall_due.store(held.1.may_be_due(), Ordering::Relaxed);
+        answer
+    }
+
+    /// Whether its driver's next stall may be due within `submit_stalls::MOST_EMPTY` calls, as of
+    /// its last use (`Period::may_be_due`), read without its lock.
+    pub(crate) fn stall_may_be_due(&self) -> bool {
+        self.stall_due.load(Ordering::Relaxed)
     }
 
     /// The host saw the timeline reach `value`.
@@ -1269,7 +1320,8 @@ impl Device {
                     raw.get_device_queue(family, index)
                 };
                 QueueSlot {
-                    raw: Mutex::new(queue),
+                    raw: Mutex::new((queue, submit_stalls::Period::default())),
+                    stall_due: AtomicBool::new(false),
                     family,
                     flags: flags_of(family),
                     // SAFETY: the queue was just returned, its word the loader's.
@@ -1705,7 +1757,7 @@ impl Device {
             functions: Arc::new(functions),
             queue_family,
             round_robin: queues.len() - present_queues,
-            queues,
+            queues: queues.into(),
             queue_families,
             round_robin_made: AtomicU64::new(0),
             presenting_made: AtomicU64::new(0),
@@ -1839,6 +1891,19 @@ impl Device {
         // `driver_defects.rs`): there the turns wake it. A defect fact, never the driver's name.
         if waits_on_gpu {
             (shared.scheduler).wait_on_gpu(Functions::clone(&shared.functions), shared.nudge);
+        }
+        // Where the driver stalls in one signalling submission of every 1024 to a `VkQueue`
+        // (`DriverFact::SignallingSubmitsStallEvery1024`), the scheduler's thread takes the
+        // stalls while idle, each queue's empty submissions signalling a semaphore of its own
+        // (`submit_stalls.rs`); a device that cannot make the semaphores takes none.
+        let stalls = metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024;
+        if shared.properties.driver_facts.contains(&stalls) {
+            if let Some(semaphores) = submit_stalls::semaphores(shared.vk(), shared.queues.len()) {
+                let functions = Functions::clone(&shared.functions);
+                let queues = Arc::clone(&shared.queues);
+                let idle = submit_stalls::IdleStalls::new(functions, queues, semaphores);
+                shared.scheduler.take_stalls_idle(idle);
+            }
         }
         let device = Device(shared);
         // The pages its replays held last go on its handler threads (`recorder`).

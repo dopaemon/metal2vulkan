@@ -2619,6 +2619,7 @@ field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_render_target	pub ho
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_shader_write	pub host_texture_shadows_shader_write: u64
 field	metal2vulkan-runtime::WorkCounts.host_texture_shadows_unchecked	pub host_texture_shadows_unchecked: u64
 field	metal2vulkan-runtime::WorkCounts.host_textures_in_place	pub host_textures_in_place: u64
+field	metal2vulkan-runtime::WorkCounts.idle_submits	pub idle_submits: u64
 field	metal2vulkan-runtime::WorkCounts.image_blits_recorded	pub image_blits_recorded: u64
 field	metal2vulkan-runtime::WorkCounts.images_started_on_the_host	pub images_started_on_the_host: u64
 field	metal2vulkan-runtime::WorkCounts.in_place_checks_failed	pub in_place_checks_failed: u64
@@ -2835,6 +2836,9 @@ field	metal2vulkan-runtime::WorkCounts.storage_forms_taken	pub storage_forms_tak
 field	metal2vulkan-runtime::WorkCounts.storage_placeholder_attachments	pub storage_placeholder_attachments: u64
 field	metal2vulkan-runtime::WorkCounts.storage_placeholders_made	pub storage_placeholders_made: u64
 field	metal2vulkan-runtime::WorkCounts.submit_infos	pub submit_infos: u64
+field	metal2vulkan-runtime::WorkCounts.submit_stalls_idle	pub submit_stalls_idle: u64
+field	metal2vulkan-runtime::WorkCounts.submit_stalls_on_work	pub submit_stalls_on_work: u64
+field	metal2vulkan-runtime::WorkCounts.submits_behind_idle_stalls	pub submits_behind_idle_stalls: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadow_bytes	pub texel_shadow_bytes: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadow_reads	pub texel_shadow_reads: u64
 field	metal2vulkan-runtime::WorkCounts.texel_shadows_dropped	pub texel_shadows_dropped: u64
@@ -2857,6 +2861,7 @@ field	metal2vulkan-runtime::WorkCounts.variants_taken_back	pub variants_taken_ba
 field	metal2vulkan-runtime::WorkCounts.view_shadows	pub view_shadows: u64
 field	metal2vulkan-runtime::WorkCounts.views_through_swizzle	pub views_through_swizzle: u64
 field	metal2vulkan-runtime::WorkCounts.visibility_queries_begun	pub visibility_queries_begun: u64
+field	metal2vulkan-runtime::WorkCounts.wait_behind_idle_stall_longest_nanos	pub wait_behind_idle_stall_longest_nanos: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_command_buffer_waiters	pub wakes_command_buffer_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_completion_waiters	pub wakes_completion_waiters: u64
 field	metal2vulkan-runtime::WorkCounts.wakes_event_waiters	pub wakes_event_waiters: u64
@@ -11050,6 +11055,7 @@ variant	metal2vulkan-runtime::DriverFact::SampledFetchRecoversCodes	SampledFetch
 variant	metal2vulkan-runtime::DriverFact::SemaphoreOperationsStallSubmits	SemaphoreOperationsStallSubmits
 variant	metal2vulkan-runtime::DriverFact::ShadowCopyBackDispatchFaster	ShadowCopyBackDispatchFaster
 variant	metal2vulkan-runtime::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
+variant	metal2vulkan-runtime::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
 variant	metal2vulkan-runtime::DriverFact::SubmissionsWithoutSignalsMerge	SubmissionsWithoutSignalsMerge
 variant	metal2vulkan-runtime::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan-runtime::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
@@ -12272,6 +12278,7 @@ variant	metal2vulkan::device::DriverFact::SampledFetchRecoversCodes	SampledFetch
 variant	metal2vulkan::device::DriverFact::SemaphoreOperationsStallSubmits	SemaphoreOperationsStallSubmits
 variant	metal2vulkan::device::DriverFact::ShadowCopyBackDispatchFaster	ShadowCopyBackDispatchFaster
 variant	metal2vulkan::device::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
+variant	metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
 variant	metal2vulkan::device::DriverFact::SubmissionsWithoutSignalsMerge	SubmissionsWithoutSignalsMerge
 variant	metal2vulkan::device::DriverFact::TileStoreIsMetals	TileStoreIsMetals
 variant	metal2vulkan::device::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers

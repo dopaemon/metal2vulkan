@@ -1649,7 +1649,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 23] = [
+const KEEPERS: [(&str, &str); 24] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -1677,6 +1677,12 @@ const KEEPERS: [(&str, &str); 23] = [
     (
         "device/relay.rs",
         "the queues' flights, taken back from the instance's relay first in the teardown",
+    ),
+    (
+        "device/submit_stalls.rs",
+        "the empty submissions that take a driver's stalls idle, made by the scheduler's thread \
+         inside a section; the teardown waits for the device to idle, the thread having stopped, \
+         before it releases their semaphores",
     ),
     (
         "draw_source.rs",

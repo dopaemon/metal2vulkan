@@ -449,6 +449,16 @@ fn child(side: &str, options: &Options) {
                 c.scheduler_sleeps,
                 c.scheduler_wakes_commit,
             );
+            eprintln!(
+                "runtime submit stalls: idle_submits {} submit_stalls_idle {} \
+                 submit_stalls_on_work {} submits_behind_idle_stalls {} \
+                 wait_behind_idle_stall_longest_nanos {}",
+                c.idle_submits,
+                c.submit_stalls_idle,
+                c.submit_stalls_on_work,
+                c.submits_behind_idle_stalls,
+                c.wait_behind_idle_stall_longest_nanos,
+            );
             eprintln!("runtime commands replayed: {:?}", c.commands_replayed);
             eprintln!(
                 "runtime notices: {} (bound notices made {}), other messages heard {}",

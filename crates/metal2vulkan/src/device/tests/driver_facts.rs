@@ -401,6 +401,7 @@ const ROWS: DriverFact = DriverFact::RowCopiesDispatchFaster;
 const MERGES: DriverFact = DriverFact::SubmissionsWithoutSignalsMerge;
 const MESSENGER: DriverFact = DriverFact::QueueFailuresReportedByMessenger;
 const STALL: DriverFact = DriverFact::SemaphoreOperationsStallSubmits;
+const STALL_1024: DriverFact = DriverFact::SignallingSubmitsStallEvery1024;
 const SAMPLED_HIZ: DriverFact = DriverFact::SampledDepthKeepsHiZ;
 const MSAA_DEPTH: DriverFact = DriverFact::MultisampledDepthFasterOutOfGeneral;
 const TILE_STORE: DriverFact = DriverFact::TileStoreIsMetals;
@@ -552,7 +553,7 @@ fn the_committed_profiles_drivers_have_their_facts() {
         (
             "nvidia-rtx5080-laptop",
             vec![
-                ZERO, DENORMALS, FETCH, SPLIT, PLANES, BC6H, BC7, ROWS, STALL,
+                ZERO, DENORMALS, FETCH, SPLIT, PLANES, BC6H, BC7, ROWS, STALL, STALL_1024,
             ],
         ),
     ]
@@ -649,6 +650,48 @@ fn nvidia_s_semaphore_stall_holds_on_the_gpus_measured() {
         .map(|row| row.driver)
         .collect();
     assert_eq!(drivers, [DriverId::NVIDIA_PROPRIETARY; 2]);
+}
+
+/// NVIDIA's driver stalls in one signalling submission of every 1024 to a queue on the GPU
+/// measured, the RTX 5080 Laptop GPU, at every release, so the runtime takes that stall while
+/// idle there; the RTX 3090 and an RTX 5080 desktop GPU, not measured in that form, do not take
+/// the fact, nor does RADV, measured without it, or any other driver.
+#[test]
+fn nvidia_s_every_1024th_signalling_submit_stall_holds_on_the_gpu_measured() {
+    use crate::device::driver_facts::NVIDIA_RTX_5080_LAPTOP;
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
+    let read = |stem: &str| {
+        let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect(stem);
+        DeviceDescription::from_khronos_json(&text, None).expect("profile parses")
+    };
+    let laptop = read("nvidia-rtx5080-laptop");
+    assert!(laptop.driver_facts().contains(&STALL_1024));
+    let mut later = laptop.clone();
+    later.driver_version += 1 << 6;
+    assert!(later.driver_facts().contains(&STALL_1024));
+    let mut rtx_3090 = laptop.clone();
+    rtx_3090.device_id = NVIDIA_RTX_3090;
+    assert!(!rtx_3090.driver_facts().contains(&STALL_1024));
+    let mut desktop = laptop.clone();
+    desktop.device_id = 0x2c02;
+    assert!(!desktop.driver_facts().contains(&STALL_1024));
+    for stem in [
+        "amd-rdna3-radv",
+        "moltenvk-m3",
+        "intel-irisxe-rplp-anv",
+        "lavapipe",
+    ] {
+        assert!(!read(stem).driver_facts().contains(&STALL_1024), "{stem}");
+    }
+    let rows: Vec<(DriverId, Option<u32>)> = MEASURED
+        .iter()
+        .filter(|row| row.fact == STALL_1024)
+        .map(|row| (row.driver, row.device))
+        .collect();
+    assert_eq!(
+        rows,
+        [(DriverId::NVIDIA_PROPRIETARY, Some(NVIDIA_RTX_5080_LAPTOP))]
+    );
 }
 
 /// RADV on the RX 7900 XTX takes the facts measured on it: its pointer imports follow their

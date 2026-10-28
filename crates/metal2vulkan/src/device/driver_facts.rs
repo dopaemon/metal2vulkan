@@ -1259,6 +1259,24 @@ pub enum DriverFact {
     /// a batch) for about 1 us of CPU a wait (`command_buffer/submit.rs` in the runtime). Held on
     /// the GPUs measured alone.
     SemaphoreOperationsStallSubmits,
+    /// A cost fact (the module docs): the driver spends milliseconds of the submitting thread's
+    /// CPU in one `vkQueueSubmit` of every 1024 that signal a fence or a semaphore on a
+    /// `VkQueue`, counted per queue, whatever the call submits. Measured with a probe outside the
+    /// runtime, 8192 calls of each form timed one by one: every 1024th signalling call took 2.2
+    /// to 3.7 ms, the others 1.6 us (p50), for one command buffer and a timeline signal, no
+    /// command buffer and a timeline signal, a fence alone, `vkQueueSubmit2`, and four signalling
+    /// submit infos in one call, 100 us apart or back to back; a call that signals nothing never
+    /// stalled. Two queues of a device, two devices and two processes each counted their own, and
+    /// `vkQueueWaitIdle` counted as a call. This is the stall
+    /// [`DriverFact::SemaphoreOperationsStallSubmits`] counts by semaphore operations. On a driver
+    /// with it the runtime's scheduler takes the stall while it is idle: once it has seen one on
+    /// a queue, it counts the queue's signalling calls, and where the next stall is due within the
+    /// queue's next burst of work it submits the calls left as empty submissions in the gap
+    /// between bursts (`device/submit_stalls.rs` in the runtime); elsewhere it submits none. No
+    /// answer changes, only when the stall falls. NVIDIA's 615.71.09 on the RTX 5080 Laptop GPU
+    /// under Linux; RADV (Mesa 26.2.4 on the Radeon RX 7900 XTX) measured none over 1.4 ms and
+    /// none periodic, so is not listed. Held on the GPU measured alone.
+    SignallingSubmitsStallEvery1024,
     /// A cost fact (the module docs): the driver keeps a single-sample depth image's
     /// hierarchical depth, with which its depth test rejects hidden fragments a block at a time,
     /// in the `GENERAL` layout where the image has sampled usage, and drops it there, with the
@@ -2065,6 +2083,10 @@ pub(crate) const MEASURED: &[Measured<DriverFact>] = &[
         NVIDIA_RTX_5080_LAPTOP,
     ),
     nvidia_on(DriverFact::SemaphoreOperationsStallSubmits, NVIDIA_RTX_3090),
+    nvidia_on(
+        DriverFact::SignallingSubmitsStallEvery1024,
+        NVIDIA_RTX_5080_LAPTOP,
+    ),
     moltenvk_on_apple(DriverFact::TimestampsWaitForEveryQueue),
     Measured {
         fact: DriverFact::TimestampPoolsAreCounterSampleBuffers,

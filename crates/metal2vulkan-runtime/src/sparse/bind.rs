@@ -23,6 +23,7 @@ use super::mapping::{MetalUnit, UnitUpdate, VkUnit};
 use super::texture::SparseImage;
 use crate::device::lock;
 use crate::device::relay::By;
+use crate::device::submit_stalls::Uses;
 use crate::error::{internal, Error};
 use crate::exit_guard::{self, Call};
 use crate::heap::Heap;
@@ -336,7 +337,7 @@ pub(crate) fn bind_batch(
     // lock. Where the queue's failures are relayed, one of the bind's loses the device
     // (`device/relay.rs`).
     shared.counts.queue_submitted(0, 0);
-    let bound = shared.use_queue(queue, By::Runtime, |vk_queue| unsafe {
+    let bound = shared.use_queue(queue, By::Runtime, Uses::Unknown, |vk_queue| unsafe {
         shared
             .vk()
             .queue_bind_sparse(vk_queue, &[info], vk::Fence::null())

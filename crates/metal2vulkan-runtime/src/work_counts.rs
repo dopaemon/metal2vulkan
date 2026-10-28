@@ -147,6 +147,9 @@ pub(crate) struct Counters {
     submit_infos: AtomicU64,
     command_buffers_submitted: AtomicU64,
     batch_submit_nanos: AtomicU64,
+    submit_stalls_on_work: AtomicU64,
+    submits_behind_idle_stalls: AtomicU64,
+    wait_behind_idle_stall_longest_nanos: AtomicU64,
     command_buffers_begun: AtomicU64,
     encoder_command_buffers_begun: AtomicU64,
     command_buffers_begun_by: [AtomicU64; Begun::COUNT],
@@ -1173,6 +1176,19 @@ impl Counters {
     /// nanoseconds in the driver (`device/relay.rs`).
     pub(crate) fn batch_submitted_in(&self, nanos: u64) {
         self.batch_submit_nanos.fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// A signalling call of work took the driver's stall (`device/submit_stalls.rs`).
+    pub(crate) fn submit_stall_on_work(&self) {
+        self.submit_stalls_on_work.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A submission waited `nanos` nanoseconds for its queue's lock behind a stall taken idle
+    /// (`device/submit_stalls.rs`).
+    pub(crate) fn submit_behind_idle_stall(&self, nanos: u64) {
+        self.submits_behind_idle_stalls
+            .fetch_add(1, Ordering::Relaxed);
+        (self.wait_behind_idle_stall_longest_nanos).fetch_max(nanos, Ordering::Relaxed);
     }
 
     /// A render encoder ended (`RenderCommandEncoder::end_encoding`).
@@ -3345,6 +3361,23 @@ pub struct WorkCounts {
     /// the driver, so a lane that times the scheduler thread's take-up of later commits leaves it
     /// out (`runtime_lane::queue_order`).
     pub batch_submit_nanos: u64,
+    /// Empty submissions the scheduler's thread made while idle to take the driver's stall in
+    /// one signalling submission of every 1024 to a `VkQueue` then, on a driver that has it
+    /// (NVIDIA's; `device/submit_stalls.rs`): the calls left before the stall, where it was due
+    /// within the queue's next burst of work.
+    pub idle_submits: u64,
+    /// Of those, the ones that took the stall: 2.2 ms or more each on the RTX 5080 measured.
+    pub submit_stalls_idle: u64,
+    /// Signalling submissions of work that took 2 ms or more in the driver (on a driver with
+    /// the stall above, the stall where none was taken idle: before the first was seen, or after
+    /// a use of the queue the runtime cannot count).
+    pub submit_stalls_on_work: u64,
+    /// Work that came while a stall taken idle ran: a submission that waited 10 us or more for
+    /// its queue's lock behind it, and a commit that reached the scheduler meanwhile.
+    pub submits_behind_idle_stalls: u64,
+    /// The longest of those waits, in nanoseconds: a submission's wait for the lock, and for a
+    /// commit, the stall it came during (its wait at most).
+    pub wait_behind_idle_stall_longest_nanos: u64,
     /// `VkCommandBuffer`s the runtime began once the device was made: each encoder's, a render
     /// encoder's draws' secondary ones, segments', a batch's barrier and first-work ones, internal
     /// and staging submissions'. A driver may clear a command buffer's state as it begins one
@@ -4728,6 +4761,7 @@ impl Device {
             |cause: Split| counters.instance_splits_by[cause as usize].load(Ordering::Relaxed);
         let (sleeps, [by_commit, by_completion, by_host, by_slice], scheduler_spared, gpu_waits) =
             self.shared().scheduler.sleeps_and_wakings();
+        let idle_stalls = self.shared().scheduler.idle_stall_counts();
         let (completion_wakes, completion_spared) = self.shared().completion.wakes();
         let (handler_wakes, handler_spared) = self.shared().contexts.wakes();
         let command_buffer_wakes = counters.command_buffer_wakes.load(Ordering::Relaxed);
@@ -4939,6 +4973,14 @@ impl Device {
             submit_infos: counters.submit_infos.load(Ordering::Relaxed),
             command_buffers_submitted: counters.command_buffers_submitted.load(Ordering::Relaxed),
             batch_submit_nanos: counters.batch_submit_nanos.load(Ordering::Relaxed),
+            idle_submits: idle_stalls.empty,
+            submit_stalls_idle: idle_stalls.idle,
+            submit_stalls_on_work: counters.submit_stalls_on_work.load(Ordering::Relaxed),
+            submits_behind_idle_stalls: idle_stalls.behind
+                + counters.submits_behind_idle_stalls.load(Ordering::Relaxed),
+            wait_behind_idle_stall_longest_nanos: idle_stalls
+                .behind_longest
+                .max((counters.wait_behind_idle_stall_longest_nanos).load(Ordering::Relaxed)),
             command_buffers_begun: counters.command_buffers_begun.load(Ordering::Relaxed),
             command_buffers_begun_encoders: begun(Begun::Encoder),
             command_buffers_begun_segments: begun(Begun::Segment),

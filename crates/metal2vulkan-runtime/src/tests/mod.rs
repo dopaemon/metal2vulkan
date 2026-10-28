@@ -266,6 +266,9 @@ mod srgb_fetch_images;
 mod stage_entries_shared;
 mod stand_in;
 mod storage_form;
+mod submit_stalls;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod submit_stalls_idle;
 mod surface_depth;
 mod surface_two_planes;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

@@ -91,6 +91,12 @@
 //!   ready together.
 //! - **Waits are bounded.** The thread wakes on a commit or a host signal, and at least every
 //!   [`WAIT_SLICE`], so a stop is seen promptly.
+//! - **The driver's stalls taken idle** (`device/submit_stalls.rs`). Where the driver stalls in
+//!   one signalling submission of every 1024 to a `VkQueue` (NVIDIA's), and a queue's next stall
+//!   may be due, the thread wakes once it has had nothing to submit for `IDLE_NANOS`, and
+//!   submits the calls left before the stall as empty submissions, without its lock, stopping
+//!   where a commit or a waker came meanwhile: the stall falls in the gap between bursts of work
+//!   rather than on a batch. That wake is no [`WAIT_SLICE`]'s.
 //! - **Woken by completions only when they let a batch go** ([`Awaits`]). A pass that leaves a
 //!   head at its gate, its checks waiting for a GPU signal to land, or a group kept, leaves what
 //!   it waits for: each `VkQueue`'s value to complete, each event value to be reached. A
@@ -147,6 +153,7 @@ use super::command_buffer::CommandBufferShared;
 use super::command_buffer::{Group, GroupEnd, Submitting, GROUP_BATCHES};
 use super::device::functions::Functions;
 use super::device::lock;
+use super::device::submit_stalls::{IdleCounts, IdleStalls, IDLE_NANOS};
 use super::error::{CommandBufferError, Error, MemoryKind};
 use super::event::EventShared;
 use super::event_timeline::WaitFor;
@@ -167,7 +174,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{fence, AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long the thread sleeps at most without looking for work.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
@@ -377,6 +384,9 @@ struct SchedulerShared {
     /// The device's recorder, where it records off the encoding thread (`recorder`): woken after
     /// a round that took commits in (the module docs).
     recorder: OnceLock<Arc<RecorderShared>>,
+    /// Where the device's driver stalls in one signalling submission of every 1024 to a queue,
+    /// what the thread takes those stalls idle with (the module docs).
+    stalls: OnceLock<IdleStalls>,
 }
 
 impl SchedulerShared {
@@ -614,6 +624,7 @@ impl Scheduler {
             nudge: OnceLock::new(),
             spare_logs: SpareLogs::default(),
             recorder: OnceLock::new(),
+            stalls: OnceLock::new(),
         });
         let thread = {
             let shared = Arc::clone(&shared);
@@ -638,6 +649,27 @@ impl Scheduler {
             functions,
             semaphore,
         });
+    }
+
+    /// Take the driver's stalls in one signalling submission of every 1024 to a queue idle with
+    /// `stalls` (the module docs): on a device whose driver has them, which releases the
+    /// semaphores after stopping the thread ([`release_idle`](Self::release_idle)).
+    pub(crate) fn take_stalls_idle(&self, stalls: IdleStalls) {
+        let _ = self.shared.stalls.set(stalls);
+    }
+
+    /// The counts of the stalls taken idle so far (`WorkCounts::idle_submits` and kin): none on
+    /// a device that takes none.
+    pub(crate) fn idle_stall_counts(&self) -> IdleCounts {
+        (self.shared.stalls.get()).map_or_else(IdleCounts::default, IdleStalls::counts)
+    }
+
+    /// Release what the thread took the stalls idle with: the device is being torn down, its
+    /// thread stopped and its queues idle.
+    pub(crate) fn release_idle(&self, raw: &ash::Device) {
+        if let Some(stalls) = self.shared.stalls.get() {
+            stalls.release(raw);
+        }
     }
 
     /// Wake `recorder`, the device's, after each round that took commits in (the module docs).
@@ -898,25 +930,51 @@ fn run(shared: &SchedulerShared) {
     let mut gpu = GpuWait::default();
     loop {
         let mut state = lock(shared.inbox.state());
+        // Since when the thread has had nothing to submit, and whether it looked for a driver's
+        // stall due since (the module docs): once an idle, once it lasted `IDLE_NANOS`.
+        let (idle_since, mut looked) = (Instant::now(), false);
         // A commit, or a nudge, left to this thread's pass may wait in the inbox (`inbox.rs`).
         while !state.dirty
             && !state.stopping
             && !shared.inbox.holds_commits()
             && !shared.inbox.nudged()
         {
+            // A stall due is taken without the lock, the empty submissions stopping where a
+            // commit or a waker came; the sleep before it ends at the idle's length, no slice.
+            let stalls = (shared.stalls.get()).filter(|stalls| !looked && stalls.may_be_due());
+            let (slice, short) = match stalls {
+                Some(stalls) => {
+                    let idle = Duration::from_nanos(IDLE_NANOS);
+                    match idle.checked_sub(idle_since.elapsed()) {
+                        Some(left) if !left.is_zero() => (WAIT_SLICE.min(left), left < WAIT_SLICE),
+                        _ => {
+                            looked = true;
+                            drop(state);
+                            stalls.take(|| {
+                                shared.inbox.holds_commits()
+                                    || shared.inbox.nudged()
+                                    || lock(shared.inbox.state()).dirty
+                            });
+                            state = lock(shared.inbox.state());
+                            continue;
+                        }
+                    }
+                }
+                None => (WAIT_SLICE, false),
+            };
             shared.sleeps.fetch_add(1, Ordering::Relaxed);
             if let Some(nudge) = shared.nudge.get().filter(|_| shared.gpu_waits(&mut gpu)) {
-                state = wait_for_gpu(shared, state, nudge, &mut gpu);
+                state = wait_for_gpu(shared, state, nudge, &mut gpu, (slice, short));
                 continue;
             }
             state.asleep = true;
             let (woke, waited) = shared
                 .wake
-                .wait_timeout(state, WAIT_SLICE)
+                .wait_timeout(state, slice)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state = woke;
             state.asleep = false;
-            if waited.timed_out() {
+            if waited.timed_out() && !short {
                 shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -941,13 +999,16 @@ fn run(shared: &SchedulerShared) {
 }
 
 /// Sleep on the GPU (the module docs): for any of `gpu`'s semaphores to reach its value, or the
-/// nudge its next, at most [`WAIT_SLICE`], without the lock `state` holds, which comes back taken.
-/// Where a value landed, its events observe their counters, and the state is marked for a pass.
+/// nudge its next, at most `slice` ([`WAIT_SLICE`], or, where `short`, the idle's length before
+/// a driver's stall is taken, whose end is no slice's), without the lock `state` holds, which
+/// comes back taken. Where a value landed, its events observe their counters, and the state is
+/// marked for a pass.
 fn wait_for_gpu<'a>(
     shared: &'a SchedulerShared,
     mut state: std::sync::MutexGuard<'a, State>,
     nudge: &Nudge,
     gpu: &mut GpuWait,
+    (slice, short): (Duration, bool),
 ) -> std::sync::MutexGuard<'a, State> {
     shared.gpu_waits.fetch_add(1, Ordering::Relaxed);
     let target = state.nudge_value + 1;
@@ -965,7 +1026,7 @@ fn wait_for_gpu<'a>(
         // the thread stopped; each value is a submitted signal's, or the nudge's next, which a
         // waker signals.
         let waited =
-            unsafe { (nudge.functions.get()).wait_semaphores(&info, WAIT_SLICE.as_nanos() as u64) };
+            unsafe { (nudge.functions.get()).wait_semaphores(&info, slice.as_nanos() as u64) };
         exit_guard::called(exit_guard::Call::WaitSemaphores);
         waited
     });
@@ -988,9 +1049,10 @@ fn wait_for_gpu<'a>(
         }
         // Nudged: the waker counted the waking and marked the state.
         Some(Ok(())) => {}
-        Some(Err(vk::Result::TIMEOUT)) => {
+        Some(Err(vk::Result::TIMEOUT)) if !short => {
             shared.wakings[Woken::Slice as usize].fetch_add(1, Ordering::Relaxed);
         }
+        Some(Err(vk::Result::TIMEOUT)) => {}
         // A failed wait (a lost device) or an exit: a pass finds out.
         _ => state.dirty = true,
     }
