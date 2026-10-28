@@ -777,10 +777,6 @@ engine/fca_kernel_absent_builtin.air.ll	fca_kernel_absent_builtin	ok	ok	ok	ok	ok
 engine/fca_kernel_absent_builtin.ll	fca_kernel_absent_builtin	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fca_vertex_absent_attribute.air.ll	fca_vertex_absent_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fca_vertex_absent_attribute.ll	fca_vertex_absent_attribute	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/fmx2_contract_fast.air.ll	fmx2_contract_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/fmx2_contract_fast.ll	fmx2_contract_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/fmx2_contract_precise.air.ll	fmx2_contract_precise	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/fmx2_contract_precise.ll	fmx2_contract_precise	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fmx2_divide_edges.air.ll	fmx2_divide_edges	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fmx2_divide_edges.ll	fmx2_divide_edges	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/fmx2_divide_fast.air.ll	fmx2_divide_fast	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -1797,16 +1793,6 @@ engine/rdw_tile_kept.air.ll	rdw_tile_kept_fill_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/rdw_tile_kept.ll	rdw_tile_kept_fill	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rdw_tile_kept.ll	rdw_tile_kept_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rdw_tile_kept.ll	rdw_tile_kept_fill_dump	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.air.ll	pair_lanes	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.air.ll	lanes_used_twice	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.air.ll	per_lane_third	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.air.ll	already_paired	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.air.ll	dither	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.ll	pair_lanes	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.ll	lanes_used_twice	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.ll	per_lane_third	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.ll	already_paired	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/regroup_chain.ll	dither	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rfb_viewports.air.ll	rfb_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rfb_viewports.air.ll	rfb_span	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rfb_viewports.air.ll	rfb_position	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -2357,18 +2343,6 @@ engine/stx_stencil_ms.ll	stx_stencil_ms_by_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/stx_stencil_ms.ll	stx_stencil_ms_in_order	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock)]]}	ok	ok	ok	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock)]]}	Unsupported{RasterOrderGroups; AnyOf[[Feature(FragmentShaderPixelInterlock)], [Feature(FragmentShaderSampleInterlock)]]}	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock), Feature(FragmentStoresAndAtomics), Format { format: VK_FORMAT_R8_UINT, usage: StorageImage }, Feature(ShaderStorageImageExtendedFormats)]]}
 engine/stx_stencil_ms.ll	stx_stencil_ms_color	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock)]]}	ok	ok	ok	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock)]]}	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock), Feature(FragmentStoresAndAtomics), Format { format: VK_FORMAT_R8_UINT, usage: StorageImage }, Feature(ShaderStorageImageExtendedFormats)]]}
 engine/stx_stencil_ms.ll	stx_stencil_ms_color_by_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock)]]}	ok	ok	ok	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock)]]}	ok	Unsupported{StencilExport; AnyOf[[Extension(ExtShaderStencilExport)], [Feature(FragmentShaderPixelInterlock), Feature(FragmentStoresAndAtomics), Format { format: VK_FORMAT_R8_UINT, usage: StorageImage }, Feature(ShaderStorageImageExtendedFormats)]]}
-engine/sum_regroup.air.ll	sum_regroup_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.air.ll	regroup	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.air.ll	tied	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.air.ll	unpinned	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.ll	sum_regroup_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.ll	regroup	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.ll	tied	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup.ll	unpinned	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup_precise.air.ll	sum_regroup_precise_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup_precise.air.ll	strict	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup_precise.ll	sum_regroup_precise_full	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/sum_regroup_precise.ll	strict	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/sxc_taps_before_step.air.ll	sxc_taps_before_step	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/sxc_taps_before_step.ll	sxc_taps_before_step	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/tail_argument_cube_gradient.air.ll	argument_sampler_cube_gradient	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
@@ -2563,8 +2537,6 @@ engine/unk_ulong_rw.air.ll	unk_ulong_rw	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	o
 engine/unk_ulong_rw.air.ll	unk_ulong_access	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Format; AnyOf[[Feature(ShaderStorageImageExtendedFormats)], [Feature(ShaderStorageImageWriteWithoutFormat)]]}
 engine/unk_ulong_rw.ll	unk_ulong_rw	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Format; AnyOf[[Feature(ShaderStorageImageExtendedFormats)], [Feature(ShaderStorageImageReadWithoutFormat), Feature(ShaderStorageImageWriteWithoutFormat)]]}
 engine/unk_ulong_rw.ll	unk_ulong_access	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Format; AnyOf[[Feature(ShaderStorageImageExtendedFormats)], [Feature(ShaderStorageImageWriteWithoutFormat)]]}
-engine/unm_contract_chain.air.ll	unm_contract_chain	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
-engine/unm_contract_chain.ll	unm_contract_chain	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unmeasured_speculation.air.ll	quad_first_in_an_unmeasured_arm	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unmeasured_speculation.air.ll	sin_in_an_unmeasured_arm	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unmeasured_speculation.ll	quad_first_in_an_unmeasured_arm	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
