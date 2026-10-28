@@ -132,7 +132,10 @@ pub fn serialize(m: TypedModule) -> BResult<RelocatableModule> {
 /// memory (an `OpLoad` of data or of a `PhysicalStorageBuffer` pointer, or an `OpCompositeExtract`
 /// or `OpVectorShuffle` of such a value, which SPIRV-Cross forwards the same way) that a loop not
 /// defining it reads is materialized where it is defined, so the loop reads the value loaded before
-/// it, never what a store of an earlier iteration left in that memory.
+/// it, never what a store of an earlier iteration left in that memory. A materialized array is
+/// copied element by element and constructed from the copies (`Ser::copy`), since that
+/// SPIRV-Cross initializes an array's `OpCopyObject` with a buffer block's plain array, which
+/// Metal's compiler refuses.
 ///
 /// Where the profile takes `DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls`
 /// (MoltenVK 1.4.1, whose SPIRV-Cross declares `Workgroup` and `Private` variables in the entry
@@ -346,6 +349,22 @@ pub fn id_table_bytes(m: &TypedModule, p: &DeviceProfile) -> usize {
                 .count()
                 .saturating_mul(std::mem::size_of::<BlockId>()),
         )
+}
+
+/// The ids beyond its own that the copy of a materialized value of type `ty` writes
+/// (`Ser::copy`): none for a value but an array of a known length, and for such an array two per
+/// element (the element extracted and its copy) and its element's own.
+fn copy_parts(m: &TypedModule, ty: TypeId) -> BResult<u32> {
+    let Type::Array { elem, len, .. } = m.types().get(ty)? else {
+        return Ok(0);
+    };
+    let Some(n) = m.consts().array_len(*len, m.types())? else {
+        return Ok(0);
+    };
+    copy_parts(m, *elem)?
+        .checked_add(2)
+        .and_then(|each| each.checked_mul(n))
+        .ok_or(BuildError::IdSpaceExhausted)
 }
 
 /// Which values SPIRV-Cross may evaluate lazily, by value.
@@ -1200,7 +1219,12 @@ impl Ids {
                         }
                         (Some(r), _) if materialize => {
                             materialized.insert(r, take()?);
-                            set(&mut values, r, take()?)?
+                            set(&mut values, r, take()?)?;
+                            // An array's copy is written element by element (`Ser::copy`), under
+                            // the ids that follow the value's.
+                            for _ in 0..copy_parts(m, m.value(r)?.ty)? {
+                                take()?;
+                            }
                         }
                         (Some(r), _) => set(&mut values, r, take()?)?,
                         (None, Inst::Call { .. }) => {
@@ -1338,6 +1362,43 @@ impl Ser<'_> {
 
     fn result_ty(&self, v: Value) -> BResult<u32> {
         self.ty(self.value_ty(v)?)
+    }
+
+    /// Write the copy SPIRV-Cross declares as a temporary where it stands: `dst`, of type `ty`, a
+    /// copy of `src`. A scalar, vector, matrix or struct is one `OpCopyObject`. An array of a
+    /// known length is copied element by element, each element extracted and copied under the
+    /// next two ids of `parts` (an array element recursively), then constructed under `dst`
+    /// ([`copy_parts`] counts those ids): SPIRV-Cross's MSL declares an array temporary as a
+    /// `spvUnsafeArray` and initializes the `OpCopyObject` of a loaded array with the load's
+    /// expression, which Metal's compiler refuses where the array lies in a buffer block (a plain
+    /// C array there, `no viable conversion from 'const constant uint4[2]'`), while each element's
+    /// copy and the construct of the copies are values it converts for every array.
+    fn copy(&self, w: &mut Writer, ty: TypeId, dst: u32, src: u32, parts: &mut u32) -> BResult<()> {
+        fn next(parts: &mut u32) -> BResult<u32> {
+            let id = *parts;
+            *parts = id.checked_add(1).ok_or(BuildError::IdSpaceExhausted)?;
+            Ok(id)
+        }
+        let array = match self.m.types().get(ty)? {
+            Type::Array { elem, len, .. } => self
+                .m
+                .consts()
+                .array_len(*len, self.m.types())?
+                .map(|n| (*elem, n)),
+            _ => None,
+        };
+        let Some((elem, n)) = array else {
+            return w.inst(Op::CopyObject, &[self.ty(ty)?, dst, src]);
+        };
+        let mut construct = vec![self.ty(ty)?, dst];
+        for i in 0..n {
+            let extracted = next(parts)?;
+            let part = next(parts)?;
+            w.inst(Op::CompositeExtract, &[self.ty(elem)?, extracted, src, i])?;
+            self.copy(w, elem, part, extracted, parts)?;
+            construct.push(part);
+        }
+        w.inst(Op::CompositeConstruct, &construct)
     }
 
     // ---- Preamble ----
@@ -2007,7 +2068,9 @@ impl Ser<'_> {
                 // declares as a temporary where it stands.
                 Some((r, own)) => {
                     self.inst(w, (id, i as u32), Some((r, own)), &n.inst)?;
-                    w.inst(Op::CopyObject, &[self.result_ty(r)?, self.val(r)?, own])?;
+                    let at = self.val(r)?;
+                    let mut parts = at.checked_add(1).ok_or(BuildError::IdSpaceExhausted)?;
+                    self.copy(w, self.value_ty(r)?, at, own, &mut parts)?;
                 }
                 None => {
                     let result = n

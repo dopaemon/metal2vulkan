@@ -300,4 +300,6 @@ mod written_commands;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod ycbcr_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod ycbcr_in_place_loop;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod ycbcr_refresh;

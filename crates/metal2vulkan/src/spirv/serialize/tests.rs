@@ -1,6 +1,7 @@
 //! Serializer tests: `spirv-val` over every builder family, the parse round trip, relocation, and
 //! determinism.
 
+mod array_copies;
 mod builder_properties;
 mod derivation;
 mod families;
