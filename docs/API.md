@@ -2746,7 +2746,10 @@ bound.
 - `metal2vulkan-degrade-device-nan-encoding` (precision). `PrecisionNote::DeviceNanEncoding`: A
   `float` NaN result's bit pattern follows the device: Metal answers the canonical `0x7fc00000` for
   the NaN results of its float arithmetic and functions, and Vulkan states no encoding, so a device
-  may answer another sign or payload (llvmpipe: `0xffc00000`).
+  may answer another sign or payload (llvmpipe: `0xffc00000`). Also, once per device, a GPU blit
+  into, out of or between textures of which one is an `RG11B10Float` texture Metal keeps losslessly
+  compressed, whose compression makes a NaN field the quiet NaN (`0x7e0`, `0x3f0`), where the
+  device's copy keeps the bits.
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
   enabled whose driver is not measured to keep depth values outside `[0, 1]` without it.
