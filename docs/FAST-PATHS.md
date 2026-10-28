@@ -317,6 +317,20 @@ recorded here.
 Open differences from Metal that no note announces yet, and runtime costs still above the
 driver's. Each is open work.
 
+- **A copied host buffer costs O(its size) at every commit and every batch's completion**
+  (`copied.rs`, `copied-host-pages`): each compares every byte of every live copy with the bytes
+  the copy and the pages last agreed on, whichever buffers the work names, where a page log or the
+  work's uses could bound it. A copy is made only where the caller's gate refuses an import or an
+  admitted import fails, never by default.
+- **A copied host buffer's merge keeps the CPU's byte where the CPU and the GPU both wrote it**
+  between a commit and the completion: bytes are merged one at a time, so a GPU write never
+  rewrites a byte beside it, but a byte both wrote keeps the CPU's, where on Metal the later write
+  wins. A heap's rebind is never copied, nor a buffer's rebind with an image in place over the
+  buffer: a refused or failed import of either still refuses the call.
+- **A shared event's value can reach the CPU before a copied host buffer's merge**: the host reads
+  the event's semaphore, which the batch signals before its completion merges the GPU's writes
+  back, so a CPU that waits for the value may read the pages before them, where Metal's writes are
+  in the pages when the value is seen.
 - **A shadowed texture over an IOSurface plane's bytes is copied in whole for every command
   buffer that samples it**, where it is a shadow: one that only samples or reads is an image in
   place where its class's check passed (`in_place.rs`), so this holds for a plane that renders or

@@ -43,6 +43,9 @@ mod completion_seen;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute;
 mod contexts;
+mod copied;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod copied_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod copy_bounds;
 mod copy_plan;

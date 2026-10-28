@@ -446,7 +446,8 @@ pub(super) fn on_device_with(
 
 /// Every kind is taken by a lane test's site: listed above, or a stage's precision note or
 /// reconvergence; no kind is in two lists, and no list names a kind twice. `misplaced-notice`
-/// ([`MISPLACED`]) is taken by the runtime's own tests instead, as no lane can meet it.
+/// ([`MISPLACED`]) and `copied-host-pages` ([`COPIED_PAGES`]) are taken by the runtime's own tests
+/// instead, as no lane can meet them.
 ///
 /// This module compiles only under the device cfgs, so a kind that lands with no site leaves this
 /// test red where the ordinary gate cannot read it. The runtime crate's
@@ -563,6 +564,7 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &READ_ONLY_PAGES,
         &MISPLACED,
         &STILL_MAKING,
+        &COPIED_PAGES,
         &DEPTH_DENORMALS,
         &SIGNED_DEPTH_TESTS,
         &FIRST_SPARSE,
@@ -777,6 +779,16 @@ const STILL_MAKING: [Degradation; 3] = [
     Degradation::DispatchDroppedStillMaking,
     Degradation::DrawDroppedUnmade,
 ];
+
+/// The kind a no-copy buffer takes whose import of the caller's pages the caller's gate
+/// (`HostMemory::with_import_gate`) refused, or whose import the gate and the device admitted and
+/// that then failed, so the pages are copied. No lane meets it: no lane gives a gate, and no
+/// venue's driver fails an admitted import on demand (NVIDIA's runs out of the host kernel's
+/// mappings only past `vm.max_map_count`). The runtime's own tests
+/// `copied_buffer_is_made_where_the_caller_s_gate_refuses_the_import` and
+/// `copied_buffer_is_made_where_an_admitted_import_fails_announced` take its site, the import
+/// failed by the runtime's test hook.
+const COPIED_PAGES: [Degradation; 1] = [Degradation::CopiedHostPages];
 
 /// The kind Metal's private option bit takes where the GPU's writes reach the memory here
 /// ([`the_private_option_bit_is_announced_on_a_heap_of_the_runtime_s_memory`],

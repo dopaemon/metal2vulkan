@@ -2389,6 +2389,28 @@ impl Device {
         if p.image.route == AliasRoute::Tiled {
             return Ok(p);
         }
+        // A copied heap's bytes the GPU uses lie in a copy of the caller's pages (`copied.rs`),
+        // to which no image is bound: a shadow of them, as over pages no image takes, unless its
+        // route is one in memory of its own already.
+        if bytes.copied() {
+            if matches!(
+                p.image.route,
+                AliasRoute::Shadow
+                    | AliasRoute::MemoryShadow
+                    | AliasRoute::Unaliased
+                    | AliasRoute::Planes
+            ) {
+                return Ok(p);
+            }
+            let facts = self
+                .shared()
+                .textures
+                .facts(self.compile_device().profile());
+            let linear = plan_image(&p.layout, descriptor.image_usage(), false, &facts)
+                .map_err(|refusal| image_error(call, refusal))?;
+            let image = self.memory_shadow(linear, &p)?;
+            return Ok(HeapPlan { image, ..p });
+        }
         if let HeapLayout::Tiled(tiled) = &p.metal_layout {
             match self.tiled_heap_image(call, &p, tiled, descriptor)? {
                 Some(image) => return Ok(HeapPlan { image, ..p }),

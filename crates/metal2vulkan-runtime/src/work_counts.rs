@@ -290,6 +290,14 @@ pub(crate) struct Counters {
     host_imports_remapped: AtomicU64,
     host_pointer_imports_made: AtomicU64,
     host_pointer_import_bytes_made: AtomicU64,
+    host_imports_refused_by_host: AtomicU64,
+    copied_host_buffers_made: AtomicU64,
+    copied_host_buffers_refused: AtomicU64,
+    copied_host_buffers_degraded: AtomicU64,
+    copied_rebind_pages_made: AtomicU64,
+    copied_heaps_made: AtomicU64,
+    copied_copy_in_bytes: AtomicU64,
+    copied_merge_back_bytes: AtomicU64,
     dma_buf_sparse_buffers: AtomicU64,
     dma_buf_images: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
@@ -1996,6 +2004,43 @@ impl Counters {
     pub(crate) fn host_pointer_import_made(&self, bytes: u64) {
         (self.host_pointer_imports_made).fetch_add(1, Ordering::Relaxed);
         (self.host_pointer_import_bytes_made).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// The caller's import gate refused a no-copy buffer's import (`HostMemory::with_import_gate`).
+    pub(crate) fn host_import_refused_by_host(&self) {
+        (self.host_imports_refused_by_host).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A copied host buffer was made (`copied.rs`): after an admitted import failed where
+    /// `degraded`, else for the gate's refusal.
+    pub(crate) fn copied_host_buffer_made(&self, degraded: bool) {
+        (self.copied_host_buffers_made).fetch_add(1, Ordering::Relaxed);
+        match degraded {
+            true => &self.copied_host_buffers_degraded,
+            false => &self.copied_host_buffers_refused,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A no-copy heap's own buffer was made a copy of its pages (`copied.rs`).
+    pub(crate) fn copied_heap_made(&self) {
+        (self.copied_heaps_made).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A rebind gave a buffer a copy of its new pages (`copied.rs`).
+    pub(crate) fn copied_rebind_pages_made(&self) {
+        (self.copied_rebind_pages_made).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A commit copied `bytes` the CPU changed into copied host buffers (`copied.rs`).
+    pub(crate) fn copied_copied_in(&self, bytes: u64) {
+        (self.copied_copy_in_bytes).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A batch's completion merged `bytes` the GPU changed back into the caller's pages
+    /// (`copied.rs`).
+    pub(crate) fn copied_merged_back(&self, bytes: u64) {
+        (self.copied_merge_back_bytes).fetch_add(bytes, Ordering::Relaxed);
     }
 
     /// A host import the device never releases while idle, for `because`, was made (`kept`), or
@@ -4256,6 +4301,31 @@ pub struct WorkCounts {
     pub host_pointer_imports_made: u64,
     /// Their bytes: whole pages, rounded out to the import's unit.
     pub host_pointer_import_bytes_made: u64,
+    /// The no-copy buffers' imports the caller's gate refused (`HostMemory::with_import_gate`):
+    /// each made a copied host buffer instead (`copied_host_buffers_refused`).
+    pub host_imports_refused_by_host: u64,
+    /// The copied host buffers made (`copied-host-pages`): no-copy buffers whose bytes the GPU
+    /// uses in a copy of the caller's pages in memory of the device's own, which no import maps.
+    /// Each is one of the next two.
+    pub copied_host_buffers_made: u64,
+    /// Of those, the ones made because the caller's gate refused the import.
+    pub copied_host_buffers_refused: u64,
+    /// Of those, the ones made because an import the device and the gate admitted failed (out
+    /// of memory, another Vulkan error).
+    pub copied_host_buffers_degraded: u64,
+    /// Of the copies made, those a rebind gave a buffer as its new pages
+    /// (`Buffer::rebind_bytes_no_copy`), in `copied_host_buffers_made` and its kin too.
+    pub copied_rebind_pages_made: u64,
+    /// Of the copies made, the no-copy heaps' own buffers (`Device::new_heap_with_bytes_no_copy`),
+    /// in `copied_host_buffers_made` and its kin too: the heap's buffers lie in the copy, and its
+    /// textures are shadows of its bytes.
+    pub copied_heaps_made: u64,
+    /// The bytes the CPU changed in copied host buffers' pages that commits copied into the
+    /// copies.
+    pub copied_copy_in_bytes: u64,
+    /// The bytes the GPU changed in copied host buffers' copies that batches' completions merged
+    /// back into the caller's pages.
+    pub copied_merge_back_bytes: u64,
     /// The live host imports the device never releases while idle as a heap's own import (a
     /// no-copy heap's). With the next three and `host_imports_kept_for_fds`, they are every live
     /// no-copy import the device keeps imported whatever reads it.
@@ -5318,6 +5388,20 @@ impl Device {
             host_pointer_import_bytes_made: counters
                 .host_pointer_import_bytes_made
                 .load(Ordering::Relaxed),
+            host_imports_refused_by_host: counters
+                .host_imports_refused_by_host
+                .load(Ordering::Relaxed),
+            copied_host_buffers_made: counters.copied_host_buffers_made.load(Ordering::Relaxed),
+            copied_host_buffers_refused: counters
+                .copied_host_buffers_refused
+                .load(Ordering::Relaxed),
+            copied_host_buffers_degraded: counters
+                .copied_host_buffers_degraded
+                .load(Ordering::Relaxed),
+            copied_rebind_pages_made: counters.copied_rebind_pages_made.load(Ordering::Relaxed),
+            copied_heaps_made: counters.copied_heaps_made.load(Ordering::Relaxed),
+            copied_copy_in_bytes: counters.copied_copy_in_bytes.load(Ordering::Relaxed),
+            copied_merge_back_bytes: counters.copied_merge_back_bytes.load(Ordering::Relaxed),
             host_imports_lost: counters.host_imports_lost.load(Ordering::Relaxed),
             host_import_fds_kept: counters.host_import_fds_kept.load(Ordering::Relaxed),
             host_imports_kept_for_fds: counters.host_imports_kept_for_fds.load(Ordering::Relaxed),

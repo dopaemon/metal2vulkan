@@ -404,6 +404,10 @@ fn finish(watch: &Watch, lists: &mut FenceLists, mut finished: Vec<(usize, Submi
     else {
         return true;
     };
+    // The GPU's writes into copied host buffers go back to the caller's pages before anything
+    // sees the batches complete: their event signals, the scheduler, a waiter, their completed
+    // handlers (`copied.rs`).
+    device.shared().copied.merge_back(&device.shared().counts);
     // The holds of the batches that end no command buffer go first, their work completed: a
     // detach that sees one of their signals detaches what only they held (`detach.rs`).
     for (_, batch) in &mut finished {

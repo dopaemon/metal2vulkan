@@ -2205,6 +2205,16 @@ impl Device {
                          texture was made"
                             .to_owned(),
                     )
+                } else if texels.buffer.copied() {
+                    // A copied host buffer's bytes the GPU uses lie in memory of the device's
+                    // own, no import of the pages (`copied.rs`): the shadow copies them, its
+                    // copies the buffer's uses, which commits copy in and completions merge back.
+                    ShadowCause::Refused(
+                        Refusal::Placement,
+                        "the buffer's bytes are a copy of the caller's pages in memory of the \
+                         device's own, which no image over the pages lies in"
+                            .to_owned(),
+                    )
                 } else {
                     // The check's own textures measure the device whatever its policy.
                     let policy = match checking {

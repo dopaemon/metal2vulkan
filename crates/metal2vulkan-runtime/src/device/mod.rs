@@ -434,6 +434,13 @@ pub(super) struct DeviceShared {
     pub(super) rebinds: super::rebind::Rebinds,
     /// The no-copy buffers by the host memory they were made over (`host_aliases.rs`).
     pub(super) aliases: super::host_aliases::HostAliases,
+    /// Its copied host buffers, compared at each commit and each batch's completion
+    /// (`copied.rs`).
+    pub(crate) copied: Arc<super::copied::CopiedBuffers>,
+    /// How many of the next imports of host pages by their pointer fail as the driver's out of
+    /// device memory: for the tests of `copied.rs` (`Device::fail_next_host_imports`).
+    #[cfg(test)]
+    pub(crate) failing_host_imports: std::sync::atomic::AtomicU64,
     /// The logs of its shadows over host pages a consumer logs the writes to
     /// (`dirty_pages.rs`).
     pub(super) dirty: super::dirty_pages::DirtyShadows,
@@ -942,6 +949,16 @@ pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl Device {
+    /// Fail the next `count` imports of host pages by their pointer as the driver's out of device
+    /// memory: the tests' stand-in for an import the device and the gate admitted that then fails
+    /// (`copied.rs`).
+    pub(crate) fn fail_next_host_imports(&self, count: u64) {
+        (self.shared().failing_host_imports).store(count, Ordering::Relaxed);
+    }
 }
 
 impl Device {
@@ -1854,6 +1871,9 @@ impl Device {
             heap_keys: Default::default(),
             rebinds: Default::default(),
             aliases: Default::default(),
+            copied: Default::default(),
+            #[cfg(test)]
+            failing_host_imports: Default::default(),
             dirty: Default::default(),
             fresh: Default::default(),
             owners: Default::default(),

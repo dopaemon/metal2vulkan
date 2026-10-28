@@ -58,6 +58,7 @@ mod command_buffer;
 mod compressed_blit;
 mod compute;
 mod contexts;
+mod copied;
 mod copy_plan;
 mod creation;
 mod deferred;
@@ -290,7 +291,7 @@ pub use function_table::{
 pub use gpu_time::host_time;
 pub use heap::{Heap, HeapDescriptor, HeapProblem, HeapType, SizeAndAlign};
 pub use host_bytes::HostBytes;
-pub use host_memory::{Deallocator, HostMemory, KeepAlive};
+pub use host_memory::{Deallocator, HostMemory, ImportGate, ImportRequest, KeepAlive};
 pub use indirect_command_buffer::{
     EncodedComputeCommand, EncodedRenderCommand, IndirectBufferBinding, IndirectCommand,
     IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandBufferProblem,

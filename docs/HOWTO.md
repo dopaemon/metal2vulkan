@@ -311,6 +311,37 @@ records it (`WorkCounts::copy_regions_split`): among them a two-plane YCbCr text
 into its staging buffer where it converts whole (`WorkCounts::ycbcr_whole_conversions`), and a
 staged texture's bytes and rows.
 
+### Copied host buffers
+
+A no-copy buffer whose import the runtime does not make is made over a copy of its bytes instead,
+announced (`copied-host-pages`): no import maps the pages, so they take no kernel mapping. That
+happens where:
+
+- the caller's gate refuses the import: `HostMemory::with_import_gate(gate)` asks the `ImportGate`
+  once, on the thread making the buffer, heap or rebind and holding no lock of the runtime's, just
+  before the import, with the pages it would map (`ImportRequest`, the host pages from the first
+  byte's through the last's). `false` makes the copy (`WorkCounts::host_imports_refused_by_host`,
+  `copied_host_buffers_refused`). A consumer with a budget of mappings (Linux's
+  `vm.max_map_count`) refuses there, paying in copies instead of a failed call. It is not asked
+  for a buffer or rebind that lies in a live import of the same bytes, a heap's rebind, memory
+  whose GPU writes Metal's private option bit 24 drops, or where the device refused the pointer
+  before it;
+- an import the device and the gate admitted fails (out of memory, another Vulkan error:
+  `copied_host_buffers_degraded`).
+
+The copy is host-visible memory of the device's own; the buffer's `contents` is still the pointer.
+Each commit writes into the copy every byte the CPU changed in the pages since the copy and the
+pages last agreed, and each batch's completion writes back every byte the GPU changed, before its
+handlers run or a waiter returns, keeping a byte the CPU changed since (`copied_copy_in_bytes`,
+`copied_merge_back_bytes`). Each compares every byte of every live copy, so keep copies few. A
+texture over a copied buffer is a shadow of its bytes. Pages the process cannot read are never
+copied: the buffer is refused, as their import is.
+
+A no-copy heap's own buffer is copied the same way (`copied_heaps_made`): its buffers lie in the
+copy, and its textures are shadows of its bytes. `Buffer::rebind_bytes_no_copy` gives the buffer a
+copy of its new pages the same way (`copied_rebind_pages_made`), except over a buffer with a
+texture in place over it, which the rebind refuses (`NotImplemented(RebindTextures)`).
+
 ## 7. Check the integration
 
 `spirv-val` checks structural validity, not agreement with Metal:

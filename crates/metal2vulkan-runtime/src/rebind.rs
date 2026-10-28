@@ -903,6 +903,13 @@ impl Buffer {
     /// memory from its next use, and one whose linear image aliases its bytes has its image made
     /// again over the new memory before the call returns; nothing of the old contents is copied.
     ///
+    /// Where the caller's gate refuses the new pages' import
+    /// ([`HostMemory::with_import_gate`](crate::HostMemory::with_import_gate)), or the import the
+    /// device and the gate admitted fails (out of memory, another Vulkan error), the buffer is
+    /// given a copy of the new pages in memory of the device's own instead, its `contents` the new
+    /// pointer, announced (`copied-host-pages`, `copied.rs`); refused instead where an image in
+    /// place aliases the buffer's bytes (`NotImplemented(RebindTextures)`).
+    ///
     /// Refused: a buffer that is not a no-copy buffer of its own (`Invalid`,
     /// [`RebindProblem::NotHostMemory`]); a command buffer not yet committed whose commands used
     /// the buffer, or an open encoder that did (a render encoder with an attachment over it, from

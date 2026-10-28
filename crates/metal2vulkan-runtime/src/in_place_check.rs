@@ -299,7 +299,7 @@ impl ClassPages {
 
 /// A no-copy buffer of `length` bytes over anonymous pages mapped for it, imported by their
 /// pointer, which its keep-alive unmaps ([`Anonymous`]). `None` where the device makes none, or
-/// does not import the pointer (dma-bufs).
+/// does not import the pointer (dma-bufs, or a copied host buffer, `copied.rs`).
 #[cfg(unix)]
 fn pointer_pages(device: &Device, length: u64) -> Option<ClassPages> {
     let start = map_anonymous(length)?;
@@ -308,7 +308,7 @@ fn pointer_pages(device: &Device, length: u64) -> Option<ClassPages> {
     // which stays until the keep-alive unmaps it, and which nothing else maps or frees.
     let memory = unsafe { HostMemory::new(start) };
     let buffer = no_copy_kept(device, memory, length, pages)?;
-    if buffer.over_dma_buf() {
+    if buffer.over_dma_buf() || buffer.copied() {
         return None;
     }
     Some(ClassPages { buffer, start })

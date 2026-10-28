@@ -207,7 +207,10 @@ the runtime made.
   ([HOWTO](../../docs/HOWTO.md#6-host-memory-a-driver-refuses)). A no-copy buffer's import of such
   dma-bufs that only blits have read may be released while idle and imported again at its next
   blit, which then costs time: RADV lists every import in every submission. Nothing of Metal's
-  observes it.
+  observes it. A no-copy buffer, heap or buffer rebind whose import the caller's gate refuses
+  (`HostMemory::with_import_gate`), or whose admitted import fails, is made over a copy of its
+  bytes in memory of the device's own, announced (`copied-host-pages`,
+  [HOWTO](../../docs/HOWTO.md#copied-host-buffers)).
   `CommandBuffer::used_resources` lists what a command buffer uses until it completes, so a
   program knows when it may take memory away.
 - **Hazards** are tracked as Metal tracks them. A heap's resources are untracked by default, so
@@ -287,6 +290,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   the writes to a no-copy object's pages, by which every copy of them into memory of the device's
   own (a shadow of a texture over them) copies in only the pages changed since its last copy, on
   every device. The runtime's own writes into the pages are reported back, naming their writer.
+- `HostMemory::with_import_gate` and its `ImportGate` (with `ImportRequest`): the consumer's
+  gate over a no-copy buffer's, heap's or rebind's import of its pages; a refusal makes a copy of
+  them.
 - `HostBytes`: bytes at a pointer that may change while a call reads them (a guest's memory),
   which `Texture::replace_region_with_host_bytes` and `BufferContents::CopyHost` copy once through
   the pointer, where the slice forms would need the caller's own copy first.

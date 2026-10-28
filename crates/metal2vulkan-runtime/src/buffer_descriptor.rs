@@ -13,6 +13,7 @@ use super::address_pool::AddressPool;
 #[cfg(unix)]
 use super::buffer::Pages;
 use super::buffer::{usage, Buffer, BufferParts, HostCell, Lying, Modes, Owner, ReadApart};
+use super::copied::NotCopied;
 use super::degradation::Degradation;
 use super::device::lock;
 use super::error::MemoryKind;
@@ -21,8 +22,8 @@ use super::heap::{Heap, HeapProblem};
 use super::host_bytes::HostBytes;
 use super::host_memory::{
     based_size, binds_in, buffer_base, import_refused, import_window, not_importable,
-    refuse_unwritable, refused, Deallocator, HostMemory, HostParts, HostRelease, ImportWindow,
-    Importer, KeepAlive, Source,
+    refuse_unwritable, refused, Deallocator, HostMemory, HostParts, HostRelease, ImportRequest,
+    ImportWindow, Importer, KeepAlive, Source,
 };
 #[cfg(unix)]
 use super::host_residency::Again;
@@ -302,6 +303,13 @@ impl Device {
     /// are: on macOS the pages are imported through a read-only view of them, by their pointer
     /// alone; elsewhere the GPU's writes reach them, announced (`private-resource-option`).
     ///
+    /// Where the caller's gate refuses the import ([`HostMemory::with_import_gate`]), or the import
+    /// the device and the gate admitted fails (out of memory, another Vulkan error), the buffer is
+    /// made over a copy of the bytes in memory of the device's own instead, its `contents` still
+    /// the pointer, announced (`copied-host-pages`): each commit copies in the bytes the CPU
+    /// changed, and each batch's completion merges back the bytes the GPU changed (`copied.rs`).
+    /// Pages the process cannot read are never copied, and keep the import's refusal.
+    ///
     /// Refused: a length of 0 or past `max_buffer_length` (`Nil`, as plain Metal answers nil);
     /// `Private` or `Memoryless` storage, as Metal stops them, and an undefined
     /// option (`Invalid`); a device
@@ -477,6 +485,7 @@ impl Device {
             source,
             writable,
             dirty,
+            gate,
         } = memory.into_parts();
         let host = host_window(call, importer, pointer, length, source, drops_writes)?;
         let window = host.window;
@@ -511,6 +520,26 @@ impl Device {
         // and the pages stay writable while imported (`HostMemory::new`).
         let host = writability_settled(host, writable, &shared.counts)?;
         let unwritable = host.unwritable;
+        // A no-copy buffer or heap whose pointer the device would import (not one whose GPU
+        // writes are dropped) may be a copy instead (`copied.rs`): where the caller's gate refuses
+        // the import, asked here with the pages it would map, holding no lock of the runtime's; or
+        // where the import it admitted fails.
+        let copyable = !drops_writes;
+        let refused_by_host = copyable
+            && host.by_pointer
+            && gate.as_ref().is_some_and(|gate| {
+                let request = ImportRequest {
+                    start: NonNull::new(window.start as *mut u8).unwrap_or(pointer),
+                    length: window.size,
+                };
+                !gate(request)
+            });
+        if refused_by_host {
+            shared.counts.host_import_refused_by_host();
+            let copy = (call, pointer, length, modes, placement, of_heap);
+            // SAFETY: the caller's contract.
+            return unsafe { self.copied_buffer(copy, release, dirty, None) };
+        }
         // SAFETY: the window lies in the pages of the caller's bytes, which stay mapped
         // (`HostMemory::new`), and the source's pieces hold them (`HostMemory::with_dma_buf`). No
         // lock of the runtime's is held.
@@ -518,26 +547,35 @@ impl Device {
         // while idle and import them again (`host_residency.rs`), as it may its own import of
         // the pointer where the driver's pointer imports follow their address; a heap's import
         // stays, as does an import of a read-only view.
-        let (buffer, memory, again) =
-            match unsafe { self.import_by_pointer(importer, pointer, length, host, class) }? {
-                Ok((buffer, memory)) => {
-                    #[cfg(unix)]
-                    let again = (!of_heap && !drops_writes)
-                        .then(|| Again::pointer(self, pointer, (length, window, class)))
-                        .flatten();
-                    #[cfg(not(unix))]
-                    let again = None;
-                    (buffer, memory, again)
-                }
-                // SAFETY: as above.
-                Err(source) => unsafe {
-                    let keep = !of_heap;
-                    let window = &window;
-                    self.import_from_source(
-                        call, importer, pointer, length, window, source, class, keep,
-                    )
-                }?,
-            };
+        let imported = unsafe { self.import_by_pointer(importer, pointer, length, host, class) };
+        let imported = match imported {
+            // An import the device and the gate admitted that then failed: a copy, announced.
+            Err(error) if copyable && copies_after(&error) => {
+                let copy = (call, pointer, length, modes, placement, of_heap);
+                // SAFETY: the caller's contract.
+                return unsafe { self.copied_buffer(copy, release, dirty, Some(error)) };
+            }
+            imported => imported,
+        };
+        let (buffer, memory, again) = match imported? {
+            Ok((buffer, memory)) => {
+                #[cfg(unix)]
+                let again = (!of_heap && !drops_writes)
+                    .then(|| Again::pointer(self, pointer, (length, window, class)))
+                    .flatten();
+                #[cfg(not(unix))]
+                let again = None;
+                (buffer, memory, again)
+            }
+            // SAFETY: as above.
+            Err(source) => unsafe {
+                let keep = !of_heap;
+                let window = &window;
+                self.import_from_source(
+                    call, importer, pointer, length, window, source, class, keep,
+                )
+            }?,
+        };
         if unwritable {
             self.degrade_read_only_pages(call, pointer, length);
         }
@@ -637,6 +675,7 @@ impl Device {
             source,
             writable,
             dirty,
+            gate,
         } = memory.into_parts();
         // A buffer whose GPU writes are dropped keeps them dropped over its new pages.
         let drops_writes = cell.drops_writes();
@@ -683,11 +722,62 @@ impl Device {
                 let unit = importer.page.max(importer.alignment);
                 let start = pointer.as_ptr() as u64;
                 let covered = (shared.aliases).covered(start, start.saturating_add(length), unit);
-                // SAFETY: the window lies in the pages of the caller's bytes, which stay mapped
-                // (`HostMemory::new`, `HostMemory::with_dma_buf`).
-                let (host, placement, remade) = match unsafe {
-                    self.import_by_pointer(importer, pointer, length, host, class)
-                }? {
+                // A buffer's new pages whose pointer the device would import (not a heap's, nor
+                // a buffer's whose GPU writes are dropped) may be a copy of them instead
+                // (`copied.rs`): where the caller's gate refuses the import, asked here with the
+                // pages it would map, holding no lock of the runtime's; or where the import it
+                // admitted fails.
+                let copyable = heap.is_none() && !drops_writes;
+                let gate = gate.filter(|_| copyable && host.by_pointer);
+                let refused_by_host = match gate {
+                    Some(gate) => {
+                        // Asked with no lock of the runtime's held: the textures over detached
+                        // bytes are let go of meanwhile, and settled again after it.
+                        let was_settled = settled.take().is_some();
+                        let request = ImportRequest {
+                            start: NonNull::new(window.start as *mut u8).unwrap_or(pointer),
+                            length: window.size,
+                        };
+                        let refused = !gate(request);
+                        if was_settled {
+                            settled = Some(cell.settled().ok_or_else(detached_textures)?);
+                        }
+                        refused
+                    }
+                    None => false,
+                };
+                if refused_by_host {
+                    shared.counts.host_import_refused_by_host();
+                }
+                let copy = |failed: Option<Error>| {
+                    // An image in place over the bytes would be made again over the copy, which
+                    // is not done: refused, as over new pages no image takes.
+                    if !in_place.is_empty() {
+                        return Err(Error::NotImplemented(RuntimeGap::RebindTextures));
+                    }
+                    // SAFETY: the caller's contract.
+                    unsafe { self.copied_pages(pointer, length, &window, failed) }
+                };
+                let imported = match refused_by_host {
+                    true => Err(None),
+                    // SAFETY: the window lies in the pages of the caller's bytes, which stay
+                    // mapped (`HostMemory::new`, `HostMemory::with_dma_buf`).
+                    false => match unsafe {
+                        self.import_by_pointer(importer, pointer, length, host, class)
+                    } {
+                        Err(error) if copyable && copies_after(&error) => Err(Some(error)),
+                        imported => Ok(imported),
+                    },
+                };
+                let (imported, copied) = match imported {
+                    Ok(imported) => (imported, None),
+                    Err(failed) => {
+                        let degraded = failed.is_some();
+                        let (host, placement, copied) = copy(failed)?;
+                        (Ok(Ok((host, placement))), Some((copied, degraded)))
+                    }
+                };
+                let (host, placement, remade) = match imported? {
                     Ok((host, placement)) => (host, placement, Remade::default()),
                     // The source is called with no lock of the runtime's held (`dma_buf.rs`):
                     // the textures over detached bytes are let go of meanwhile, and must be
@@ -744,7 +834,15 @@ impl Device {
                     host.base,
                     host.size - host.base,
                 );
-                shared.counts.host_rebind_import_made(covered);
+                match copied {
+                    Some((copied, degraded)) => {
+                        pages.set_copied(copied);
+                        shared.counts.copied_host_buffer_made(degraded);
+                        shared.counts.copied_rebind_pages_made();
+                        self.degrade_copied(call, pointer, length, degraded);
+                    }
+                    None => shared.counts.host_rebind_import_made(covered),
+                }
                 (pages, remade)
             }
         };
@@ -1045,6 +1143,245 @@ impl Device {
         });
     }
 
+    /// A copy of the `length` bytes at `pointer` for a rebind's new pages (`copied.rs`), laid
+    /// out as their import of `window` would be: a `VkBuffer` from the window's first page, the
+    /// bytes `window.offset` into it, in host-visible memory of the device's own, so the texel
+    /// views planned at the bytes' offset lie where they lay. Its memory's host address is the
+    /// window's, so the buffer's `contents` stays the pointer. Refused as
+    /// [`Device::copied_buffer`] refuses its copy.
+    ///
+    /// # Safety
+    ///
+    /// The caller's bytes meet [`HostMemory::new`]'s contract for `length` bytes.
+    unsafe fn copied_pages(
+        &self,
+        pointer: NonNull<u8>,
+        length: u64,
+        window: &ImportWindow,
+        failed: Option<Error>,
+    ) -> Result<(HostBuffer, Placement, crate::copied::Copied), Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let bytes = usize::try_from(length).map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;
+        // Padded to 16 bytes past the bytes, as a buffer of the runtime's own.
+        let size = (window.offset.checked_add(length))
+            .and_then(|end| end.checked_next_multiple_of(16))
+            .ok_or(Error::OutOfMemory(MemoryKind::Device))?;
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage(false)),
+        );
+        // SAFETY: the device is live and `info` valid.
+        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        shared.counts.buffer_made(info.usage);
+        // SAFETY: `raw` is a live buffer of this device.
+        let requirements = unsafe { raw_device.get_buffer_memory_requirements(raw) };
+        let allocated = crate::memory::allocate_addressed(
+            &shared.memory,
+            raw_device,
+            &super::buffer::placed(requirements),
+            MemoryClass::Shared,
+            &shared.counts,
+        );
+        let mut memory = match allocated {
+            Ok(memory) => memory,
+            Err(error) => {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(raw_device, raw) };
+                return Err(error);
+            }
+        };
+        let discard = |memory: &Placement| {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            lock(&shared.memory).free(raw_device, memory);
+        };
+        // SAFETY: the placement meets the buffer's requirements and is not bound elsewhere.
+        let bound =
+            unsafe { crate::creation::bind_buffer(raw_device, raw, memory.memory, memory.offset) };
+        if let Err(error) = bound {
+            discard(&memory);
+            return Err(vulkan(error));
+        }
+        let copy = memory
+            .mapped
+            .and_then(|mapped| NonNull::new(mapped.as_ptr().wrapping_add(window.offset as usize)));
+        let Some(copy) = copy else {
+            discard(&memory);
+            return Err(internal(
+                "a copied host buffer's memory is not host-visible",
+            ));
+        };
+        // SAFETY: the copy is the placement's `length` bytes past the window's offset, mapped,
+        // which nothing uses yet and which stay mapped while the import holds them; the caller's
+        // bytes stay mapped as long (the caller's contract).
+        let copied = match unsafe { shared.copied.add(pointer, copy, bytes) } {
+            Ok(copied) => copied,
+            Err(why) => {
+                discard(&memory);
+                return Err(match why {
+                    NotCopied::Unreadable => failed.unwrap_or_else(not_importable),
+                    NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
+                });
+            }
+        };
+        // The host address of the window's first byte, as an import's: `contents` is the
+        // pointer, `window.offset` past it.
+        let start = NonNull::new(pointer.as_ptr().wrapping_sub(window.offset as usize));
+        memory.mapped = Some(super::memory::Mapped::of_caller(start.unwrap_or(pointer)));
+        let host = HostBuffer {
+            raw,
+            base: window.offset,
+            size: window.offset + length,
+            requirements,
+        };
+        Ok((host, memory, copied))
+    }
+
+    /// Announce that `call` made the `length` bytes at `pointer` a copy of the caller's pages
+    /// (`Degradation::CopiedHostPages`): where `degraded`, because the import the device and the
+    /// gate admitted failed, else because the caller's gate refused it.
+    fn degrade_copied(
+        &self,
+        call: &'static str,
+        pointer: NonNull<u8>,
+        length: u64,
+        degraded: bool,
+    ) {
+        self.degrade(Degradation::CopiedHostPages, || {
+            let why = match degraded {
+                false => {
+                    "the caller's import gate (HostMemory::with_import_gate) refused their \
+                          import"
+                }
+                true => "their import failed",
+            };
+            (
+                format!("{call} over {length:#x} bytes at {pointer:p}"),
+                format!("{why}, so the GPU uses a copy of them in memory of the device's own"),
+            )
+        });
+    }
+
+    /// A copied host buffer over the `length` bytes at `pointer` (`copied.rs`), of `modes`, at
+    /// `placement`, for `call`, a heap's own buffer where `of_heap` (laid where the heap's
+    /// textures could lie, its hazard identity a heap's), given back to `release`, its caller's
+    /// log `dirty` kept with it:
+    /// made where the caller's gate refused the pointer's import (`failed` is `None`), or where
+    /// the import the gate and the device admitted failed with `failed`. Announced
+    /// (`copied-host-pages`) and counted either way. Refused where its own memory cannot be had
+    /// (typed as the allocation answers), and where the process cannot read every page (memory
+    /// Metal makes no buffer over): with the import's failure where there was one, else as not
+    /// importable.
+    ///
+    /// # Safety
+    ///
+    /// The caller's bytes meet [`HostMemory::new`]'s contract for `length` bytes.
+    unsafe fn copied_buffer(
+        &self,
+        (call, pointer, length, modes, placement, of_heap): (
+            &'static str,
+            NonNull<u8>,
+            u64,
+            Modes,
+            Place,
+            bool,
+        ),
+        release: Option<super::host_memory::Release>,
+        dirty: Option<Arc<super::dirty_pages::DirtySource>>,
+        failed: Option<Error>,
+    ) -> Result<Buffer, Error> {
+        let shared = self.shared();
+        let raw_device = shared.vk();
+        let unreadable = |failed: Option<Error>| failed.unwrap_or_else(not_importable);
+        let bytes = usize::try_from(length).map_err(|_| Error::OutOfMemory(MemoryKind::Host))?;
+        // Padded to 16 bytes, so a device fill clears every byte too, as a buffer of its own.
+        let size = length
+            .checked_next_multiple_of(16)
+            .ok_or_else(|| nil(call, Problem::BufferLength { length }))?;
+        let info = shared.sharing().buffer(
+            vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage(false)),
+        );
+        // SAFETY: the device is live and `info` valid.
+        let raw = unsafe { crate::creation::buffer(raw_device, &info) }.map_err(vulkan)?;
+        shared.counts.buffer_made(info.usage);
+        // A heap's own buffer lies where its textures could too, as an imported heap's.
+        let placed = match of_heap {
+            true => self.place_heap_buffer(raw, length, MemoryClass::Shared, placement),
+            false => self.place_buffer(raw, length, MemoryClass::Shared, placement),
+        };
+        let (mut memory, (address, reserved)) = match placed {
+            Ok(placed) => placed,
+            Err(error) => {
+                // SAFETY: the buffer is unused.
+                unsafe { release::object(raw_device, raw) };
+                return Err(error);
+            }
+        };
+        let discard = |memory: &Placement| {
+            // SAFETY: the buffer is unused.
+            unsafe { release::object(raw_device, raw) };
+            lock(&shared.memory).free(raw_device, memory);
+        };
+        let Some(copy) = memory
+            .mapped
+            .and_then(|mapped| NonNull::new(mapped.as_ptr()))
+        else {
+            discard(&memory);
+            return Err(internal(
+                "a copied host buffer's memory is not host-visible",
+            ));
+        };
+        // SAFETY: the copy is the placement's `length` bytes, mapped, which nothing uses yet and
+        // which stay mapped while the import holds them; the caller's bytes stay mapped as long
+        // (the caller's contract).
+        let copied = match unsafe { shared.copied.add(pointer, copy, bytes) } {
+            Ok(copied) => copied,
+            Err(why) => {
+                discard(&memory);
+                return Err(match why {
+                    NotCopied::Unreadable => unreadable(failed),
+                    NotCopied::OutOfHostMemory => Error::OutOfMemory(MemoryKind::Host),
+                });
+            }
+        };
+        // Its `contents` is the caller's pointer, as a no-copy buffer's is.
+        memory.mapped = Some(super::memory::Mapped::of_caller(pointer));
+        let buffer = self.buffer_of(BufferParts {
+            raw,
+            memory,
+            offset: 0,
+            base: 0,
+            length,
+            reach: length,
+            modes,
+            address,
+            reserved,
+            owner: Owner::Caller,
+            release,
+            of_heap,
+            mirror: None,
+            #[cfg(unix)]
+            again: None,
+        });
+        if let Some(pages) = buffer.host_pages() {
+            pages.set_copied(copied);
+            // The caller's log of the pages' writes stays with them (`dirty_pages.rs`).
+            if let Some(dirty) = dirty {
+                pages.keep_dirty(dirty);
+            }
+        }
+        shared.counts.copied_host_buffer_made(failed.is_some());
+        if of_heap {
+            shared.counts.copied_heap_made();
+        }
+        self.degrade_copied(call, pointer, length, failed.is_some());
+        Ok(buffer)
+    }
+
     /// Release `buffer` and its `placement`, an import made for a buffer or rebind that is not
     /// made after all: the `VkBuffer` first, once its sparse binding completed.
     pub(super) fn discard_import(&self, buffer: HostBuffer, placement: Placement) {
@@ -1178,6 +1515,16 @@ impl Device {
     ) -> Result<Placement, Error> {
         let shared = self.shared();
         let raw_device = shared.vk();
+        #[cfg(test)]
+        {
+            use std::sync::atomic::Ordering;
+            let failing = &shared.failing_host_imports;
+            if (failing.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1)))
+                .is_ok()
+            {
+                return Err(Error::OutOfMemory(MemoryKind::Device));
+            }
+        }
         // SAFETY: the caller's contract keeps the pages mapped until the placement is freed.
         let placement =
             unsafe { lock(&shared.memory).import_host(raw_device, pages, size, allowed, class) }
@@ -1245,6 +1592,13 @@ fn writability_settled(
         }),
         Err(error) => Err(error),
     }
+}
+
+/// Whether `error`, an import's failure that is not the device's refusal of the pages, leaves the
+/// no-copy buffer a copy of them (`copied.rs`): out of memory, or another Vulkan error. A lost
+/// device does not, nor does misuse.
+fn copies_after(error: &Error) -> bool {
+    matches!(error, Error::OutOfMemory(_) | Error::Vulkan(_))
 }
 
 /// The host pages a no-copy object of `length` bytes at `pointer` imports on the device of

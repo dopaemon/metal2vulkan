@@ -558,6 +558,13 @@ impl Device {
     /// private option bit 24 the GPU's writes to the memory are dropped as a no-copy buffer's are
     /// ([`Device::new_buffer_with_bytes_no_copy`]).
     ///
+    /// Where the caller's gate refuses the import
+    /// ([`HostMemory::with_import_gate`](crate::HostMemory::with_import_gate)), or the import the
+    /// device and the gate admitted fails (out of memory, another Vulkan error), the heap's own
+    /// buffer is a copy of the pages in memory of the device's own instead, its buffers lying in
+    /// the copy and its textures shadows of its bytes, announced (`copied-host-pages`,
+    /// `copied.rs`).
+    ///
     /// Refused: a size of 0 (`Nil`, as [`Device::new_heap`] answers it); storage other than
     /// `Shared`, a sparse heap, an undefined option (`Invalid`); memory whose first byte is not a multiple of the import's unit
     /// (`Invalid`, [`HeapProblem::HostMemoryAlignment`]); and as

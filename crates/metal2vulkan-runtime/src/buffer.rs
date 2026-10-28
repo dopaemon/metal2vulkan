@@ -683,6 +683,11 @@ impl HostPages {
         }
     }
 
+    /// They lie in a copy of the caller's pages, registered as `copied` (`copied.rs`).
+    pub(super) fn set_copied(&self, copied: crate::copied::Copied) {
+        self.import.set_copied(copied);
+    }
+
     /// Keep the caller's log of the writes to them (`dirty_pages.rs`), given with their memory.
     pub(super) fn keep_dirty(&self, dirty: Arc<DirtySource>) {
         let _kept = self.dirty.set(dirty);
@@ -763,6 +768,11 @@ impl HostPages {
     /// Whether they were imported as dma-bufs (`dma_buf.rs`), not by their pointer.
     pub(super) fn over_dma_buf(&self) -> bool {
         self.import.shape.over_dma_buf
+    }
+
+    /// Whether they lie in a copy of the caller's pages (`copied.rs`), not an import of them.
+    pub(super) fn copied(&self) -> bool {
+        self.import.copied()
     }
 
     /// Where they lie as dma-bufs (`dma_buf.rs`): the imports, with the caller's source; the host
@@ -921,6 +931,9 @@ pub(super) struct HostImport {
     /// The releases of pages that went while it lived with no keep-alive: their deallocators
     /// run once it is freed.
     after_free: Mutex<Vec<Release>>,
+    /// Its place among its device's copied host buffers, where its memory is a copy of the
+    /// caller's pages, not their import (`copied.rs`): unregistered as it goes, before its memory.
+    copied: OnceLock<crate::copied::Copied>,
 }
 
 /// Where a host import's bytes lie in its `VkBuffer` and memory, which reading needs no
@@ -1097,6 +1110,7 @@ impl HostImport {
             unlisted: AtomicBool::new(unlisted),
             kept: Mutex::new(None),
             after_free: Mutex::new(Vec::new()),
+            copied: OnceLock::new(),
         }
     }
 
@@ -1121,6 +1135,7 @@ impl HostImport {
             unlisted: AtomicBool::new(false),
             kept: Mutex::new(None),
             after_free: Mutex::new(Vec::new()),
+            copied: OnceLock::new(),
         }
     }
 
@@ -1130,6 +1145,18 @@ impl HostImport {
         if self.unlisted.load(Ordering::Relaxed) && self.unlisted.swap(false, Ordering::Relaxed) {
             (self.device.shared().counts).host_import_rebound_unlisted(false);
         }
+    }
+
+    /// Its memory is a copy of the caller's pages, registered as `copied` (`copied.rs`), not
+    /// their import.
+    pub(super) fn set_copied(&self, copied: crate::copied::Copied) {
+        // Set once, as the copied buffer is made.
+        let _ = self.copied.set(copied);
+    }
+
+    /// Whether its memory is a copy of the caller's pages (`copied.rs`), not their import.
+    pub(super) fn copied(&self) -> bool {
+        self.copied.get().is_some()
     }
 
     /// Whether its pages were imported through a read-only view of them, which drops the GPU's
@@ -1267,6 +1294,8 @@ impl Device {
 
 impl Drop for HostImport {
     fn drop(&mut self) {
+        // A copy leaves its device's comparisons before its memory can go (`copied.rs`).
+        drop(self.copied.take());
         // The Vulkan teardown is a section of the exit guard.
         let Some(busy) = exit_guard::enter() else {
             // The process is exiting: the pages stay imported to its end (`exit_guard`), so no
@@ -2568,7 +2597,7 @@ impl Device {
 
     /// Place `raw` (for a buffer of `length` bytes) in memory of `class` and at `at` in the
     /// address space; released again when either fails.
-    fn place_buffer(
+    pub(super) fn place_buffer(
         &self,
         raw: vk::Buffer,
         length: u64,
@@ -2582,7 +2611,7 @@ impl Device {
 
     /// [`place_buffer`](Device::place_buffer) for a heap's own buffer: where the heap's textures
     /// can lie too (`Device::heap_requirements`).
-    fn place_heap_buffer(
+    pub(super) fn place_heap_buffer(
         &self,
         raw: vk::Buffer,
         length: u64,
@@ -3357,6 +3386,15 @@ impl Buffer {
             Some(Lying::In(pages)) => pages.type_index(),
             Some(Lying::Detached(detached)) => detached.type_index,
             None => self.memory().2,
+        }
+    }
+
+    /// Whether the buffer's bytes lie in a copy of the caller's pages (a copied host buffer,
+    /// `copied.rs`), not an import of them; false for a buffer over no host pages, or detached.
+    pub(crate) fn copied(&self) -> bool {
+        match self.pages_cell().map(|cell| cell.lying()) {
+            Some(Lying::In(pages)) => pages.copied(),
+            _ => false,
         }
     }
 

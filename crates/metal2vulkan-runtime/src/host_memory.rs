@@ -129,7 +129,43 @@ pub struct HostMemory {
     writable: bool,
     /// The caller's log of the pages written ([`HostMemory::with_dirty_pages`]).
     dirty: Option<Arc<dyn DirtyHook>>,
+    /// The caller's gate over the import of the pages ([`HostMemory::with_import_gate`]).
+    gate: Option<ImportGate>,
 }
+
+/// A consumer's gate over the import of a no-copy object's pages (a runtime extension,
+/// [`HostMemory::with_import_gate`]): asked once, just before the runtime imports the pages for a
+/// no-copy buffer or heap made over them, or for a buffer's rebind to them
+/// (`Buffer::rebind_bytes_no_copy`), with the pages the import would map. `true` lets the import
+/// go on; `false` refuses it, and the buffer is a copied host buffer instead (the heap's own
+/// buffer too, the rebind's new pages a copy of them), whose bytes the GPU uses in memory of the
+/// device's own, kept coherent with the pages at each commit and each completion, so the pages
+/// take no kernel mapping (`copied.rs`, docs/HOWTO.md, "Copied host buffers"). Called on the
+/// thread that makes the buffer, heap or rebind, holding no lock of the runtime's. Not asked for a
+/// buffer or rebind that lies in a live import (one made over the same bytes), nor where the device
+/// refused the import before it (no host-pointer import, an import alignment the range cannot
+/// meet), nor for memory whose GPU writes Metal's private option bit 24 drops, nor for a heap's
+/// rebind, which imports without asking. An import it lets go on that then fails (out of memory,
+/// another Vulkan error) makes the copy all the same. Every copy is announced
+/// (`copied-host-pages`). No Metal counterpart.
+pub type ImportGate = Arc<dyn Fn(ImportRequest) -> bool + Send + Sync + 'static>;
+
+/// The pages an [`ImportGate`] is asked about: those an import would map for the buffer, from the
+/// host page its first byte lies in through the one its last lies in.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImportRequest {
+    /// The first byte of the first page.
+    pub start: NonNull<u8>,
+    /// The bytes of the pages.
+    pub length: u64,
+}
+
+// SAFETY: a request is an address and a length, plain data: nothing is reached through the
+// address.
+unsafe impl Send for ImportRequest {}
+// SAFETY: as above.
+unsafe impl Sync for ImportRequest {}
 
 /// What a [`HostMemory`] may carry besides its pointer: a [`DmaBufSource`] where the system has
 /// file descriptors, nothing elsewhere.
@@ -155,6 +191,7 @@ impl std::fmt::Debug for HostMemory {
             .field("dma_buf", &self.source.is_some())
             .field("writable", &self.writable)
             .field("dirty_pages", &self.dirty.is_some())
+            .field("import_gate", &self.gate.is_some())
             .finish()
     }
 }
@@ -194,6 +231,7 @@ impl HostMemory {
             source: None,
             writable: false,
             dirty: None,
+            gate: None,
         }
     }
 
@@ -240,6 +278,7 @@ impl HostMemory {
             source: Some(source),
             writable: false,
             dirty: None,
+            gate: None,
         }
     }
 
@@ -309,6 +348,19 @@ impl HostMemory {
         }
     }
 
+    /// This memory, with the caller's gate over the import of its pages (a runtime extension,
+    /// [`ImportGate`]): asked once, just before a no-copy buffer or heap made over it, or a
+    /// buffer's rebind to it, imports the pages; where it answers `false`, the buffer is a copied
+    /// host buffer (the heap's own buffer too, the rebind's new pages a copy), which no import maps,
+    /// announced (`copied-host-pages`) and counted (`WorkCounts::host_imports_refused_by_host`,
+    /// `WorkCounts::copied_host_buffers_refused`). No Metal counterpart.
+    pub fn with_import_gate(self, gate: ImportGate) -> HostMemory {
+        HostMemory {
+            gate: Some(gate),
+            ..self
+        }
+    }
+
     /// The pointer.
     pub fn pointer(&self) -> NonNull<u8> {
         self.pointer
@@ -316,7 +368,8 @@ impl HostMemory {
 
     /// The pointer, the dma-buf source where the caller gave one, whether the caller vouched
     /// for the pages' write permission ([`HostMemory::assume_writable`]), and its log of the pages
-    /// written ([`HostMemory::with_dirty_pages`]), kept with the pointer its offsets count from.
+    /// written ([`HostMemory::with_dirty_pages`]), kept with the pointer its offsets count from,
+    /// and its gate over their import ([`HostMemory::with_import_gate`]).
     pub(super) fn into_parts(self) -> HostParts {
         let dirty = (self.dirty).map(|hook| DirtySource::new(hook, self.pointer.as_ptr() as u64));
         HostParts {
@@ -324,6 +377,7 @@ impl HostMemory {
             source: self.source,
             writable: self.writable,
             dirty,
+            gate: self.gate,
         }
     }
 }
@@ -334,6 +388,7 @@ pub(super) struct HostParts {
     pub(super) source: Option<Source>,
     pub(super) writable: bool,
     pub(super) dirty: Option<Arc<DirtySource>>,
+    pub(super) gate: Option<ImportGate>,
 }
 
 /// A no-copy buffer's deallocator (Metal's block): called once, with the pointer and the length,

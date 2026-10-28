@@ -2491,6 +2491,22 @@ bound.
   writes. Cost: the GPU's writes through it reach the pages, and the CPU then reads them there,
   where after Metal's GPU writes into pages the process maps read-only the CPU reads them as they
   were (an M3 Max under macOS 27.0.1, private and shared memory alike).
+- `metal2vulkan-degrade-copied-host-pages` (precision). `CopiedHostPages`: A no-copy buffer, a
+  no-copy heap or a buffer's rebind was made over a copy of the caller's host pages in memory of
+  the device's own, which no import maps (a heap's textures shadows of its bytes):
+  the caller's gate (`HostMemory::with_import_gate`) refused the pages' import, or the import the
+  device and the gate admitted failed (out of memory, or another Vulkan error, such as a driver out
+  of the mappings the host kernel allows). Pages the process cannot read are never copied: the
+  buffer is refused, as their import is. A copy whose own allocation fails refuses the call
+  (`OutOfMemory`). A heap's rebind and memory whose GPU writes Metal's private option bit 24 drops
+  are never copied. Counted: `WorkCounts::copied_host_buffers_made`, of them
+  `copied_host_buffers_refused` and `copied_host_buffers_degraded` (and `copied_heaps_made`,
+  `copied_rebind_pages_made`). Cost: the GPU uses a copy of
+  the bytes, into which each commit writes every byte the CPU changed in the pages since, and from
+  which each batch's completion writes back every byte the GPU changed, where Metal's GPU reads and
+  writes the pages themselves: a CPU write the GPU reads mid-command-buffer, or a GPU write the CPU
+  reads before the batch completes (behind a shared event's value among them), is not seen, and
+  each commit and completion compares every byte of every copy.
 - `metal2vulkan-degrade-grouped-completion` (precision). `GroupedCompletion`: Batches of command
   buffers committed on one queue that the scheduler found ready together, or held while two or more
   earlier submissions of their queue ran, went to the driver in one `vkQueueSubmit`, only the last

@@ -682,6 +682,12 @@ impl Mapped {
     pub(super) fn as_ptr(self) -> *mut u8 {
         self.0.as_ptr()
     }
+
+    /// The caller's bytes at `pointer`, as the host address of a copied host buffer's memory
+    /// (`copied.rs`): its `contents`, which the runtime's comparisons keep coherent with the copy.
+    pub(super) fn of_caller(pointer: NonNull<u8>) -> Mapped {
+        Mapped(pointer)
+    }
 }
 
 /// One `VkDeviceMemory` block.

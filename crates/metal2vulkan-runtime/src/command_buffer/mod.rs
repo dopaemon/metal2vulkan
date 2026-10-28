@@ -2824,6 +2824,9 @@ impl CommandBuffer {
                 let ticket = state.heaps.commit(device);
                 state.retained.push(Box::new(ticket));
             }
+            // Every byte the CPU changed in a copied host buffer's pages is in its copy before any
+            // of this command buffer's work is submitted (`copied.rs`).
+            device.shared().copied.copy_in(&device.shared().counts);
             state.status = CommandBufferStatus::Committed;
             // Its set-0 cache is shut here, before anything records again: from the commit on it
             // holds what its commands took only weakly (below), so no handle a kept set holds is
