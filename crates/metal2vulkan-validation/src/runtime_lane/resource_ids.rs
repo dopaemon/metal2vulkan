@@ -55,6 +55,10 @@ use std::time::{Duration, Instant};
 /// the device's or the pipeline's sampler arrays hold (and expects absent elsewhere).
 pub(super) const UNLISTED: [Degradation; 1] = [Degradation::UnlistedArgumentSampler];
 
+/// What a dispatch sampling through an argument buffer announces while a sampler state of pixel
+/// coordinates lives.
+const PIXEL_ARGUMENT: [Degradation; 1] = [Degradation::ArgumentPixelSamplerScaling];
+
 /// The kind [`a_texture_its_heap_array_cannot_view_is_announced_once`] takes.
 pub(super) const UNVIEWABLE: [Degradation; 1] = [Degradation::UnnamedTextureUnviewable];
 
@@ -2166,8 +2170,9 @@ fn late_sampler_states_past_twice_the_class_are_reached_by_their_ids() {
 /// 100003 and sampled through an argument buffer as their address modes say). With 100000
 /// reserved before anything takes a sampler ID, the case's states take IDs past it, and a state
 /// in pixel coordinates standing in the argument buffer for the case's, at the next plain ID,
-/// reads texel (0, 0), where the neutral sampler reads the case's own answer. Nothing is
-/// announced.
+/// reads texel (0, 0), where the neutral sampler reads the case's own answer. The dispatch
+/// samples through an argument buffer while that pixel state lives, which announces
+/// `argument-pixel-sampler-scaling` and nothing else.
 #[test]
 fn sampler_states_past_the_low_window_are_reached_by_their_ids() {
     on_device(|device, messages| {
@@ -2207,7 +2212,7 @@ fn sampler_states_past_the_low_window_are_reached_by_their_ids() {
             corner(),
             "through ID {id}"
         );
-        sampling.announced(device, messages, &[]);
+        sampling.announced(device, messages, &PIXEL_ARGUMENT);
     });
 }
 
@@ -2252,7 +2257,9 @@ const CROWD: u64 = 2048;
 /// ID Metal makes (16380), in pixel coordinates and standing in the argument buffer for the case's
 /// state, reads texel (0, 0) at all four of the case's coordinates (each below 1), as Metal's does
 /// (the M3 Max: bound and through an argument buffer alike), where the neutral
-/// sampler the state would miss to reads the case's own answer; nothing is announced. A state is
+/// sampler the state would miss to reads the case's own answer; the dispatch announces
+/// `argument-pixel-sampler-scaling` alone, sampling through an argument buffer while the pixel
+/// state lives. A state is
 /// left out only where more states live than the arrays hold: the line `SAMPLER-CAPACITY` reports
 /// the device's and the case's pipeline's, and where either holds at most [`CROWD`] elements the
 /// lane makes states past it, announced once (`UNLISTED`), and the command buffer completes with
@@ -2298,7 +2305,7 @@ fn a_sampler_state_at_any_id_is_listed() {
             corner,
             "through ID {high}"
         );
-        sampling.announced(device, messages, &[]);
+        sampling.announced(device, messages, &PIXEL_ARGUMENT);
         let [execution] = &command_buffer.executions()[..] else {
             panic!("one dispatch");
         };

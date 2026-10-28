@@ -1739,21 +1739,13 @@ impl ResourcePlanner<'_> {
     }
 
     /// The `SamplerState { slot, fields }` specialization: the bound sampler's word masked by
-    /// `fields`, the bits the function reads; 0 where no sampler is bound, and where `fields`
-    /// states `SamplerWord::PIXEL_GATED` and the word normalized coordinates, whose other fields
-    /// the function then reads only through tests that fail.
+    /// `fields`, the bits the function reads; 0 where no sampler is bound.
     pub fn sampler_state(&self, slot: SlotRef, fields: u32) -> u64 {
-        use crate::metal::sampler::SamplerWord;
         let word = self
             .stage_shape(slot.stage)
             .and_then(|s| s.samplers.get(&slot.index))
             .map_or(0, |s| s.word.0);
-        let read = word & fields;
-        let gated = fields & SamplerWord::PIXEL_GATED != 0;
-        match gated && read & SamplerWord::PIXEL_COORDINATES == 0 {
-            true => 0,
-            false => u64::from(read),
-        }
+        u64::from(word & fields)
     }
 
     /// The `SamplerMinLevel(slot)` specialization: the level, in sixty-fourths, that Metal's

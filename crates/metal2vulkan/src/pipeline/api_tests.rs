@@ -729,7 +729,7 @@ mod serde_round_trips {
                 id: 0,
                 key: SpecKey::SamplerState {
                     slot: slot(Stage::Fragment, SlotClass::Sampler, 1),
-                    fields: crate::metal::sampler::SamplerWord::PIXEL_NEAREST,
+                    fields: crate::metal::sampler::SamplerWord::PIXEL_COORDINATES,
                 },
                 size: 4,
                 default: 0,

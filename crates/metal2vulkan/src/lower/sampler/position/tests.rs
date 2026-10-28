@@ -1,13 +1,12 @@
-//! Metal's position and the snapped coordinates, run on the interpreter against the rule computed
-//! exactly. Each kernel reads `(bits(u), n)` per invocation and writes the bits of [`position`]'s
-//! `X`, for one addressing, and of [`snapped_axis`]'s gather and footprint-cell coordinates reading
-//! `u` as a pixel coordinate.
+//! Metal's position and its offset rule, run on the interpreter against the rule computed exactly.
+//! The position kernel reads `(bits(u), n)` per invocation and writes the bits of [`position`]'s
+//! `X`, for one addressing.
 //!
 //! The reference wraps `u` with the same `f32` operations Metal's rule names (they are exact or
 //! rounded once, as on the device), forms the product `u' n` exactly in `f64` (at most 46
 //! significant bits), and rounds it to `f32` with ties away from zero.
 
-use super::{celled_by_word, gathered_by_word, offset_dropped, position, snapped_axis, AxisSnap};
+use super::{offset_dropped, position};
 use crate::lower::sampler::bicubic::TapAddress;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -56,11 +55,9 @@ fn word(f: &mut FunctionBuilder<'_>, buf: GlobalId, i: Value, per: u32, k: u32) 
     f.access_chain(base, &[zero, at])
 }
 
-/// A kernel whose invocation `i` reads `(bits(u), n)` from buffer 0 and writes `X` and, reading `u`
-/// as a pixel coordinate, the gather's and the footprint cell's coordinates, as bits, to buffer 1,
-/// for an axis addressed by `address` whose access the device moves by the constant texel offset
-/// `offset` (0: none).
-fn kernel(address: TapAddress, offset: i32) -> BResult<TypedModule> {
+/// A kernel whose invocation `i` reads `(bits(u), n)` from buffer 0 and writes `X`, as bits, to
+/// buffer 1, for an axis addressed by `address`.
+fn kernel(address: TapAddress) -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
     let f32_ = b.ty(Type::Float { width: 32 })?;
     let u32_ = b.ty(Type::Int {
@@ -82,20 +79,9 @@ fn kernel(address: TapAddress, offset: i32) -> BResult<TypedModule> {
     let at = word(&mut f, input, i, 2, 1)?;
     let n = f.load(at, MemAccess::default())?;
     let (x, _) = position(&mut f, u, n, address)?;
-    let o = if offset == 0 {
-        None
-    } else {
-        // Metal's offsets lie in [-8, 7], each exact as an `f32`.
-        Some(super::f32_const(&mut f, offset as f32)?)
-    };
-    let at = (address, o, None);
-    let pg = snapped_axis(&mut f, AxisSnap::Gather, u, n, at)?;
-    let cell = snapped_axis(&mut f, AxisSnap::Cell, u, n, at)?;
-    for (k, v) in [x, pg, cell].into_iter().enumerate() {
-        let bits = f.convert(ConvOp::Bitcast, v, u32_)?;
-        let at = word(&mut f, output, i, 3, k as u32)?;
-        f.store(at, bits, MemAccess::default())?;
-    }
+    let bits = f.convert(ConvOp::Bitcast, x, u32_)?;
+    let at = word(&mut f, output, i, 1, 0)?;
+    f.store(at, bits, MemAccess::default())?;
     f.ret(None)?;
     let main = f.finish()?;
     b.entry(
@@ -106,14 +92,9 @@ fn kernel(address: TapAddress, offset: i32) -> BResult<TypedModule> {
     b.finalize()
 }
 
-/// The kernel's three words per lane `(u, n)`.
-fn run(address: TapAddress, lanes: &[(f32, u32)]) -> Vec<[u32; 3]> {
-    run_offset(address, 0, lanes)
-}
-
-/// The kernel's three words per lane `(u, n)`, under the constant texel offset `offset`.
-fn run_offset(address: TapAddress, offset: i32, lanes: &[(f32, u32)]) -> Vec<[u32; 3]> {
-    let m = kernel(address, offset).expect("kernel");
+/// The kernel's `X` bits per lane `(u, n)`.
+fn run(address: TapAddress, lanes: &[(f32, u32)]) -> Vec<u32> {
+    let m = kernel(address).expect("kernel");
     let bytes: Vec<u8> = lanes
         .iter()
         .flat_map(|(u, n)| [u.to_bits().to_le_bytes(), n.to_le_bytes()])
@@ -129,7 +110,7 @@ fn run_offset(address: TapAddress, offset: i32, lanes: &[(f32, u32)]) -> Vec<[u3
             Buffer {
                 slot: Some(slot(1)),
                 address: None,
-                bytes: vec![0xAB; lanes.len() * 12],
+                bytes: vec![0xAB; lanes.len() * 4],
             },
         ],
         ..Resources::default()
@@ -140,14 +121,10 @@ fn run_offset(address: TapAddress, offset: i32, lanes: &[(f32, u32)]) -> Vec<[u3
     };
     let (out, _) = interp::run_with_images(&m, &cfg, res, Vec::new()).expect("run");
     out.buffers[1]
-        .as_chunks::<12>()
+        .as_chunks::<4>()
         .0
         .iter()
-        .map(|c| {
-            std::array::from_fn(|k| {
-                u32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]])
-            })
-        })
+        .map(|c| u32::from_le_bytes(*c))
         .collect()
 }
 
@@ -246,15 +223,6 @@ fn footprints_differ(a: f32, b: f32) -> bool {
 fn gather_i0(x: f32) -> i64 {
     let q = (256.0 * f64::from(x) + 0.5).floor() as i64 - 128;
     q >> 8
-}
-
-/// The gather's snapped coordinate (module docs), computed from the exact `i0`.
-fn gather_coordinate(x: f32, n: u32, address: TapAddress) -> f32 {
-    let mut i0 = gather_i0(x);
-    if matches!(address, TapAddress::Edge | TapAddress::Border) {
-        i0 = i0.clamp(-10, i64::from(n) + 8);
-    }
-    (i0 as f32 + 1.0) / n as f32
 }
 
 const ADDRESSES: [TapAddress; 4] = [
@@ -401,11 +369,11 @@ fn the_position_is_metals_wrap_first_and_ties_away() {
             for (&(u, n), got) in picked.iter().zip(&out) {
                 let want = metal_x(u, n, address);
                 assert_eq!(
-                    got[0],
+                    *got,
                     want.to_bits(),
                     "{address:?} n {n} u {u:e} ({:#010x}): X {:e} vs {want:e}",
                     u.to_bits(),
-                    f32::from_bits(got[0])
+                    f32::from_bits(*got)
                 );
                 let even = even_x(u, n, address);
                 if gather_i0(want) != gather_i0(even) || want.floor() != even.floor() {
@@ -464,51 +432,10 @@ fn the_ties_hold_up_to_the_size_bound() {
         let mut decided = 0;
         for (&(u, n), got) in us.iter().zip(&out) {
             let want = metal_x(u, n, address);
-            assert_eq!(got[0], want.to_bits(), "{address:?} n {n} u {u:e}");
+            assert_eq!(*got, want.to_bits(), "{address:?} n {n} u {u:e}");
             decided += usize::from(want != even_x(u, n, address));
         }
         assert!(decided > 0, "{address:?}: no tie rounded the other way");
-    }
-}
-
-/// A pixel coordinate `x` is Metal's position as given. Its gather's snapped coordinate is the
-/// gather's at `X = x`, and its footprint cell's, `(q + 128) / 256 / n` for `q = floor(256 x -
-/// 127.5)`, reads as a normalized coordinate (Metal's own sampler's position of it, ties away from
-/// zero) the same `q`: every lane a ulp either side of each step and texel edge and centre, on the
-/// clamping axes (a pixel sampler only clamps) of Metal's sizes.
-#[test]
-fn pixel_coordinate_snaps_read_metals_footprint() {
-    let q = |x: f32| (256.0 * f64::from(x) - 127.5).floor() as i64;
-    for address in [TapAddress::Edge, TapAddress::Border] {
-        for n in [1u32, 2, 3, 13, 255, 1000, 16383, 16384] {
-            let mut xs = Vec::new();
-            let top = i64::from(n).min(40) + 12;
-            for k in -12..=top {
-                for base in [
-                    k as f32,
-                    k as f32 + 0.5 - 1.0 / 512.0,
-                    k as f32 + 0.5 - 1.0 / 256.0,
-                ] {
-                    xs.extend([base, base.next_down(), base.next_up(), base + 1.0 / 1024.0]);
-                }
-            }
-            for k in [n - 1, n, n + 1] {
-                let b = k as f32 - 0.5 - 1.0 / 512.0;
-                xs.extend([b, b.next_down(), b.next_up(), k as f32 - 0.25]);
-            }
-            let lanes: Vec<(f32, u32)> = xs.iter().map(|x| (*x, n)).collect();
-            let out = run(address, &lanes);
-            for (&(x, n), got) in lanes.iter().zip(&out) {
-                let g = gather_coordinate(x, n, address);
-                assert_eq!(got[1], g.to_bits(), "{address:?} n {n} x {x:e}: gather");
-                let c = f32::from_bits(got[2]);
-                assert_eq!(
-                    q(metal_x(c, n, address)),
-                    q(x),
-                    "{address:?} n {n} x {x:e}: cell {c:e}"
-                );
-            }
-        }
     }
 }
 
@@ -772,246 +699,4 @@ fn the_offset_rule_reads_the_parent_s_base_through_the_view_bit() {
         }
         assert_eq!(got[0], u32::from(rule(n, own)), "{at}: no parent test");
     }
-}
-
-/// On a repeating or mirrored axis whose size is 3, 5, 6 or 7, Metal drops a texel offset the
-/// device adds, so each snapped coordinate (reading `u` as a pixel coordinate) moves back by the
-/// offset there: the device's index at a gather's (`floor(c n - 1/2)`), plus the offset, is the
-/// unmoved snap's, and the footprint cell moves back the same way. On every other size, and on
-/// every clamping axis, the offset leaves the snap as it is (Metal adds it as the device does).
-#[test]
-fn a_snap_moves_back_by_the_offset_metal_drops() {
-    let mut moved = 0usize;
-    for address in ADDRESSES {
-        for n in (1u32..=10).chain([13, 16, 255]) {
-            let all = lanes(n);
-            let step = (all.len() / 200).max(1);
-            let picked: Vec<(f32, u32)> = all.into_iter().step_by(step).collect();
-            let plain = run(address, &picked);
-            let dropped = matches!(address, TapAddress::Repeat | TapAddress::Mirror)
-                && matches!(n, 3 | 5 | 6 | 7);
-            for o in [-8i32, -1, 1, 7] {
-                let out = run_offset(address, o, &picked);
-                let back = if dropped { o as f32 } else { 0.0 };
-                let nf = n as f32;
-                for ((&(u, _), got), was) in picked.iter().zip(&out).zip(&plain) {
-                    let at = format!("{address:?} n {n} o {o} u {u:e}");
-                    if !dropped {
-                        assert_eq!(got, was, "{at}: moved where Metal adds the offset");
-                        continue;
-                    }
-                    assert_eq!(got[0], was[0], "{at}: X");
-                    let pg = (gather_i0(u) as f32 + 1.0 - back) / nf;
-                    assert_eq!(got[1], pg.to_bits(), "{at}: pixel gather");
-                    let y = 256.0 * u;
-                    let fl = y.floor();
-                    let cell = (fl + if y - fl >= 0.5 { 1.0 } else { 0.0 }) * (1.0 / 256.0);
-                    let cell = (cell - back) / nf;
-                    assert_eq!(got[2], cell.to_bits(), "{at}: cell");
-                    // The device's index at the moved coordinate, plus the offset, is the
-                    // unmoved one's.
-                    let index = |bits: u32| {
-                        let y = f64::from(f32::from_bits(bits)) * f64::from(n);
-                        (y - 0.5).floor() as i64
-                    };
-                    assert_eq!(index(got[1]) + i64::from(o), index(was[1]), "{at}");
-                    moved += 1;
-                }
-            }
-        }
-    }
-    assert!(moved > 0, "no lane moved back");
-}
-
-/// The coordinate the word kernels hand the device where their snap does not reach a lane: a
-/// marker no snap yields.
-const DEVICE: f32 = -12345.0;
-
-/// A kernel whose invocation `i` reads `(bits(u), n, word)` from buffer 0 and writes the bits of
-/// [`gathered_by_word`]'s coordinate of a one-axis gather of size `n` through a runtime sampler of
-/// word `word`, and of [`celled_by_word`]'s, each handing [`DEVICE`] as the coordinate the device
-/// reads otherwise, to buffer 1.
-fn word_gather_kernel() -> BResult<TypedModule> {
-    let mut b = ModuleBuilder::new();
-    let f32_ = b.ty(Type::Float { width: 32 })?;
-    let u32_ = b.ty(Type::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
-    let input = storage_buffer(&mut b, 0, u32_)?;
-    let output = storage_buffer(&mut b, 1, u32_)?;
-    let id = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
-    let void = b.ty(Type::Void)?;
-    let mut f = b.function(void)?;
-    let gid = f.module().global_value(id)?;
-    let gid = f.load(gid, MemAccess::default())?;
-    let i = f.composite_extract(gid, &[0])?;
-    let at = word(&mut f, input, i, 3, 0)?;
-    let ub = f.load(at, MemAccess::default())?;
-    let u = f.convert(ConvOp::Bitcast, ub, f32_)?;
-    let at = word(&mut f, input, i, 3, 1)?;
-    let n = f.load(at, MemAccess::default())?;
-    let at = word(&mut f, input, i, 3, 2)?;
-    let w = f.load(at, MemAccess::default())?;
-    let device = super::f32_const(&mut f, DEVICE)?;
-    let g = gathered_by_word(&mut f, w, (u, device), 1, (n, 1))?;
-    let c = celled_by_word(&mut f, w, (u, device), 1, (n, 1))?;
-    for (k, v) in [g, c].into_iter().enumerate() {
-        let bits = f.convert(ConvOp::Bitcast, v, u32_)?;
-        let at = word(&mut f, output, i, 2, k as u32)?;
-        f.store(at, bits, MemAccess::default())?;
-    }
-    f.ret(None)?;
-    let main = f.finish()?;
-    b.entry(
-        ExecModel::GLCompute,
-        main,
-        vec![ExecMode::LocalSize { x: 1, y: 1, z: 1 }],
-    )?;
-    b.finalize()
-}
-
-/// The word gather kernel's two coordinates' bits per lane `(u, n, word)`.
-fn run_word_gather(lanes: &[(f32, u32, u32)]) -> Vec<[u32; 2]> {
-    let m = word_gather_kernel().expect("kernel");
-    let bytes: Vec<u8> = lanes
-        .iter()
-        .flat_map(|(u, n, w)| [u.to_bits().to_le_bytes(), n.to_le_bytes(), w.to_le_bytes()])
-        .flatten()
-        .collect();
-    let res = Resources {
-        buffers: vec![
-            Buffer {
-                slot: Some(slot(0)),
-                address: None,
-                bytes,
-            },
-            Buffer {
-                slot: Some(slot(1)),
-                address: None,
-                bytes: vec![0xAB; lanes.len() * 8],
-            },
-        ],
-        ..Resources::default()
-    };
-    let cfg = Config {
-        workgroups: [u32::try_from(lanes.len()).expect("lanes"), 1, 1],
-        ..Config::default()
-    };
-    let (out, _) = interp::run_with_images(&m, &cfg, res, Vec::new()).expect("run");
-    out.buffers[1]
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| {
-            std::array::from_fn(|k| {
-                u32::from_le_bytes([c[4 * k], c[4 * k + 1], c[4 * k + 2], c[4 * k + 3]])
-            })
-        })
-        .collect()
-}
-
-/// A runtime sampler's gather hands the device the centre of the 2x2 block Metal reads at the
-/// coordinate as given where its word states pixel coordinates, and the device's coordinate for a
-/// normalized word; a word's other fields leave it as it is. The footprint-cell snap takes the
-/// centre of the step Metal reads the coordinate as given at where the word states a linear pixel
-/// sampler, and the device's coordinate for every other word.
-#[test]
-fn a_runtime_samplers_gather_centres_metals_block_by_its_word() {
-    use crate::metal::sampler::SamplerWord;
-    use crate::metal::SamplerAddressMode as M;
-    let modes = [
-        M::ClampToEdge,
-        M::MirrorClampToEdge,
-        M::Repeat,
-        M::MirrorRepeat,
-        M::ClampToZero,
-        M::ClampToBorderColor,
-    ];
-    // Fields the gather ignores: the filters, the mip filter, the `t` and `r` modes, the border,
-    // the comparison, the reduction, anisotropy and the level clamps.
-    let ignored = SamplerWord::MIN_LINEAR
-        | SamplerWord::MAG_LINEAR
-        | SamplerWord::MIP_FILTER
-        | SamplerWord::ADDRESS[1]
-        | SamplerWord::ADDRESS[2]
-        | SamplerWord::BORDER
-        | SamplerWord::COMPARE
-        | SamplerWord::REDUCTION
-        | SamplerWord::ANISOTROPIC
-        | SamplerWord::LEVEL_MIN
-        | SamplerWord::LEVEL_MAX;
-    let linear_pixel =
-        SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
-    let mut checked = 0usize;
-    for n in [1u32, 3, 7, 13, 16, 255, 16383] {
-        let all = lanes(n);
-        let step = (all.len() / 60).max(1);
-        let us: Vec<f32> = all.into_iter().step_by(step).map(|(u, _)| u).collect();
-        let mut picked = Vec::new();
-        for mode in modes {
-            let m = mode.as_raw() << SamplerWord::ADDRESS_SHIFT[0];
-            for w in [
-                m,
-                m | ignored,
-                m | SamplerWord::PIXEL_COORDINATES,
-                m | linear_pixel,
-                m | SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR,
-            ] {
-                picked.extend(us.iter().map(|&u| (u, n, w)));
-            }
-        }
-        // Pixel coordinates around the steps and edges of the texels near the level.
-        for k in -12i64..=i64::from(n.min(40)) + 12 {
-            for base in [k as f32, k as f32 + 0.5 - 1.0 / 512.0, k as f32 + 0.25] {
-                for x in [base, base.next_down(), base.next_up()] {
-                    for w in [SamplerWord::PIXEL_COORDINATES, linear_pixel] {
-                        picked.push((x, n, w));
-                    }
-                }
-            }
-        }
-        let out = run_word_gather(&picked);
-        let nf = n as f32;
-        for (&(u, n, w), got) in picked.iter().zip(&out) {
-            let at = format!("n {n} word {w:#x} u {u:e}");
-            let pixel = w & SamplerWord::PIXEL_COORDINATES != 0;
-            let snapped = pixel.then_some(u);
-            let want = match snapped {
-                Some(x) => {
-                    let i0 = gather_i0(x).clamp(-2 * i64::from(n) - 10, 2 * i64::from(n) + 8);
-                    (i0 as f32 + 1.0) / nf
-                }
-                None => DEVICE,
-            };
-            assert_eq!(
-                got[0],
-                want.to_bits(),
-                "{at}: gather {:e} vs {want:e}",
-                f32::from_bits(got[0])
-            );
-            if let Some(x) = snapped {
-                // The device reads the block at `i0`, as Metal does.
-                let c = f64::from(f32::from_bits(got[0])) * f64::from(n);
-                let i0 = gather_i0(x).clamp(-2 * i64::from(n) - 10, 2 * i64::from(n) + 8);
-                assert!((c - (i0 + 1) as f64).abs() <= 2f64.powi(-7) + 8.0, "{at}");
-            }
-            let cell = if w & linear_pixel == linear_pixel {
-                let y = 256.0 * u;
-                let fl = y.floor();
-                ((fl + if y - fl >= 0.5 { 1.0 } else { 0.0 }) * (1.0 / 256.0)) / nf
-            } else {
-                DEVICE
-            };
-            assert_eq!(
-                got[1],
-                cell.to_bits(),
-                "{at}: cell {:e} vs {cell:e}",
-                f32::from_bits(got[1])
-            );
-            checked += 1;
-        }
-    }
-    assert!(checked > 15_000, "{checked}");
 }

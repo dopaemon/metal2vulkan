@@ -119,6 +119,25 @@ fn count(a: &FunctionArtifact, op: u16) -> usize {
         .count()
 }
 
+/// The `GLSL.std.450` instructions numbered `glsl` the module's `OpExtInst`s call.
+fn glsl_count(a: &FunctionArtifact, glsl: u32) -> usize {
+    const OP_EXT_INST: u32 = 12;
+    let words = &a.module.words;
+    let mut n = 0;
+    let mut i = 5;
+    while i < words.len() {
+        let len = (words[i] >> 16) as usize;
+        if words[i] & 0xFFFF == OP_EXT_INST && words.get(i + 4) == Some(&glsl) {
+            n += 1;
+        }
+        i += len.max(1);
+    }
+    n
+}
+
+/// `GLSL.std.450 Floor`.
+const GLSL_FLOOR: u32 = 8;
+
 const OP_SELECT: u16 = 169;
 const OP_FDIV: u16 = 136;
 const OP_IMAGE_SAMPLE_IMPLICIT_LOD: u16 = 87;
@@ -270,11 +289,8 @@ fn runtime_samplers_select_pixel_coordinates_by_specialization() {
         .facts
         .contains(&RuntimeFact::SamplerCoordinates { slot: s }));
     assert!(a.facts.contains(&RuntimeFact::SamplerReduction { slot: s }));
-    // Read only through the pixel tests: gated by the coordinates bit.
-    assert_eq!(
-        sampler_fields(&a, s),
-        Some(SamplerWord::PIXEL_NEAREST | SamplerWord::PIXEL_GATED)
-    );
+    // The coordinates bit alone: the device's sampler reads the scaled coordinate.
+    assert_eq!(sampler_fields(&a, s), Some(SamplerWord::PIXEL_COORDINATES));
     assert!(a.precision.contains(&PrecisionNote::PixelSamplerScaling));
     assert_eq!(uses(&a, "sampler.sample"), 1);
     assert_eq!(combined(&a), vec![(0, SamplerRef::Slot(0), false, false)]);
@@ -299,10 +315,9 @@ fn runtime_samplers_select_pixel_coordinates_by_specialization() {
 }
 
 /// A sample through a runtime sampler slot is the device's on every committed profile: the
-/// function reads only the pixel fields of the slot's word (`SamplerWord::PIXEL_NEAREST`, gated by
-/// the coordinates bit), never its filter, address modes or levels, and the module requires the
-/// device's own sampler (`VkProperty::MetalSampler` on MoltenVK, `VkProperty::DeviceSampling`
-/// elsewhere) and validates.
+/// function reads only the coordinates bit of the slot's word (`SamplerWord::PIXEL_COORDINATES`),
+/// never its filter, address modes or levels, and the module requires the device's own sampler
+/// (`VkProperty::MetalSampler` on MoltenVK, `VkProperty::DeviceSampling` elsewhere) and validates.
 #[test]
 fn a_runtime_samplers_sample_is_the_device_s() {
     let Some(bc) = fixture() else {
@@ -314,7 +329,7 @@ fn a_runtime_samplers_sample_is_the_device_s() {
         let a = ok(&bc, "sample_level", &p);
         assert_eq!(
             sampler_fields(&a, s),
-            Some(SamplerWord::PIXEL_NEAREST | SamplerWord::PIXEL_GATED),
+            Some(SamplerWord::PIXEL_COORDINATES),
             "{stem}"
         );
         assert_eq!(uses(&a, "sampler.sample"), 1, "{stem}");
@@ -372,60 +387,60 @@ fn a_runtime_samples_level_is_the_device_s() {
     }
 }
 
-/// A sample through a runtime sampler slot reads the slot's word for a nearest pixel sampler beside
-/// its pixel coordinates (the `SamplerState` fields `SamplerWord::PIXEL_NEAREST`), and selects by
-/// it the centre of the texel Metal floors a pixel coordinate to, keeping `PixelSamplerScaling`; a
-/// gather through one reads the pixel coordinates and the `s` and `t` address modes, and snaps onto
-/// Metal's block behind them, so it records no note.
+/// A sample, a gather and a comparison through a runtime sampler slot read only the coordinates
+/// bit of the slot's word (`SamplerWord::PIXEL_COORDINATES`), and hand the device's sampler the
+/// coordinate scaled behind it, on every committed profile: each records `PixelSamplerScaling`,
+/// held where the bound sampler states pixel coordinates (its one clause tests that bit), and
+/// emits no texel centre, footprint cell or block (no `Floor`).
 #[test]
-fn runtime_pixel_samples_read_the_texel_centre_by_specialization() {
+fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
+    use crate::pipeline::artifact::SpecializedNote;
     let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
-    for gather in [false, true] {
-        let name = if gather {
-            "pixel_gather"
-        } else {
-            "pixel_sample"
-        };
-        let Some(bc) = assemble(name, &dynamic_offset_kernel(gather)) else {
+    let kernels = [
+        ("pixel_sample", dynamic_offset_kernel(false)),
+        ("pixel_gather", dynamic_offset_kernel(true)),
+        ("pixel_compare", COMPARE_KERNEL.to_owned()),
+    ];
+    for (name, text) in kernels {
+        let Some(bc) = assemble(name, &text) else {
             return;
         };
-        let a = ok(&bc, "k", &m3());
-        let fields = match gather {
-            true => {
-                SamplerWord::PIXEL_COORDINATES | SamplerWord::ADDRESS[0] | SamplerWord::ADDRESS[1]
-            }
-            // Read only through the pixel tests: gated.
-            false => SamplerWord::PIXEL_NEAREST | SamplerWord::PIXEL_GATED,
-        };
-        assert_eq!(sampler_fields(&a, s), Some(fields), "{name}");
-        assert!(a
-            .facts
-            .contains(&RuntimeFact::SamplerCoordinates { slot: s }));
-        assert_eq!(
-            a.precision.contains(&PrecisionNote::PixelSamplerScaling),
-            !gather,
-            "{name}"
-        );
+        for (stem, p) in committed_profiles().expect("profiles") {
+            let what = format!("{name} on {stem}");
+            let a = ok(&bc, "k", &p);
+            assert_eq!(
+                sampler_fields(&a, s),
+                Some(SamplerWord::PIXEL_COORDINATES),
+                "{what}"
+            );
+            assert!(a
+                .facts
+                .contains(&RuntimeFact::SamplerCoordinates { slot: s }));
+            assert!(
+                a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                "{what}"
+            );
+            let key = SpecKey::SamplerState {
+                slot: s,
+                fields: SamplerWord::PIXEL_COORDINATES,
+            };
+            let held: Vec<&SpecializedNote> = a
+                .specialized
+                .iter()
+                .filter(|n| n.note == PrecisionNote::PixelSamplerScaling)
+                .collect();
+            assert_eq!(held.len(), 1, "{what}: {held:?}");
+            assert!(
+                held[0].when.iter().all(|c| c
+                    .all
+                    .iter()
+                    .all(|t| t.key == key && t.mask == SamplerWord::PIXEL_COORDINATES)),
+                "{what}: {held:?}"
+            );
+            assert_eq!(glsl_count(&a, GLSL_FLOOR), 0, "{what}");
+            assert!(count(&a, OP_FDIV) >= 1, "{what}");
+        }
     }
-}
-
-/// A comparison through a runtime sampler slot reads the centre of the texel Metal floors a pixel
-/// coordinate to, as a sample does, behind the slot's word for a nearest pixel sampler
-/// (`SamplerWord::PIXEL_NEAREST`), and records `PixelSamplerScaling` (the bound sampler may filter
-/// linearly).
-#[test]
-fn a_runtime_pixel_comparison_reads_the_texel_centre_by_specialization() {
-    let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
-    let Some(bc) = assemble("pixel_compare", COMPARE_KERNEL) else {
-        return;
-    };
-    let a = ok(&bc, "k", &m3());
-    assert_eq!(count(&a, OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD), 1);
-    assert_eq!(
-        sampler_fields(&a, s),
-        Some(SamplerWord::PIXEL_NEAREST | SamplerWord::PIXEL_GATED)
-    );
-    assert!(a.precision.contains(&PrecisionNote::PixelSamplerScaling));
 }
 
 /// A kernel whose one comparison samples `depth2d<float, sample>` slot 0 through runtime sampler
@@ -762,11 +777,11 @@ fn gathers_gradients_and_pixel_constexpr_samplers() {
     // device's decode.
     assert_half_rounding(&h);
     assert!(h.precision.contains(&PrecisionNote::DeviceNanEncoding));
-    // A linear pixel sample, which Metal's own sampler filters on this profile, snapped onto the
-    // centre of its footprint step: exact, so no `PixelSamplerScaling`.
+    // A linear pixel sample, the device's sampler's at the coordinate scaled in the shader:
+    // `PixelSamplerScaling`, on Metal's own sampler too.
     let x = ok(&bc, "sample_pixel", &p);
-    assert!(!x.precision.contains(&PrecisionNote::PixelSamplerScaling));
-    assert_eq!(uses(&x, "sampler.linear.snapped"), 1);
+    assert!(x.precision.contains(&PrecisionNote::PixelSamplerScaling));
+    assert_eq!(uses(&x, "sampler.sample"), 1);
     assert!(count(&x, OP_FDIV) >= 1);
     assert!(x
         .interface

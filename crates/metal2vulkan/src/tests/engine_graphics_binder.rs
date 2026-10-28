@@ -1379,8 +1379,7 @@ fn sampled_textures_and_runtime_samplers() {
         }
         assert!(plan.diagnostics.is_empty(), "{stem}");
         // The pixel-coordinate path is selected by specialization when the kernel declares it:
-        // the bound sampler's word masked by the fields the kernel reads, 0 for a word of
-        // normalized coordinates where the fields are gated by the coordinates bit.
+        // the bound sampler's word masked by the fields the kernel reads.
         let state = p
             .stage
             .specialization
@@ -1410,13 +1409,7 @@ fn sampled_textures_and_runtime_samplers() {
                 u32::from_le_bytes(bytes.try_into().expect("a u32"))
             };
             let normalized = sampler(true, SamplerReductionMode::WeightedAverage);
-            let keyed = |word: u32| {
-                let gated = fields & SamplerWord::PIXEL_GATED != 0;
-                match gated && word & SamplerWord::PIXEL_COORDINATES == 0 {
-                    true => 0,
-                    false => word & fields,
-                }
-            };
+            let keyed = |word: u32| word & fields;
             assert_eq!(
                 value(&plan),
                 keyed(SamplerWord::of(&normalized.desc).0),

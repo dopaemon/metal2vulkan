@@ -67,8 +67,8 @@
 //! next face, as the device projects it). Through an isotropic constexpr sampler the module takes
 //! Metal's level alone, its major axis's (an isotropic cube's measured so: a footprint past
 //! `1 + 3/2048` minifies, `unk_cube_grad_table`'s turning points), and one tap, where no exact
-//! path of the sample's own answers it (a snapped, fetched or centred coordinate): its levels are
-//! Metal's, each the device's filter.
+//! path of the sample's own answers it (a fetched coordinate): its levels are Metal's, each the
+//! device's filter.
 //!
 //! **The loop**. Tap 0 is written out, and taps 1 to `n - 1` are one loop's body, which asks the
 //! driver not to unroll it (`LoopControl` `DontUnroll`): each tap's arithmetic and the sum's order

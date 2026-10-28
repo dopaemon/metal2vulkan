@@ -3553,11 +3553,11 @@ impl Device {
 
     /// Announce `PrecisionNote::ArgumentPixelSamplerScaling` at a draw or dispatch of a variant
     /// of `stages` whose commands list `samplers` (the device's live sampler states its sampler
-    /// table lists): where a stage records the note and a listed state has pixel coordinates and
-    /// a linear minification or magnification filter or a comparison, the states whose access
-    /// through an argument buffer may hand the device a scaled coordinate. A listed state is any an
-    /// argument buffer the commands read may name by its ID; which ones a program's argument
-    /// buffers hold, the CPU or the GPU writing them, the runtime does not see. Nothing else
+    /// table lists): where a stage records the note and a listed state has pixel coordinates, the
+    /// states whose access through an argument buffer may hand the device a scaled coordinate. A
+    /// listed state is any an argument buffer the commands read may name by its ID; which ones a
+    /// program's argument buffers hold, the CPU or the GPU writing them, the runtime does not
+    /// see. Nothing else
     /// announces the note: a pipeline that records it but never runs while such a state lives
     /// announces nothing.
     pub(crate) fn degrade_argument_pixel_samplers(
@@ -3577,8 +3577,7 @@ impl Device {
                 stage_object(stage.stage).to_owned(),
                 format!(
                     "{}: it samples through an argument buffer's sampler while sampler state {} \
-                     of pixel coordinates with a linear filter or a comparison lives, which a \
-                     program's argument buffer may name",
+                     of pixel coordinates lives, which a program's argument buffer may name",
                     self.note_reason(NOTE),
                     state.gpu_resource_id().0
                 ),

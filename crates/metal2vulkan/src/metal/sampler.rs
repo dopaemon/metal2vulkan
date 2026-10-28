@@ -902,12 +902,6 @@ impl SamplerWord {
     pub const CUBIC: u32 = 1 << 30;
     /// Every bit a word may set.
     pub const FIELDS: u32 = (1 << 31) - 1;
-    /// Not a field of the word, which never sets it: in the fields of a slot's
-    /// `SpecKey::SamplerState` specialization, it states that the function reads every other
-    /// field only through a test that fails where [`PIXEL_COORDINATES`](Self::PIXEL_COORDINATES)
-    /// is clear (whether the word states a nearest or a linear pixel sampler), so the binder
-    /// keys a word of normalized coordinates as 0, the word of no sampler, whatever its filters.
-    pub const PIXEL_GATED: u32 = 1 << 31;
     /// The bits that state a cubic sampler's sample (a min or mag filter `Cubic`) beyond its
     /// filter, which Metal answers as a constexpr bicubic sampler of the same state: the
     /// coordinates, the mip filter, the address modes, the border color, the
@@ -921,13 +915,6 @@ impl SamplerWord {
         | Self::BORDER
         | Self::REDUCTION
         | Self::ANISOTROPIC;
-    /// The bits of a pixel sampler that filters nearest: the word masked by them is
-    /// [`PIXEL_COORDINATES`](Self::PIXEL_COORDINATES) exactly for a sampler with pixel
-    /// coordinates whose min and mag filters are nearest. Metal admits a pixel sampler only
-    /// without a mip filter and isotropic (`runtime::sampler::check_descriptor`), so such a
-    /// sampler reads one texel of one level, the centre of the texel Metal floors a sample's
-    /// coordinate to.
-    pub const PIXEL_NEAREST: u32 = Self::PIXEL_COORDINATES | Self::MIN_LINEAR | Self::MAG_LINEAR;
     /// The bits of the filter Metal's linear rule answers: the word masked by them is
     /// [`LINEAR`](Self::LINEAR) exactly for a sampler whose minification and magnification filters
     /// are linear, without a mip filter, and isotropic. Its reduction does not decide it: a minimum
@@ -2093,8 +2080,7 @@ mod tests {
     }
 
     /// The word answers the pixel samplers' predicates. A sampler with normalized coordinates
-    /// answers neither. A pixel sampler is nearest ([`SamplerWord::PIXEL_NEAREST`]) exactly when
-    /// its min and mag filters are; its exact fetch ([`SamplerWord::exact_fetch`]) needs one
+    /// answers neither. A pixel sampler's exact fetch ([`SamplerWord::exact_fetch`]) needs one
     /// isotropic level (no mip filter, not anisotropic), clamping to the edge on each of the
     /// image's plane axes (the others do not matter), and nearest filters unless the texture is
     /// integer.
@@ -2238,7 +2224,6 @@ mod tests {
             holds(d, SamplerWord::exact_fetch(plane, integer))
         };
         let normalized = metal_default();
-        assert!(!holds(&normalized, SamplerWord::PIXEL_NEAREST));
         assert!(!holds(&normalized, SamplerWord::PIXEL_COORDINATES));
         let mut pixel = metal_default();
         pixel.normalized_coordinates = false;
@@ -2258,23 +2243,16 @@ mod tests {
             d.min_filter = min;
             d.mag_filter = mag;
             let nearest = min == F::Nearest && mag == F::Nearest;
-            assert_eq!(
-                holds(&d, SamplerWord::PIXEL_NEAREST),
-                nearest,
-                "{min:?} {mag:?}"
-            );
             assert_eq!(fetch(&d, 2, false), nearest, "{min:?} {mag:?}");
             assert!(fetch(&d, 2, true), "{min:?} {mag:?}");
         }
         for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
             let mut d = pixel;
             d.mip_filter = mip;
-            assert!(holds(&d, SamplerWord::PIXEL_NEAREST), "{mip:?}");
             assert!(!fetch(&d, 1, true), "{mip:?}");
         }
         let mut d = pixel;
         d.max_anisotropy = 2;
-        assert!(holds(&d, SamplerWord::PIXEL_NEAREST));
         assert!(!fetch(&d, 1, true));
         for &mode in SamplerAddressMode::ALL {
             let edge = mode == SamplerAddressMode::ClampToEdge;

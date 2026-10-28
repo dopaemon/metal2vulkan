@@ -471,8 +471,6 @@ assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIN_LINEAR	pub const MIN_
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER	pub const MIP_FILTER: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER_SHIFT	pub const MIP_FILTER_SHIFT: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_COORDINATES	pub const PIXEL_COORDINATES: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_GATED	pub const PIXEL_GATED: u32
-assoc-const	metal2vulkan::metal::sampler::SamplerWord::PIXEL_NEAREST	pub const PIXEL_NEAREST: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::REDUCTION	pub const REDUCTION: u32
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::REDUCTION_SHIFT	pub const REDUCTION_SHIFT: u32
 assoc-const	metal2vulkan::pipeline::AccessSet::READ	pub const READ: AccessSet
@@ -967,8 +965,6 @@ assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIN_LINEAR	1 <<1
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER	0b11 <<Self::MIP_FILTER_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::MIP_FILTER_SHIFT	3
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_COORDINATES	1 <<0
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_GATED	1 <<31
-assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::PIXEL_NEAREST	Self::PIXEL_COORDINATES | Self::MIN_LINEAR | Self::MAG_LINEAR
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::REDUCTION	0b11 <<Self::REDUCTION_SHIFT
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::REDUCTION_SHIFT	19
 assoc-const-value	metal2vulkan::pipeline::AccessSet::READ	AccessSet

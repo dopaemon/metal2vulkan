@@ -730,9 +730,8 @@ impl TextureStrategy {
     /// The sampled images of combined bindings this strategy makes: its own sampling's, or its
     /// switch's arms' (each the static sampling of one binding). Under the separate form each is
     /// made from the separate texture and sampler. A sampling makes one in its open block. A switch
-    /// that emulates once ([`Switch::shared`],
-    /// SEMANTICS 1012) makes them only for its arms' device accesses
-    /// ([`Sampling::shared_sampled_images`]).
+    /// that emulates once ([`Switch::shared`], SEMANTICS 1012) makes none: its bicubic taps read
+    /// each arm's image alone.
     pub fn combined_samplings(&self) -> u32 {
         match self {
             TextureStrategy::Sampling(s) => match s.source {
@@ -740,9 +739,7 @@ impl TextureStrategy {
                 _ => 0,
             },
             TextureStrategy::Switch(w) => match w.shared() {
-                Some(arms) => arms
-                    .iter()
-                    .fold(0, |n, (_, s)| n.saturating_add(s.shared_sampled_images())),
+                Some(_) => 0,
                 None => w
                     .arms
                     .iter()

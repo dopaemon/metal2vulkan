@@ -111,7 +111,7 @@ fn switch(
         let c = crate::lower::sampler::Candidates { sels, arms: shared };
         let null = |cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>| null_value(cx, fb, &sw.null);
         return Ok(Some(crate::lower::sampler::shared_value(
-            cx, fb, &c, grads, &null,
+            cx, fb, &c, &null,
         )?));
     }
     let mut arms: Vec<(&[u32], Leaf<'_>)> = Vec::with_capacity(sw.arms.len());

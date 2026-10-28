@@ -141,7 +141,7 @@ pub(super) fn nearest_on_grid(
 /// it, by its word `word`, where the sample's level before the sampler's clamp reads `nearest`
 /// (an `f32`, [`nearest_on_grid`]'s, or 0 at level 0) under a nearest mip filter: that level clamped into
 /// the levels the word's clamp leaves ([`SamplerWord::LEVEL_MIN`], [`SamplerWord::LEVEL_MAX`])
-/// under a nearest mip filter, else 0 (a snapped sample's sampler has no mip filter there).
+/// under a nearest mip filter, else 0, the one level a sampler without a mip filter reads.
 pub(super) fn snap_level(
     fb: &mut FunctionBuilder<'_>,
     word: SValue,

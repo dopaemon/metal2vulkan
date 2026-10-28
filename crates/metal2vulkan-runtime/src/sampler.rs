@@ -815,15 +815,10 @@ impl SamplerState {
 
     /// Whether an access through an argument buffer that names this state may hand the device a
     /// pixel coordinate scaled by the texture's size (`Device::degrade_argument_pixel_samplers`):
-    /// its coordinates are pixels, and it filters (a minification or magnification filter other
-    /// than nearest) or compares. A nearest pixel state's sample reads Metal's texel, by its
-    /// flagged fetch or Metal's own sampler.
+    /// its coordinates are pixels. Every gather, comparison and sample through such a state but a
+    /// sample its flagged fetch answers (nearest, clamped to the edge) reads the scaled coordinate.
     pub(super) fn scales_in_an_argument_buffer(&self) -> bool {
-        let d = &self.0.descriptor;
-        !d.normalized_coordinates
-            && (d.min_filter != SamplerMinMagFilter::Nearest
-                || d.mag_filter != SamplerMinMagFilter::Nearest
-                || d.compare_function != CompareFunction::Never)
+        !self.0.descriptor.normalized_coordinates
     }
 
     /// The Vulkan sampler of `desc` (one of this state's binds, its view mapping included): the

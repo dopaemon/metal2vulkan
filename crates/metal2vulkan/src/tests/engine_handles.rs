@@ -4238,15 +4238,13 @@ fn is_sampler_table(k: &ResourceKind) -> bool {
 /// own domain: a lookup in the stage's sampler table (set 0) whose element indexes the set-1
 /// sampler array of the sample's use (comparison, integer texel), non-uniformly, and
 /// `OpSampledImage` of the heap image and that sampler. Each entry declares one sampler array of
-/// its use; a comparison in the sampler's coordinates carries the argument buffer's
-/// pixel-coordinate near-equivalent (`ArgumentPixelSamplerScaling`; a sample without comparison
-/// reads the device sampler's texels; never `PixelSamplerScaling`), a comparison or an integer
-/// texel samples through its own use, and a fragment samples at its implicit level. A sample
-/// without comparison also fetches the texel the rule names, which the sampler's word selects; a
-/// sample, a comparison's included, tests the word for a nearest pixel sampler
-/// (`SamplerWord::PIXEL_NEAREST`; of an integer texture, for pixel coordinates), which selects the
-/// centre of the texel Metal floors its coordinate to. A profile without the heap's features
-/// refuses each naming them.
+/// its use; every access in the sampler's coordinates carries the argument buffer's
+/// pixel-coordinate near-equivalent (`ArgumentPixelSamplerScaling`; never `PixelSamplerScaling`),
+/// a comparison or an integer texel samples through its own use, and a fragment samples at its
+/// implicit level. A sample without comparison also fetches the texel the rule names, which the
+/// sampler's word selects; no access reads a texel's centre (no test of the word's filters beside
+/// its coordinates, `SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR |
+/// SamplerWord::MAG_LINEAR`). A profile without the heap's features refuses each naming them.
 #[test]
 fn argument_buffer_samplers_are_heap_lookups() {
     let Some(bc) = argument_samplers_fixture() else {
@@ -4341,26 +4339,21 @@ fn argument_buffer_samplers_are_heap_lookups() {
                 "{stem} {entry}"
             );
             assert_eq!(non_uniform(&a), 6 + usize::from(!compare), "{stem} {entry}");
-            assert_eq!(
+            assert!(
                 a.precision
                     .contains(&PrecisionNote::ArgumentPixelSamplerScaling),
-                compare,
                 "{stem} {entry}"
             );
             assert!(
                 !a.precision.contains(&PrecisionNote::PixelSamplerScaling),
                 "{stem} {entry}"
             );
-            // A sample, a comparison's included, reads the texel's centre where the sampler's
-            // word states a nearest pixel sampler; an integer texture's, which no sampler filters,
-            // where it states pixel coordinates.
-            let centre = match use_.1 {
-                true => SamplerWord::PIXEL_COORDINATES,
-                false => SamplerWord::PIXEL_NEAREST,
-            };
+            // No texel centre: no mask of the word's coordinates and filters.
+            let centre =
+                SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
             assert!(
-                u32_constants(&a).contains(&centre),
-                "{stem} {entry}: the word's nearest pixel sampler"
+                !u32_constants(&a).contains(&centre),
+                "{stem} {entry}: a test of the word's nearest pixel sampler"
             );
             compiled += 1;
         }

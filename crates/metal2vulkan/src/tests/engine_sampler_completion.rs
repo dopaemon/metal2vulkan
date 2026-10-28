@@ -304,11 +304,11 @@ fn a_switch_of_pixel_fetches_hoists_nothing() {
 }
 
 /// A nearest pixel sampler that clamps to zero keeps the sample, because its out-of-range texel
-/// depends on the bound pixel format, and reads the centre of the texel Metal floors its coordinate
-/// to (its floor, divided by the size), which every device's nearest filter names: exact, so it
-/// carries no `PixelSamplerScaling`.
+/// depends on the bound pixel format, and hands the device's sampler the coordinate divided by the
+/// size, as given (no floor, no texel centre): the device's nearest filter names the texel, so it
+/// carries `PixelSamplerScaling`.
 #[test]
-fn a_clamp_to_zero_pixel_sampler_samples_its_texel_centre() {
+fn a_clamp_to_zero_pixel_sampler_samples_the_scaled_coordinate() {
     let Some(bc) = fixture() else {
         return;
     };
@@ -316,8 +316,8 @@ fn a_clamp_to_zero_pixel_sampler_samples_its_texel_centre() {
     assert_eq!(count(&a, OP_IMAGE_FETCH), 0);
     assert_eq!(uses(&a, "sampler.sample"), 1);
     assert!(count(&a, OP_FDIV) >= 1);
-    assert!(count(&a, OP_EXT_INST) >= 1);
-    assert!(!a.precision.contains(&PrecisionNote::PixelSamplerScaling));
+    assert_eq!(glsl(&a, GLSL_FLOOR), 0);
+    assert!(a.precision.contains(&PrecisionNote::PixelSamplerScaling));
 }
 
 /// The image-operand masks of every instruction `op` of the module, the mask being operand word

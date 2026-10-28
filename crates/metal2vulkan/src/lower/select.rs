@@ -1804,13 +1804,6 @@ fn clause_bytes(c: &NoteClause) -> usize {
         .saturating_add(tree_bytes(c.len(), test).max(NODE_TESTS * test))
 }
 
-/// The clauses of `a` and of `b` both holding: each pair's conjunction.
-pub(crate) fn both(a: &[NoteClause], b: &[NoteClause]) -> Vec<NoteClause> {
-    a.iter()
-        .flat_map(|x| b.iter().map(move |y| x.union(y).copied().collect()))
-        .collect()
-}
-
 /// Each test of `tests` alone, as clauses: the disjunction of the tests.
 pub(crate) fn any_of(tests: impl IntoIterator<Item = NoteTest>) -> Vec<NoteClause> {
     tests.into_iter().map(|t| [t].into()).collect()
@@ -1845,8 +1838,7 @@ fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
     })
 }
 
-/// `clause` over the function's declared constants, or `None` where a test reads none, or reads
-/// a gated sampler word in a way the binder's key does not keep (`pixel_gated`).
+/// `clause` over the function's declared constants, or `None` where a test reads none.
 fn declared_clause(families: &FamilyPlans, clause: &NoteClause) -> Option<SpecClause> {
     let mut all = clause
         .iter()
@@ -1854,7 +1846,7 @@ fn declared_clause(families: &FamilyPlans, clause: &NoteClause) -> Option<SpecCl
         .collect::<Option<Vec<_>>>()?;
     all.sort_unstable();
     all.dedup();
-    pixel_gated(&all).then_some(SpecClause { all })
+    Some(SpecClause { all })
 }
 
 /// The module's notes and its specialized notes: every note `precision` holds, and each of
@@ -1885,34 +1877,6 @@ fn resolve_notes(
         }
     }
     (precision.into_iter().collect(), kept)
-}
-
-/// Whether the clause `all` holds of every `SamplerState` word as it holds of its key: a word
-/// whose fields state `SamplerWord::PIXEL_GATED` keys as 0 where it states normalized coordinates
-/// (its pixel-coordinates bit clear), so each such word's tests must agree on every such word and
-/// on 0. A test agrees where it reads the bit alone, or tests it set (the masked word then never
-/// equals the bits): its value is the one it takes of 0. The tests of a word agree together where
-/// every one agrees, or where one that agrees fails of 0, failing the clause for every such word.
-fn pixel_gated(all: &[SpecTest]) -> bool {
-    use crate::metal::sampler::SamplerWord;
-    const PIXEL: u32 = SamplerWord::PIXEL_COORDINATES;
-    let agrees = |t: &SpecTest| t.mask == PIXEL || (t.mask & PIXEL != 0 && t.bits & PIXEL != 0);
-    let of_zero = |t: &SpecTest| (t.bits == 0) == t.equal;
-    let words: BTreeSet<SlotRef> = all
-        .iter()
-        .filter_map(|t| match t.key {
-            SpecKey::SamplerState { slot, fields } if fields & SamplerWord::PIXEL_GATED != 0 => {
-                Some(slot)
-            }
-            _ => None,
-        })
-        .collect();
-    words.into_iter().all(|slot| {
-        let tests = all
-            .iter()
-            .filter(|t| matches!(t.key, SpecKey::SamplerState { slot: s, .. } if s == slot));
-        tests.clone().all(agrees) || tests.clone().any(|t| agrees(t) && !of_zero(t))
-    })
 }
 
 #[cfg(test)]
@@ -2235,55 +2199,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// A clause over a gated sampler word holds of its key, which is 0 for every word of
-    /// normalized coordinates, only where its tests of the word agree on every such word and on
-    /// 0, or one of them fails wherever the coordinates bit is clear; an ungated word's clause is
-    /// kept whatever it tests.
-    #[test]
-    fn a_gated_word_s_clause_must_hold_of_its_key() {
-        use crate::metal::sampler::SamplerWord as W;
-        use crate::pipeline::sym::SlotClass;
-        let slot = SlotRef {
-            stage: Stage::Fragment,
-            class: SlotClass::Sampler,
-            index: 2,
-        };
-        let key = |fields| SpecKey::SamplerState { slot, fields };
-        let gated = key(W::PIXEL_NEAREST | W::PIXEL_GATED);
-        let test = |key, mask, bits, equal| SpecTest {
-            key,
-            mask,
-            bits,
-            equal,
-        };
-        let pixel = test(gated, W::PIXEL_COORDINATES, 0, false);
-        let normalized = test(gated, W::PIXEL_COORDINATES, 0, true);
-        let linear_min = test(gated, W::MIN_LINEAR, 0, false);
-        let nearest_pixel = test(gated, W::PIXEL_NEAREST, W::PIXEL_COORDINATES, true);
-        assert!(pixel_gated(&[pixel]));
-        assert!(pixel_gated(&[normalized]));
-        assert!(pixel_gated(&[pixel, linear_min]));
-        assert!(pixel_gated(&[nearest_pixel]));
-        assert!(pixel_gated(&[nearest_pixel, linear_min]));
-        // A filter test alone, or beside a test that holds for normalized coordinates, reads
-        // what the key clears.
-        assert!(!pixel_gated(&[linear_min]));
-        assert!(!pixel_gated(&[normalized, linear_min]));
-        // A word that is not a nearest pixel sampler: every word of normalized coordinates, as
-        // its key 0 is.
-        let not_nearest_pixel = test(gated, W::PIXEL_NEAREST, W::PIXEL_COORDINATES, false);
-        assert!(pixel_gated(&[not_nearest_pixel]));
-        assert!(!pixel_gated(&[not_nearest_pixel, linear_min]));
-        // An ungated word keeps every bit it reads.
-        let plain = key(W::PIXEL_NEAREST);
-        assert!(pixel_gated(&[test(plain, W::MIN_LINEAR, 0, false)]));
-        // Each gated word answers for itself.
-        let other = SpecKey::SamplerState {
-            slot: SlotRef { index: 3, ..slot },
-            fields: W::PIXEL_NEAREST | W::PIXEL_GATED,
-        };
-        assert!(!pixel_gated(&[pixel, test(other, W::MIN_LINEAR, 0, false)]));
     }
 }

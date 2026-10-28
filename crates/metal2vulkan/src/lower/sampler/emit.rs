@@ -976,71 +976,20 @@ pub(super) fn sampled_value(
         _ => None,
     };
     let (mut coord, mut grad) = plane_and_gradients(cx, fb, s, grads)?;
-    // A pixel sampler's snap reads the coordinate as given.
-    let given = coord;
     // Pixel coordinates: the plane coordinate (and any gradient) over the level-0 size, always
     // or behind the runtime sampler's word.
-    let mut centred = None;
-    let size_lanes = image.plane + u8::from(image.arrayed);
-    // The image and level-0 size the pixel coordinates query, which a word snap reads too.
-    let mut level0 = None;
     if let Some(spec) = pixel_coordinates(cx, fb, s)? {
         let img = fb.image(si)?;
         let zero = fb.u32_const(0)?;
         let zero = fb.module().const_value(zero)?;
         let size = fb.query(ImageQuery::SizeLod(zero), img)?;
-        level0 = Some((img, size));
-        centred = pixel_centre(cx, fb, s, coord, (size, size_lanes))?;
+        let size_lanes = image.plane + u8::from(image.arrayed);
         (coord, grad) = scaled(fb, s.lanes, (size, size_lanes), spec, (coord, grad))?;
     }
     // The plane coordinate as the sample reads it (pixel coordinates scaled), whose derivatives a
     // bias past the device's limit scales, and from which Metal's footprint of an observed access
     // follows.
     let plane = coord;
-    // The device reads a coordinate snapped onto the texels Metal reads.
-    if let Some(snap) = &s.snap {
-        coord = match snap.kind {
-            // A runtime or argument buffer's sampler's gather, and its linear pixel sample, on the
-            // base level's size the pixel coordinates queried, from the coordinate as given.
-            super::position::SnapKind::WordGather => {
-                let word = sampler_word(cx, fb, s.pixel)?;
-                let Some((_, size)) = level0 else {
-                    return Err(cx.fail("a word gather without its base level's size"));
-                };
-                super::position::gathered_by_word(
-                    fb,
-                    word,
-                    (given, coord),
-                    s.lanes,
-                    (size, size_lanes),
-                )?
-            }
-            super::position::SnapKind::WordCell { .. } => {
-                let word = sampler_word(cx, fb, s.pixel)?;
-                let Some((_, size)) = level0 else {
-                    return Err(cx.fail("a word cell without its base level's size"));
-                };
-                super::position::celled_by_word(
-                    fb,
-                    word,
-                    (given, coord),
-                    s.lanes,
-                    (size, size_lanes),
-                )?
-            }
-            _ => {
-                let offsets = snap_offsets(cx, fb, op_offset(&s.op), s.lanes)?;
-                let at = (given, offsets.as_slice(), offset_base(cx, s)?);
-                super::position::snapped(cx, fb, snap, at, s.lanes, (si, image))?
-            }
-        };
-    }
-    // A nearest pixel sampler's texel at its centre.
-    coord = match centred {
-        Some((Some(nearest), centre)) => fb.select(nearest, centre, coord)?,
-        Some((None, centre)) => centre,
-        None => coord,
-    };
     let (coord, layer) = layered(cx, fb, s, coord)?;
     // The access, from the sampled image `si`; under a sparse arm each arm loads its own.
     // The access, from the sampled image `si` (loaded in the open block); under a sparse arm each
@@ -1287,8 +1236,7 @@ fn heap_sampler_field(
 
 /// Whether sampler word `word` masked by `mask` is exactly [`SamplerWord::PIXEL_COORDINATES`] (a
 /// `bool`): every predicate a sampling tests of a runtime sampler is a pixel sampler's, with the
-/// other fields of `mask` at their zero values ([`SamplerWord::exact_fetch`],
-/// [`SamplerWord::PIXEL_NEAREST`]).
+/// other fields of `mask` at their zero values ([`SamplerWord::exact_fetch`]).
 fn word_states(fb: &mut FunctionBuilder<'_>, word: SValue, mask: u32) -> BResult<SValue> {
     let m = fb.u32_const(mask)?;
     let m = fb.module().const_value(m)?;
@@ -1296,60 +1244,6 @@ fn word_states(fb: &mut FunctionBuilder<'_>, word: SValue, mask: u32) -> BResult
     let pixel = fb.u32_const(SamplerWord::PIXEL_COORDINATES)?;
     let pixel = fb.module().const_value(pixel)?;
     fb.binary(BinOp::IEqual, have, pixel)
-}
-
-/// For a centred sample ([`Sampling::centred`]): where it reads the texel's centre (`None` always,
-/// for a constexpr sampler; else where the runtime sampler's word masked by
-/// [`Sampling::centre_word`] is [`SamplerWord::PIXEL_COORDINATES`]), and
-/// the normalized centre of the texel Metal reads at pixel coordinate `coord` (`s.lanes` floats) on
-/// a texture of level-0 size `size` (`size_lanes` components), `(floor(coord) + 1/2) / size` per
-/// plane axis. Metal floors a nearest pixel sampler's coordinate (Apple M4, 1,378
-/// lanes a fraction of a texel either side of every integer, constexpr and runtime samplers,
-/// clamped to the edge and to zero); a device's nearest filter takes `floor(u size)`, whose product
-/// `u size` of the scaled coordinate can round onto the next integer, so the texel's centre, half a
-/// texel from either edge, names it on every device. A coordinate outside the texture keeps its
-/// centre outside it, where clamping to the edge, to zero, or to a border, or mirroring once and
-/// clamping, reads what Metal reads. `None` for any other sampling: a gather or a comparison keeps the scaled coordinate, whose
-/// texels are the device's.
-fn pixel_centre(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    s: &Sampling,
-    coord: SValue,
-    (size, size_lanes): (SValue, u8),
-) -> BResult<Option<(Option<SValue>, SValue)>> {
-    if !s.centred {
-        return Ok(None);
-    }
-    let nearest = match s.pixel {
-        Pixel::None => return Ok(None),
-        Pixel::Always => None,
-        // A runtime sampler: its word's nearest pixel sampler.
-        Pixel::Spec(_) | Pixel::Heap(_) => {
-            let word = sampler_word(cx, fb, s.pixel)?;
-            Some(word_states(fb, word, s.centre_word)?)
-        }
-    };
-    let floor = fb.glsl(GlslOp::Floor, &[coord])?;
-    let f = f32_ty(fb)?;
-    let half = fb.module().constant(Constant::Scalar {
-        ty: f,
-        bits: ConstBits(u64::from(0.5f32.to_bits())),
-    })?;
-    let half = match s.lanes {
-        1 => half,
-        len => {
-            let ty = fb.module().ty(SType::Vector { elem: f, len })?;
-            fb.module().constant(Constant::Composite {
-                ty,
-                parts: vec![half; usize::from(len)].into(),
-            })?
-        }
-    };
-    let half = fb.module().const_value(half)?;
-    let centre = fb.binary(BinOp::FAdd, floor, half)?;
-    let centre = scale(fb, centre, size, s.lanes, size_lanes)?;
-    Ok(Some((nearest, centre)))
 }
 
 /// The plane coordinate `coord` (`lanes` floats) and gradients `grad` over the level-0 size
@@ -1398,7 +1292,7 @@ pub(super) fn layered(
 }
 
 /// The `SpecKey::OffsetBaseAxes` tests of `s`'s slot (`texture::OffsetBase`), by which its
-/// emulation or snap places a texel offset (`position::offset_dropped`), where `s` reads them
+/// emulation places a texel offset (`position::offset_dropped`), where `s` reads them
 /// ([`Sampling::offset_base`]); `None` for every other access, a heap element's among them.
 pub(super) fn offset_base(
     cx: &mut EmitCx<'_>,
@@ -1416,50 +1310,6 @@ pub(super) fn offset_base(
         }
         _ => Ok(None),
     }
-}
-
-/// The texel offset a sample or gather `op` carries, if any.
-pub(super) fn op_offset(op: &SampleOp) -> Option<&Offset> {
-    match op {
-        SampleOp::Sample { offset, .. } | SampleOp::Gather { offset, .. } => offset.as_ref(),
-        _ => None,
-    }
-}
-
-/// Each of the `lanes` plane axes' texel offset of `o` as an `f32` (`None` on an axis a constant
-/// offset leaves at 0, and every axis without an offset), which a snapped axis moves its index
-/// back by where Metal drops the offset the device adds (`position::snapped_axis`). A dynamic
-/// offset is read as Metal reads it ([`metal_offset`]).
-pub(super) fn snap_offsets(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    o: Option<&Offset>,
-    lanes: u8,
-) -> BResult<Vec<Option<SValue>>> {
-    let mut out = Vec::with_capacity(usize::from(lanes));
-    match o {
-        None => {}
-        Some(Offset::Const(k)) => {
-            for &v in k.iter().take(usize::from(lanes)) {
-                // Metal's offsets lie in [-8, 7], each exact as an `f32`.
-                let x = v as f32;
-                out.push((v != 0).then(|| f32_const(fb, x.to_bits())).transpose()?);
-            }
-        }
-        Some(Offset::Dynamic(v, _)) => {
-            let ov = metal_offset(cx, fb, *v, lanes)?;
-            let f = f32_ty(fb)?;
-            for a in 0..u32::from(lanes) {
-                let x = if lanes == 1 {
-                    ov
-                } else {
-                    fb.composite_extract(ov, &[a])?
-                };
-                out.push(Some(fb.convert(ConvOp::ConvertSToF, x, f)?));
-            }
-        }
-    }
-    Ok(out)
 }
 
 /// The texel offset operand of `o` on a `lanes`-component plane: a constant's `ConstOffset`, a

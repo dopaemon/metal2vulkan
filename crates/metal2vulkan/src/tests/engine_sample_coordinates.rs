@@ -1,15 +1,12 @@
 //! The coordinates a device's gathers and samples read. A gather and a sample through a constexpr
-//! normalized sampler are the device's sampler's on every device (Metal's own on MoltenVK). A
-//! constexpr pixel sampler's position is the coordinate as given, on every device: its gather
-//! snaps from it (`sampler.gather.snapped`), and its linear sample snaps onto its footprint cell
-//! (`sampler.linear.snapped`), none of them noted `PixelSamplerScaling`; and a cube reads it as a
-//! normalized sampler. A runtime sampler's gather snaps behind its word where the word states pixel
-//! coordinates. Every module requires the device's sampler (`VkProperty::MetalSampler` or
-//! `VkProperty::DeviceSampling`) and validates on every committed profile, and the plan's word
+//! normalized sampler are the device's sampler's on every device (Metal's own on MoltenVK), at the
+//! coordinate as given: a subnormal coordinate reaches the device unflushed, the border axes'
+//! included. A pixel sampler's coordinate reaches the device's sampler divided by the level-0
+//! size, on every device, under the operation's own census name and noted `PixelSamplerScaling`;
+//! a cube reads it as a normalized sampler. A runtime sampler's gather and sample read only its
+//! word's coordinates bit. Every module requires the device's sampler (`VkProperty::MetalSampler`
+//! or `VkProperty::DeviceSampling`) and validates on every committed profile, and the plan's word
 //! estimate bounds what it emits.
-//!
-//! The snapped coordinate's arithmetic is checked bit for bit on the interpreter by
-//! `lower::sampler::position`'s tests (the interpreter has no gather or sample).
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -29,7 +26,7 @@ const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16
 fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "m2v-snapped-{}-{}-{}",
+        "m2v-coordinates-{}-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed),
         name.replace(' ', "-")
@@ -93,6 +90,13 @@ enum Op {
 /// A kernel performing `op` through constexpr sampler `words` (`None`: the runtime
 /// `[[sampler(0)]]`).
 fn kernel(op: Op, words: Option<u64>) -> String {
+    kernel_of(op, words, false)
+}
+
+/// [`kernel`], its coordinate, where `flushed`, replaced in the AIR by the zero of its sign on
+/// each lane whose magnitude is subnormal (integer operations on its bits, a select between them):
+/// the shape a flush of the coordinate takes in the module.
+fn kernel_of(op: Op, words: Option<u64>, flushed: bool) -> String {
     let s = if words.is_some() {
         "@__air_sampler_state"
     } else {
@@ -170,12 +174,25 @@ fn kernel(op: Op, words: Option<u64>) -> String {
         ),
         None => (String::new(), "", ""),
     };
+    let load = match flushed {
+        false => "  %uv = load <2 x float>, ptr addrspace(1) %p, align 8\n".to_owned(),
+        true => [
+            "  %given = load <2 x float>, ptr addrspace(1) %p, align 8",
+            "  %bits = bitcast <2 x float> %given to <2 x i32>",
+            "  %magnitude = and <2 x i32> %bits, <i32 2147483647, i32 2147483647>",
+            "  %small = icmp ult <2 x i32> %magnitude, <i32 8388608, i32 8388608>",
+            "  %sign = and <2 x i32> %bits, <i32 -2147483648, i32 -2147483648>",
+            "  %kept = select <2 x i1> %small, <2 x i32> %sign, <2 x i32> %bits",
+            "  %uv = bitcast <2 x i32> %kept to <2 x float>",
+            "",
+        ]
+        .join("\n"),
+    };
     format!(
         r#"{state}define void @k(ptr addrspace(1) %t, ptr addrspace(1) %c, ptr addrspace(1) %out{params}, i32 %tid) {{
   %i = zext i32 %tid to i64
   %p = getelementptr inbounds <2 x float>, ptr addrspace(1) %c, i64 %i
-  %uv = load <2 x float>, ptr addrspace(1) %p, align 8
-  %u = extractelement <2 x float> %uv, i64 0
+{load}  %u = extractelement <2 x float> %uv, i64 0
   %uvw = shufflevector <2 x float> %uv, <2 x float> <float 0.5, float 0.5>, <3 x i32> <i32 0, i32 1, i32 2>
 {load_lod}  %r = call {{ <4 x float>, i8 }} {call}
   %v = extractvalue {{ <4 x float>, i8 }} %r, 0
@@ -243,7 +260,6 @@ fn cases() -> Vec<(&'static str, Op, Option<u64>, &'static str)> {
             near([EDGE; 3]),
             "sampler.gather",
         ),
-        // Snapped behind its word, under the operation's own name.
         ("gather runtime sampler", gather, None, "sampler.gather"),
         (
             "nearest repeat 2d",
@@ -287,8 +303,6 @@ fn cases() -> Vec<(&'static str, Op, Option<u64>, &'static str)> {
             Some(sampler(0, 1, [REPEAT; 3], false)),
             "sampler.sample",
         ),
-        // A runtime sampler's sample snaps onto its footprint cell where its word states a
-        // linear pixel sampler, under the operation's own name.
         (
             "nearest repeat runtime sampler",
             Op::Sample2D,
@@ -366,41 +380,47 @@ fn the_fixture_cube_gathers_are_the_device_s() {
 /// coordinates).
 fn pixel_cases() -> Vec<(&'static str, Op, u64, Option<&'static str>)> {
     let pixel = |filter, address| sampler(filter, 0, address, true);
-    let snapped = Some("sampler.gather.snapped");
-    let linear = Some("sampler.linear.snapped");
+    let gather = Some("sampler.gather");
+    let sample = Some("sampler.sample");
     vec![
         (
             "pixel gather edge",
             Op::Gather { offset: (0, 0) },
             pixel(0, [EDGE; 3]),
-            snapped,
+            gather,
         ),
         (
             "pixel gather zero offset",
             Op::Gather { offset: (2, -3) },
             pixel(0, [ZERO; 3]),
-            snapped,
+            gather,
         ),
         (
             "pixel gather linear sampler",
             Op::Gather { offset: (0, 0) },
             pixel(1, [EDGE; 3]),
-            snapped,
+            gather,
         ),
         (
             "pixel gather array",
             Op::GatherArray,
             pixel(0, [ZERO, EDGE, EDGE]),
-            snapped,
+            gather,
         ),
-        ("pixel linear 1d", Op::Sample1D, pixel(1, [EDGE; 3]), linear),
+        ("pixel linear 1d", Op::Sample1D, pixel(1, [EDGE; 3]), sample),
         (
             "pixel linear 2d",
             Op::Sample2D,
             pixel(1, [ZERO, EDGE, EDGE]),
-            linear,
+            sample,
         ),
-        ("pixel linear 3d", Op::Sample3D, pixel(1, [EDGE; 3]), linear),
+        ("pixel linear 3d", Op::Sample3D, pixel(1, [EDGE; 3]), sample),
+        (
+            "pixel nearest zero 2d",
+            Op::Sample2D,
+            pixel(0, [ZERO; 3]),
+            sample,
+        ),
         (
             "pixel nearest cube",
             Op::SampleCube,
@@ -416,12 +436,33 @@ fn pixel_cases() -> Vec<(&'static str, Op, u64, Option<&'static str>)> {
     ]
 }
 
-/// On every committed profile, a constexpr pixel sampler's gather and linear sample compile to
-/// their census names, require the device's sampler, validate, and record no
-/// `PixelSamplerScaling`; a cube through a pixel sampler compiles as through the same sampler with
-/// normalized coordinates, to the same census, notes, and requirements.
+/// The `GLSL.std.450` instructions numbered `glsl` the module of `a` calls.
+fn glsl_count(a: &FunctionArtifact, glsl: u32) -> usize {
+    const OP_EXT_INST: u32 = 12;
+    let words = &a.module.words;
+    let mut n = 0;
+    let mut i = 5;
+    while i < words.len() {
+        let len = (words[i] >> 16) as usize;
+        if words[i] & 0xFFFF == OP_EXT_INST && words.get(i + 4) == Some(&glsl) {
+            n += 1;
+        }
+        i += len.max(1);
+    }
+    n
+}
+
+/// `GLSL.std.450 Floor`, which a texel centre, a footprint cell and a gather's block all take.
+const GLSL_FLOOR: u32 = 8;
+
+/// On every committed profile, a constexpr pixel sampler's gather and linear or clamp-to-zero
+/// sample compile to their operation's census names, hand the device the coordinate divided by
+/// the level-0 size as given (no `Floor` of it: no texel centre, footprint cell or block),
+/// record `PixelSamplerScaling`, require the device's sampler and validate; a cube through a pixel
+/// sampler compiles as through the same sampler with normalized coordinates, to the same census,
+/// notes, and requirements.
 #[test]
-fn pixel_samplers_read_metals_position_on_every_device() {
+fn pixel_samplers_hand_the_device_the_scaled_coordinate() {
     let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
     for (name, op, words, expect) in pixel_cases() {
         let Some(bc) = assemble(name, &kernel(op, Some(words))) else {
@@ -439,9 +480,10 @@ fn pixel_samplers_read_metals_position_on_every_device() {
                 (Some(census), _) => {
                     assert_eq!(uses(&a, census), 1, "{what}");
                     assert!(
-                        !a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                        a.precision.contains(&PrecisionNote::PixelSamplerScaling),
                         "{what}"
                     );
+                    assert_eq!(glsl_count(&a, GLSL_FLOOR), 0, "{what}");
                     assert!(requires_the_sampler(&a, p), "{what}");
                 }
                 (None, Some(nbc)) => {
@@ -469,18 +511,14 @@ fn sampler_fields(a: &FunctionArtifact) -> u32 {
         .expect("a `SamplerState` specialization")
 }
 
-/// On every committed profile, a runtime sampler's gather of a 2D texture or array snaps behind its
-/// word (`position::SnapKind::WordGather`): the function reads the word's coordinates and its `s`
-/// and `t` modes, and records no `PixelSamplerScaling`, every word's gather reading Metal's block.
-/// A runtime sampler's 2D sample reads whether the word states a linear pixel sampler
-/// (`position::SnapKind::WordCell`), and keeps `PixelSamplerScaling`. Each requires the device's
-/// sampler.
+/// On every committed profile, a runtime sampler's gather of a 2D texture or array and its 2D
+/// sample read only the coordinates bit of its word (none of its address modes or filters), hand
+/// the device the coordinate scaled behind it (no `Floor`), and record `PixelSamplerScaling`. Each
+/// requires the device's sampler.
 #[test]
-fn a_runtime_samplers_gather_snaps_behind_its_word() {
+fn a_runtime_samplers_gather_and_sample_read_only_its_coordinates() {
     use crate::metal::sampler::SamplerWord;
     let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
-    let gather = SamplerWord::PIXEL_COORDINATES | SamplerWord::ADDRESS[0] | SamplerWord::ADDRESS[1];
-    let cell = SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
     for (name, op) in [
         ("runtime gather", Op::Gather { offset: (0, 0) }),
         ("runtime gather offset", Op::Gather { offset: (2, -1) }),
@@ -494,16 +532,135 @@ fn a_runtime_samplers_gather_snaps_behind_its_word() {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let fields = sampler_fields(&a);
-            let scaled = a.precision.contains(&PrecisionNote::PixelSamplerScaling);
             assert!(requires_the_sampler(&a, p), "{what}");
-            if matches!(op, Op::Sample2D) {
-                assert_eq!(fields & cell, cell, "{what}: {fields:#x}");
-                assert!(scaled, "{what}");
-                continue;
+            assert_eq!(sampler_fields(&a), SamplerWord::PIXEL_COORDINATES, "{what}");
+            assert!(
+                a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                "{what}"
+            );
+            assert_eq!(glsl_count(&a, GLSL_FLOOR), 0, "{what}");
+        }
+    }
+}
+
+/// Whether every coordinate operand of every sample and gather in the module `words` is the
+/// coordinate the kernel loaded, its bits unchanged: built from the loaded words by bit moves alone
+/// (loads, bitcasts, the extraction, construction and shuffle of lanes, constants), and an array's
+/// layer by its conversion to `float`. Also whether the module samples or gathers at all.
+fn coordinates_pass_through(words: &[u32]) -> (bool, bool) {
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::Op as O;
+    use std::collections::HashMap;
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let parsed = parse_bytes(&bytes).expect("parse");
+    let defs: HashMap<u32, &crate::spirv_binary::Instruction> = parsed
+        .instructions
+        .iter()
+        .filter_map(|i| i.result_id.map(|id| (id, i)))
+        .collect();
+    let ids = |i: &crate::spirv_binary::Instruction| -> Vec<u32> {
+        i.operands
+            .iter()
+            .filter_map(|o| match o {
+                Operand::IdRef(w) => Some(*w),
+                _ => None,
+            })
+            .collect()
+    };
+    // The value `id` is a bit move of the loaded coordinate (or a constant, or a layer).
+    fn moves(
+        id: u32,
+        defs: &HashMap<u32, &crate::spirv_binary::Instruction>,
+        ids: &dyn Fn(&crate::spirv_binary::Instruction) -> Vec<u32>,
+    ) -> bool {
+        let Some(i) = defs.get(&id) else {
+            return false;
+        };
+        match i.opcode {
+            // A load's operand is its pointer, not a value of the coordinate's.
+            O::Load
+            | O::Constant
+            | O::ConstantComposite
+            | O::ConstantNull
+            | O::ConvertUToF
+            | O::ConvertSToF => true,
+            O::Bitcast
+            | O::CompositeExtract
+            | O::CompositeConstruct
+            | O::CompositeInsert
+            | O::VectorShuffle
+            | O::CopyObject => ids(i).into_iter().all(|v| moves(v, defs, ids)),
+            _ => false,
+        }
+    }
+    let mut sampled = false;
+    let mut all = true;
+    for i in &parsed.instructions {
+        let coordinate = match i.opcode {
+            O::ImageSampleImplicitLod
+            | O::ImageSampleExplicitLod
+            | O::ImageSampleDrefImplicitLod
+            | O::ImageSampleDrefExplicitLod
+            | O::ImageGather
+            | O::ImageDrefGather
+            | O::ImageSparseSampleImplicitLod
+            | O::ImageSparseSampleExplicitLod
+            | O::ImageSparseGather => ids(i).get(1).copied(),
+            _ => continue,
+        };
+        sampled = true;
+        all &= coordinate.is_some_and(|c| moves(c, &defs, &ids));
+    }
+    (sampled, all)
+}
+
+/// The kernels of the subnormal test: through constexpr normalized samplers whose every axis
+/// addresses through the border (clamp to zero, and to an opaque white border), nearest and linear,
+/// of 1D, 2D and 3D textures and a 2D gather.
+fn border_cases() -> Vec<(String, Op, u64)> {
+    const OPAQUE_WHITE: u64 = 2 << 56;
+    let mut out = Vec::new();
+    for (op, what) in [
+        (Op::Sample1D, "1d"),
+        (Op::Sample2D, "2d"),
+        (Op::Sample3D, "3d"),
+        (Op::Gather { offset: (0, 0) }, "gather"),
+    ] {
+        for filter in [0, 1] {
+            for (border, colour) in [(0, "zero"), (OPAQUE_WHITE, "white")] {
+                let words = sampler(filter, 0, [ZERO; 3], false) | border;
+                out.push((format!("border {what} {filter} {colour}"), op, words));
             }
-            assert_eq!(fields & gather, gather, "{what}: {fields:#x}");
-            assert!(!scaled, "{what}");
+        }
+    }
+    out
+}
+
+/// A subnormal coordinate reaches the device's sampler as given, on every committed profile: the
+/// coordinate operand of each sample and gather through a constexpr normalized sampler whose axes
+/// address through the border (where Metal's texture unit reads a subnormal as the zero of its
+/// sign before the address mode decides, `PrecisionNote::DeviceSampling`) is the loaded coordinate,
+/// its bits unchanged. The negative control: the same kernels with the coordinate flushed in the
+/// AIR, whose modules read the coordinate's bits before the sample, are told apart.
+#[test]
+fn a_subnormal_coordinate_reaches_the_device_unflushed() {
+    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
+    for (name, op, words) in border_cases() {
+        for flushed in [false, true] {
+            let Some(bc) = assemble(&name, &kernel_of(op, Some(words), flushed)) else {
+                return;
+            };
+            for (stem, p) in &profiles {
+                let what = format!("{name} (flushed: {flushed}) on {stem}");
+                let a = compile(&bc, "k", p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
+                let (sampled, through) = coordinates_pass_through(&a.module.words);
+                assert!(sampled, "{what}: no sample or gather");
+                assert_eq!(through, !flushed, "{what}");
+                if !flushed {
+                    assert!(requires_the_sampler(&a, p), "{what}");
+                }
+            }
         }
     }
 }
@@ -511,7 +668,7 @@ fn a_runtime_samplers_gather_snaps_behind_its_word() {
 /// The plan's word estimate bounds the emitted module of every kernel above on every committed
 /// profile.
 #[test]
-fn the_snapped_estimate_bounds_its_emission() {
+fn the_coordinate_estimate_bounds_its_emission() {
     use crate::budget::SPIRV_WORDS;
     use crate::library::FunctionConstantValues;
     use crate::lower::select::LowerInputs;

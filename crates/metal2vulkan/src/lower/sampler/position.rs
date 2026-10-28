@@ -1,5 +1,6 @@
-//! Metal's texel-space position of a normalized coordinate, and the coordinate that makes a
-//! device's gather or linear sample of a pixel sampler read the texels Metal reads.
+//! Metal's texel-space position of a normalized coordinate, which the filters the device has no
+//! form for read their footprints from (`bicubic`, `extended`, `heap_raw`, `in_place`, and the
+//! residency `footprint`), and Metal's placement of a texel offset on a repeating or mirrored axis.
 //!
 //! **The position** (Apple M3 Max, macOS 26.7, and Apple M4, macOS 27.0.1, byte-identical; the
 //! tie, gather, and bicubic probes). Per axis of size `N` and normalized coordinate `u`, Apple's
@@ -72,9 +73,8 @@
 //!   above the base through a view of that one level, which reads exactly as the level does: the
 //!   view's parent's base-level size decides.
 //!
-//! An emulated footprint applies the rule to its taps (`bicubic::axis`), and a snapped axis that
-//! repeats or mirrors subtracts the offset the device will add where Metal drops it
-//! ([`snapped_axis`]). The base-level size the rule reads is a view's parent's, which a shader
+//! An emulated footprint applies the rule to its taps (`bicubic::axis`). The base-level size the
+//! rule reads is a view's parent's, which a shader
 //! cannot query: a view whose first level lies above its parent's base reads the bound view's
 //! own, so on an axis of size 2 or 4 under a parent base that is not a power of two (where the
 //! view's base is) the rule would keep the offset Metal drops. The binder states those axes in the
@@ -82,271 +82,28 @@
 //! whose tests (`texture::OffsetBase`) the rule reads; a heap element's access reads none, and
 //! records `PrecisionNote::ViewBaseTexelOffset` (the residue there).
 //!
-//! **The snapped coordinate** ([`snapped`]). A pixel sampler's coordinate, scaled for the
-//! device, reads whichever texels the device's own arithmetic gives near a texel edge. Where
-//! Metal's texels follow from the coordinate as given, a snapped axis instead hands the device a
-//! coordinate half a step from every edge of them: a gather's `(i0 + 1) / N`, the centre of its
-//! 2x2 block ([`AxisSnap::Gather`]), and a linear sample's footprint cell ([`AxisSnap::Cell`]),
-//! with `i0` and the cell from Metal's position. Any device's rounding then reads Metal's block or
-//! step, and the device keeps everything else: the texel conversion, the filter's weights, the
-//! border, the comparison, the offset (added to the snapped index, then wrapped or clamped, as
-//! Metal adds it), and the layer. A gather's `i0` is computed in `f32`, `floor(floor(256 X + 1/2)
-//! / 256 - 1/2)`, exact for `|X| < 2^15` (every position of a Metal texture's repeating or mirrored
-//! axis, at most `2N`, included). On a clamping axis `i0` is first clamped into `[-10, N + 8]`:
-//! past either end, with any offset in Metal's gather range `[-8, 7]`, both texels lie outside the
-//! level on the same side, so they read the same edge texels or border as the exact `i0` would,
-//! and the coordinate stays small. On a repeating or mirrored axis whose size drops the offset
-//! ([`offset_dropped`]), the snapped index is first moved back by the offset, which the device then
-//! adds: the device reads the texel or block Metal reads there, the one without the offset.
-//!
-//! **A runtime or argument buffer's sampler** names its state in its word, read in the function:
-//! where the word states pixel coordinates, its gather of a 2D texture or array snaps behind it
-//! ([`gathered_by_word`]), each axis at the coordinate as given, with `i0` clamped into the wider
-//! `[-2N - 10, 2N + 8]`, which holds every position of a repeating or mirrored axis and reads a
-//! clamping axis's same edge texels or border; and where it also states linear min and mag
-//! filters, its sample snaps onto its footprint cell ([`celled_by_word`]), as a constexpr pixel
-//! sampler's does (that sample reads Metal's rule at the coordinate as given: our probe's 10,250
-//! lanes of a runtime pixel sampler on both chips). A normalized word's gather and every other
-//! word's sample keep the device's coordinate. On a `MirrorClampToEdge` axis (which no constexpr
-//! sampler states) Metal's position is a clamping axis's, `u N` unwrapped, its taps mirrored once
-//! and clamped as Vulkan's `MIRROR_CLAMP_TO_EDGE` mirrors and clamps them ([`position_by_mode`]),
-//! and a texel offset is dropped by the sizes that drop it on a repeating axis (every gather of
-//! 13x11, 7x5 and 16x8 textures through a slot's and an argument buffer's runtime sampler, with
-//! offsets of 2 and -3, on an Apple M3 Max and an Apple M4 alike), a pixel coordinate's as a
-//! normalized one's, and a pixel word's texel centre moves back by a dropped offset
-//! (`emit::pixel_centre`).
+//! **A runtime sampler's position** ([`position_by_mode`]): an emulation of a runtime or argument
+//! buffer's sampler reads the address mode from the sampler's word in the function. On a
+//! `MirrorClampToEdge` axis (which no constexpr sampler states) Metal's position is a clamping
+//! axis's, `u N` unwrapped, its taps mirrored once and clamped as Vulkan's `MIRROR_CLAMP_TO_EDGE`
+//! mirrors and clamps them, and a texel offset is dropped by the sizes that drop it on a repeating
+//! axis (every gather of 13x11, 7x5 and 16x8 textures through a slot's and an argument buffer's
+//! runtime sampler, with offsets of 2 and -3, on an Apple M3 Max and an Apple M4 alike), a pixel
+//! coordinate's as a normalized one's.
 
-use crate::air::abi::{AddressMode, Coordinates, Filter};
-use crate::air::intrinsics::{ImageDim, ImageShape};
-use crate::error::Error;
-use crate::lower::emit::EmitCx;
-use crate::lower::select::SelectCx;
-use crate::lower::texture::OffsetBase;
 use crate::metal::SamplerAddressMode;
-use crate::pipeline::sym::SamplerRef;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value as SValue;
-use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, ImageQuery, Type as SType};
+use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, Type as SType};
 
 use super::bicubic::TapAddress;
-use super::{CombinedImage, SampleOp};
 
 /// The census words of one axis's [`position`]: the conversion of the size, the wrap (a mirrored
 /// axis's four instructions, and the rounding's thirteen, which choose up or down by the size), the
 /// product, and the ties' twelve integer instructions, with their constants (186 words on a
 /// mirrored axis). Every estimate that emits a position adds it per axis.
 pub const POSITION_WORDS: u32 = 200;
-
-/// How the texels a snapped plane axis hands the device follow from the position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum AxisSnap {
-    /// A gather's 2x2 block: the coordinate `(i0 + 1) / N`.
-    Gather,
-    /// A linear sample's footprint cell: the coordinate `(floor(256 X - 127.5) + 128) / 256 / N`,
-    /// the centre of the `1/256` step `q` Metal's filter reads `X` as, half a step from either edge
-    /// of it.
-    Cell,
-}
-
-/// What a snap hands the device.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SnapKind {
-    /// The plane coordinate with [`Snap::axes`]' axes snapped.
-    Axes(AxisSnap),
-    /// A runtime or argument buffer's sampler's gather of a 2D texture or 2D array: behind the
-    /// sampler's word, where it states pixel coordinates, each plane axis takes
-    /// [`AxisSnap::Gather`]'s coordinate, the centre of the 2x2 block Metal reads at the coordinate
-    /// as given ([`gathered_by_word`]); a normalized coordinate is the device's gather's.
-    /// [`Snap::axes`] is empty: the word names the modes.
-    WordGather,
-    /// A runtime or argument buffer's sampler's sample of a texture of `axes` plane axes: where
-    /// the word states pixel coordinates
-    /// and linear min and mag filters, each plane axis takes [`AxisSnap::Cell`]'s coordinate, the
-    /// centre of the footprint step Metal reads the coordinate as given at, as a constexpr linear
-    /// pixel sampler's sample does there ([`celled_by_word`]); every other word keeps the scaled
-    /// coordinate. [`Snap::axes`] is empty.
-    WordCell { axes: u8 },
-}
-
-/// A gather or linear sample whose coordinate is snapped onto Metal's texels (module docs).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Snap {
-    pub kind: SnapKind,
-    /// Per plane axis (`s`, then `t`, then `r`), its addressing where the axis is snapped, or
-    /// `None` where the device reads the coordinate as given.
-    pub axes: Vec<Option<TapAddress>>,
-}
-
-impl Snap {
-    /// A runtime or argument buffer's sampler's snap behind its word ([`SnapKind::WordGather`],
-    /// [`SnapKind::WordCell`]).
-    pub fn by_word(&self) -> bool {
-        matches!(self.kind, SnapKind::WordGather | SnapKind::WordCell { .. })
-    }
-
-    /// The census words: the image and its size query; per snapped plane axis the extractions, the
-    /// [`position`], the index and its clamp, and the coordinate, and the composite.
-    pub fn words(&self) -> u32 {
-        // The coordinate is in texels: Metal's position `X` is the coordinate as given.
-        let per_axis = 8 + match self.kind {
-            SnapKind::Axes(AxisSnap::Gather) => GATHER_AXIS_WORDS,
-            SnapKind::Axes(AxisSnap::Cell) => CELL_AXIS_WORDS,
-            SnapKind::WordGather => {
-                return 32 + WORD_REACH_WORDS + 2 * (8 + GATHER_AXIS_WORDS + WORD_AXIS_WORDS);
-            }
-            SnapKind::WordCell { axes } => {
-                return 32
-                    + WORD_REACH_WORDS
-                    + u32::from(axes) * (8 + CELL_AXIS_WORDS + WORD_AXIS_WORDS);
-            }
-        };
-        let snapped = self.axes.iter().filter(|a| a.is_some()).count() as u32;
-        32 + snapped * per_axis + self.axes.len() as u32 * 8
-    }
-
-    /// The census words of the offset rule ([`offset_dropped`]) on each axis this snap may move
-    /// back, for an access with a texel offset: each snapped plane axis's, and each axis of a word
-    /// gather.
-    pub fn offset_words(&self) -> u32 {
-        let axes = match self.kind {
-            // The device's sampler places a pixel cell's.
-            SnapKind::WordCell { .. } => 0,
-            SnapKind::WordGather => 2,
-            SnapKind::Axes(_) => self.axes.iter().filter(|a| a.is_some()).count() as u32,
-        };
-        axes * OFFSET_RULE_WORDS
-    }
-}
-
-/// A gather axis's words past its position: the two extractions, `i0` (six instructions and their
-/// constants), its clamp, and the coordinate.
-const GATHER_AXIS_WORDS: u32 = 96;
-/// A footprint cell's words past its position: the two extractions, the step (seven instructions
-/// and their constants), and the coordinate.
-const CELL_AXIS_WORDS: u32 = 96;
-/// A word snap's test of its word (`SamplerWord::PIXEL_COORDINATES`, and a cell's linear filters):
-/// the mask, the comparison, and their constants.
-const WORD_REACH_WORDS: u32 = 24;
-/// A word snap's axis words past its snapped coordinate: the extractions of the coordinate as
-/// given and the device's, the size's conversion, a gather's widened clamp, and the select.
-const WORD_AXIS_WORDS: u32 = 64;
-/// The tap addressing of address mode `m`.
-pub(super) fn address(m: AddressMode) -> TapAddress {
-    match m {
-        AddressMode::ClampToEdge => TapAddress::Edge,
-        AddressMode::Repeat => TapAddress::Repeat,
-        AddressMode::MirroredRepeat => TapAddress::Mirror,
-        AddressMode::ClampToZero | AddressMode::ClampToBorder => TapAddress::Border,
-    }
-}
-
-/// The snap of `op` on a texture of `shape` through the static sampler `stat` (`None`: an
-/// argument buffer's), where the module docs snap it. A pixel sampler's coordinate is Metal's
-/// position as given, which the device's sampler, reading the coordinate over the size, does not
-/// reproduce, its own or Metal's alike. So on every device:
-///
-/// - a constexpr pixel sampler's gather of a 2D texture or 2D array snaps both plane axes from the
-///   coordinate as given;
-/// - a runtime or argument buffer's sampler's gather of a 2D texture or 2D array snaps behind the
-///   sampler's word, where it states pixel coordinates ([`SnapKind::WordGather`]);
-/// - a constexpr pixel sampler's linear sample of a 1D, 2D, or 3D texture or array with a
-///   floating-point texel (an `integer` one's reads one texel) snaps every plane axis onto the
-///   centre of its footprint cell, unless the sampler is anisotropic;
-/// - a runtime or argument buffer's sampler's sample of such a texture, a comparison's included,
-///   snaps onto its footprint cell where its word states a linear pixel sampler
-///   ([`SnapKind::WordCell`]).
-///
-/// Every other gather and sample is the device's, and the module requires the device's sampler
-/// (`SamplerFamily::metal_sampler`). A cube's coordinate is a direction through a pixel sampler
-/// too, so a cube takes no snap.
-pub(super) fn plan(
-    cx: &mut SelectCx<'_>,
-    op: &SampleOp,
-    stat: Option<(SamplerRef, Coordinates)>,
-    (shape, integer): (ImageShape, bool),
-) -> Result<Option<Snap>, Error> {
-    // A constexpr sampler's state, and whether its coordinate is in texels (not a cube's).
-    let state = match stat {
-        Some((SamplerRef::Constexpr(words), c)) => Some((
-            super::state_of(words)?,
-            c == Coordinates::Pixel && shape.dim != ImageDim::Cube,
-        )),
-        _ => None,
-    };
-    // The plane axes of a 1D, 2D, or 3D texture or array, single-sampled.
-    let plane = match (shape.dim, shape.ms) {
-        (ImageDim::D1, false) => 1,
-        (ImageDim::D2, false) => 2,
-        (ImageDim::D3, false) => 3,
-        _ => 0,
-    };
-    match op {
-        SampleOp::Gather { .. } => match state {
-            Some((s, true)) if shape.dim == ImageDim::D2 && !shape.ms => Ok(Some(Snap {
-                kind: SnapKind::Axes(AxisSnap::Gather),
-                axes: vec![Some(address(s.address_s)), Some(address(s.address_t))],
-            })),
-            // A runtime or argument buffer's sampler's gather, behind its word. The device's own
-            // gather of a normalized coordinate is its block: the word snaps a pixel coordinate
-            // alone, and the module requires the device's sampler.
-            None if shape.dim == ImageDim::D2 && !shape.ms => {
-                cx.families.sampler.metal_sampler = true;
-                Ok(Some(Snap {
-                    kind: SnapKind::WordGather,
-                    axes: Vec::new(),
-                }))
-            }
-            _ => {
-                cx.families.sampler.metal_sampler = true;
-                Ok(None)
-            }
-        },
-        // A linear pixel sample's footprint cell.
-        SampleOp::Sample { dref: None, .. }
-            if state.as_ref().is_some_and(|(s, pixel)| {
-                *pixel
-                    && plane > 0
-                    && !integer
-                    && s.min_filter == Filter::Linear
-                    && s.mag_filter == Filter::Linear
-            }) =>
-        {
-            let Some((s, _)) = state else {
-                return Ok(None);
-            };
-            if s.max_anisotropy > 1 {
-                return Ok(None);
-            }
-            Ok(Some(Snap {
-                kind: SnapKind::Axes(AxisSnap::Cell),
-                axes: [s.address_s, s.address_t, s.address_r]
-                    .into_iter()
-                    .take(plane)
-                    .map(|m| Some(address(m)))
-                    .collect(),
-            }))
-        }
-        // A runtime or argument buffer's sampler's sample, a comparison's included, onto its
-        // footprint cell where its word states a linear pixel sampler, as a constexpr one's. An
-        // integer texture's sample reads one texel whatever the filters say, its pixel sampler's
-        // texel centre.
-        SampleOp::Sample { .. }
-            if plane > 0 && !integer && !matches!(stat, Some((SamplerRef::Constexpr(_), _))) =>
-        {
-            cx.families.sampler.metal_sampler = true;
-            Ok(Some(Snap {
-                kind: SnapKind::WordCell { axes: plane as u8 },
-                axes: Vec::new(),
-            }))
-        }
-        SampleOp::Sample { dref: None, .. } => {
-            cx.families.sampler.metal_sampler = true;
-            Ok(None)
-        }
-        _ => Ok(None),
-    }
-}
 
 fn f32_const(fb: &mut FunctionBuilder<'_>, x: f32) -> BResult<SValue> {
     let ty = fb.module().ty(SType::Float { width: 32 })?;
@@ -362,9 +119,9 @@ fn u32_const(fb: &mut FunctionBuilder<'_>, x: u32) -> BResult<SValue> {
     fb.module().const_value(c)
 }
 
-/// The census words of [`offset_dropped`] and of a snapped axis's compensation by it: the
-/// subtractions, the comparisons, the mask and their conjunction, the select, the subtraction from
-/// the index, and their constants, in the leveled form (the larger).
+/// The census words of [`offset_dropped`] and of a footprint's placement of the offset by it: the
+/// subtractions, the comparisons, the mask and their conjunction, the select, and their constants,
+/// in the leveled form (the larger).
 pub const OFFSET_RULE_WORDS: u32 = 64;
 
 /// Whether Metal drops a constant texel offset on a repeating or mirrored axis whose level size is
@@ -409,7 +166,7 @@ pub fn offset_dropped(
 }
 
 /// The census words a slot's `SpecKey::OffsetBaseAxes` test adds to [`offset_dropped`] on each
-/// plane axis an offset moves, per footprint, snap or centre that places it: the general rule's
+/// plane axis an offset moves, per footprint that places it: the general rule's
 /// words where they replace the base level's shorter ones, the disjunction, and their constants,
 /// and a share of the slot's tests' declaration (a specialization constant and three
 /// `OpSpecConstantOp` tests per axis, `texture::OffsetBase`).
@@ -552,245 +309,6 @@ fn wrap(
     let bs = fb.convert(ConvOp::Bitcast, s, w)?;
     let bs = fb.binary(BinOp::IAdd, bs, step)?;
     fb.convert(ConvOp::Bitcast, bs, f)
-}
-
-/// A gather's base texel `i0` (an `f32`) at position `x`: `floor(floor(256 x + 1/2) / 256 - 1/2)`,
-/// the `q >> 8`, exact for `|x| < 2^15` (module docs).
-fn gather_base(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
-    let k256 = f32_const(fb, 256.0)?;
-    let y = fb.binary(BinOp::FMul, x, k256)?;
-    let half = f32_const(fb, 0.5)?;
-    let y = fb.binary(BinOp::FAdd, y, half)?;
-    let z = fb.glsl(GlslOp::Floor, &[y])?;
-    let step = f32_const(fb, 1.0 / 256.0)?;
-    let z = fb.binary(BinOp::FMul, z, step)?;
-    let z = fb.binary(BinOp::FSub, z, half)?;
-    fb.glsl(GlslOp::Floor, &[z])
-}
-
-/// Component `i` of `v`, or `v` itself for a one-lane value.
-fn lane(fb: &mut FunctionBuilder<'_>, v: SValue, lanes: u8, i: u32) -> BResult<SValue> {
-    if lanes == 1 {
-        Ok(v)
-    } else {
-        fb.composite_extract(v, &[i])
-    }
-}
-
-/// The snapped axis coordinate (an `f32`) of coordinate `u` (in texels, Metal's position as
-/// given) on an axis of size `n` (a `u32`) addressed by `address`,
-/// for `kind` (module docs), whose access the device moves by the constant texel offset `offset`
-/// (an `f32` holding the axis's offset; `None`: none): on a repeating or mirrored axis whose size
-/// drops it ([`offset_dropped`], whose `parent` is the axis's `texture::OffsetBase` test), the
-/// index is moved back by it first.
-pub fn snapped_axis(
-    fb: &mut FunctionBuilder<'_>,
-    kind: AxisSnap,
-    x: SValue,
-    n: SValue,
-    (address, offset, parent): (TapAddress, Option<SValue>, Option<SValue>),
-) -> BResult<SValue> {
-    let f = fb.module().ty(SType::Float { width: 32 })?;
-    let nf = fb.convert(ConvOp::ConvertUToF, n, f)?;
-    let at = match kind {
-        AxisSnap::Gather => {
-            let i0 = gather_base(fb, x)?;
-            let i0 = match address {
-                TapAddress::Edge | TapAddress::Border => {
-                    let lo = f32_const(fb, -10.0)?;
-                    let eight = f32_const(fb, 8.0)?;
-                    let hi = fb.binary(BinOp::FAdd, nf, eight)?;
-                    fb.glsl(GlslOp::FClamp, &[i0, lo, hi])?
-                }
-                TapAddress::Repeat | TapAddress::Mirror => i0,
-            };
-            let one = f32_const(fb, 1.0)?;
-            fb.binary(BinOp::FAdd, i0, one)?
-        }
-        // `q + 128 = floor(256 X) + [frac(256 X) >= 1/2]`, as `bicubic::quantize` reads `q`:
-        // `256 X`, its floor, and its fraction are exact, where `256 X - 127.5` can round (a
-        // negative `X` whose sum carries into the next binade). The centre `(q + 128) / 256` is
-        // exact below `|X| = 2^15`.
-        AxisSnap::Cell => {
-            let k256 = f32_const(fb, 256.0)?;
-            let y = fb.binary(BinOp::FMul, x, k256)?;
-            let fl = fb.glsl(GlslOp::Floor, &[y])?;
-            let r = fb.binary(BinOp::FSub, y, fl)?;
-            let half = f32_const(fb, 0.5)?;
-            let up = fb.binary(BinOp::FOrdGreaterThanEqual, r, half)?;
-            let one = f32_const(fb, 1.0)?;
-            let zero = f32_const(fb, 0.0)?;
-            let up = fb.select(up, one, zero)?;
-            let c = fb.binary(BinOp::FAdd, fl, up)?;
-            let step = f32_const(fb, 1.0 / 256.0)?;
-            fb.binary(BinOp::FMul, c, step)?
-        }
-    };
-    let at = match (address, offset) {
-        (TapAddress::Repeat | TapAddress::Mirror, Some(o)) => {
-            let dropped = offset_dropped(fb, n, None, parent)?;
-            let none = f32_const(fb, 0.0)?;
-            let back = fb.select(dropped, o, none)?;
-            fb.binary(BinOp::FSub, at, back)?
-        }
-        _ => at,
-    };
-    fb.binary(BinOp::FDiv, at, nf)
-}
-
-/// The coordinate `coord` (`lanes` floats, in texels) of a sample or gather of sampled image `si` (image facts `image`) snapped by `snap` (module docs) on
-/// the base level's size: a normalized coordinate. `offsets` holds, per plane axis, the constant
-/// texel offset the device adds to the access (an `f32`, or `None`; [`snapped_axis`]), and
-/// `parent` the slot's `SpecKey::OffsetBaseAxes` tests (`texture::OffsetBase`).
-pub fn snapped(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    snap: &Snap,
-    (coord, offsets, parent): (SValue, &[Option<SValue>], Option<OffsetBase>),
-    lanes: u8,
-    (si, image): (SValue, CombinedImage),
-) -> BResult<SValue> {
-    let img = fb.image(si)?;
-    let zero = u32_const(fb, 0)?;
-    let size = fb.query(ImageQuery::SizeLod(zero), img)?;
-    snapped_on(cx, fb, snap, (coord, offsets, parent), lanes, (size, image))
-}
-
-/// The coordinate `coord` (`lanes` floats) snapped by `snap` (module docs) on the base level's
-/// size `size` of an image with facts `image`: a plane coordinate's axes. `offsets` holds each
-/// plane axis's constant texel offset the device adds ([`snapped_axis`]), and `parent` the slot's
-/// `SpecKey::OffsetBaseAxes` tests (`texture::OffsetBase`).
-pub fn snapped_on(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    snap: &Snap,
-    (coord, offsets, parent): (SValue, &[Option<SValue>], Option<OffsetBase>),
-    lanes: u8,
-    (size, image): (SValue, CombinedImage),
-) -> BResult<SValue> {
-    let size_lanes = image.plane + u8::from(image.arrayed);
-    let kind = match snap.kind {
-        SnapKind::Axes(kind) => kind,
-        SnapKind::WordGather | SnapKind::WordCell { .. } => {
-            return Err(cx.fail("a word snap without its sampler's word"))
-        }
-    };
-    let mut parts = Vec::with_capacity(usize::from(lanes));
-    for (a, axis) in (0u32..).zip(&snap.axes).take(usize::from(lanes)) {
-        let u = lane(fb, coord, lanes, a)?;
-        parts.push(match axis {
-            Some(address) => {
-                let n = lane(fb, size, size_lanes, a)?;
-                let offset = offsets.get(a as usize).copied().flatten();
-                let parent = OffsetBase::axis(parent, a);
-                snapped_axis(fb, kind, u, n, (*address, offset, parent))?
-            }
-            None => u,
-        });
-    }
-    if let [x] = parts[..] {
-        return Ok(x);
-    }
-    let f = fb.module().ty(SType::Float { width: 32 })?;
-    let ty = fb.module().ty(SType::Vector {
-        elem: f,
-        len: lanes,
-    })?;
-    fb.composite_construct(ty, &parts)
-}
-
-/// The plane coordinate of `parts` (one `f32` per plane axis).
-fn composite(fb: &mut FunctionBuilder<'_>, parts: Vec<SValue>) -> BResult<SValue> {
-    if let [x] = parts[..] {
-        return Ok(x);
-    }
-    let f = fb.module().ty(SType::Float { width: 32 })?;
-    let ty = fb.module().ty(SType::Vector {
-        elem: f,
-        len: parts.len() as u8,
-    })?;
-    fb.composite_construct(ty, &parts)
-}
-
-/// Whether sampler word `word` (a `u32`) masked by `mask` holds every bit of `mask`, a `bool`.
-fn word_holds(fb: &mut FunctionBuilder<'_>, word: SValue, mask: u32) -> BResult<SValue> {
-    let m = u32_const(fb, mask)?;
-    let have = fb.binary(BinOp::BitwiseAnd, word, m)?;
-    fb.binary(BinOp::IEqual, have, m)
-}
-
-/// The coordinate of a runtime or argument buffer's sampler's 2D gather, its sampler's word
-/// `word`, snapped by [`SnapKind::WordGather`] on the base level's size `size` (`size_lanes`
-/// components): where the word states pixel coordinates, per plane axis the centre `(i0 + 1) / N`
-/// of the 2x2 block Metal reads ([`AxisSnap::Gather`]), its base texel `i0` at Metal's position,
-/// the coordinate as given (`given`, `lanes` floats); for a normalized word the coordinate the
-/// device reads otherwise (`scaled`, `lanes` floats). `i0` is clamped into `[-2N - 10, 2N + 8]`,
-/// past which, with any offset in Metal's gather range `[-8, 7]`, both texels of a clamping or
-/// mirror-clamped axis read the same edge texel or border, as the exact `i0`'s do. The device's
-/// sampler places an offset of the normalized centre (Metal's own drops it where it drops the
-/// pixel coordinate's), so no offset moves it.
-pub fn gathered_by_word(
-    fb: &mut FunctionBuilder<'_>,
-    word: SValue,
-    (given, scaled): (SValue, SValue),
-    lanes: u8,
-    (size, size_lanes): (SValue, u8),
-) -> BResult<SValue> {
-    use crate::metal::sampler::SamplerWord;
-    let pixel = word_holds(fb, word, SamplerWord::PIXEL_COORDINATES)?;
-    let f = fb.module().ty(SType::Float { width: 32 })?;
-    let lo = f32_const(fb, -10.0)?;
-    let eight = f32_const(fb, 8.0)?;
-    let one = f32_const(fb, 1.0)?;
-    let mut parts = Vec::with_capacity(usize::from(lanes));
-    for a in 0..u32::from(lanes) {
-        let x = lane(fb, given, lanes, a)?;
-        let device = lane(fb, scaled, lanes, a)?;
-        let n = lane(fb, size, size_lanes, a)?;
-        let nf = fb.convert(ConvOp::ConvertUToF, n, f)?;
-        let i0 = gather_base(fb, x)?;
-        let twice = fb.binary(BinOp::FAdd, nf, nf)?;
-        let hi = fb.binary(BinOp::FAdd, twice, eight)?;
-        let low = fb.binary(BinOp::FSub, lo, twice)?;
-        let i0 = fb.glsl(GlslOp::FClamp, &[i0, low, hi])?;
-        let at = fb.binary(BinOp::FAdd, i0, one)?;
-        let centre = fb.binary(BinOp::FDiv, at, nf)?;
-        parts.push(fb.select(pixel, centre, device)?);
-    }
-    composite(fb, parts)
-}
-
-/// The coordinate of a runtime or argument buffer's sampler's sample, its sampler's word `word`,
-/// snapped by [`SnapKind::WordCell`] on the
-/// base level's size `size` (`size_lanes` components): where the word states pixel coordinates and
-/// linear min and mag filters, each plane axis of the coordinate as given (`given`, `lanes` floats)
-/// onto the centre of its footprint step ([`AxisSnap::Cell`]); for every other word the coordinate
-/// the device reads otherwise (`scaled`). A pixel sampler clamps every axis or mirrors it once and
-/// clamps it (`runtime::sampler`'s rule), and the device's sampler places a texel offset of the
-/// normalized cell (Metal's own as Metal places the pixel coordinate's: kept on a clamping axis,
-/// dropped by a mirror-clamped one's sizes alike), so no offset moves the cell.
-pub fn celled_by_word(
-    fb: &mut FunctionBuilder<'_>,
-    word: SValue,
-    (given, scaled): (SValue, SValue),
-    lanes: u8,
-    (size, size_lanes): (SValue, u8),
-) -> BResult<SValue> {
-    use crate::metal::sampler::SamplerWord;
-    let reach = word_holds(
-        fb,
-        word,
-        SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR,
-    )?;
-    let mut parts = Vec::with_capacity(usize::from(lanes));
-    for a in 0..u32::from(lanes) {
-        let x = lane(fb, given, lanes, a)?;
-        let device = lane(fb, scaled, lanes, a)?;
-        let n = lane(fb, size, size_lanes, a)?;
-        let cell = snapped_axis(fb, AxisSnap::Cell, x, n, (TapAddress::Edge, None, None))?;
-        parts.push(fb.select(reach, cell, device)?);
-    }
-    composite(fb, parts)
 }
 
 #[cfg(test)]

@@ -1930,30 +1930,6 @@ fn select_one(
         SamplerArg::Static(SamplerRef::Constexpr(_), Coordinates::Pixel) if !cube => Pixel::Always,
         _ => Pixel::None,
     };
-    // A nearest pixel sampler's sample, a comparison's included, reads the centre of the texel
-    // Metal floors its coordinate to: a constexpr sampler's where its state reads one texel of one
-    // level (an integer texture's whatever its filters say), exactly; a runtime or argument
-    // buffer's behind its word (its slot's `SamplerState` specialization or its table entry's),
-    // near only where the bound sampler filters linearly. (Metal's compiler takes no constexpr
-    // pixel sampler with a comparison; a runtime one's comparison floors as a sample does, item
-    // 24.) A gather snaps (`position::plan`).
-    let centred = matches!(op, SampleOp::Sample { .. })
-        && match (pixel, sampler) {
-            (Pixel::Spec(_) | Pixel::Heap(_), _) => true,
-            (Pixel::Always, SamplerArg::Static(SamplerRef::Constexpr(words), _)) => {
-                let s = super::state_of(words)?;
-                (integer || (s.min_filter == Filter::Nearest && s.mag_filter == Filter::Nearest))
-                    && s.mip_filter == MipFilter::None
-                    && s.max_anisotropy <= 1
-            }
-            _ => false,
-        };
-    // An integer texture reads one texel through any sampler, so its pixel sample reads the centre
-    // of the texel Metal floors to whatever the word's filters.
-    let centre_word = match integer {
-        true => SamplerWord::PIXEL_COORDINATES,
-        false => SamplerWord::PIXEL_NEAREST,
-    };
     // A `half` texel's NaN is the device's decode, a bicubic sample's taps included: where the
     // bound format may hold one.
     let half = form.is_some_and(|f| f.conv == TexelConv::F16);
@@ -1991,7 +1967,6 @@ fn select_one(
         };
         s.compare |= compare;
         s.coordinates |= pixel != Pixel::None;
-        s.nearest |= centred;
         // A cube's gradients whose footprint the word chooses read its anisotropy.
         s.anisotropy |= matches!(
             op,
@@ -2131,24 +2106,11 @@ fn select_one(
     if let Some((note, when)) = super::linear::filter_note(cx, &op, form, (by, image))? {
         cx.note_when(note, when, m)?;
     }
-    // A pixel sampler's gather (or a runtime sampler's, behind its word) and a linear pixel
-    // sample's footprint cell, snapped onto Metal's texels.
-    let snap = super::position::plan(cx, &op, stat, (shape, integer))?;
-    if let SamplerArg::Static(SamplerRef::Slot(n), _) = sampler {
-        if let Some(s) = cx.families.sampler.slots.get_mut(&n) {
-            match snap.as_ref().map(|p| p.kind) {
-                Some(super::position::SnapKind::WordGather) => s.gathers = true,
-                Some(super::position::SnapKind::WordCell { .. }) => s.cells = true,
-                _ => {}
-            }
-        }
-    }
-    // A pixel sampler's coordinate, scaled for the device, reads Metal's texels where Metal's
-    // position, the coordinate as given, decides them: a centred texel, a snapped gather or
-    // footprint cell. The note holds where none of them runs and the device's filter reads the
-    // scaled coordinate, as `pixel_note` says. An argument buffer's sampler records a note of its
-    // own, which the runtime announces only while a bound state can need it.
-    let when = pixel_note(&op, pixel, (centred, integer), snap.as_ref());
+    // A pixel sampler's coordinate reaches the device's sampler over the level-0 size, whose
+    // texels at a texel edge or a filter step's edge are the device's arithmetic's on that
+    // coordinate (`pixel_note`). An argument buffer's sampler records a note of its own, which the
+    // runtime announces only while a bound state can need it.
+    let when = pixel_note(pixel);
     let note = match pixel {
         Pixel::Heap(_) => PrecisionNote::ArgumentPixelSamplerScaling,
         _ => PrecisionNote::PixelSamplerScaling,
@@ -2351,10 +2313,7 @@ fn select_one(
         pixel,
         residency,
         footprint,
-        snap,
         cube,
-        centred,
-        centre_word,
         one_texel,
         half_texel: half_converts && !shape.depth,
         unmapped,
@@ -2412,64 +2371,25 @@ fn clamps_reference(
     Ok(clamps)
 }
 
-/// Where sampling `op` through a sampler of pixel coordinates `pixel` hands the device a
-/// coordinate scaled by the texture's size whose texels the device's filter decides
+/// Where a sampling through a sampler of pixel coordinates `pixel` hands the device a coordinate
+/// scaled by the texture's level-0 size, whose texels the device's sampler decides
 /// (`PrecisionNote::PixelSamplerScaling`): the clauses of the arms that do (empty: none).
 ///
-/// - A constexpr pixel sampler: never where the sample is `centred` or snapped onto Metal's
-///   texels; always otherwise.
-/// - A runtime sampler slot: where its word states pixel coordinates and the sample's arm is the
-///   device's. A 2D gather snaps behind the word on every device. A sample (a comparison's
-///   included) reads the texel's centre where the word states one texel ([`Sampling::centre_word`]:
-///   every pixel word for an integer texture); otherwise it snaps onto its footprint cell where the
-///   word's two filters are linear, on every device, leaving a word of mixed filters to the
-///   device; without the cell the device filters. Metal admits a pixel sampler only
-///   without a mip filter and isotropic (`runtime::sampler::check_descriptor`), so its word filters
-///   exactly where a min or mag filter is linear. Any other sampling (an LOD query) is the
-///   device's.
-/// - An argument buffer's sampler ([`PrecisionNote::ArgumentPixelSamplerScaling`]): never for a 2D
-///   gather (snapped behind its word), nor for a sample without a comparison, which reads the
-///   device sampler's texels there (a nearest word's flagged fetch, a linear word's footprint
-///   cell); always otherwise, since its word, which the specialized module cannot read, may filter.
-fn pixel_note(
-    op: &SampleOp,
-    pixel: Pixel,
-    (centred, integer): (bool, bool),
-    snap: Option<&super::position::Snap>,
-) -> Vec<crate::lower::select::NoteClause> {
-    use super::position::SnapKind;
-    use crate::lower::select::{both, NoteClause};
-    let always = || vec![NoteClause::new()];
-    let gathered = snap.is_some_and(|s| matches!(s.kind, SnapKind::WordGather));
+/// - A constexpr pixel sampler: always (its exact fetch, `SampleOp::PixelFetch`, reaches here with
+///   [`Pixel::None`]).
+/// - A runtime sampler slot: where its word states pixel coordinates.
+/// - An argument buffer's sampler ([`PrecisionNote::ArgumentPixelSamplerScaling`]): always, since
+///   its word, which the specialized module cannot read, may state pixel coordinates; the runtime
+///   announces it only while a state of pixel coordinates lives.
+fn pixel_note(pixel: Pixel) -> Vec<crate::lower::select::NoteClause> {
+    use crate::lower::select::NoteClause;
     match pixel {
         Pixel::None => Vec::new(),
-        Pixel::Always if centred || snap.is_some_and(|s| !s.by_word()) => Vec::new(),
-        Pixel::Always => always(),
-        Pixel::Heap(_) if gathered => Vec::new(),
-        Pixel::Heap(_) if matches!(op, SampleOp::Sample { dref: None, .. }) => Vec::new(),
-        Pixel::Heap(_) => always(),
-        Pixel::Spec(_) if gathered => Vec::new(),
+        Pixel::Always | Pixel::Heap(_) => vec![NoteClause::new()],
         Pixel::Spec(n) => {
-            let on = NoteOn::Sampler(n);
-            let coordinates = NoteTest::differ(on, SamplerWord::PIXEL_COORDINATES, 0);
-            let filter = |bit| NoteTest::differ(on, bit, 0);
-            let filters = [SamplerWord::MIN_LINEAR, SamplerWord::MAG_LINEAR].map(filter);
-            let device = match op {
-                SampleOp::Sample { .. } if centred && integer => Vec::new(),
-                SampleOp::Sample { .. }
-                    if snap.is_some_and(|s| matches!(s.kind, SnapKind::WordCell { .. })) =>
-                {
-                    // Mixed filters: one linear, the other not.
-                    let nearest = |bit| NoteTest::equal(on, bit, 0);
-                    vec![
-                        [filters[0], nearest(SamplerWord::MAG_LINEAR)].into(),
-                        [nearest(SamplerWord::MIN_LINEAR), filters[1]].into(),
-                    ]
-                }
-                SampleOp::Sample { .. } if centred => filters.map(|t| NoteClause::from([t])).into(),
-                _ => always(),
-            };
-            both(&[[coordinates].into()], &device)
+            let coordinates =
+                NoteTest::differ(NoteOn::Sampler(n), SamplerWord::PIXEL_COORDINATES, 0);
+            vec![[coordinates].into()]
         }
     }
 }

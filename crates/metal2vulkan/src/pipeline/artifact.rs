@@ -627,18 +627,28 @@ pub enum PrecisionNote {
     /// [`PrecisionNote::NativeMinMax`]'s. Validation derives no tolerance and no explanation from
     /// it: every `float` computation is exposed to it.
     DeviceDenormals,
-    /// Pixel-coordinate samplers scale coordinates in the shader, rounding differently. Recorded
-    /// for an access through a runtime sampler slot whose word may state pixel coordinates, and for
-    /// an access through a constexpr pixel sampler that reads Metal's texels from none of: an exact
-    /// fetch, the centre of the texel Metal floors its coordinate to, a gather snapped from the
-    /// coordinate as given, a linear sample's footprint step. A runtime slot's sample, a
-    /// comparison's included, is exact too where the bound sampler filters nearest (it reads that
-    /// centre) and, of a 1D, 2D or 3D texture or array with a floating-point texel, where it
-    /// filters linear both ways (it snaps onto its footprint cell behind the sampler's word, on
-    /// every device); its gather of a 2D texture or array snaps from the coordinate as given behind
-    /// the sampler's word; a word of mixed filters is the device's. A cube's pixel sampler is a
-    /// normalized one. An argument buffer's sampler records
-    /// [`PrecisionNote::ArgumentPixelSamplerScaling`] instead.
+    /// A pixel-coordinate sampler's coordinate reaches the device's sampler divided by the
+    /// texture's level-0 size in the shader (Vulkan's unnormalized samplers take no gather,
+    /// offset, comparison, array, 3D image or level of detail), and the device's sampler reads its
+    /// texels from that coordinate in its own arithmetic: the position it reads, `(x / N) N` in
+    /// the device's rounding and its sub-texel precision, lies within a few units in the last place
+    /// of the coordinate `x` as given, where Metal reads `x` itself. So a sample or gather reads
+    /// Metal's texels and weights but where `x` lies that close to a texel edge (a nearest
+    /// sample's texel, a gather's 2x2 block, a linear filter's pair of texels) or to the edge of
+    /// one of the device's sub-texel steps (a linear filter's weight), where it may read the
+    /// neighbouring texel, block or step. Measured: the device answers as its normalized sampler at
+    /// a coordinate within one `f32` ulp of the quotient `x / N` on MoltenVK, and at the quotient
+    /// itself on lavapipe (800 coordinates at and around each texel edge of a 5x3 texture, every
+    /// filter and address mode); a linear downscale by 8 of textures 1000 to 1920 texels wide is
+    /// within 1/255 of Metal's on MoltenVK and 2/255 on lavapipe (a weight one 1/256 step off on
+    /// each axis); other devices unmeasured. Recorded on every device for every access through a
+    /// constexpr pixel sampler but its exact fetch (nearest, clamped to the edge,
+    /// `sampler.pixel_fetch`), and for every access through a runtime sampler slot, held where the
+    /// bound sampler states pixel coordinates. A cube's pixel sampler is a normalized one. An
+    /// argument buffer's sampler records [`PrecisionNote::ArgumentPixelSamplerScaling`] instead.
+    ///
+    /// Validation derives no tolerance from it: at a texel edge the value is the neighbouring
+    /// texel's, whatever it holds.
     PixelSamplerScaling,
     /// Float division, remainder, square root, fused multiply-add, and dot products use Vulkan's
     /// precision bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct
@@ -1227,18 +1237,18 @@ pub enum PrecisionNote {
     ComputedSampleDepth,
     /// An access through an argument buffer's sampler whose word the specialized module cannot read
     /// may hand the device a pixel coordinate scaled by the texture's size, where the sampler
-    /// states pixel coordinates and a linear filter or a comparison. Recorded on every device for
-    /// such an access but a 2D gather, which snaps behind the sampler's word, and a sample without
-    /// a comparison, which reads the device sampler's texels (a nearest word's flagged fetch, a
-    /// linear word's footprint cell). Measured exact: a nearest or linear sample of `RGBA8Unorm`
-    /// and `RGBA16Float` through such a pixel sampler, clamped to the edge, to zero, to a border or
-    /// mirrored once, on MoltenVK and lavapipe. It is its own note, apart from
+    /// states pixel coordinates: the device's sampler reads its texels from that coordinate in its
+    /// own arithmetic, with [`PrecisionNote::PixelSamplerScaling`]'s measured bound (the
+    /// neighbouring texel, block or sub-texel step where the coordinate lies within a few units in
+    /// the last place of an edge of one). Recorded on every device for every such access; a sample
+    /// without a comparison through a sampler whose word states the exact fetch (nearest, clamped
+    /// to the edge, one level, isotropic) reads that fetch instead. It is its own note, apart from
     /// [`PrecisionNote::PixelSamplerScaling`], because only the bound states decide it: the runtime
     /// announces it at the first draw or dispatch of a pipeline that records it while the device
-    /// lists a sampler state of pixel coordinates with a linear filter or a comparison, never at
-    /// the pipeline's making.
+    /// lists a sampler state of pixel coordinates, never at the pipeline's making.
     ///
-    /// Validation derives no tolerance from it: the class is unbounded.
+    /// Validation derives no tolerance from it: at a texel edge the value is the neighbouring
+    /// texel's, whatever it holds.
     ArgumentPixelSamplerScaling,
     /// A fragment function returns a `half` color output (a scalar or vector of AIR's `half`) to
     /// an attachment the pipeline has, and either its module is compiled without fast math

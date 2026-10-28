@@ -81,22 +81,20 @@
 //! ([`Lod::Base`]), and `calculate_*_lod` is undefined in Metal (`NotRepresentable`). Gradients,
 //! explicit levels, and gathers (which read the base level) are not tangled.
 //!
-//! **Pixel coordinates**. Vulkan unnormalized samplers are never used: the plane coordinate (and
-//! any gradient) is divided by the level-0 size in the shader, always for a constexpr pixel
-//! sampler, and selected by the word of the slot's `SamplerState` specialization for a runtime
-//! sampler, so the one sampling instruction reads either coordinate. A constexpr pixel sampler with
-//! nearest filtering and clamp-to-edge addressing instead fetches its texel exactly,
-//! `OpImageFetch(clamp(floor(coord) + offset))` ([`SampleOp::PixelFetch`]), which also takes a
-//! dynamic offset. An argument buffer's sampler is known only at run time: a sample through one
-//! without comparison emits both the scaled sample and that fetch, and selects the fetch where its
-//! table entry's word states the state (`metal::sampler::SamplerWord::exact_fetch`); gathers and
-//! comparisons stay scaled. Every other sample without comparison through a pixel sampler that
-//! filters nearest reads the centre of the texel Metal floors the coordinate to, `(floor(coord) +
-//! 1/2) / size` (`emit::pixel_centre`): a constexpr sampler whose state reads one texel of one
-//! level, always; a runtime sampler slot's where its `SamplerState` specialization's word says the
-//! bound sampler filters nearest; an argument buffer's where its word says so
-//! (`metal::sampler::SamplerWord::PIXEL_NEAREST`). Comparisons stay scaled; a gather snaps from
-//! the coordinate as given (below).
+//! **Pixel coordinates**. Vulkan unnormalized samplers, which take no gather, offset, comparison,
+//! array, 3D image or level of detail, are never used: the plane coordinate (and any gradient) is
+//! divided by the level-0 size in the shader, always for a constexpr pixel sampler, and selected by
+//! the word of the slot's `SamplerState` specialization for a runtime sampler, so the one sampling
+//! instruction reads either coordinate. The device's sampler reads its texels from that scaled
+//! coordinate in its own arithmetic, which near a texel edge or a filter step's edge may read
+//! another texel or weight than Metal's at the coordinate as given
+//! (`PrecisionNote::PixelSamplerScaling`, `PrecisionNote::ArgumentPixelSamplerScaling`). A
+//! constexpr pixel sampler with nearest filtering and clamp-to-edge addressing instead fetches its
+//! texel, `OpImageFetch(clamp(floor(coord) + offset))` ([`SampleOp::PixelFetch`]), which also
+//! takes a dynamic offset on any profile. An argument buffer's sampler is known only at run time:
+//! a sample through one without comparison emits both the scaled sample and that fetch, and
+//! selects the fetch where its table entry's word states the state
+//! (`metal::sampler::SamplerWord::exact_fetch`); gathers and comparisons stay scaled.
 //!
 //! **Texel offsets**. Metal reads each component of an offset as the two's-complement value of its
 //! low four bits ([`metal_offset`]), which is the identity on its documented range
@@ -124,20 +122,10 @@
 //! (`VkProperty::DeviceSampling`, recorded as `PrecisionNote::DeviceSampling`); the module
 //! requires the property. A cube's direction takes Metal's face at a tie (`face::metal_ties`).
 //! Every footprint Metal's rule decides in the shader (the emulated filters the device has no form
-//! for, a pixel sampler's snapped coordinate) reads Metal's position ([`position`]): the coordinate
-//! wrapped into one period first on a repeating or mirrored axis, then scaled with ties away from
-//! zero.
-//!
-//! **Pixel coordinates**. Through a pixel sampler Metal's position is the coordinate as given,
-//! which the device's sampler, reading the coordinate over the level's size, does not reproduce. On
-//! every device a constexpr pixel sampler's nearest sample reads its texel's centre, its gather of
-//! a 2D texture or array snaps from the coordinate as given, and its linear sample snaps onto the
-//! centre of its footprint cell, so the device's filter reads Metal's footprint. A runtime or
-//! argument buffer's sampler's gather of a 2D texture or array snaps from the coordinate as given
-//! where its word states pixel coordinates (`position::SnapKind::WordGather`), and its sample snaps
-//! onto its footprint cell where its word states a linear pixel sampler
-//! (`position::SnapKind::WordCell`). Metal reads a cube's coordinate as a direction through a pixel
-//! sampler too, so a cube's pixel sampler is a normalized one here.
+//! for) reads Metal's position ([`position`]): the coordinate wrapped into one period first on a
+//! repeating or mirrored axis, then scaled with ties away from zero. Metal reads a cube's
+//! coordinate as a direction through a pixel sampler too, so a cube's pixel sampler is a normalized
+//! one here.
 //!
 //! Not lowered yet: a static texture sampled through an argument buffer's sampler, a heap image
 //! sampled through several sampler candidates, the binding-array rule, and the bicubic forms
@@ -540,8 +528,7 @@ pub enum Pixel {
     /// A constexpr pixel-coordinate sampler: always scaled.
     Always,
     /// A runtime sampler in slot `n`: scaled when its `SamplerState` specialization's word states
-    /// pixel coordinates, and a sample at the centre of the texel Metal floors to when the word
-    /// states a nearest pixel sampler.
+    /// pixel coordinates.
     Spec(u32),
     /// An argument buffer's sampler of heap handle `handle`, the index of its sampler table
     /// entry: scaled when the entry's word states pixel coordinates; a sample without comparison is
@@ -574,23 +561,9 @@ pub struct Sampling {
     /// Metal's footprint of an observed sample or gather where the rule decides it: its word is the
     /// residency of exactly those texels, through the slot's sparse arm or tile map.
     pub footprint: Option<footprint::Footprint>,
-    /// A gather or nearest sample whose plane coordinate is snapped onto the texels Metal reads
-    /// ([`position`]).
-    pub snap: Option<position::Snap>,
     /// It reads a cube by a direction, whose ties between major axes the device is handed broken
     /// as Metal breaks them ([`face`]).
     pub cube: bool,
-    /// A sample through a pixel sampler that reads the centre of the texel Metal floors its
-    /// coordinate to where the sampler filters nearest: always for a constexpr sampler whose
-    /// state reads one texel of one level, behind the slot's `SamplerState` specialization
-    /// ([`Pixel::Spec`]) or the table entry's word ([`Pixel::Heap`]), each testing the word's
-    /// [`centre_word`](Self::centre_word) bits.
-    pub centred: bool,
-    /// The bits of a runtime sampler's word whose value [`SamplerWord::PIXEL_COORDINATES`] states
-    /// a sampler that reads one texel at a [`centred`](Self::centred) sample:
-    /// [`SamplerWord::PIXEL_NEAREST`], or for an integer texture, which no sampler filters,
-    /// [`SamplerWord::PIXEL_COORDINATES`] alone.
-    pub centre_word: u32,
     /// Whether the access reads one texel of one level: its `half` texel's lanes for the class's
     /// conversion.
     pub one_texel: crate::lower::texture::OneTexel,
@@ -711,8 +684,8 @@ impl Sampling {
     /// The shape the arms of a switch-at-use share where it emulates once (SEMANTICS 1012,
     /// `sampler::shared_value`): this sampling with its texture slot and sampler taken out, where
     /// it is an emulation on a combined binding whose residency the function does not observe: a
-    /// bicubic sample, or a snapped gather or sample but a runtime sampler's word snap. Arms of one shape differ only in the binding they read: each emulation states its
-    /// sampler's addressing in its own fields, and the device's access stays in each arm.
+    /// bicubic sample. Arms of one shape differ only in the binding they read: each emulation
+    /// states its sampler's addressing in its own fields.
     pub(crate) fn shared_shape(&self) -> Option<Sampling> {
         let Source::Combined(key) = self.source else {
             return None;
@@ -734,38 +707,17 @@ impl Sampling {
             sampler: SamplerRef::Slot(0),
             ..key
         });
-        match (&mut k.op, &k.snap) {
-            (SampleOp::Bicubic(b), None) => b.texture = 0,
-            // A runtime sampler's word snap alone is no emulation to share.
-            (SampleOp::Sample { .. } | SampleOp::Gather { .. }, Some(p)) if !p.by_word() => {}
-            _ => return None,
-        }
+        let SampleOp::Bicubic(b) = &mut k.op else {
+            return None;
+        };
+        b.texture = 0;
         Some(k)
-    }
-
-    /// The sampled images each arm of a switch-at-use that emulates once makes (SEMANTICS 1012):
-    /// one for the device's access, a snapped access's, with a second where a dynamic bias may pass
-    /// the device's limit; none for a bicubic sample. The facts and the taps read the image alone.
-    pub(crate) fn shared_sampled_images(&self) -> u32 {
-        match &self.op {
-            SampleOp::Bicubic(_) => 0,
-            SampleOp::Sample {
-                lod:
-                    Lod::Implicit {
-                        reach: BiasReach::Either { .. },
-                        ..
-                    },
-                ..
-            } => 2,
-            _ => 1,
-        }
     }
 
     /// The estimated words each arm of a switch-at-use that emulates once adds (SEMANTICS 1012):
     /// per dispatch its case, label, branch, and merge operands, and its binding's load, and in it
-    /// the reads of the candidate's own image: the facts' size query, an emulation's tap fetches,
-    /// and a snapped access with its texel's conversion.
-    /// [`Sampling::words`] counts the emulation once.
+    /// the reads of the candidate's own image: the facts' size query and the bicubic filter's tap
+    /// fetches. [`Sampling::words`] counts the emulation once.
     pub(crate) fn shared_arm_words(&self) -> u32 {
         // A dispatch's arm: its case, label, branch, and merge operands, the binding's loads,
         // `OpSampledImage` of a separate binding, and `OpImage`.
@@ -773,38 +725,17 @@ impl Sampling {
         // A read in an arm: the fetch or access with its operands, and its merge operands.
         const READ: u32 = 16;
         let facts = ARM + 3 * READ;
-        let half = match self.texel {
-            Some(f) if f.conv == crate::lower::texture::TexelConv::F16 => {
-                crate::lower::texture::half::CALL_WORDS.max(f.read_words())
-            }
-            Some(f) => f.read_words(),
-            None => 0,
+        let SampleOp::Bicubic(b) = &self.op else {
+            return facts;
         };
-        match (&self.op, &self.snap) {
-            (SampleOp::Bicubic(b), _) => {
-                // A 1D texture's one row of two taps, else each row of four and the half sum's
-                // row its loop reads.
-                let (rows, taps) = if b.address.len() == 1 { (2, 2) } else { (5, 4) };
-                facts + rows * (ARM + taps * READ)
-            }
-            (SampleOp::Sample { lod, .. }, Some(_)) => {
-                let beyond = match lod {
-                    Lod::Implicit {
-                        reach: BiasReach::Either { .. },
-                        ..
-                    } => ARM + 2 * READ,
-                    _ => 0,
-                };
-                facts + ARM + READ + half + beyond
-            }
-            _ => facts + ARM + READ + half,
-        }
+        // A 1D texture's one row of two taps, else each row of four and the half sum's row its
+        // loop reads.
+        let (rows, taps) = if b.address.len() == 1 { (2, 2) } else { (5, 4) };
+        facts + rows * (ARM + taps * READ)
     }
 
-    /// The census name; a heap element's names its operation, one through an argument buffer's
-    /// sampler its operation too, and a texture slot's snapped gather is `sampler.gather.snapped`
-    /// or `sampler.gather_compare.snapped`, and a pixel sampler's linear sample snapped onto its
-    /// footprint cell `sampler.linear.snapped`.
+    /// The census name; a heap element's names its operation, and one through an argument buffer's
+    /// sampler its operation too.
     pub fn name(&self) -> &'static str {
         let compares = matches!(self.op, SampleOp::Gather { dref: Some(_), .. });
         if let Source::HeapSampler { .. } = self.source {
@@ -826,25 +757,6 @@ impl Sampling {
                 SampleOp::Lod { .. } => "sampler.heap.query_lod",
                 SampleOp::QueryLevel { .. } => "sampler.heap.query_level",
             };
-        }
-        // A snapped coordinate; a runtime sampler's word snap keeps its operation's name, the snap
-        // one part of it.
-        if let Some(snap) = &self.snap {
-            let snapped = match (snap.kind, &self.op) {
-                (position::SnapKind::Axes(position::AxisSnap::Gather), _) if compares => {
-                    Some("sampler.gather_compare.snapped")
-                }
-                (position::SnapKind::Axes(position::AxisSnap::Gather), _) => {
-                    Some("sampler.gather.snapped")
-                }
-                (position::SnapKind::Axes(position::AxisSnap::Cell), _) => {
-                    Some("sampler.linear.snapped")
-                }
-                (position::SnapKind::WordGather | position::SnapKind::WordCell { .. }, _) => None,
-            };
-            if let Some(name) = snapped {
-                return name;
-            }
         }
         match &self.op {
             SampleOp::Sample {
@@ -903,9 +815,8 @@ impl Sampling {
     /// `bias_gradients`, and (for a dynamic bias) the test, the selection, and the second sample, a
     /// `half` texel's call of its conversion routine or its exact rounding outside the bicubic
     /// filter, an sRGB texel's raw decode, a cube gradient's footprint, an argument buffer's pixel
-    /// sampler's flagged fetch, a snapped coordinate and the positions of an observed footprint,
-    /// the lanes Metal reads as constants, a cube direction's broken ties, a runtime pixel
-    /// sampler's texel centre, and a raw heap sample's decode.
+    /// sampler's flagged fetch, the positions of an observed footprint, the lanes Metal reads as
+    /// constants, a cube direction's broken ties, and a raw heap sample's decode.
     pub fn words(&self) -> u32 {
         // A swizzled slot's sampling: its swizzle, and a gather's of each component.
         match (self.swizzle, &self.op) {
@@ -1000,21 +911,12 @@ impl Sampling {
             _ => 0,
         };
         // An argument buffer's sampler reads its entry's word for each test of it: its pixel
-        // coordinates, its exact fetch, and its texel centre.
+        // coordinates and its exact fetch.
         let word = match self.pixel {
-            Pixel::Heap(_) => {
-                (1 + u32::from(fetch != 0) + u32::from(self.centred)) * ENTRY_FIELD_WORDS
-            }
+            Pixel::Heap(_) => (1 + u32::from(fetch != 0)) * ENTRY_FIELD_WORDS,
             _ => 0,
         };
-        // The snapped coordinate, and the position of each axis of Metal's footprint of an observed
-        // sample or gather.
-        let snap = self.snap.as_ref().map_or(0, position::Snap::words)
-            + self
-                .snap
-                .as_ref()
-                .filter(|_| offset.is_some())
-                .map_or(0, position::Snap::offset_words);
+        // The position of each axis of Metal's footprint of an observed sample or gather.
         let footprint = self
             .footprint
             .map_or(0, |fp| u32::from(fp.axes) * position::POSITION_WORDS);
@@ -1037,13 +939,11 @@ impl Sampling {
             + half
             + fetch
             + word
-            + snap
             + footprint
             + parent
             + unmapped
             + if self.cube { face::TIE_WORDS } else { 0 }
             + if self.pixel == Pixel::None { 0 } else { 48 }
-            + if self.centred { PIXEL_CENTRE_WORDS } else { 0 }
             + self.heap_raw.as_ref().map_or(0, heap_raw::HeapRaw::words)
     }
 }
@@ -1057,11 +957,6 @@ const SWIZZLE_WORDS: u32 = extended::SWIZZLE_WORDS;
 /// specialization constants), the construction, and their constants, at most 8 words each.
 pub const CONSTANT_LANES_WORDS: u32 = 4 * 3 * 8 + 16;
 
-/// The estimated words of a pixel sampler's texel centre (`emit::pixel_centre`): its floor,
-/// addition, scaling (a shuffle, a conversion, and a division), an argument buffer's handle test (a
-/// mask and a comparison), and the select, and their constants, at most 8 words each.
-pub const PIXEL_CENTRE_WORDS: u32 = 96;
-
 /// A runtime sampler slot the function samples with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeSlot {
@@ -1071,10 +966,6 @@ pub struct RuntimeSlot {
     /// A coordinate-sensitive operation uses it (`SamplerCoordinates`): the function reads its
     /// word's pixel coordinates.
     pub coordinates: bool,
-    /// A sample without comparison (not a gather) reads it with coordinates that may be pixels
-    /// ([`Sampling::centred`]): the function reads whether its word states a nearest pixel
-    /// sampler.
-    pub nearest: bool,
     /// An extended-range or heap raw texture's emulated filter reads it: the function reads its
     /// word's filter, coordinates, address modes, and border color.
     pub linear: bool,
@@ -1084,12 +975,6 @@ pub struct RuntimeSlot {
     /// A cube's explicit gradients take their footprint by its word (`CubeFootprint::Word`): the
     /// function reads whether its word is anisotropic.
     pub anisotropy: bool,
-    /// A 2D gather snaps behind its word (`position::SnapKind::WordGather`): the function reads its
-    /// word's coordinates and its `s` and `t` address modes.
-    pub gathers: bool,
-    /// A sample snaps onto its footprint cell behind its word (`position::SnapKind::WordCell`):
-    /// the function reads whether its word states a linear pixel sampler.
-    pub cells: bool,
     /// A sample's `half` texel converts by the bound format's class where the sampler reads one
     /// texel of one level (`texture::OneTexel::Word`), on a device that samples through Metal's
     /// own sampler (`VkProperty::MetalSampler`): the function reads its word's filter fields.
@@ -1105,47 +990,11 @@ pub struct RuntimeSlot {
 
 impl RuntimeSlot {
     /// The fields of the slot's sampler word the function reads: the mask of its
-    /// `SpecKey::SamplerState` specialization, with [`SamplerWord::PIXEL_GATED`] where it reads
-    /// fields beyond the coordinates only through the pixel tests ([`gated`](Self::gated)).
+    /// `SpecKey::SamplerState` specialization.
     pub fn fields(&self) -> u32 {
-        let fields = self.read_fields();
-        match self.gated() && fields & !SamplerWord::PIXEL_COORDINATES != 0 {
-            true => fields | SamplerWord::PIXEL_GATED,
-            false => fields,
-        }
-    }
-
-    /// Whether every read of the slot's word is the pixel coordinates bit itself, or a test that
-    /// fails where it is clear: the centre test (whether the word states a nearest pixel sampler,
-    /// `emit::word_states`), the footprint cell's (whether it states a linear pixel sampler,
-    /// `position::celled_by_word`), and the coordinates' (`SamplerCoordinates`). Every other use
-    /// reads fields that matter for normalized coordinates too.
-    pub fn gated(&self) -> bool {
-        let RuntimeSlot {
-            slot: _,
-            compare: _,
-            coordinates: _,
-            nearest: _,
-            cells: _,
-            min_level: _,
-            linear,
-            fetch_levels,
-            anisotropy,
-            gathers,
-            texels,
-            emulated,
-        } = *self;
-        ![linear, fetch_levels, anisotropy, emulated, gathers, texels].contains(&true)
-    }
-
-    /// The fields the slot's uses read of its word, without [`SamplerWord::PIXEL_GATED`].
-    fn read_fields(&self) -> u32 {
         let mut fields = 0;
         if self.coordinates {
             fields |= SamplerWord::PIXEL_COORDINATES;
-        }
-        if self.nearest {
-            fields |= SamplerWord::PIXEL_NEAREST;
         }
         if self.linear {
             fields |= SamplerWord::LINEAR_STATE;
@@ -1158,14 +1007,6 @@ impl RuntimeSlot {
         }
         if self.emulated {
             fields |= SamplerWord::ANISOTROPIC | SamplerWord::MIP_FILTER;
-        }
-        if self.gathers {
-            fields |=
-                SamplerWord::PIXEL_COORDINATES | SamplerWord::ADDRESS[0] | SamplerWord::ADDRESS[1];
-        }
-        if self.cells {
-            fields |=
-                SamplerWord::PIXEL_COORDINATES | SamplerWord::MIN_LINEAR | SamplerWord::MAG_LINEAR;
         }
         if self.texels {
             fields |= SamplerWord::LINEAR_FILTER;
@@ -1666,12 +1507,9 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
                 slot,
                 compare: false,
                 coordinates: false,
-                nearest: false,
                 linear: false,
                 fetch_levels: false,
                 anisotropy: false,
-                gathers: false,
-                cells: false,
                 texels: false,
                 min_level: false,
                 emulated: false,

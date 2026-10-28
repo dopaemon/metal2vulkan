@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1025 |
+| ledger rows (a case whose gap is recorded) | 1049 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2849,13 +2849,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
-| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1366x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
@@ -2872,8 +2867,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1366x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1440x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
@@ -2890,8 +2883,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1440x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1440x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
@@ -2908,8 +2899,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1440x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1536x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1536x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
@@ -2927,7 +2916,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1536x1152` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
@@ -2944,8 +2932,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1536x1152` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
-| `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1920x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
@@ -2961,35 +2947,13 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-downscales-1920x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most one code of 1/255 (0.00392, to an `f32` ulp). `device-sampli… |
 | `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-border` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
@@ -2999,8 +2963,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-edge` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
-| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
 | `pixel-samplers-rgba8-nearest-zero` | A pixel-coordinate sample through the device's own sampler: the digest of the site's output differs, so the report gives no count or bound here. The case reads … |
@@ -3227,4 +3189,66 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 | `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-nearest-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-edge` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-zero` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-border` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-sca… |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through the device's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's o… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the digest of the site's output differs,… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on the device's own sampler at the coordinate divided by the size: the site's elements differ by at most 1.… |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through Metal's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-scaling`… |
+| `pixel-samplers-rgba16f-linear-mirror` | A pixel-coordinate sample through Metal's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's output… |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through Metal's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`, `argument-pixel-sampler-scaling`… |
+| `pixel-samplers-rgba8-linear-mirror` | A pixel-coordinate sample through Metal's own sampler at the coordinate divided by the texture's size (`pixel-sampler-scaling`): the digest of the site's output… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.56 co… |
+| `pixel-downscales-1536x1152` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.75 co… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.44 co… |
+| `pixel-downscales-1440x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.88 co… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.50 co… |
+| `pixel-downscales-1920x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.63 co… |
+| `pixel-downscales-1366x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1000x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.75 co… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.44 co… |
+| `pixel-downscales-1440x1152` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.88 co… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the digest of the site's output differs, so t… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.56 co… |
+| `pixel-downscales-1536x1080` | A linear-filtered downscale through a pixel sampler, on Metal's own sampler at the coordinate divided by the size: the site's elements differ by at most 0.63 co… |
 

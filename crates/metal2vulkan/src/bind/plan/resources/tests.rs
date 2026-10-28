@@ -862,9 +862,8 @@ fn bicubic_texels_follow_the_bound_format() {
 }
 
 /// A runtime sampler slot specializes `SamplerState` to the bound sampler's word masked by the
-/// fields the function reads, and an unbound slot to 0. So the pixel predicates hold as they did of
-/// `SamplerCoords` and `SamplerPixelNearest`: pixel coordinates wherever the sampler uses them, a
-/// nearest pixel sampler exactly where it also filters nearest.
+/// fields the function reads, and an unbound slot to 0. So the pixel predicate holds as it did of
+/// `SamplerCoords`: pixel coordinates wherever the sampler uses them, whatever its filters.
 #[test]
 fn sampler_state_follows_the_bound_sampler() {
     use crate::bind::state::SamplerDescriptor;
@@ -905,7 +904,7 @@ fn sampler_state_follows_the_bound_sampler() {
             template: Default::default(),
             alpha_red_texels: Default::default(),
         };
-        [W::PIXEL_COORDINATES, W::PIXEL_NEAREST, W::FIELDS]
+        [W::PIXEL_COORDINATES, W::LINEAR, W::FIELDS]
             .map(|fields| planner.sampler_state(slot, fields) as u32)
     };
     let with = |normalized: bool, filter: F| {
@@ -922,21 +921,17 @@ fn sampler_state_follows_the_bound_sampler() {
     assert_eq!(plan(None), [0, 0, 0]);
     assert_eq!(plan(with(true, F::Nearest)), [0, 0, repeat_t]);
     assert_eq!(plan(with(true, F::Linear)), [0, linear, linear | repeat_t]);
-    assert_eq!(
-        plan(with(false, F::Nearest)),
-        [pixel, pixel, pixel | repeat_t]
-    );
+    assert_eq!(plan(with(false, F::Nearest)), [pixel, 0, pixel | repeat_t]);
     assert_eq!(
         plan(with(false, F::Linear)),
-        [pixel, pixel | linear, pixel | linear | repeat_t]
+        [pixel, linear, pixel | linear | repeat_t]
     );
-    // The pixel predicates: the word masked by them is exactly the pixel-coordinates bit.
-    let states = |desc, mask| plan(desc)[if mask == W::PIXEL_COORDINATES { 0 } else { 1 }] == pixel;
-    assert!(!states(with(true, F::Nearest), W::PIXEL_COORDINATES));
-    assert!(states(with(false, F::Linear), W::PIXEL_COORDINATES));
-    assert!(states(with(false, F::Nearest), W::PIXEL_NEAREST));
-    assert!(!states(with(false, F::Linear), W::PIXEL_NEAREST));
-    assert!(!states(None, W::PIXEL_NEAREST));
+    // The pixel predicate: the word masked by it is exactly the pixel-coordinates bit.
+    let states = |desc| plan(desc)[0] == pixel;
+    assert!(!states(with(true, F::Nearest)));
+    assert!(states(with(false, F::Linear)));
+    assert!(states(with(false, F::Nearest)));
+    assert!(!states(None));
 }
 
 /// A texture slot read or sampled with a `half` result specializes `TexelFormat` from the bound

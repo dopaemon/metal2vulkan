@@ -2607,7 +2607,16 @@ bound.
   exact value is below `2^-126` up to `2^-126`, which Metal flushes
   (`float-tininess-after-rounding`).
 - `metal2vulkan-degrade-pixel-sampler-scaling` (precision). `PrecisionNote::PixelSamplerScaling`:
-  Pixel-coordinate samplers scale coordinates in the shader, rounding differently.
+  A pixel-coordinate sampler's coordinate reaches the device's sampler divided by the texture's
+  level-0 size in the shader, on every device, and the device reads its texels from that coordinate
+  in its own arithmetic: within a few units in the last place of a texel edge (a nearest sample's
+  texel, a gather's block, a linear filter's pair) or of one of the device's sub-texel steps (a
+  linear filter's weight) it may read the neighbouring texel, block or step, where Metal reads the
+  coordinate as given. Measured: the device's normalized sampler's answer within one `f32` ulp of
+  the quotient on MoltenVK and at the quotient on lavapipe; a linear downscale by 8 within 1/255 of
+  Metal's on MoltenVK and 2/255 on lavapipe. A constexpr pixel sampler that filters nearest and
+  clamps to the edge fetches its texel instead and records nothing; a runtime sampler slot's access
+  announces it where the bound sampler states pixel coordinates.
 - `metal2vulkan-degrade-device-arithmetic` (precision). `PrecisionNote::DeviceArithmetic`: Float
   division, remainder, square root, fused multiply-add, and dot products use Vulkan's precision
   bounds (e.g. 2.5 ULP division, a possibly unfused `Fma`) rather than correct rounding.
@@ -2899,9 +2908,12 @@ bound.
   sample's depth from its vertex function's window depth read at the sample, plus `FragCoord.z` less
   that depth read at the centre, which carries the depth bias.
 - `metal2vulkan-degrade-argument-pixel-sampler-scaling` (precision).
-  `PrecisionNote::ArgumentPixelSamplerScaling`: A comparison through an argument buffer's sampler
-  whose word the specialized module cannot read may hand the device a pixel coordinate scaled by
-  the texture's size, where the sampler states pixel coordinates.
+  `PrecisionNote::ArgumentPixelSamplerScaling`: A sample, gather or comparison through an argument
+  buffer's sampler whose word the specialized module cannot read may hand the device a pixel
+  coordinate scaled by the texture's size, where the sampler states pixel coordinates, with
+  `pixel-sampler-scaling`'s bound. A sample without a comparison through a state that filters
+  nearest and clamps to the edge fetches its texel instead. Announced at the first draw or dispatch
+  of a pipeline that records it while the device holds a sampler state of pixel coordinates.
 - `metal2vulkan-degrade-half-output-precision` (precision). `PrecisionNote::HalfOutputPrecision`: A
   fragment function returns a `half` color output (a scalar or vector of AIR's `half`) to an
   attachment the pipeline has, and either its module is compiled without fast math
