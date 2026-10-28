@@ -835,6 +835,67 @@ impl ShadowCopies {
         }
     }
 
+    /// Whether a merge's keep and changed copy ([`record_kept`](Self::record_kept),
+    /// [`record_out`](Self::record_out)) each write every one of the first `length` bytes of its
+    /// part: a heap's tiled texture's do, as they copy the staging buffer's span of the texture's
+    /// bytes whole (`HeapTiledCopies::record_out`), or the heap's.
+    pub(super) fn copies_out_whole(&self, length: u64) -> bool {
+        match &self.source {
+            ShadowSource::Bytes {
+                target: ShadowTarget::Tiled { staging, .. },
+                ..
+            } => staging.into.size >= length,
+            _ => false,
+        }
+    }
+
+    /// Whether a merge's keep right after this shadow's copy in, with no copy of the shadow
+    /// between, may copy the staging buffer that copy in filled
+    /// ([`record_kept_from_staging`](Self::record_kept_from_staging)): a heap's tiled texture's
+    /// whose moves give back each byte they took (`HeapTiledCopies::moves_bits`).
+    pub(super) fn keeps_from_staging(&self) -> bool {
+        matches!(
+            &self.source,
+            ShadowSource::Bytes {
+                target: ShadowTarget::Tiled { tiles, .. },
+                ..
+            } if tiles.moves_bits()
+        )
+    }
+
+    /// Record a merge's keep into `to` from `at` as a copy of the staging buffer, right after the
+    /// shadow's copy in filled it with the heap's bytes and moved them into the image
+    /// ([`keeps_from_staging`](Self::keeps_from_staging)): the bytes a keep's move out of the
+    /// image would leave there ([`record_kept`](Self::record_kept)), the texture's bytes from its
+    /// first, without the move. Nothing for any other shadow.
+    ///
+    /// # Safety
+    ///
+    /// As `record_out`'s, after a barrier that orders the copy after the copy in, and with no
+    /// command between them that writes the shadow or its staging buffer.
+    pub(super) unsafe fn record_kept_from_staging(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+        (to, at): (vk::Buffer, u64),
+    ) {
+        let ShadowSource::Bytes {
+            target: ShadowTarget::Tiled { staging, .. },
+            ..
+        } = &self.source
+        else {
+            return;
+        };
+        let region = vk::BufferCopy {
+            src_offset: staging.into.dst_offset,
+            dst_offset: at,
+            size: staging.into.size,
+        };
+        // SAFETY: the caller's contract; the staging buffer holds the texture's bytes from its
+        // start (`HeapTiledCopies::staging`), and `to` holds them from `at`.
+        unsafe { device.cmd_copy_buffer(command_buffer, staging.raw(), to, &[region]) };
+    }
+
     /// Record a merge's keep of the shadow's texels into `to` from `at`, laid out as in the
     /// buffer from the texture's first byte (`shadow_merge.rs`): as
     /// [`record_out`](Self::record_out) copies them; but where a heap's tiled texture's image
@@ -1442,6 +1503,38 @@ impl ShadowCopy {
             Step::Keep(merge) => merge.keep_uses(c),
             Step::Merge(merge) => merge.merge_uses(c),
         }
+    }
+
+    /// Whether this keep may copy the staging buffer its texture's copy in just filled
+    /// ([`ShadowCopies::keeps_from_staging`]): a keep whose kept part a copy writes.
+    pub(super) fn keeps_from_staging(&self) -> bool {
+        matches!(&self.step, Step::Keep(merge) if merge.copied_kept_part().is_some())
+            && self.copies.keeps_from_staging()
+    }
+
+    /// Record this keep as a copy of its texture's staging buffer
+    /// ([`ShadowCopies::record_kept_from_staging`]), where it
+    /// [`keeps_from_staging`](Self::keeps_from_staging); any other copy as
+    /// [`record`](Self::record) records it.
+    ///
+    /// # Safety
+    ///
+    /// As `record`'s, right after its texture's copy in, with no copy of its shadow between.
+    pub(super) unsafe fn record_keep_from_staging(
+        &self,
+        device: &Vk,
+        command_buffer: vk::CommandBuffer,
+    ) {
+        if let Step::Keep(merge) = &self.step {
+            if let Some(to) = merge.copied_kept_part() {
+                // SAFETY: the caller's contract.
+                return unsafe {
+                    (self.copies).record_kept_from_staging(device, command_buffer, to)
+                };
+            }
+        }
+        // SAFETY: the caller's contract.
+        unsafe { self.record(device, command_buffer, None) }
     }
 
     /// Record the copy into `command_buffer`, its staged rows back (where it has them) by `back`

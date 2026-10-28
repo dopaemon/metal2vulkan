@@ -702,7 +702,10 @@ impl CommandBufferShared {
                         // SAFETY: the command buffer is recording, outside a render pass; it is
                         // submitted first in the batch, before any later one, and every batch on
                         // another `VkQueue` waits for the batch (`FirstMoves::waits`).
-                        unsafe { first_work.record(raw, buffer, shared.queue_flags_of(queue)) };
+                        unsafe {
+                            let family = shared.queue_flags_of(queue);
+                            first_work.record((raw, &shared.counts), buffer, family);
+                        };
                     }
                     if has_staged {
                         // SAFETY: the command buffer is recording, outside a render pass; every

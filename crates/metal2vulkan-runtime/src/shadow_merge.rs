@@ -15,7 +15,11 @@
 //! So the bytes the commands changed through the texture are merged into the buffer's instead:
 //!
 //! - **Kept.** Before the command, after its copies in, the shadow's texels are copied into the
-//!   *kept* part of a scratch buffer, laid out as in the buffer from the texture's first byte.
+//!   *kept* part of a scratch buffer, laid out as in the buffer from the texture's first byte. A
+//!   heap's tiled texture of one sample and colour aspects alone, kept right after its copy in
+//!   with no copy of its shadow between, copies the staging buffer that copy filled with the
+//!   heap's bytes: the bytes a move of its texels out of the image would leave there, without
+//!   the move (`ShadowCopies::record_kept_from_staging`, `WorkCounts::shadow_keeps_from_staging`).
 //! - **Merged in place**, where the texture's first byte is a whole word of its buffer, its last
 //!   byte's word lies in the buffer, and the bytes lie in pages when the merge is planned (not
 //!   detached, `detach.rs`): the shadow's texels are copied into the *changed* part, and the merge
@@ -78,7 +82,9 @@
 //!   retained until its command buffer completes: one, two or three parts of the texture's bytes
 //!   (a cut's rows) rounded up to 256, in one buffer where the device's buffers take it (else one
 //!   each), or a kept image in place of them. A cut merge's copies write its parts' rows back to
-//!   back, every byte its kernel reads, so its scratch is not zeroed: one of those its shadow's
+//!   back, every byte its kernel reads, and a heap's tiled texture's merge in place copies the
+//!   texture's bytes whole (`texture/heap_tiled.rs`), the bytes its kernel reads, so neither
+//!   scratch is zeroed: one of those its shadow's
 //!   earlier merges were done with, kept once their command buffers completed (at most two,
 //!   `ScratchSpares`; `WorkCounts::shadow_merge_scratches_reused`), else a new one. A kept image
 //!   is its queue's, of any merge of the queue of the same view and extent once the encoder that
@@ -400,17 +406,19 @@ impl ShadowMerge {
             (Held::Image(image), Vec::new())
         } else if length <= device.properties().max_buffer_length {
             // A cut's copies write every byte of its kept and changed parts the kernel reads (its
-            // rows of whole words, back to back), so its scratch needs no zero: one of the
-            // shadow's spares, else a new one unzeroed. Every other merge's scratch is new and
-            // zero.
+            // rows of whole words, back to back), and so do a heap's tiled texture's in place
+            // (the texture's bytes whole, which the kernel reads alone), so their scratch needs
+            // no zero: one of the shadow's spares, else a new one unzeroed. Every other merge's
+            // scratch is new and zero.
+            let written = cut.is_some() || (in_place && copies.copies_out_whole(rounded));
             let spares = copies.merge_scratch.clone();
-            let one = match (&cut, cut.as_ref().and_then(|_| spares.take(length))) {
-                (Some(_), Some(spare)) => {
+            let one = match (written, written.then(|| spares.take(length)).flatten()) {
+                (true, Some(spare)) => {
                     counts.shadow_merge_scratch_reused();
                     spare
                 }
-                (Some(_), None) => device.unzeroed_buffer(length, HazardTrackingMode::Default)?,
-                (None, _) => {
+                (true, None) => device.unzeroed_buffer(length, HazardTrackingMode::Default)?,
+                (false, _) => {
                     counts.shadow_merge_scratch_zeroed();
                     device.own_buffer(length, options)?
                 }
@@ -670,6 +678,16 @@ impl ShadowMerge {
             dispatches,
         };
         Ok((merge, lease))
+    }
+
+    /// Where a copy writes the keep's kept part (the keep no dispatch, cut to no rectangle, into
+    /// no kept image): its `VkBuffer` and where the part starts there; `None` for any other
+    /// keep.
+    pub(super) fn copied_kept_part(&self) -> Option<(vk::Buffer, u64)> {
+        match (&self.keep_dispatch, self.kept_in, &self.cut) {
+            (None, KeptIn::Part(kept), None) => Some((kept.raw, kept.at)),
+            _ => None,
+        }
     }
 
     /// Whether the keep is a dispatch (`ShadowMerge::keep_dispatch`), which runs in the compute

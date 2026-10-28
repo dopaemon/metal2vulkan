@@ -541,7 +541,9 @@ fn a_texture_made_again_beside_dispatches_takes_its_moves_pool_back() {
 
 /// A dispatch writes a tiled texture's texel (0, 0) and four bytes of a buffer over the heap,
 /// those of element (1, 0) or ones between the elements, and both writes stay: every other byte
-/// is the heap's (the module docs), merged once (`shadow-merge`).
+/// is the heap's (the module docs), merged once (`shadow-merge`). Each keep, right after its copy
+/// in, copies the heap's bytes that copy took (`WorkCounts::shadow_keeps_from_staging`): a keep
+/// of other bytes would have the merge put the copy in's back over the buffer's write.
 #[test]
 fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
     on_device(|device, messages| {
@@ -580,6 +582,7 @@ fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
                 .unwrap()
                 .size;
             let buffer = heap.new_buffer_at_offset(span, shared(), OFFSET).unwrap();
+            let counted = device.work_counts();
             let before = named(HEAP, 7);
             mapping.write(0, &before);
             let at = buffer_with(device, &(off as u32).to_le_bytes()).unwrap();
@@ -606,6 +609,9 @@ fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
                 differ.len(),
                 differ.first()
             );
+            let staged =
+                device.work_counts().shadow_keeps_from_staging - counted.shadow_keeps_from_staging;
+            assert_eq!(staged, 1, "{what}: keeps from the staging buffer");
             made = true;
             drop((buffer, texture, heap));
             drop(mapping);
@@ -619,6 +625,90 @@ fn a_command_writing_a_tiled_texture_two_ways_keeps_both_writes() {
                 "merged, announced once: {counted:?}"
             );
         }
+    });
+}
+
+/// A dispatch writes a tiled texture's texel (0, 0) in three command buffers one after another,
+/// each over bytes the CPU wrote anew, and its 4 bytes of a buffer of its own: each write goes
+/// back by a merge in place (the CPU writes the heap's bytes too), every other byte the CPU's.
+/// Its keep and changed copy write the texture's bytes whole, so no merge zeroes its scratch:
+/// each takes one an earlier merge kept, else a new one
+/// (`WorkCounts::shadow_merge_scratches_zeroed`, `shadow_merge_scratches_reused`); and each keep
+/// copies the bytes its copy in took (`WorkCounts::shadow_keeps_from_staging`).
+#[test]
+fn a_tiled_texture_s_merges_take_kept_scratches_unzeroed() {
+    on_device(|device, _| {
+        let queue = device.new_command_queue().unwrap();
+        let ll =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/public/engine/tob_renders.ll");
+        let library = device
+            .new_library_with_air(&llvm_assemble(&ll).unwrap())
+            .unwrap();
+        let function = library.new_function_with_name("tob_two_ways").unwrap();
+        let kernel = device
+            .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+            .unwrap();
+        let plain = Plain {
+            format: PixelFormat::RGBA8Unorm,
+            unit: 4,
+            extent: [64, 64],
+        };
+        let mapping = Mapping::anonymous(HEAP);
+        let Some(heap) = heap_over(device, &mapping) else {
+            return;
+        };
+        let made = device.work_counts();
+        let texture = heap
+            .new_texture_at_offset(&plain.descriptor(), OFFSET)
+            .unwrap();
+        let counts = device.work_counts();
+        assert_eq!(
+            layouts_counted(&made, &counts),
+            [1, 0, 0, 0],
+            "the texture lies in Metal's tiles"
+        );
+        let aside = buffer_with(device, &[0u8; 16]).unwrap();
+        let at = buffer_with(device, &0u32.to_le_bytes()).unwrap();
+        for run_at in 0..3 {
+            let before = named(HEAP, 11 + run_at);
+            mapping.write(0, &before);
+            let command_buffer = queue.command_buffer().unwrap();
+            let mut e = command_buffer.compute_command_encoder().unwrap();
+            e.set_compute_pipeline_state(&kernel).unwrap();
+            e.set_texture(Some(&texture), 0).unwrap();
+            e.set_buffer(Some(&aside), 0, 0).unwrap();
+            e.set_buffer(Some(&at), 0, 1).unwrap();
+            e.dispatch_threads(Size::new(1, 1, 1), Size::new(1, 1, 1))
+                .unwrap();
+            e.end_encoding().unwrap();
+            run(&command_buffer);
+            let mut want = before;
+            let first = OFFSET as usize;
+            want[first..first + 4].copy_from_slice(&[0xff, 0, 0, 0xff]);
+            let after = mapping.read(0..HEAP);
+            let differ: Vec<usize> = (0..HEAP).filter(|&i| after[i] != want[i]).collect();
+            assert!(
+                differ.is_empty(),
+                "command buffer {run_at}: {} bytes differ, the first at {:?}",
+                differ.len(),
+                differ.first()
+            );
+        }
+        assert_eq!(read_buffer(&aside, 0, 4).unwrap(), [0x5a, 0x5b, 0x5c, 0x5d]);
+        let after = device.work_counts();
+        let merged = after.shadow_merge_dispatches_planned - counts.shadow_merge_dispatches_planned;
+        let zeroed = after.shadow_merge_scratches_zeroed - counts.shadow_merge_scratches_zeroed;
+        let reused = after.shadow_merge_scratches_reused - counts.shadow_merge_scratches_reused;
+        assert!(
+            merged >= 3,
+            "a merge in each command buffer: {merged} dispatches"
+        );
+        assert_eq!(zeroed, 0, "merge scratches zeroed");
+        let staged = after.shadow_keeps_from_staging - counts.shadow_keeps_from_staging;
+        assert_eq!(staged, 3, "keeps from the staging buffer");
+        drop((texture, heap));
+        drop(mapping);
+        eprintln!("HEAPLAYOUT tiled merges: {merged} dispatches, {reused} scratches reused");
     });
 }
 

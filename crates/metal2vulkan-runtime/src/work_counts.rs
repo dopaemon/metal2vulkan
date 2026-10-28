@@ -313,6 +313,7 @@ pub(crate) struct Counters {
     fresh_page_buffers_made: AtomicU64,
     fresh_page_bytes: AtomicU64,
     new_buffer_bytes_cleared: AtomicU64,
+    new_buffer_zero_fills: AtomicU64,
     shadow_copies: AtomicU64,
     shadow_texels_copied_in: AtomicU64,
     shadow_texels_first_copied_in: AtomicU64,
@@ -347,6 +348,7 @@ pub(crate) struct Counters {
     shadow_texels_copied_back: AtomicU64,
     shadow_copies_back_dispatched: AtomicU64,
     shadow_copies_in_dispatched: AtomicU64,
+    shadow_keeps_from_staging: AtomicU64,
     shadow_merge_copies_dispatched: AtomicU64,
     shadow_merge_dispatches_planned: AtomicU64,
     shadow_merge_words_examined: AtomicU64,
@@ -2123,6 +2125,12 @@ impl Counters {
         (self.new_buffer_bytes_cleared).fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// A submission's first work zeroed a new buffer's bytes the host cannot write with one
+    /// `vkCmdFillBuffer` in place of copies of the device's zeros (`texture/first_move.rs`).
+    pub(crate) fn new_buffer_zero_filled(&self) {
+        (self.new_buffer_zero_fills).fetch_add(1, Ordering::Relaxed);
+    }
+
     /// An encoder planned `n` copies between shadowed textures' truths and their shadows
     /// (`shadow.rs`), whose copies in and back of buffers' textures' images move `texels_in` and
     /// `texels_back` texels.
@@ -2212,6 +2220,13 @@ impl Counters {
     /// (`shadow_copy_in.rs`).
     pub(crate) fn shadow_copy_in_dispatched(&self) {
         self.shadow_copies_in_dispatched
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// An encoder recorded a heap's tiled texture's keep as a copy of the staging buffer its copy
+    /// in just filled (`ShadowCopies::record_kept_from_staging`).
+    pub(crate) fn shadow_keep_from_staging(&self) {
+        self.shadow_keeps_from_staging
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -4331,6 +4346,12 @@ pub struct WorkCounts {
     /// data, since a command buffer's arena chunks are made without a clear and each region zeroes
     /// what its data does not cover (`upload.rs`).
     pub new_buffer_bytes_cleared: u64,
+    /// New buffers' bytes the host cannot write (`Private` storage, a `Managed` buffer's device
+    /// copy, the device's neutral buffers) that a submission's first work set to zero with one
+    /// `vkCmdFillBuffer`, on a device without unified memory whose fills are not transfers, in
+    /// place of copies of the device's host-visible zeros, which such a device reads over the bus
+    /// (`texture/first_move.rs`); fills apart from `fills_recorded`.
+    pub new_buffer_zero_fills: u64,
     /// Copies between a shadowed texture's truth and its shadow that encoders planned
     /// (`shadow.rs`): copies in before a command, copies back after one or as the encoder ends,
     /// and the keeps and merges of a command that writes the bytes two ways or writes through a
@@ -4452,6 +4473,11 @@ pub struct WorkCounts {
     /// the shadow and in the merge's scratch, where the device runs them faster so
     /// (`DriverFact::ShadowCopyInDispatchFaster`): the same bytes either way.
     pub shadow_copies_in_dispatched: u64,
+    /// Of the keeps of merged shadowed textures, those of a heap's tiled texture recorded right
+    /// after its copy in as one copy of the staging buffer that copy filled with the heap's
+    /// bytes, in place of a move of the shadow's texels back into Metal's tiles: the same bytes
+    /// either way (`shadow.rs`).
+    pub shadow_keeps_from_staging: u64,
     /// The copies in of shadows over host pages a consumer logs whose regions the log decided as
     /// their command buffer replayed (`dirty_pages.rs`).
     pub dirty_copies_in_gated: u64,
@@ -4497,7 +4523,8 @@ pub struct WorkCounts {
     /// The merges of shadowed textures whose scratch was made zero, as their kernel reads bytes
     /// no copy writes (those between the texture's rows): a merge not cut to rows of whole words,
     /// through a copy or of rows that start or end inside a word. A cut merge's copies write
-    /// every byte its kernel reads, so its scratch is not zeroed.
+    /// every byte its kernel reads, as a heap's tiled texture's merge in place copies the
+    /// texture's bytes whole, so neither scratch is zeroed.
     pub shadow_merge_scratches_zeroed: u64,
     /// Copies of rows of bytes between two buffers (`row_copies.rs`): a blit between a buffer and
     /// a texture over a buffer or between two textures over buffers, and a buffer-texture copy's
@@ -5284,6 +5311,7 @@ impl Device {
             fresh_page_buffers_made: counters.fresh_page_buffers_made.load(Ordering::Relaxed),
             fresh_page_bytes: counters.fresh_page_bytes.load(Ordering::Relaxed),
             new_buffer_bytes_cleared: counters.new_buffer_bytes_cleared.load(Ordering::Relaxed),
+            new_buffer_zero_fills: counters.new_buffer_zero_fills.load(Ordering::Relaxed),
             views_through_swizzle: counters.views_through_swizzle.load(Ordering::Relaxed),
             view_shadows: counters.view_shadows.load(Ordering::Relaxed),
             attachment_reads_through_copies: counters
@@ -5394,6 +5422,7 @@ impl Device {
             shadow_copies_in_dispatched: counters
                 .shadow_copies_in_dispatched
                 .load(Ordering::Relaxed),
+            shadow_keeps_from_staging: counters.shadow_keeps_from_staging.load(Ordering::Relaxed),
             dirty_copies_in_gated: dirty.gated.load(Ordering::Relaxed),
             dirty_copies_in_whole: dirty.whole.load(Ordering::Relaxed),
             dirty_copies_in_skipped: dirty.skipped.load(Ordering::Relaxed),

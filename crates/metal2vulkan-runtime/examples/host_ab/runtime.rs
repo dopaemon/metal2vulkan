@@ -1294,6 +1294,7 @@ impl Gpu for Runtime {
             ("completed_waits", c.completed_waits),
             ("device_memory_bytes", c.device_memory_allocated),
             ("cleared_bytes", c.new_buffer_bytes_cleared),
+            ("new_buffer_zero_fills", c.new_buffer_zero_fills),
             (
                 "replayed_begin_command_buffer",
                 replayed.begin_command_buffer,
@@ -1932,6 +1933,7 @@ impl Gpu for Runtime {
                 c.shadow_copies_back_dispatched,
             ),
             ("shadow_copies_in_dispatched", c.shadow_copies_in_dispatched),
+            ("shadow_keeps_from_staging", c.shadow_keeps_from_staging),
             (
                 "shadow_merge_copies_dispatched",
                 c.shadow_merge_copies_dispatched,

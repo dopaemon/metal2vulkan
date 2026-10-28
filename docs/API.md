@@ -1282,7 +1282,9 @@ bound.
   scissors copies in only the texels inside them (`WorkCounts::shadow_texels_copied_in`). Over a
   buffer's bytes that another writer may
   write while a command buffer runs, the image is kept in a scratch buffer before the first command
-  that writes through it, and each copy back is a dispatch that merges only the words the commands
+  that writes through it (a one-sample colour texture in Metal's tiles, right after its copy in, by
+  a copy of the bytes that copy took: `WorkCounts::shadow_keeps_from_staging`), and each copy back
+  is a dispatch that merges only the words the commands
   changed, so that writer's writes to the texels they left stay, as on Metal: the CPU's, over a
   `Shared` or `Managed` buffer's bytes, host pages or the caller's `VkBuffer`, and another queue's
   commands', over an untracked buffer's. A tracked `Private` buffer's bytes have no such writer (the

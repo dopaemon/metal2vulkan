@@ -63,7 +63,10 @@
 //!   byte over such pages (`in_place.rs`); elsewhere it is a shadow, whose copies address its texels
 //!   alone (`texture.rs`'s `storage_over_buffer`).
 //! - **The work.** A barrier from every command before (memory other commands wrote), then the
-//!   buffers' fills with zeros, then their copies of staged bytes after a barrier, then a
+//!   buffers' fills with zeros (copies of the device's zeros; on a device without unified memory,
+//!   which would read those over the bus, one `vkCmdFillBuffer` each, counted:
+//!   `WorkCounts::new_buffer_zero_fills`, `FirstFill::zeros`), then their copies of staged bytes
+//!   after a barrier, then a
 //!   barrier carrying each image's move (after the fills: an image placed in a new heap moves
 //!   after the heap's fill, so the fill never overwrites what the move wrote), then the images'
 //!   copies of zeros, then a barrier that makes them visible to every later command and to the
@@ -109,6 +112,7 @@ use super::super::memory::{Memory, MemoryClass, Placement};
 use super::super::release;
 use super::super::resource::ResourceKey;
 use super::super::tracker::Point;
+use super::super::work_counts::Counters;
 use super::super::Device;
 use super::decoded_twin::DecodePass;
 use super::{buffer_image_copy, image_aspects, transfer_barrier, ImageRegion, ZERO_BYTES};
@@ -609,12 +613,17 @@ const STAGED_BYTES: u64 = 256 << 20;
 /// them, waited for (the module docs): a bound on the work waiting, whatever its bytes.
 const STAGED_COPIES: usize = 4096;
 
-/// A new buffer's fill: copies of the device's zeros onto `range` of `buffer`, or of the bytes a
-/// staging buffer holds, or a `Managed` buffer's upload from its host copy.
+/// A new buffer's fill: copies of the device's zeros onto `range` of `buffer`, or a fill of its
+/// words with zeros (`word_fill.rs`), or copies of the bytes a staging buffer holds, or a
+/// `Managed` buffer's upload from its host copy.
 pub(crate) struct FirstFill {
     buffer: vk::Buffer,
     source: vk::Buffer,
     copies: Vec<vk::BufferCopy>,
+    /// The words one `vkCmdFillBuffer` sets to zero in place of the copies (none then): on a
+    /// device without unified memory, whose zeros (`Zeros`, host-visible) a copy would read over
+    /// the bus ([`FirstFill::zeros`]).
+    filled: Option<std::ops::Range<u64>>,
     /// What keeps the staging buffer `source` is, held until the submission that makes the fill
     /// completed; `None` where `source` is the device's zeros.
     staging: Option<Box<dyn Any + Send + Sync>>,
@@ -637,8 +646,44 @@ impl FirstFill {
             buffer,
             source: zeros,
             copies,
+            filled: None,
             staging: None,
         }
+    }
+
+    /// The zeros of `range` of `buffer` on `device`: one `vkCmdFillBuffer` of its words on a
+    /// device without unified memory whose fills are `vkCmdFillBuffer`'s (`word_fill.rs`), where
+    /// the range's ends are multiples of 4; else copies of the device's zeros, made now if they
+    /// are not yet. A discrete GPU reads those host-visible zeros over the bus: on the RX 7900 XTX
+    /// (RADV) 512 KiB of them took 66 us to copy and 11 us more in the barrier after it, where a
+    /// fill of the same bytes took 0.7 us and 2.5 us. The copy stays where the device shares the
+    /// host's memory, whose zeros lie in the memory the GPU reads anyway (not measured there),
+    /// and where fills go as transfers (`DriverFact::FillCompiledPerCommandPool`), whose copies
+    /// within the buffer need `TRANSFER_SRC` usage that a neutral buffer lacks.
+    fn zeros(
+        device: &Device,
+        moves: &FirstMoves,
+        buffer: vk::Buffer,
+        range: std::ops::Range<u64>,
+    ) -> Result<FirstFill, Error> {
+        let words = range.start.is_multiple_of(4) && range.end.is_multiple_of(4);
+        let discrete = !device.properties().has_unified_memory;
+        if words && discrete && !crate::word_fill::by_transfers(device) {
+            return Ok(FirstFill {
+                buffer,
+                source: vk::Buffer::null(),
+                copies: Vec::new(),
+                filled: Some(range),
+                staging: None,
+            });
+        }
+        let zeros = moves.zeros(device, 0)?;
+        Ok(FirstFill::new(
+            buffer,
+            range.start,
+            range.end - range.start,
+            zeros,
+        ))
     }
 
     /// The copy of `length` bytes of `source` from byte `from` onto `buffer` from byte `start`,
@@ -658,6 +703,7 @@ impl FirstFill {
                 dst_offset: start,
                 size: length,
             }],
+            filled: None,
             staging: Some(staging),
         }
     }
@@ -890,8 +936,7 @@ impl FirstMoves {
         buffer: vk::Buffer,
         range: std::ops::Range<u64>,
     ) -> Result<(), Error> {
-        let zeros = self.zeros(device, 0)?;
-        let fill = FirstFill::new(buffer, range.start, range.end - range.start, zeros);
+        let fill = FirstFill::zeros(device, self, buffer, range)?;
         let _order = self.registration_place();
         lock(&self.waiting).push(Waiting::Fill(keeper, fill));
         Ok(())
@@ -1465,7 +1510,7 @@ impl Taken<'_> {
     /// one of the resources, on the same `VkQueue` or waited for.
     pub(crate) unsafe fn record(
         &self,
-        device: &Vk,
+        (device, counts): (&Vk, &Counters),
         command_buffer: vk::CommandBuffer,
         family: vk::QueueFlags,
     ) {
@@ -1518,6 +1563,18 @@ impl Taken<'_> {
                     );
                 }
                 exit_guard::called(Call::CmdPipelineBarrier);
+            }
+            if let Some(words) = &fill.filled {
+                // SAFETY: as above; the words lie in the buffer, held, which has `TRANSFER_DST`
+                // usage as every buffer of the runtime's, their ends multiples of 4
+                // (`FirstFill::zeros`).
+                unsafe {
+                    let (buffer, words) = (fill.buffer, words.clone());
+                    crate::word_fill::record_command(device, command_buffer, buffer, words, 0);
+                }
+                exit_guard::called(Call::CmdFillBuffer);
+                counts.new_buffer_zero_filled();
+                continue;
             }
             // SAFETY: as above; every copy lies within its source, the device's zeros (live and
             // `ZERO_BYTES` long) or a staging buffer the fill keeps, and within the buffer,

@@ -200,7 +200,10 @@ impl Device {
             // SAFETY: recording, outside a render pass, for the queue family; it is submitted
             // first in the work's submission, which is waited for before anything that uses the
             // resources is submitted after it.
-            unsafe { taken.record(raw, objects.buffer, shared.queue_flags_of(0)) };
+            unsafe {
+                let family = shared.queue_flags_of(0);
+                taken.record((raw, &shared.counts), objects.buffer, family);
+            };
         }
         // Host calls' staged copies, after the first work, before the work.
         // SAFETY: recording, outside a render pass; every image's move is recorded before it

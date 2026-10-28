@@ -1855,6 +1855,18 @@ impl HeapTiledCopies {
         self.samples.is_some()
     }
 
+    /// Whether the moves between the image and the staging buffer give back each byte they took:
+    /// a single-sample image of colour aspects alone, whose copies to and from the tight buffer
+    /// move its texel blocks' bits (a depth aspect's copy writes values outside `[0, 1]` as
+    /// undefined, `VUID-vkCmdCopyBufferToImage-pRegions-07931`), and whose dispatches move words.
+    /// So, right after a move in, the staging buffer holds what a move out of the image would
+    /// leave there (`ShadowCopies::record_kept_from_staging`).
+    pub(crate) fn moves_bits(&self) -> bool {
+        self.samples.is_none()
+            && (self.regions.iter())
+                .all(|region| region.image_subresource.aspect_mask == vk::ImageAspectFlags::COLOR)
+    }
+
     /// Whether the image takes the heap's bytes inexactly: a multisample depth whose moves into
     /// it draw values the driver's fragment depth changes (`drawn-depth-copy`), which a merge's
     /// keep then reads from the heap's bytes (`ShadowCopies::record_kept`).

@@ -16,8 +16,12 @@
 //!   (as `vkCmdCopyBuffer` requires), and every word ends as the fill's.
 //! - **Elsewhere** `vkCmdFillBuffer`, unchanged, on every other driver and release.
 //! - **Counted.** Each fill counts as one of the two forms (`WorkCounts::fills_recorded` and
-//!   `fills_by_transfers`), so a run shows which its device took.
+//!   `fills_by_transfers`), so a run shows which its device took; a new buffer's first zeros
+//!   filled on a device without unified memory count apart (`WorkCounts::new_buffer_zero_fills`,
+//!   `texture/first_move.rs`), which takes them only where the device's fills are
+//!   `vkCmdFillBuffer`'s ([`by_transfers`]).
 
+use crate::device::functions::Vk;
 use crate::Device;
 use ash::vk;
 use metal2vulkan::device::DriverFact;
@@ -78,25 +82,14 @@ pub(crate) unsafe fn record(
     word: u32,
 ) {
     let device = owner.shared().vk();
-    let by_transfers = owner
-        .properties()
-        .driver_facts
-        .contains(&DriverFact::FillCompiledPerCommandPool);
+    let by_transfers = by_transfers(owner);
     if words.is_empty() {
         return;
     }
     owner.shared().counts.fill_recorded(by_transfers);
     if !by_transfers {
         // SAFETY: the caller's contract.
-        unsafe {
-            device.cmd_fill_buffer(
-                command_buffer,
-                buffer,
-                words.start,
-                words.end - words.start,
-                word,
-            );
-        }
+        unsafe { record_command(device, command_buffer, buffer, words, word) };
         return;
     }
     let first = (words.end - words.start).min(UPDATE_LIMIT) / 4;
@@ -136,5 +129,37 @@ pub(crate) unsafe fn record(
                 }
             }
         }
+    }
+}
+
+/// Whether `owner`'s fills go as transfers ([`DriverFact::FillCompiledPerCommandPool`]).
+pub(crate) fn by_transfers(owner: &Device) -> bool {
+    (owner.properties().driver_facts).contains(&DriverFact::FillCompiledPerCommandPool)
+}
+
+/// Record a fill of `words` of `buffer` with `word` as one `vkCmdFillBuffer` with `device`'s
+/// functions, uncounted: [`record`]'s form on a device whose fills do not go as transfers
+/// ([`by_transfers`]).
+///
+/// # Safety
+///
+/// `command_buffer` is recording, outside a render pass; `buffer` is live until it completes,
+/// made with `TRANSFER_DST` usage, and `words` lies in it, its ends multiples of 4.
+pub(crate) unsafe fn record_command(
+    device: &Vk,
+    command_buffer: vk::CommandBuffer,
+    buffer: vk::Buffer,
+    words: Range<u64>,
+    word: u32,
+) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        device.cmd_fill_buffer(
+            command_buffer,
+            buffer,
+            words.start,
+            words.end - words.start,
+            word,
+        );
     }
 }

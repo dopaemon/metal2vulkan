@@ -2658,6 +2658,7 @@ field	metal2vulkan-runtime::WorkCounts.mipmaps_filtered	pub mipmaps_filtered: u6
 field	metal2vulkan-runtime::WorkCounts.missed_completion_wakes	pub missed_completion_wakes: u64
 field	metal2vulkan-runtime::WorkCounts.modifier_feature_queries	pub modifier_feature_queries: u64
 field	metal2vulkan-runtime::WorkCounts.new_buffer_bytes_cleared	pub new_buffer_bytes_cleared: u64
+field	metal2vulkan-runtime::WorkCounts.new_buffer_zero_fills	pub new_buffer_zero_fills: u64
 field	metal2vulkan-runtime::WorkCounts.no_copy_lies_read	pub no_copy_lies_read: u64
 field	metal2vulkan-runtime::WorkCounts.object_churn	pub object_churn: super::churn_counts::ObjectChurn
 field	metal2vulkan-runtime::WorkCounts.own_pixel_reads	pub own_pixel_reads: u64
@@ -2766,6 +2767,7 @@ field	metal2vulkan-runtime::WorkCounts.shadow_copies	pub shadow_copies: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_back_dispatched	pub shadow_copies_back_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_copies_in_dispatched	pub shadow_copies_in_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_keeps	pub shadow_keeps: super::churn_counts::ShadowKeeps
+field	metal2vulkan-runtime::WorkCounts.shadow_keeps_from_staging	pub shadow_keeps_from_staging: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_copies_dispatched	pub shadow_merge_copies_dispatched: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_dispatches_planned	pub shadow_merge_dispatches_planned: u64
 field	metal2vulkan-runtime::WorkCounts.shadow_merge_kept_images_followed	pub shadow_merge_kept_images_followed: u64

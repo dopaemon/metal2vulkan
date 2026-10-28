@@ -1570,8 +1570,10 @@ impl EncoderCore {
     pub(super) fn shadow_copies(&mut self, copies: &[ShadowCopy]) {
         let device = self.device().clone();
         let mut run = ShadowRun::default();
-        // The keeps a dispatch at their copy in took, which record nothing.
+        // The keeps a dispatch at their copy in took, which record nothing, and those that copy
+        // the staging buffer their copy in filled.
         let mut taken = Vec::new();
+        let mut staged = Vec::new();
         for (i, copy) in copies.iter().enumerate() {
             if taken.contains(&i) {
                 continue;
@@ -1621,15 +1623,32 @@ impl EncoderCore {
                     (self.open.command_buffer.dirty()).gate((log, &copy.copies, texel), shadows)
                 }),
             };
+            // A keep may copy the staging buffer its copy in filled only where that copy in
+            // copies the texture's bytes whole: recorded here, ungated.
+            if dispatched.is_none() && gate.is_none() {
+                staged.extend(staged_keep(copies, i));
+            }
+            let from_staging = staged.contains(&i);
+            let kept = std::cell::Cell::new(false);
             let record = |device: &Vk, raw: vk::CommandBuffer| match &dispatched {
                 // SAFETY: the encoder's command buffer is recording outside a render pass; its
                 // commands retain the shadowed textures (and their views) and the dispatch until
                 // it completes, and every image rests in the `GENERAL` layout.
                 Some(back) => unsafe { back.record(device, raw) },
+                None if from_staging => {
+                    // SAFETY: as above; the keep follows its texture's copy in, after the barrier
+                    // its read of the shadow takes from that copy's write, with no copy of the
+                    // shadow between them (`staged_keep`).
+                    unsafe { copy.record_keep_from_staging(device, raw) };
+                    kept.set(true);
+                }
                 // SAFETY: as above; the rows are the copy's own, made just now.
                 None => unsafe { copy.record_gated(device, raw, rows.as_ref(), gate) },
             };
             self.shadow_command(&mut run, (stages, &uses, copy.writes_truth()), record);
+            if kept.get() {
+                device.shared().counts.shadow_keep_from_staging();
+            }
             if let Some(back) = dispatched {
                 device.shared().counts.shadow_copy_back_dispatched();
                 self.retain(back);
@@ -2455,6 +2474,21 @@ fn meets(earlier: &[Use<ResourceKey>], later: &[Use<ResourceKey>]) -> bool {
                 && !(before.write.is_empty() && used.write.is_empty())
         })
     })
+}
+
+/// The place in `copies` of the keep that copies the staging buffer the copy in at `copies[i]`
+/// fills (`ShadowCopy::keeps_from_staging`): its texture's next copy, the copies between them
+/// other textures' shadows', which leave its shadow and staging buffer as the copy in left them.
+/// `None` where the keep moves its texels out of the image, or no keep follows.
+fn staged_keep(copies: &[ShadowCopy], i: usize) -> Option<usize> {
+    let copy = &copies[i];
+    if !matches!(copy.step, Step::Into) {
+        return None;
+    }
+    let shadow = copy.copies.shadow_key;
+    let (j, keep) = (copies.iter().enumerate().skip(i + 1))
+        .find(|(_, later)| later.copies.shadow_key == shadow)?;
+    (Arc::ptr_eq(&keep.copies, &copy.copies) && keep.keeps_from_staging()).then_some(j)
 }
 
 /// The dispatch that takes the copy in at `copies[i]` and its texture's keep after it together

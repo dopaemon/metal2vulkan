@@ -39,6 +39,10 @@
 //!   (`commit_failed`, a failing submission check) still runs it: a later read is zero. Bytes a
 //!   command buffer writes through a resource placed in a new heap, and through one aliasing it,
 //!   stay: the heap's fill comes before its first command.
+//! - **A large `Private` buffer reads zero through its first fill.** One past the device's zeros'
+//!   length, over memory a released buffer had filled, reads all zero; on a device without unified
+//!   memory whose fills are not transfers its zeros are one `vkCmdFillBuffer`
+//!   (`WorkCounts::new_buffer_zero_fills`), elsewhere copies of the device's zeros.
 //! - **A heap texture's `replace_region` waits for nothing**: its copy is staged for the device's
 //!   next submission; a later command buffer reads the later of two calls' bytes, and `get_bytes`
 //!   the staged bytes. A new heap texture's staged copy lands where that submission also carries
@@ -1120,6 +1124,60 @@ fn a_new_resource_s_zeros_come_before_every_use_on_every_queue() {
                 Err(error) => panic!("new_buffer {options:?}: {error:?}"),
             }
         }
+    });
+}
+
+/// A new `Private` buffer larger than the device's zeros (`ZERO_BYTES`, 4 MiB), made where one
+/// whose every byte was `0xa7` was just released (most likely its memory), reads all zero after
+/// the submission that took its first work: zeroed by one `vkCmdFillBuffer` on a device without
+/// unified memory whose fills are not transfers (`WorkCounts::new_buffer_zero_fills` counts
+/// exactly one), by copies of the device's zeros elsewhere (it counts none).
+#[test]
+fn a_new_private_buffer_reads_zero_through_its_first_fill() {
+    on_device(|device| {
+        let name = device.name();
+        let len = (5 << 20) + 48;
+        let queue = device.new_command_queue().unwrap();
+        let dirty = device.new_buffer(len, ResourceOptions::private()).unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.fill_buffer(&dirty, 0..len, 0xa7).unwrap();
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None, "the dirty fill on {name}");
+        let address = dirty.gpu_address();
+        drop((command_buffer, dirty));
+        let before = device.work_counts().new_buffer_zero_fills;
+        let made = device.new_buffer(len, ResourceOptions::private()).unwrap();
+        let reused = made.gpu_address() == address;
+        let command_buffer = queue.command_buffer().unwrap();
+        let out = buffer_out(&command_buffer, &made, len);
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None, "on {name}");
+        let filled = device.work_counts().new_buffer_zero_fills - before;
+        let properties = device.properties();
+        let by_transfers =
+            (properties.driver_facts).contains(&DriverFact::FillCompiledPerCommandPool);
+        let fills = !properties.has_unified_memory && !by_transfers;
+        println!(
+            "FIRST-USE on {name}: a new {len}-byte Private buffer {} the released one's memory, \
+             its zeros {}",
+            if reused { "took" } else { "did not take" },
+            if fills { "a fill" } else { "copies" }
+        );
+        let bytes = read_buffer(&out, 0, len).unwrap();
+        let other = bytes.iter().filter(|&&b| b != 0).count();
+        assert_eq!(
+            other, 0,
+            "bytes of a new Private buffer that read other than zero on {name}"
+        );
+        assert_eq!(
+            filled,
+            u64::from(fills),
+            "fills of the new Private buffer's zeros on {name}"
+        );
     });
 }
 
