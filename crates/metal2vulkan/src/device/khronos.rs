@@ -1137,12 +1137,6 @@ fn feature_route(structure: &str) -> Option<Route> {
         | "VkPhysicalDeviceScalarBlockLayoutFeaturesEXT" => {
             Ext(&["VK_EXT_scalar_block_layout"], Some(2))
         }
-        "VkPhysicalDeviceVariablePointersFeatures"
-        | "VkPhysicalDeviceVariablePointersFeaturesKHR"
-        | "VkPhysicalDeviceVariablePointerFeatures"
-        | "VkPhysicalDeviceVariablePointerFeaturesKHR" => {
-            Ext(&["VK_KHR_variable_pointers"], Some(1))
-        }
         "VkPhysicalDeviceUniformBufferStandardLayoutFeatures"
         | "VkPhysicalDeviceUniformBufferStandardLayoutFeaturesKHR" => {
             Ext(&["VK_KHR_uniform_buffer_standard_layout"], Some(2))
@@ -1362,11 +1356,6 @@ pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
             "uniformBufferStandardLayout",
             F::UniformBufferStandardLayout,
         ),
-        (
-            "variablePointersStorageBuffer",
-            F::VariablePointersStorageBuffer,
-        ),
-        ("variablePointers", F::VariablePointers),
         ("vulkanMemoryModel", F::VulkanMemoryModel),
         (
             "vulkanMemoryModelDeviceScope",

@@ -79,17 +79,6 @@
 //!   the import's 11 to 20 ms per GiB.
 //! - **Freed.** The view is unmapped once the memory imported from it is freed (`memory.rs`'s
 //!   `Block`), as the import requires it mapped for its whole life.
-//! - **The shader drops its own stores as well**, on every device and through either read-only
-//!   state: a slot bound to such a buffer has its bit set in the stage's dropped-store word
-//!   (`StageTable::dropped_store_buffers`, the translator's `SpecKey::DroppedStoreSlots`), which a
-//!   function that stores through a buffer slot reads as ordinary pipeline data and branches each
-//!   of its stores on. The word is per draw and per dispatch, so one pipeline runs with any of its
-//!   values, and only a function that stores pays the uniform branch. It reaches a store through a
-//!   bound slot alone: a store through an address loaded out of an argument buffer or a pointer
-//!   names no slot, an atomic is not gated (what Metal's atomics do to such memory is not
-//!   measured), and a blit fill, a visibility result and a render pass's own attachment writes are
-//!   not a shader's stores at all. On this system the read-only view keeps all of those out of the
-//!   pages, and the two agree on every shape measured above.
 //! - **Elsewhere** the import is of the caller's pages: Linux drivers pin imported pages for
 //!   writing and refuse or fault on read-only ones (`host_memory.rs`), so there the GPU's writes
 //!   reach the pages, and the difference is announced

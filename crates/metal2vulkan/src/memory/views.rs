@@ -103,16 +103,12 @@ fn u32_type(mb: &mut ModuleBuilder) -> BResult<TypeId> {
 
 /// Declare the view of `slot` (its `Buffer` descriptor binding symbol).
 pub fn declare(mb: &mut ModuleBuilder, slot: SlotRef, kind: ViewKind) -> BResult<View> {
-    declare_at(mb, buffer_symbol(slot), kind)
-}
-
-/// The `Buffer` descriptor binding symbol of `slot`.
-fn buffer_symbol(slot: SlotRef) -> ResourceSlot {
-    ResourceSlot {
+    let sym = ResourceSlot {
         stage: slot.stage,
         kind: ResourceKind::Buffer,
         index: slot.index,
-    }
+    };
+    declare_at(mb, sym, kind)
 }
 
 /// Declare a word view of kind `kind` at binding symbol `sym` (a Metal buffer slot, or a
@@ -282,27 +278,15 @@ impl UnitViews {
         view: View,
         units: crate::memory::leaf::Units,
     ) -> BResult<UnitViews> {
-        UnitViews::declare_at(mb, buffer_symbol(slot), view, units)
-    }
-
-    /// The same, at binding symbol `sym` (a Metal buffer slot, or a synthetic binding such as the
-    /// dropped-store sink, `lower::access::sink`): every view is another module-scope variable at
-    /// that one binding, so the stage counts one descriptor whatever units it declares.
-    pub fn declare_at(
-        mb: &mut ModuleBuilder,
-        sym: ResourceSlot,
-        view: View,
-        units: crate::memory::leaf::Units,
-    ) -> BResult<UnitViews> {
         let storage = view.kind == ViewKind::Storage;
         Ok(UnitViews {
             u16: if storage && units.u16 {
-                Some(declare_narrow(mb, sym, 2)?)
+                Some(declare_narrow(mb, slot, 2)?)
             } else {
                 None
             },
             u8: if storage && units.u8 {
-                Some(declare_narrow(mb, sym, 1)?)
+                Some(declare_narrow(mb, slot, 1)?)
             } else {
                 None
             },
@@ -311,20 +295,24 @@ impl UnitViews {
                     global: view.global,
                     class: StorageClass::Uniform,
                 }),
-                _ if units.vec4 => Some(declare_vec4(mb, sym, view)?),
+                _ if units.vec4 => Some(declare_vec4(mb, slot, view)?),
                 _ => None,
             },
         })
     }
 }
 
-/// Declare the `uvec4` view at binding symbol `sym`, whose word view [`declare_at`] declared as
-/// `view`:
+/// Declare the `uvec4` view of `slot`, whose word view [`declare`] declared as `view`:
 /// `StorageBuffer { uvec4[] }` (std430) beside a storage view, or `Uniform { uvec4[words / 4] }`
 /// (std140, valid without `uniformBufferStandardLayout`) beside a `UniformWords` view, whose size
 /// is a multiple of 16 bytes ([`uniform_range`]). Both have `ArrayStride` 16, and the serializer
 /// decorates the storage one `Aliased` as every storage view of a Metal buffer.
-pub fn declare_vec4(mb: &mut ModuleBuilder, sym: ResourceSlot, view: View) -> BResult<Vec4View> {
+pub fn declare_vec4(mb: &mut ModuleBuilder, slot: SlotRef, view: View) -> BResult<Vec4View> {
+    let sym = ResourceSlot {
+        stage: slot.stage,
+        kind: ResourceKind::Buffer,
+        index: slot.index,
+    };
     let u32_ty = u32_type(mb)?;
     let v4 = mb.ty(Type::Vector {
         elem: u32_ty,
@@ -371,13 +359,6 @@ pub fn declare_vec4(mb: &mut ModuleBuilder, sym: ResourceSlot, view: View) -> BR
     Ok(Vec4View { global, class })
 }
 
-/// A pointer to `uvec4` unit `index` of `view`.
-pub fn vec4_ptr(fb: &mut FunctionBuilder<'_>, view: Vec4View, index: Value) -> BResult<Value> {
-    let base = fb.module().global_value(view.global)?;
-    let zero = k(fb, 0)?;
-    fb.access_chain(base, &[zero, index])
-}
-
 /// Load `uvec4` unit `index` of `view` with memory operands `ops`.
 pub fn read_vec4(
     fb: &mut FunctionBuilder<'_>,
@@ -385,17 +366,33 @@ pub fn read_vec4(
     index: Value,
     ops: MemAccess,
 ) -> BResult<Value> {
-    let p = vec4_ptr(fb, view, index)?;
+    let base = fb.module().global_value(view.global)?;
+    let zero = k(fb, 0)?;
+    let p = fb.access_chain(base, &[zero, index])?;
     fb.load(p, ops)
 }
 
-/// Declare the `bytes`-byte (1 or 2) narrow view at binding symbol `sym`, whose word view
-/// [`declare_at`] declared.
-pub fn declare_narrow(
-    mb: &mut ModuleBuilder,
-    sym: ResourceSlot,
-    bytes: u32,
-) -> BResult<NarrowView> {
+/// Store the `uvec4` `value` to unit `index` of storage view `view` with memory operands `ops`.
+pub fn write_vec4(
+    fb: &mut FunctionBuilder<'_>,
+    view: Vec4View,
+    index: Value,
+    value: Value,
+    ops: MemAccess,
+) -> BResult<()> {
+    let base = fb.module().global_value(view.global)?;
+    let zero = k(fb, 0)?;
+    let p = fb.access_chain(base, &[zero, index])?;
+    fb.store(p, value, ops)
+}
+
+/// Declare the `bytes`-byte (1 or 2) narrow view of `slot`, whose word view [`declare`] declared.
+pub fn declare_narrow(mb: &mut ModuleBuilder, slot: SlotRef, bytes: u32) -> BResult<NarrowView> {
+    let sym = ResourceSlot {
+        stage: slot.stage,
+        kind: ResourceKind::Buffer,
+        index: slot.index,
+    };
     let u32_ty = u32_type(mb)?;
     let width = match bytes {
         1 => 8,
@@ -429,7 +426,7 @@ pub fn declare_narrow(
 }
 
 /// A pointer to unit `index` (a `u32` index of `view.bytes`-byte units) of narrow view `view`.
-pub fn unit_ptr(fb: &mut FunctionBuilder<'_>, view: NarrowView, index: Value) -> BResult<Value> {
+fn unit_ptr(fb: &mut FunctionBuilder<'_>, view: NarrowView, index: Value) -> BResult<Value> {
     let base = fb.module().global_value(view.global)?;
     let zero = k(fb, 0)?;
     fb.access_chain(base, &[zero, index])
@@ -453,17 +450,17 @@ pub fn read_unit(
     Ok(y)
 }
 
-/// Store the low `8 · view.bytes` bits of `value` (a `u32`) to the place `p` of `view`'s units
-/// ([`unit_ptr`], or a selection between one of these and another view's), with memory operands
-/// `ops`.
+/// Store the low `8 · view.bytes` bits of `value` (a `u32`) to unit `index` of `view` with
+/// memory operands `ops`.
 pub fn write_unit(
     fb: &mut FunctionBuilder<'_>,
     view: NarrowView,
-    p: Value,
+    index: Value,
     value: Value,
     ops: MemAccess,
 ) -> BResult<()> {
     let x = fb.convert(ConvOp::UConvert, value, view.unit_ty)?;
+    let p = unit_ptr(fb, view, index)?;
     fb.store(p, x, ops)
 }
 

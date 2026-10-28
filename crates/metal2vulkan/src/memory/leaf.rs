@@ -1211,25 +1211,6 @@ pub fn load(
 /// the store merges a partial word into `mem` through [`WordMem::write_bits`] (the sub-word
 /// store). In a buffer slot those are two word atomics, which read the word they modify (the
 /// Vulkan memory model's "reads"), so the slot's reported access includes a read.
-/// Whether [`store`] of `leaf` into a memory whose units are `units` merges a partial word, that
-/// is calls [`WordMem::write_bits`]: the paths below are exactly [`store`]'s, and nothing in them
-/// depends on a value, so a caller can choose its form before emitting (`access::emit::store_one`
-/// takes the branching guard for such a store, whose two atomics need a place that an `OpSelect`
-/// of two pointers is not). Reading it wrong the optimistic way is loud, not silent: the builder
-/// refuses an atomic whose pointer is not a place.
-pub fn merges(leaf: &Leaf, units: Units) -> bool {
-    match leaf.path {
-        Path::Vec4 if units.vec4 => false,
-        Path::Vec4 | Path::Aligned => {
-            let partial = (0..leaf.words()).any(|j| leaf.bytes - 4 * j < 4);
-            partial && units.intersect(leaf_units(leaf, true)) != leaf_units(leaf, true)
-        }
-        Path::OneWord => !units.has(leaf.bytes),
-        // Word 0 always takes the shifted bytes through `write_bits`.
-        Path::Bytes => true,
-    }
-}
-
 pub fn store(
     fb: &mut FunctionBuilder<'_>,
     mem: &mut dyn WordMem,

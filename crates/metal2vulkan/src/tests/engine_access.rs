@@ -1381,10 +1381,7 @@ fn the_highest_storage_slots_fall_back_to_device_addresses() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        // Three storage slots, and on a device that selects a dropped store's place the stage's
-        // store sink beside them, one descriptor of its own (`lower::access::sink`): the limit
-        // leaves room for all but one, so one slot moves either way.
-        desc.limits.max_per_stage_descriptor_storage_buffers = 2 + u32::from(selects_sink(&desc));
+        desc.limits.max_per_stage_descriptor_storage_buffers = 2;
         let p = Device::new(desc, policy())
             .expect("device")
             .profile()
@@ -1426,8 +1423,7 @@ fn the_highest_storage_slots_fall_back_to_device_addresses() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
             // No robust descriptors, or no read-only slot left to move: the limit is refused.
             let mut strict = profile_desc(stem);
-            strict.limits.max_per_stage_descriptor_storage_buffers =
-                2 + u32::from(selects_sink(&strict));
+            strict.limits.max_per_stage_descriptor_storage_buffers = 2;
             strict.features.remove(&VkFeature::RobustBufferAccess);
             strict.features.remove(&VkFeature::RobustBufferAccess2);
             let mut written = profile_desc(stem);
@@ -1448,12 +1444,6 @@ fn the_highest_storage_slots_fall_back_to_device_addresses() {
     }
 }
 
-/// Whether a stage of the device `desc` describes binds a store sink for a dropped store through
-/// a descriptor view, which is one storage descriptor of its own (`lower::access::sink`).
-fn selects_sink(desc: &DeviceDescription) -> bool {
-    desc.has(VkFeature::VariablePointers) && desc.has(VkFeature::VariablePointersStorageBuffer)
-}
-
 /// The description of committed profile `stem`.
 fn profile_desc(stem: &str) -> DeviceDescription {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1464,9 +1454,8 @@ fn profile_desc(stem: &str) -> DeviceDescription {
 }
 
 /// A kernel with a loop reserves no status binding (its modules carry no execution bound), so the
-/// descriptor fallback counts the Metal slots and the stage's store sink. With three storage slots,
-/// the sink and a per-stage limit of three, moving one slot brings the storage count to three: the
-/// highest slot to a device address
+/// descriptor fallback counts the Metal slots alone. With three storage slots and a per-stage limit
+/// of two, moving one slot brings the storage count to two: the highest slot to a device address
 /// where the profile has them, else (Profile F) the uniform-view fallback moves only the bounded
 /// params word, and the `Whole` data slot stays a storage descriptor.
 #[test]
@@ -1491,10 +1480,7 @@ fn a_looping_kernel_reserves_no_status_binding_in_the_fallback() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        // Three storage slots, and on a device that selects a dropped store's place the stage's
-        // store sink beside them, one descriptor of its own (`lower::access::sink`): the limit
-        // leaves room for all but one, so one slot moves either way.
-        desc.limits.max_per_stage_descriptor_storage_buffers = 2 + u32::from(selects_sink(&desc));
+        desc.limits.max_per_stage_descriptor_storage_buffers = 2;
         let p = Device::new(desc, policy())
             .expect("device")
             .profile()

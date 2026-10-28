@@ -11,14 +11,7 @@
 //! ([`layer_sees_kernel_writes`], the run of
 //! [`a_shader_write_then_a_copy_of_one_untracked_buffer`]: one dispatch writing an untracked
 //! buffer through the runtime's own recording, then a copy of that buffer, nothing between them)
-//! runs first, once a process. A store through a descriptor view is the selection of the slot's
-//! place or the stage's store sink (`lower::access::sink`, an `OpSelect` of two storage-buffer
-//! pointers, on a device with variable pointers), which the layer does not trace to the
-//! descriptor: it takes such a kernel's every bound buffer as read alone, where it reports the
-//! same store through a plain access chain (a dispatch of hand-assembled modules of either form
-//! on the runtime's device, then a copy: Ubuntu 26.04's layer, 1.4.341, on arm64 lavapipe, and
-//! Homebrew's, 1.4.363, on MoltenVK on an M3 Max, alike). Where the control finds the layer
-//! blind, each test whose hazard needs a kernel's write prints one `LAYER-BLIND-KERNEL-WRITES`
+//! runs first, once a process. Where the control finds the layer blind, each test whose hazard needs a kernel's write prints one `LAYER-BLIND-KERNEL-WRITES`
 //! line naming what it could not check, and requires what the layer does see of its run (its
 //! reads, transfers and the runtime's own commands) to have reported nothing
 //! ([`blind_to_kernel_writes`]).

@@ -225,8 +225,6 @@ fn resources(
                 assert_eq!(f.size, 8, "a guest base is eight bytes");
                 push[at..at + 8].copy_from_slice(&guest(s.index as usize).to_le_bytes())
             }
-            // No slot's writes dropped: the word stays 0.
-            PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

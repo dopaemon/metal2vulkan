@@ -1,9 +1,9 @@
 //! A set-0 buffer binding an entry point uses through more than one variable: whether the device
 //! takes it as a dynamic descriptor, and that what its pipelines do is what the variant chose.
 //!
-//! A slot or store sink declares one variable per view at its binding -- a word view, and the
-//! narrow or `uvec4` unit views an access needs -- so a kernel whose dropped stores move a narrow
-//! leaf has a binding of several variables (`pipeline::objects::dynamic_bindings`). Vulkan bounds
+//! A slot declares one variable per view at its binding -- a word view, and the narrow or `uvec4`
+//! unit views an access needs -- so a kernel whose stores move a narrow leaf has a binding of
+//! several variables (`pipeline::objects::dynamic_bindings`). Vulkan bounds
 //! the variables at a binding nowhere, but MoltenVK's SPIRV-Cross writes Metal that does not
 //! compile for a **dynamic** one, so the device is asked (one pipeline of that shape created and
 //! destroyed, `objects::takes_multi_variable_dynamic`) rather than every device paying for it.
@@ -12,23 +12,23 @@
 //!
 //! - the pipelines of such a kernel are made and run, whatever the device answered, and
 //!   `record_stride_not_a_multiple_of_four` answers exactly what Metal's `sizeof` and its two
-//!   narrow stores say;
+//!   narrow stores say, from its buffers' starts and from each dispatch's own offset where the
+//!   offsets move: where its three-variable binding is dynamic, the dynamic offset reaches every
+//!   variable at it;
 //! - and the sets its dispatches take are the ones the variant's own choice calls for
-//!   (`ComputePipelineState::set_zero_choice`): where it pushes set 0 every dispatch pushes, where
-//!   it made the store sink's binding dynamic every dispatch after the first binds its
-//!   predecessor's set, and otherwise each allocates and writes its own;
+//!   (`ComputePipelineState::set_zero_choice`): where it pushes set 0 every dispatch pushes; where
+//!   each dispatch binds its buffers at the offsets its predecessor did, every dispatch after the
+//!   first binds its predecessor's set; and where the offsets move, none does, dynamic or not
+//!   ([`Ran::holds_the_choice`]);
 //! - and a self-check the driver refuses reaches the device's sink as at most one informational
 //!   line, never as the driver's errors of the runtime's own question.
 //!
 //! The device's answer is read where it bounds that choice -- a device that does not take such a
-//! binding has none of them dynamic -- and never as the expectation itself. The two come apart: a
-//! binding the device takes stays static where the layout's dynamic-buffer budget
-//! (`maxDescriptorSetUniformBuffersDynamic`, `maxDescriptorSetStorageBuffersDynamic`) is spent in
-//! binding order before it, as `encoders_plain`'s twenty-seventh binding is on a device of eight
-//! dynamic storage buffers (measured on a Radeon 780M, Mesa 26.2.4).
+//! binding has none of them dynamic -- and never as the expectation itself.
 //!
 //! On an Apple M3 Max under MoltenVK 1.4.2 the answer is no. On a Radeon 780M (RADV, Mesa 26.2.4)
-//! it is yes, and set 0 is pushed for both kernels here, which reaches no dynamic binding either:
+//! and on lavapipe (Mesa, arm64) it is yes, and set 0 is pushed for the kernel here, which
+//! reaches no dynamic binding either:
 //! [`a_narrow_unit_kernel_without_the_push_command_takes_the_devices_answer`] withholds
 //! `VK_KHR_push_descriptor` so that the choice is reached at all.
 //!
@@ -108,34 +108,53 @@ fn device_with(cache: &Path, pushing: Pushing, messages: Option<MessageSink>) ->
     Device::system_default_with(&options).unwrap()
 }
 
-/// `encoders_plain`'s buffer slots, `[[buffer(0)]]` to `[[buffer(24)]]`, every one written: each
-/// run binds them all, so its store sink is the one binding whose descriptor a dispatch writes of
-/// its own. A written slot left unbound takes a region of its own at every dispatch as well
-/// (`neutral_zeros_shared`), whose descriptor then differs from its predecessor's whatever the
-/// sink's binding is, and no dispatch could bind its predecessor's set.
-const PLAIN_SLOTS: u32 = 25;
+/// How far a dispatch of [`run`] binds every buffer past its predecessor, where its offsets move:
+/// the largest `minStorageBufferOffsetAlignment` Vulkan allows, so each dispatch's offset is one a
+/// descriptor can start at on any device, and past what one dispatch of the narrow-unit kernel
+/// writes (eight records of 18 bytes and eight words).
+const MOVED: u64 = 256;
 
 /// What a run of `entry` answered: the bytes of each bound buffer, what its variant chose for set
-/// 0, and the counter steps.
+/// 0, whether its dispatches' offsets moved, and the counter steps.
 struct Ran {
     buffers: Vec<Vec<u8>>,
+    moved: bool,
     chose: SetZeroChoice,
     reused: u64,
     found: u64,
     pushed: u64,
 }
 
-/// Dispatch `entry` of fixture `file` `dispatches` times with `slots` buffers of `bytes` bytes
-/// bound, each its own buffer, `threads` threads a dispatch, on a device of this `pushing`.
-fn run(
-    file: &str,
-    entry: &str,
+/// A kernel these tests run: `entry` of fixture `file`, with `slots` buffers of `bytes` bytes
+/// bound, each its own buffer, and `threads` threads a dispatch.
+struct Kernel {
+    file: &'static str,
+    entry: &'static str,
     slots: u32,
     bytes: u64,
     threads: u64,
-    dispatches: usize,
-    pushing: Pushing,
-) -> Result<Ran, String> {
+}
+
+/// `record_stride_not_a_multiple_of_four`, over its two buffers, eight threads a dispatch.
+const NARROW: Kernel = Kernel {
+    file: "kernel_record_stride_not_a_multiple_of_four.ll",
+    entry: "record_stride_not_a_multiple_of_four",
+    slots: 2,
+    bytes: 1024,
+    threads: 8,
+};
+
+/// Dispatch `kernel` `dispatches` times on a device of this `pushing`. Where `moved`, dispatch `d`
+/// binds every buffer at `d * MOVED` (each buffer as many bytes longer); else every dispatch binds
+/// them at their starts.
+fn run(kernel: &Kernel, dispatches: usize, pushing: Pushing, moved: bool) -> Result<Ran, String> {
+    let Kernel {
+        file,
+        entry,
+        slots,
+        bytes,
+        threads,
+    } = *kernel;
     let scratch = Scratch::new();
     let device = device(&scratch.0, pushing);
     let queue = device.new_command_queue().unwrap();
@@ -154,17 +173,28 @@ fn run(
         .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
         .map_err(|e| format!("pipeline: {e}"))?;
     let chose = state.set_zero_choice();
+    let step = if moved { MOVED } else { 0 };
+    let length = bytes + step * dispatches as u64;
     let buffers: Vec<_> = (0..slots)
-        .map(|_| device.new_buffer(bytes, ResourceOptions::shared()).unwrap())
+        .map(|_| {
+            device
+                .new_buffer(length, ResourceOptions::shared())
+                .unwrap()
+        })
         .collect();
     let command_buffer = queue.command_buffer().unwrap();
     let mut encoder = command_buffer.compute_command_encoder().unwrap();
     encoder.set_compute_pipeline_state(&state).unwrap();
-    for (index, buffer) in buffers.iter().enumerate() {
-        encoder.set_buffer(Some(buffer), 0, index as u32).unwrap();
-    }
     let before = device.work_counts();
-    for _ in 0..dispatches {
+    for dispatch in 0..dispatches {
+        if dispatch == 0 || moved {
+            for (index, buffer) in buffers.iter().enumerate() {
+                let offset = step * dispatch as u64;
+                encoder
+                    .set_buffer(Some(buffer), offset, index as u32)
+                    .unwrap();
+            }
+        }
         encoder
             .dispatch_threads(Size::new(threads, 1, 1), Size::new(threads.min(32), 1, 1))
             .unwrap();
@@ -188,6 +218,7 @@ fn run(
                 unsafe { std::slice::from_raw_parts(p.as_ptr(), b.length() as usize) }.to_vec()
             })
             .collect(),
+        moved,
         chose,
         reused: after.set_zero_sets_reused - before.set_zero_sets_reused,
         found: after.set_zero_sets_found - before.set_zero_sets_found,
@@ -197,179 +228,92 @@ fn run(
 
 /// `record_stride_not_a_multiple_of_four`'s answers, which Metal's `sizeof` and its two narrow
 /// stores fix: `sizeof(Rec)` is 18 and `alignof` 2, so `sizes[tid] == 18002`, and its two narrow
-/// stores land at `18 * tid + 6` (a `short`) and `18 * tid + 11` (a `uchar`). A dynamic offset
-/// applied to one variable of its sink's binding alone would answer other bytes.
+/// stores land at `18 * tid + 6` (a `short`) and `18 * tid + 11` (a `uchar`), from each
+/// dispatch's own offset where the offsets moved. A dynamic offset applied to one variable of
+/// `recs`'s binding alone would answer other bytes.
 fn holds_metals_values(ran: &Ran, threads: u64, dispatches: usize) {
     let recs = &ran.buffers[0];
     let sizes = &ran.buffers[1];
-    for tid in 0..threads as usize {
-        let size = u32::from_le_bytes(sizes[tid * 4..tid * 4 + 4].try_into().unwrap());
-        let short = i16::from_le_bytes(recs[18 * tid + 6..18 * tid + 8].try_into().unwrap());
-        let byte = recs[18 * tid + 11];
-        assert_eq!(
-            (size, short, byte),
-            (18002, (tid as i16) * 7 + 1, (tid as u8) ^ 0xa5),
-            "thread {tid} of {dispatches} dispatches answered ({size}, {short}, {byte}): \
-             Metal's `sizeof` is 18 and `alignof` 2, and the two narrow stores land at \
-             18 * tid + 6 and 18 * tid + 11"
-        );
+    let regions = if ran.moved { dispatches } else { 1 };
+    for region in 0..regions {
+        let at = region * MOVED as usize;
+        for tid in 0..threads as usize {
+            let size = at + tid * 4;
+            let size = u32::from_le_bytes(sizes[size..size + 4].try_into().unwrap());
+            let rec = at + 18 * tid;
+            let short = i16::from_le_bytes(recs[rec + 6..rec + 8].try_into().unwrap());
+            let byte = recs[rec + 11];
+            assert_eq!(
+                (size, short, byte),
+                (18002, (tid as i16) * 7 + 1, (tid as u8) ^ 0xa5),
+                "thread {tid} of dispatch {region} of {dispatches} answered ({size}, {short}, \
+                 {byte}): Metal's `sizeof` is 18 and `alignof` 2, and the two narrow stores land \
+                 at 18 * tid + 6 and 18 * tid + 11 from the dispatch's offset"
+            );
+        }
     }
 }
 
-/// `record_stride_not_a_multiple_of_four`: its store sink uses a `u16` and a `u8` unit view, so
-/// its sink binding is one of three variables, and the slot it copies from is one of two.
+/// `record_stride_not_a_multiple_of_four`: `recs` takes a `u16` and a `u8` unit view beside its
+/// word view, so its binding is one of three variables. Its dispatches bind both buffers at their
+/// starts, then at moving offsets.
 #[test]
 fn a_narrow_unit_kernel_runs_and_its_set_follows_the_variants_choice() {
-    const THREADS: u64 = 8;
     let answer = answered(Pushing::Enabled);
-    for dispatches in [8usize, 16] {
-        let ran = run(
-            "kernel_record_stride_not_a_multiple_of_four.ll",
-            "record_stride_not_a_multiple_of_four",
-            2,
-            1024,
-            THREADS,
-            dispatches,
-            Pushing::Enabled,
-        )
-        .unwrap_or_else(|e| panic!("{dispatches} dispatches: {e}"));
-        holds_metals_values(&ran, THREADS, dispatches);
-        ran.holds_the_choice(answer, dispatches, "record_stride_not_a_multiple_of_four");
+    for moved in [false, true] {
+        for dispatches in [8usize, 16] {
+            let ran = run(&NARROW, dispatches, Pushing::Enabled, moved)
+                .unwrap_or_else(|e| panic!("{dispatches} dispatches, moved {moved}: {e}"));
+            holds_metals_values(&ran, NARROW.threads, dispatches);
+            ran.holds_the_choice(answer, dispatches, "record_stride_not_a_multiple_of_four");
+        }
     }
 }
 
-/// `encoders_plain` of the reflection fixtures, whose store sink uses a `u16`, a `u8` and a
-/// `uvec4` unit view: its sink binding is one of four variables. Its answers are not Metal's to
-/// check here (its buffers are its own), only that it is made, runs, answers the same bytes at
-/// both dispatch counts, and takes the sets its variant's choice calls for.
-#[test]
-fn a_four_variable_kernel_runs_and_its_set_follows_the_variants_choice() {
-    let answer = answered(Pushing::Enabled);
-    let mut digests = Vec::new();
-    for dispatches in [8usize, 16] {
-        let ran = run(
-            "reflection/encoders.ll",
-            "encoders_plain",
-            PLAIN_SLOTS,
-            4096,
-            4,
-            dispatches,
-            Pushing::Enabled,
-        )
-        .unwrap_or_else(|e| panic!("{dispatches} dispatches: {e}"));
-        digests.push(ran.buffers.clone());
-        ran.holds_the_choice(answer, dispatches, "encoders_plain");
-    }
-    assert_eq!(
-        digests[0], digests[1],
-        "eight and sixteen dispatches of `encoders_plain` answered different bytes"
-    );
-}
-
-/// The device's answer taken on its own, and what it is worth: on a device that takes a binding of
-/// several variables dynamically and has no push command, `record_stride_not_a_multiple_of_four`'s
-/// sink binding is dynamic and sixteen dispatches allocate and write **one** set between them,
-/// where the restriction this replaced had each of the sixteen allocate and write its own.
+/// The device's answer taken on its own: on a device that takes a binding of several variables
+/// dynamically and has no push command, `record_stride_not_a_multiple_of_four`'s bindings are
+/// dynamic, and its dispatches at moving offsets answer Metal's values through their dynamic
+/// offsets, the three-variable binding's included; on a device that does not, they are static.
 ///
 /// Why the extension is withheld rather than a device found without it: on every device measured
 /// so far the choice is unreachable otherwise. MoltenVK and RADV both have
-/// `VK_KHR_push_descriptor`, and this kernel's set 0 is three descriptors, well inside
+/// `VK_KHR_push_descriptor`, and this kernel's set 0 is two descriptors, well inside
 /// `maxPushDescriptors`, so `objects::pushes_set_zero` is true and `dynamic_bindings` returns
 /// before it reads a binding's variables at all. Withholding the extension
 /// (`DeviceOptions::withheld_extensions`) is the one configuration reachable through the public
 /// API that exercises the branch, and `pushed` is asserted zero here so that the test cannot go
 /// quietly inert again if that changes.
 ///
-/// The step, not an absolute, is what this holds: `set_zero_sets_reused` over eight dispatches
-/// against sixteen. A device whose answer is no holds the other end, zero at both, which is the
-/// restriction's own reading and this test's negative control.
 #[test]
 fn a_narrow_unit_kernel_without_the_push_command_takes_the_devices_answer() {
-    const THREADS: u64 = 8;
     let answer = answered(Pushing::Withheld);
-    let mut steps = Vec::new();
     for dispatches in [8usize, 16] {
-        let ran = run(
-            "kernel_record_stride_not_a_multiple_of_four.ll",
-            "record_stride_not_a_multiple_of_four",
-            2,
-            1024,
-            THREADS,
-            dispatches,
-            Pushing::Withheld,
-        )
-        .unwrap_or_else(|e| panic!("{dispatches} dispatches: {e}"));
+        let ran = run(&NARROW, dispatches, Pushing::Withheld, true)
+            .unwrap_or_else(|e| panic!("{dispatches} dispatches: {e}"));
         assert_eq!(
             (ran.pushed, ran.chose.pushes),
             (0, false),
             "the device pushed set 0 for {dispatches} dispatches with \
              `VK_KHR_push_descriptor` withheld, so this test reached none of the choice it holds"
         );
-        holds_metals_values(&ran, THREADS, dispatches);
+        holds_metals_values(&ran, NARROW.threads, dispatches);
         ran.holds_the_choice(
             answer,
             dispatches,
             "record_stride_not_a_multiple_of_four, no push",
         );
-        // Its set 0 is three storage buffers, and Vulkan's floor for
+        // Its set 0 is two storage buffers, and Vulkan's floor for
         // `maxDescriptorSetStorageBuffersDynamic` is four, so the budget covers every one of them
         // on any device: what the device answered is the whole of the choice here.
         assert_eq!(
-            ran.sinks_are_dynamic(),
+            ran.all_dynamic(),
             answer,
-            "the device answered {answer} and its set-0 bindings {:?} are dynamic, of which {:?} \
-             are its store sinks: three storage buffers against a floor of four dynamic ones, so \
-             the sink's binding is dynamic exactly where the device takes it",
+            "the device answered {answer} and its set-0 bindings {:?} are dynamic, of {:?}: two \
+             storage buffers against a floor of four dynamic ones, so every binding is dynamic \
+             exactly where the device takes one of several variables",
             ran.chose.dynamic,
-            ran.chose.store_sinks
+            ran.chose.bindings
         );
-        steps.push(ran.reused);
-    }
-    let want: Vec<u64> = match answer {
-        // Every dispatch after the first binds the set its predecessor wrote.
-        true => vec![7, 15],
-        // The restriction's reading: each of the eight, and each of the sixteen, writes its own.
-        false => vec![0, 0],
-    };
-    assert_eq!(
-        steps,
-        want,
-        "the device {} a binding of several variables dynamically, so eight and sixteen \
-         dispatches should have reused {want:?} of their predecessors' sets, not {steps:?}",
-        match answer {
-            true => "takes",
-            false => "does not take",
-        }
-    );
-}
-
-/// `encoders_plain` with the push command withheld: the contrast within one device. Its sink
-/// binding is its twenty-seventh, and `dynamic_numbers` spends the device's dynamic storage
-/// buffers on the plain slots before it, so on a device of fewer than its twenty-six the sink
-/// stays static however the device answered, and its dispatches each write their own set. What
-/// this holds is that the counters follow the variant's choice and not the device's answer, which
-/// is the defect the earlier form of these tests carried.
-#[test]
-fn a_four_variable_kernel_without_the_push_command_follows_its_budget() {
-    let answer = answered(Pushing::Withheld);
-    for dispatches in [8usize, 16] {
-        let ran = run(
-            "reflection/encoders.ll",
-            "encoders_plain",
-            PLAIN_SLOTS,
-            4096,
-            4,
-            dispatches,
-            Pushing::Withheld,
-        )
-        .unwrap_or_else(|e| panic!("{dispatches} dispatches: {e}"));
-        assert_eq!(
-            (ran.pushed, ran.chose.pushes),
-            (0, false),
-            "the device pushed set 0 for {dispatches} dispatches with \
-             `VK_KHR_push_descriptor` withheld, so this test reached none of the choice it holds"
-        );
-        ran.holds_the_choice(answer, dispatches, "encoders_plain, no push");
     }
 }
 
@@ -436,11 +380,9 @@ fn answered(pushing: Pushing) -> bool {
 }
 
 impl Ran {
-    /// Every set-0 store sink of its variant is a dynamic binding: a sink's descriptor is a
-    /// region of the command's own, so this is what decides whether a dispatch can bind the set
-    /// its predecessor wrote (`binding::LastSetZero` compares the writes by value).
-    fn sinks_are_dynamic(&self) -> bool {
-        (self.chose.store_sinks.iter()).all(|b| self.chose.dynamic.contains(b))
+    /// Every set-0 binding of its variant is dynamic.
+    fn all_dynamic(&self) -> bool {
+        (self.chose.bindings.iter()).all(|b| self.chose.dynamic.contains(b))
     }
 
     /// Hold the sets the dispatches took against what the variant chose, never against the
@@ -448,10 +390,14 @@ impl Ran {
     /// binding the device would have taken.
     ///
     /// - Where its dispatches push set 0, all of them push and none allocates.
-    /// - Else a dispatch binds the set its predecessor wrote exactly where every set-0 store sink
-    ///   is dynamic -- a sink's descriptor is a region of the command's own, so a static sink
-    ///   makes every dispatch's writes differ and `binding::LastSetZero` holds none of them --
-    ///   and allocates and writes its own where none is.
+    /// - Else, where every dispatch binds its buffers at its predecessor's offsets, it binds the
+    ///   set its predecessor wrote, whatever its bindings' forms: the writes are the same.
+    /// - Else, the offsets moving, each dispatch allocates and writes its own, whatever its
+    ///   bindings' forms: `record_stride_not_a_multiple_of_four` reads both its buffers by thread,
+    ///   so each descriptor's range runs from its offset to the buffer's end
+    ///   (`bind::instantiate::descriptor_range`'s whole window), and a moved offset changes a
+    ///   static binding's offset and a dynamic one's range alike (`binding::LastSetZero` compares
+    ///   the writes by value).
     ///
     /// And the device's answer bounds the choice in the one direction it implies: a device that
     /// does not take a binding of several variables dynamically has none of them dynamic.
@@ -467,13 +413,9 @@ impl Ran {
             .filter(|b| chose.dynamic.contains(b))
             .collect();
         assert!(
-            !chose.several_variables.is_empty() && !chose.store_sinks.is_empty(),
-            "{what}: set 0 has bindings of several variables {:?} and store sinks {:?}, and this \
-             check needs one of each: a kernel without them holds nothing of the choice, and a \
-             set with no sink has no binding whose descriptor a command writes of its own, whose \
-             reuse nothing here measured",
-            chose.several_variables,
-            chose.store_sinks
+            !chose.several_variables.is_empty(),
+            "{what}: set 0 has no binding of several variables, and a kernel without one holds \
+             nothing of the choice"
         );
         if !answer {
             assert!(
@@ -499,19 +441,20 @@ impl Ran {
             "{what}: its variant pushes no set 0, yet {} of {dispatches} dispatches pushed one",
             self.pushed
         );
-        let want = match self.sinks_are_dynamic() {
-            true => dispatches as u64 - 1,
-            false => 0,
+        let want = match self.moved {
+            false => dispatches as u64 - 1,
+            true => 0,
         };
         assert_eq!(
             (self.reused, self.found),
             (want, 0),
-            "{what}: the variant made set-0 bindings {:?} dynamic, of which {:?} are its store \
-             sinks and {:?} are of several variables, so {dispatches} dispatches should have \
+            "{what}: the variant made set-0 bindings {:?} of {:?} dynamic, of which {:?} are of \
+             several variables, and the offsets moved: {}, so {dispatches} dispatches should have \
              reused {want} and found 0 of their predecessors' sets, not {} and {}",
             chose.dynamic,
-            chose.store_sinks,
+            chose.bindings,
             chose.several_variables,
+            self.moved,
             self.reused,
             self.found
         );

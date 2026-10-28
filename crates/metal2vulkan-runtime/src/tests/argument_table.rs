@@ -122,8 +122,7 @@ fn the_check_compares_every_field() {
             "samplers",
             "threadgroup_lengths",
             "acceleration_structures",
-            "at_bind_views",
-            "dropped_store_buffers"
+            "at_bind_views"
         ]
     );
     let sampler = BoundSampler::new(SamplerDescriptor::new());

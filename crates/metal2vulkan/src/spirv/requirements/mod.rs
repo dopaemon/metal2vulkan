@@ -1040,26 +1040,6 @@ impl Deriver<'_> {
                 indices,
                 non_uniform,
             } => self.access_chain(*base, indices, *non_uniform)?,
-            // A selection between two pointers is a variable pointer. Only `StorageBuffer` ones
-            // are built (a dropped store's sink, `lower::access::sink`); a
-            // `PhysicalStorageBuffer` pointer is a plain 64-bit value and needs nothing. The
-            // arms point into two descriptors, which the narrower capability does not allow
-            // ("Variable pointers must point into the same structure"), so the full
-            // `VariablePointers` is declared, with the capability it depends on, and both
-            // features: Vulkan enables `variablePointers` only beside
-            // `variablePointersStorageBuffer`.
-            Inst::Select { t: arm, .. } => {
-                if let Type::Pointer {
-                    class: StorageClass::StorageBuffer,
-                    ..
-                } = self.ty(self.value_ty(*arm)?)?
-                {
-                    self.cap(Cap::VariablePointersStorageBuffer);
-                    self.cap(Cap::VariablePointers);
-                    self.feat(VkFeature::VariablePointersStorageBuffer);
-                    self.feat(VkFeature::VariablePointers);
-                }
-            }
             Inst::AtomicLoad { ptr, scope, sem } => {
                 self.scope(*scope);
                 self.semantics(*sem);

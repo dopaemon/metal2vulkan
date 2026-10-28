@@ -200,7 +200,7 @@ fn a_member_the_vocabulary_does_not_name_carries_its_registry_name() {
             );
         }
     }
-    assert_eq!(unnamed, 12, "members the vocabulary does not name");
+    assert_eq!(unnamed, 14, "members the vocabulary does not name");
     // Every one of them is a name some committed capture states: a misspelled name would read as
     // a device that does not support the member, on every device.
     let captures: Vec<Capture> = committed_profiles()
@@ -367,8 +367,6 @@ fn the_old_engine_list_is_unchanged() {
             F::ShaderBufferFloat32AtomicAdd,
             F::ShaderSharedFloat32AtomicAdd,
             F::FragmentShaderBarycentric,
-            F::VariablePointers,
-            F::VariablePointersStorageBuffer,
             // The portability subset's structure is chained with what the device supports, as
             // it always was; the vocabulary names these members, the next three since ARTIFACT 180,
             // and `imageViewFormatSwizzle` since ARTIFACT 203.

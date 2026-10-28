@@ -2099,11 +2099,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     }
                     // The command buffer's status, on a device that does not address buffers.
                     SyntheticBinding::ExecutionStatus => WriteSource::ExecutionStatus,
-                    // The stage's write-only store sink, which a dropped store through a
-                    // descriptor view lands in (`lower::access::sink`). No shader reads it.
-                    SyntheticBinding::StoreSink => WriteSource::Neutral(NeutralResource::Sink {
-                        min_bytes: NeutralResource::SINK_BYTES,
-                    }),
                     other => return Err(internal(format!("a render binding {other:?}"))),
                 },
                 BindingSource::Heap(_) | BindingSource::HeapSampler { .. } => {

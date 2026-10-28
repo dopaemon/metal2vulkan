@@ -301,8 +301,6 @@ fn resources_bound(plan: &Plan, mem: &Memory, threads: u32, binds: &[Bind]) -> (
                 };
                 push[at..at + 8].copy_from_slice(&guest.to_le_bytes())
             }
-            // No slot's writes dropped: the word stays 0.
-            PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

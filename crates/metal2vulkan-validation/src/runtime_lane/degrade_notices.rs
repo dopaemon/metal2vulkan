@@ -963,6 +963,185 @@ fn the_private_option_bit_drops_the_gpu_s_writes_to_no_copy_memory() {
     });
 }
 
+/// What a kernel's stores into no-copy memory made with Metal's private option bit 24 reach, read
+/// over a window of `WINDOW` bytes from the memory's start: the bytes a copy in the same command
+/// buffer as the dispatch read, a copy in a later command buffer read, and the CPU read; and the
+/// kinds the kernel's pipeline state's making announces ([`made_compute_kinds`]).
+struct KernelStoreReads {
+    same: Vec<u8>,
+    later: Vec<u8>,
+    cpu: Vec<u8>,
+    made: BTreeSet<Degradation>,
+}
+
+/// The bytes [`kernel_store_reads`] reads of the memory, from its start.
+const WINDOW: usize = 1024;
+
+/// Where in the memory the kernel's stores land: past bytes no store names, so a stray write shows.
+const STORED_AT: u64 = 512;
+
+/// The words the kernel stores, one a thread.
+const STORED_WORDS: u32 = 64;
+
+/// The byte the memory holds before the dispatch; never zero, so a dropped store and a store of
+/// zeros read apart.
+const PAD: u8 = 0xab;
+
+/// The byte each copy's destination holds before the copy, so a copy that moved nothing reads as
+/// itself.
+const UNREAD: u8 = 0x5c;
+
+/// `a4_index_word` (`out[t] = in[3t + 1]`) dispatched over `STORED_WORDS` threads into `memory`,
+/// bound at `STORED_AT`, then read back three ways ([`KernelStoreReads`]). `in[i]` is
+/// `0xc0de_0000 + i`, so each stored word names the thread that stored it.
+fn kernel_store_reads(device: &Device, memory: &Buffer) -> KernelStoreReads {
+    let ll = engine_dir().join("a4_index_word.ll");
+    let library = device
+        .new_library_with_air(&llvm_assemble(&ll).unwrap())
+        .unwrap();
+    let function = library.new_function_with_name("a4_index_word").unwrap();
+    let state = device
+        .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+        .unwrap();
+    let words = 3 * STORED_WORDS + 1;
+    let input: Vec<u8> = (0..words)
+        .flat_map(|i| (0xc0de_0000u32 + i).to_le_bytes())
+        .collect();
+    let input = device
+        .new_buffer_with_bytes(&input, ResourceOptions::shared())
+        .unwrap();
+    let destination = || {
+        device
+            .new_buffer_with_bytes(&[UNREAD; WINDOW], ResourceOptions::shared())
+            .unwrap()
+    };
+    let (same, later) = (destination(), destination());
+    let queue = device.new_command_queue().unwrap();
+    let copy = |command_buffer: &metal2vulkan_runtime::CommandBuffer, to: &Buffer| {
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        blit.copy_from_buffer_to_buffer(memory, 0, to, 0, WINDOW as u64)
+            .unwrap();
+        blit.end_encoding().unwrap();
+    };
+    let finish = |command_buffer: &metal2vulkan_runtime::CommandBuffer| {
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(command_buffer.error(), None);
+    };
+    // The dispatch and the first copy in one command buffer; the second copy in a later one.
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_buffer(Some(&input), 0, 0).unwrap();
+    encoder.set_buffer(Some(memory), STORED_AT, 1).unwrap();
+    encoder
+        .dispatch_threads(
+            Size::new(u64::from(STORED_WORDS), 1, 1),
+            Size::new(32, 1, 1),
+        )
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    copy(&command_buffer, &same);
+    finish(&command_buffer);
+    let command_buffer = queue.command_buffer().unwrap();
+    copy(&command_buffer, &later);
+    finish(&command_buffer);
+    let read = |buffer: &Buffer| {
+        let contents = buffer.contents().unwrap();
+        // SAFETY: the buffer holds at least `WINDOW` bytes of host memory, and no command uses
+        // them now.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), WINDOW) }.to_vec()
+    };
+    KernelStoreReads {
+        same: read(&same),
+        later: read(&later),
+        cpu: read(memory),
+        made: made_compute_kinds(device, function.function_descriptor()),
+    }
+}
+
+/// A kernel's stores into a no-copy buffer made with Metal's private option bit 24, which Metal
+/// drops: measured on the M3 Max under macOS 27.0.1 (`probes/readonly_gpu_writes.m`, and the
+/// conformance suite's `host-page-writes-kernel-store-read-only`), a later command of the same
+/// command buffer reads the stored words back from the GPU's caches, every run, while a later
+/// command buffer and the CPU read the pages' own bytes. On macOS the runtime imports the pages
+/// through a read-only view of them, which answers as Metal does at all three sites and announces
+/// nothing; elsewhere the stores reach the pages and are read at all three, announced once. Every byte of
+/// the window the stores do not name keeps the pages' own byte at every site.
+#[test]
+fn a_kernel_s_stores_into_private_bit_memory_reach_only_its_own_command_buffer() {
+    on_device(|device, messages| {
+        let memory = Mapping::anonymous(GUEST_PAGE);
+        // SAFETY: the mapping's `GUEST_PAGE` bytes are this process's and nothing else uses them.
+        unsafe { std::ptr::write_bytes(memory.pointer().as_ptr(), PAD, GUEST_PAGE) };
+        let shared = with_private_bit(ResourceOptions::shared());
+        // SAFETY: the mapping outlives the buffer, which is dropped first.
+        let no_copy = unsafe {
+            device.new_buffer_with_bytes_no_copy(
+                HostMemory::new(memory.pointer()),
+                GUEST_PAGE as u64,
+                shared,
+                None,
+            )
+        };
+        let no_copy = match no_copy {
+            Err(error) if not_importable(&error) => {
+                eprintln!("PRIVATEBIT-KERNEL: the device imports no host memory: {error:?}");
+                return;
+            }
+            no_copy => no_copy.unwrap(),
+        };
+        let reads = kernel_store_reads(device, &no_copy);
+        let mut stored = vec![PAD; WINDOW];
+        for t in 0..STORED_WORDS {
+            let at = STORED_AT as usize + 4 * t as usize;
+            let word = 0xc0de_0000u32 + 3 * t + 1;
+            stored[at..at + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        let kept = vec![PAD; WINDOW];
+        let past = match DROPS_WRITES {
+            true => &kept,
+            false => &stored,
+        };
+        eprintln!(
+            "PRIVATEBIT-KERNEL: drops writes {DROPS_WRITES}; same command buffer stored {}, later \
+             command buffer stored {}, CPU stored {}",
+            reads.same == stored,
+            reads.later == stored,
+            reads.cpu == stored
+        );
+        assert!(
+            reads.same == stored,
+            "a later command of the dispatch's command buffer reads the stored words, as Metal's \
+             does"
+        );
+        assert!(
+            reads.later == *past,
+            "a later command buffer reads {}",
+            match DROPS_WRITES {
+                true => "the pages' own bytes: the stores were dropped",
+                false => "the stores, which reached the pages",
+            }
+        );
+        assert!(
+            reads.cpu == *past,
+            "the CPU reads {}",
+            match DROPS_WRITES {
+                true => "the pages' own bytes: the stores were dropped",
+                false => "the stores, which reached the pages",
+            }
+        );
+        drop(no_copy);
+        let mut first = shared_kinds(device);
+        first.extend(reads.made);
+        let kinds: &[Degradation] = match DROPS_WRITES {
+            true => &[],
+            false => &PRIVATE_OPTION,
+        };
+        assert_made_once(messages, kinds, &first);
+    });
+}
+
 /// Two command buffers each copy between overlapping ranges of one buffer, fill bytes that are
 /// not whole words, and copy rows into a `Depth16Unorm` texture from an offset of 2, which
 /// Vulkan takes only at multiples of 4 for a depth format: each kind is announced once.

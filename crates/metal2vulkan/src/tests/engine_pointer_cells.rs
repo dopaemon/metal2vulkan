@@ -134,8 +134,6 @@ fn resources(plan: &Plan, bufs: &[Vec<u32>]) -> Resources {
                 let base = 0x1_0000_0000u64 + u64::from(slot.index) * 0x10_0000;
                 push[offset as usize..offset as usize + 8].copy_from_slice(&base.to_le_bytes())
             }
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

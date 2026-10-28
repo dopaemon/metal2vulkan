@@ -1127,37 +1127,6 @@ fn terminate(p: &Prog<'_>, l: &mut Lane, term: &Terminator) -> IResult<()> {
 }
 
 /// See [`super::run`].
-/// `res` with a zero-filled buffer bound for the stage's write-only store sink
-/// (`SyntheticBinding::StoreSink`) where the module declares one and the caller bound none: a
-/// dropped store through a buffer slot's descriptor view lands there
-/// (`lower::access::sink`), the binder always supplies it from the device's neutral resources
-/// (`WriteSource::Neutral(NeutralResource::Sink)`), and no shader reads it, so a run that does
-/// not look at it need not know it exists. A caller that binds its own keeps it, and so reads
-/// back what the dropped stores wrote (`tests::engine_dropped_stores`).
-fn with_store_sink(m: &TypedModule, mut res: Resources) -> Resources {
-    use crate::pipeline::sym::{ResourceKind, SyntheticBinding};
-    let sink = m.globals().iter().find_map(|g| match &g.kind {
-        GlobalKind::Resource(slot)
-            if slot.kind == ResourceKind::Synthetic(SyntheticBinding::StoreSink) =>
-        {
-            Some(*slot)
-        }
-        _ => None,
-    });
-    let Some(sink) = sink else {
-        return res;
-    };
-    if res.buffers.iter().any(|b| b.slot == Some(sink)) {
-        return res;
-    }
-    res.buffers.push(super::Buffer {
-        slot: Some(sink),
-        address: None,
-        bytes: vec![0; crate::bind::NeutralResource::SINK_BYTES as usize],
-    });
-    res
-}
-
 pub(super) fn run(
     m: &TypedModule,
     cfg: &Config,
@@ -1172,7 +1141,6 @@ pub(super) fn run(
     // Kept apart from `res`, whose buffers the run consumes: specialization-length arrays (the
     // threadgroup arena) are sized by these values for the whole run.
     let spec = res.spec.clone();
-    let res = with_store_sink(m, res);
     let p = Prog::new(m, &res, &images, &spec, inputs)?;
     // A vertex invocation shares no workgroup: each is a workgroup of one (see `super::run`).
     let local = match model {

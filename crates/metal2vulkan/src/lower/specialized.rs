@@ -1,7 +1,4 @@
-//! The bound values a function reads as data.
-//!
-//! A key the module declares no constant for (`SpecKey::data_only`, the dropped-store word) is
-//! read by its own reader from its push field and localized nowhere here.
+//! The bound texture values a function reads as data.
 //!
 //! The format class of the texture bound at a slot (`SpecKey::TexelFormat`) was a
 //! specialization constant, so each new format a guest bound made a new `VkPipeline`, a whole
@@ -64,9 +61,7 @@ pub(crate) fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> B
         .fields
         .iter()
         .filter_map(|f| match f.field {
-            // A data-only key declares no constant, so nothing here localizes one
-            // (`SpecKey::data_only`): its reader loads the field itself.
-            PushField::Specialized(key) if !key.data_only() => Some(key),
+            PushField::Specialized(key) => Some(key),
             _ => None,
         })
         .collect();
@@ -81,9 +76,7 @@ pub(crate) fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> B
             ConstKind::Spec { key, .. } if placed.contains(key) => {
                 declared.insert(*key, c);
             }
-            ConstKind::Spec { key, .. } if key.read_as_data() && !key.data_only() => {
-                stray = Some(*key)
-            }
+            ConstKind::Spec { key, .. } if key.read_as_data() => stray = Some(*key),
             ConstKind::SpecOp { op, operands } => ops.push((c, *op, operands.to_vec())),
             _ => {}
         }

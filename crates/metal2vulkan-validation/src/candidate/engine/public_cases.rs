@@ -5,7 +5,7 @@
 use super::*;
 use crate::check::loop_free::DecodedModule;
 use crate::source::public_sources;
-use metal2vulkan::bind::{ImageSource, NeutralResource, WriteSource};
+use metal2vulkan::bind::{ImageSource, WriteSource};
 use metal2vulkan::device::FormatUsage;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
 use metal2vulkan::error::{BindError, Capability, Feature, Needs, Unsupported};
@@ -394,15 +394,7 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
                         image: ImageSource::Texture { slot, .. },
                         ..
                     } => Some(slot.index),
-                    // A neutral image or texel buffer where an element's texture belongs is the
-                    // failure this test watches for. A neutral buffer is not one: a stage whose
-                    // dropped store goes through a descriptor view binds a write-only sink
-                    // (`SyntheticBinding::StoreSink`), a neutral storage buffer no texture plan
-                    // involves.
-                    WriteSource::Neutral(
-                        neutral @ (NeutralResource::Image { .. }
-                        | NeutralResource::TexelBuffer { .. }),
-                    )
+                    WriteSource::Neutral(neutral)
                     | WriteSource::CombinedImageSampler {
                         image: ImageSource::Neutral(neutral),
                         ..

@@ -99,8 +99,6 @@ fn run_word0(plan: &Plan, m: &TypedModule, d: &Dispatch) -> u32 {
             PushField::ExecutionStatusAddress => {
                 push[o..o + 8].copy_from_slice(&STATUS_AT.to_le_bytes())
             }
-            // No slot's writes dropped: the word stays 0.
-            PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }
@@ -522,13 +520,7 @@ fn run_derivatives(
         assert!(
             matches!(
                 (f.field, f.loc),
-                (
-                    PushField::SlotBindOffset(_)
-                        | PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(
-                            _
-                        )),
-                    PushLoc::Push { .. }
-                )
+                (PushField::SlotBindOffset(_), PushLoc::Push { .. })
             ),
             "{f:?}"
         );

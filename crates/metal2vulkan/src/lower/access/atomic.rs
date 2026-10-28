@@ -121,7 +121,7 @@ use crate::spirv::ir::{
     Type as SType, UnOp,
 };
 
-use super::emit::{prepare, Mem, Prepared};
+use super::emit::{prepare, Mem, Prepared, ViewMem};
 use super::local::{self, LocalAccess, LocalPtr};
 use super::{not_lowered, refuse, static_roots, view_kind, AccessPlan, BufferReach, Target};
 use crate::error::LowerFamily;
@@ -1109,7 +1109,9 @@ fn on_target(fb: &mut FunctionBuilder<'_>, p: Prepared, o: Op) -> BResult<Option
     let two = k32(fb, 2)?;
     let word = fb.binary(BinOp::ShiftRightLogical, p.off, two)?;
     let ptr = match (p.mem, o.typed) {
-        (Mem::View(m), None) => views::word_ptr(fb, m.view(), word)?.ok_or_else(dangling)?,
+        (Mem::View(ViewMem(view, ..)), None) => {
+            views::word_ptr(fb, view, word)?.ok_or_else(dangling)?
+        }
         (Mem::Psb(m), typed) => {
             let pointee = match typed {
                 Some(t) => t,
@@ -1347,10 +1349,7 @@ pub fn emit(
             let m = fb.composite_extract(fat, &[1])?;
             let mut prepared = Vec::with_capacity(targets.len());
             for t in targets {
-                // An atomic is not gated on the slot's dropped-store word: what Metal's
-                // atomics do to memory whose writes it drops is not measured
-                // (`SpecKey::DroppedStoreSlots`), and unknown stays unknown.
-                let prep = prepare(cx, fb, t, m, bytes, false)?;
+                let prep = prepare(cx, fb, t, m, bytes)?;
                 if typed.is_some() && !matches!(prep.mem, Mem::Psb(_)) {
                     return Err(cx.fail("a typed atomic through a descriptor view"));
                 }

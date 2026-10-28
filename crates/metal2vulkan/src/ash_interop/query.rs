@@ -613,8 +613,6 @@ feature_sources! { c, x;
     BufferDeviceAddress => on(c.v12.buffer_device_address);
     ScalarBlockLayout => on(c.v12.scalar_block_layout);
     UniformBufferStandardLayout => on(c.v12.uniform_buffer_standard_layout);
-    VariablePointersStorageBuffer => on(c.v11.variable_pointers_storage_buffer);
-    VariablePointers => on(c.v11.variable_pointers);
     VulkanMemoryModel => on(c.v12.vulkan_memory_model);
     VulkanMemoryModelDeviceScope => on(c.v12.vulkan_memory_model_device_scope);
     WorkgroupMemoryExplicitLayout => on(c.explicit_layout.workgroup_memory_explicit_layout);

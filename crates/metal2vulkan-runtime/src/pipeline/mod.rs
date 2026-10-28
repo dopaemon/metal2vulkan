@@ -409,7 +409,7 @@ pub(crate) fn direct_arguments_from_air() -> u64 {
 /// ([`ComputePipelineState::set_zero_choice`]): what a device test must read rather than derive
 /// from the device's answer, since a binding the device takes dynamically still stays static where
 /// the layout's dynamic-buffer budget is spent before it
-/// (`objects::dynamic_numbers`, `tests::dynamic_multi_variable`).
+/// (`objects::dynamic_numbers`).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) struct SetZeroChoice {
     /// Its dispatches push set 0 rather than allocate and write one
@@ -421,10 +421,9 @@ pub(crate) struct SetZeroChoice {
     /// The set-0 bindings its entry point uses through more than one variable
     /// (`DescriptorBinding::variables`): those the device's answer governs.
     pub(crate) several_variables: Vec<u32>,
-    /// Its set-0 write-only store sinks (`SyntheticBinding::StoreSink`): the bindings whose
-    /// descriptor a command of its own region writes, so a dispatch binds its predecessor's set
-    /// again only where they are dynamic.
-    pub(crate) store_sinks: Vec<u32>,
+    /// Its set-0 bindings, by number, ascending: a dispatch whose bind offsets move from its
+    /// predecessor's binds that one's set again only where every binding it moves is dynamic.
+    pub(crate) bindings: Vec<u32>,
     /// The base variant was compiled under stand-ins for storage-texture formats, so dispatches
     /// run another variant and this choice is not theirs.
     pub(crate) stand_in: bool,
@@ -923,15 +922,7 @@ impl ComputePipelineState {
             pushes: objects.pushes_set_zero(),
             dynamic: objects.dynamic_bindings().to_vec(),
             several_variables: of(|b| b.variables > 1),
-            store_sinks: of(|b| {
-                matches!(
-                    b.source,
-                    metal2vulkan::pipeline::BindingSource::Synthetic {
-                        binding: metal2vulkan::pipeline::SyntheticBinding::StoreSink,
-                        ..
-                    }
-                )
-            }),
+            bindings: of(|_| true),
             stand_in: self.0.stand_in,
         }
     }

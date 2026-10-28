@@ -290,11 +290,7 @@ fn run_kernel(bc: &[u8], local: [u32; 3], words: usize) -> Vec<u32> {
     for f in &plan.push.fields {
         assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");
         assert!(
-            matches!(
-                f.field,
-                PushField::SlotBindOffset(_)
-                    | PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_))
-            ),
+            matches!(f.field, PushField::SlotBindOffset(_)),
             "unexpected push field {f:?}"
         );
     }

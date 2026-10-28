@@ -1020,8 +1020,6 @@ fn push_bytes(plan: &Plan) -> Vec<u8> {
                 out[at..at + 4].copy_from_slice(&STRIDE.to_le_bytes())
             }
             PushField::RootTableAddress => out[at..at + 8].copy_from_slice(&TABLE.to_le_bytes()),
-            // No slot's writes dropped: the word stays 0.
-            PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

@@ -841,7 +841,6 @@ codec_enum! {
         TessellationRecords,
         DepthStandIn,
         StencilStandIn,
-        StoreSink,
     }
     ResourceKind {
         Buffer, Texture, Sampler, Heap(f0), Synthetic(f0), InputAttachment(f0),
@@ -861,7 +860,6 @@ codec_enum! {
         ObjectLocalSize(f0), ObjectFlatLocalSize, ObjectMultiRegion, SamplerMinLevel(f0),
         ConstantLanes(f0), UnmeasuredTexels(f0), BoundTexelFormat(f0), OffsetBaseAxes(f0),
         SamplerAnisotropy(f0), RangeAtBindOffset(f0), PlainHalfTexels(f0),
-        DroppedStoreSlots(f0),
     }
     PushField {
         RootTableAddress, ExecutionStatusAddress, DispatchRegion, BaseVertexInstance,
@@ -919,7 +917,6 @@ codec_enum! {
         ShaderSharedFloat32AtomicMinMax, ShaderImageFloat32Atomics, ShaderImageFloat32AtomicAdd,
         ShaderImageFloat32AtomicMinMax, BufferDeviceAddress, ScalarBlockLayout,
         UniformBufferStandardLayout, VulkanMemoryModel, VulkanMemoryModelDeviceScope,
-        VariablePointersStorageBuffer, VariablePointers,
         WorkgroupMemoryExplicitLayout, WorkgroupMemoryExplicitLayout8BitAccess,
         WorkgroupMemoryExplicitLayout16BitAccess, ShaderZeroInitializeWorkgroupMemory,
         VertexPipelineStoresAndAtomics, FragmentStoresAndAtomics, ShaderDrawParameters,

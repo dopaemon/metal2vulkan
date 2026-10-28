@@ -168,10 +168,6 @@ fn each_vertex_reads_its_draw_s_bases() {
                             push[at..at + 4].copy_from_slice(&first[0].to_le_bytes());
                             push[at + 4..at + 8].copy_from_slice(&first[1].to_le_bytes());
                         }
-                        // No slot's writes dropped: the word stays 0.
-                        PushField::Specialized(
-                            crate::pipeline::sym::SpecKey::DroppedStoreSlots(_),
-                        ) => {}
                         other => panic!("{what}: unexpected push field {other:?}"),
                     }
                 }

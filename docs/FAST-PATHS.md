@@ -83,7 +83,7 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
 | A `Counting` visibility result of a draw writing more than one color attachment, on ANV (Mesa 26.2.4): Metal's count multiplied by the colors written, not divided back. `Boolean` results stay exact. | The driver counts each sample once per color output (`RuntimeDriverDefect::OcclusionCountPerColorOutput`), no documented Vulkan form counts it once, and a refusal would withhold the Mac2 and Metal3 families. | `VisibilityCountPerColor` (`visibility-count-per-color`) |
 | On MoltenVK a no-copy buffer or heap released with no keep-alive while batches are in flight runs its deallocator once the batches submitted before its release completed, and the program's own submissions through `CommandQueue::with_vk_queue` before it, where Metal runs it at the release. | MoltenVK 1.4.1 fails pending work that reads device addresses where memory a device-address buffer lay in is freed (`RuntimeDriverDefect::FreedAddressMemoryFailsPendingWork`), so freed memory waits for the batches in flight (`WorkCounts::freed_memory_parked`). | `HostDeallocatorDelayed` (`host-deallocator-delayed`) |
 | On MoltenVK a `Shared` or `Managed` texture whose format packs more than one texel into a block (every block-compressed family) keeps its image out of host-transfer memory, so its CPU copies take submissions where another driver's take none. The stored texels are Metal's either way; what changes is the work, in `WorkCounts::command_buffers_begun_batch_work` and the `command_buffers_begun` and `command_buffers_submitted` that carry it (`bc1-rgba`, four 16 x 16 `BC1_RGBA` levels: `command_buffers_begun` 8 on the bind-time path and 15 off it; `fresh-texture-bc1-rgba-managed`: 3 and 5). A `replaceRegion` of such a texture stages its bytes for the device's next submission and waits for none (`texture/first_move.rs`). Its CPU **reads** come out of a host shadow of the image's texels, made at the first read of the texture by the submission that read waits for either way and read from by every read after it: exact (it holds the image's own bytes, and a CPU write writes both), bounded (`host_shadow::SHADOW_BYTES`, past which a read takes the submission path), and lazy, so a texture nobody reads back holds nothing. It is dropped wherever anything but a CPU write may have written the texels: every commit of the program's, its own Vulkan submissions, another `VkImage`, a detach, or the program taking the image's handle (`texture/host_shadow.rs`; `WorkCounts::texel_shadows_made`, `texel_shadow_reads`, `texel_shadows_dropped`). Measured on an M3 Max: `compressed-moves-bc1-rgba` reads `internal_submissions` 5 where it read 56 and `command_buffers_begun` 30 where it read 81, for 1,168 bytes of shadow over its five textures and 56 reads out of them. | MoltenVK 1.4.2 binds such an image through a `flushToDevice` that `replaceRegion:`s every subresource at one block's bytes a row instead of the row of blocks, tripping AGX's `bytes_per_row >= used_bytes_per_row` assertion (`RuntimeDriverDefect::HostTransferImagesCopiedAtBind`). The copy is the driver's own and no call of the program's asks for it, so the only way not to provoke it is not to ask for the image; every other driver keeps the host-transfer path, as does a device without `VK_EXT_host_image_copy`. A write cannot leave the GPU's copy of the texels unwritten, so only reads come off the host shadow. | None (cost only, and exact) |
-| On a driver that does not take a set-0 buffer binding whose entry point uses it through several variables as a **dynamic** descriptor, every draw or dispatch of such a variant allocates and writes a descriptor set of its own, where one dynamic binding would let them share one set, bound again at each command's own offset. Such a binding is a slot or store sink reached through its word view and a narrow or `uvec4` unit view (`memory::views`): of the 1,378 store sinks the public fixtures plan on this profile, 20 entries have one (`record_stride_not_a_multiple_of_four`, `encoders_plain`, `encoder_types_*`, `hwd_half_reads`, `kernel_copy_runtime_ulong_length`, `kernel_simdgroup_matrix_block`). The stored values are the same either way; what changes is the set a command allocates and writes (`WorkCounts::set_zero_sets_reused` counts none of them). The device answers for itself, by creating one pipeline of exactly that shape and destroying it (`pipeline::objects::takes_multi_variable_dynamic`, `bind::DynamicViewsModule`, asked once and only where a layout has such a binding), so a driver without the defect pays nothing. A binding the device takes still turns dynamic only while the layout's dynamic-buffer budget lasts (`maxDescriptorSetUniformBuffersDynamic`, `maxDescriptorSetStorageBuffersDynamic`), spent in binding order: on a Radeon 780M (RADV, Mesa 26.2.4, eight dynamic storage buffers) `encoders_plain`'s sink is its twenty-seventh binding and gets none, so that entry keeps a set per dispatch wherever its set 0 is not pushed. A device whose set 0 is pushed (`VK_KHR_push_descriptor` with an eligible layout) never reaches the choice. | Nothing in Vulkan bounds the variables at a binding, dynamic or not, so there is no exact form to switch to: the driver either compiles the shape or does not. MoltenVK's SPIRV-Cross declares one variable's local alone -- read in 1.4.1's source and measured on 1.4.2 (`driverVersion` 10402) on an Apple M3 Max, where `vkCreateComputePipelines` answers `VK_ERROR_INITIALIZATION_FAILED` for a kernel of three and of four variables at one dynamic binding. The check proves the driver compiles the shape, not that it applies the dynamic offset to every variable at it; no device is measured to get that wrong, and RADV (Mesa 26.2.4, Radeon 780M) is measured to get it right, `record_stride_not_a_multiple_of_four` answering Metal's `sizeof` and both its narrow stores with its two-variable and three-variable bindings dynamic. | None (cost only, and exact) |
+| On a driver that does not take a set-0 buffer binding whose entry point uses it through several variables as a **dynamic** descriptor, a draw or dispatch of such a variant that binds it at another offset than its predecessor did allocates and writes a descriptor set of its own, where a dynamic binding would let it bind its predecessor's set again at its own offset. That saving needs the binding's range to stay as its offset moves (`bind::instantiate::descriptor_range`): a slot read to its buffer's end has a range that moves with its offset, so its commands write a set each in either form. Such a binding is a slot reached through its word view and a narrow or `uvec4` unit view (`memory::views`), as `record_stride_not_a_multiple_of_four`'s `recs` is. The stored values are the same either way; what changes is the set a command allocates and writes (`WorkCounts::set_zero_sets_reused` counts none of them). The device answers for itself, by creating one pipeline of exactly that shape and destroying it (`pipeline::objects::takes_multi_variable_dynamic`, `bind::DynamicViewsModule`, asked once and only where a layout has such a binding), so a driver without the defect pays nothing. A binding the device takes still turns dynamic only while the layout's dynamic-buffer budget lasts (`maxDescriptorSetUniformBuffersDynamic`, `maxDescriptorSetStorageBuffersDynamic`), spent in binding order: on a Radeon 780M (RADV, Mesa 26.2.4, eight dynamic storage buffers) a layout's storage bindings past the eighth get none, so commands that bind them at moving offsets keep a set each wherever set 0 is not pushed. A device whose set 0 is pushed (`VK_KHR_push_descriptor` with an eligible layout) never reaches the choice. | Nothing in Vulkan bounds the variables at a binding, dynamic or not, so there is no exact form to switch to: the driver either compiles the shape or does not. MoltenVK's SPIRV-Cross declares one variable's local alone -- read in 1.4.1's source and measured on 1.4.2 (`driverVersion` 10402) on an Apple M3 Max, where `vkCreateComputePipelines` answers `VK_ERROR_INITIALIZATION_FAILED` for a kernel of three and of four variables at one dynamic binding. The check proves the driver compiles the shape, not that it applies the dynamic offset to every variable at it; no device is measured to get that wrong, and RADV (Mesa 26.2.4, Radeon 780M, at offset 0) and lavapipe (Mesa, arm64, at moving offsets) are measured to get it right, `record_stride_not_a_multiple_of_four` answering Metal's `sizeof` and both its narrow stores with its three-variable binding dynamic. | None (cost only, and exact) |
 
 ## Accuracy switches whose default is Metal's
 
@@ -344,50 +344,23 @@ driver's. Each is open work.
   families of one queue, a single-graphics-queue device -- still shares, and the sharing is counted
   (`WorkCounts::queues_sharing_a_vk_queue`). Not announced.
 
-- **GPU writes into read-only memory are dropped only through a bound buffer slot.** A shader's
-  stores through a slot bound to memory whose GPU writes Metal drops (no-copy memory of its private
-  option bit 24, or pages replaced read-only) are now dropped in the shader, gated on a uniform
-  per-draw and per-dispatch word (`SpecKey::DroppedStoreSlots`). Five shapes stay open, the fifth
-  this crate's own: a store through a **descriptor view** is still guarded by a branch, and the
-  branch moves what Apple's fast-math library answers. `air.fast_asinh.f32` and
-  `air.fast_acosh.f32` expand to different last bits depending on the basic block their call sits
-  in, and the guard sinks every value a guarded store consumes into that block. Over the math
-  case's 1024 operand pairs on an M3 Max under macOS 27.0.1, 34 of 2048 `asinh` and `acosh` answers
-  move by one or two ulps, and where `x + sqrt(x*x +- 1)` cancels (a large negative `x`, or `acosh`
-  just above 1) the move carries to `NaN` against a finite answer; no other function moves and the
-  precise entry does not move at all
-  (`runtime_lane::driver_deviations::float_functions_the_device_answers_are_metals`, red since the
-  guard landed). A store through a slot's **device address** no longer branches: its bit joins the
-  bounds check in the one selection of the store's address, which sends a dropped store to the root
-  table's write-only sink (`lower::access::psb::prepare`, `tests::engine_dropped_store_sink`). A store through a
-  **descriptor view** no longer branches either: the stage carries a write-only sink binding
-  (`SyntheticBinding::StoreSink`) and the store's pointer is one `OpSelect` between storage-buffer
-  pointers. That selection needs the **full `VariablePointers`**, not only the storage-buffer form,
-  because the narrow capability lifts the rule solely for arms pointing into one memory object and
-  these arms are two distinct buffers; both capabilities are declared and both features required.
-  Where a device reports neither, the branch is kept, and it moves no stored value there; a device
-  that answers Metal's own float functions while lacking the feature is refused by name, which no
-  committed profile reaches. A `memcpy` or `memset` through a
-  buffer slot (`copy::endpoint`) reads no dropped-store word on either form. The four that follow are
-  Metal's own. A store
-  through an address loaded out of an argument buffer or a pointer names no slot and no bit, so the
-  word does not reach it; an atomic is not gated, because what Metal's atomics do to such memory is
-  unmeasured; a blit fill and a visibility result are not a shader's stores and the runtime does not
-  drop them; and a render pass's own store-out over such memory must instead end its command buffer
-  in error (`MTLCommandBufferErrorDomain` / `kIOGPUCommandBufferCallbackErrorPageFault`), which the
-  runtime does not do. That last one is the store-out alone, measured on an M3 Max under macOS
-  27.0.1: a colour, depth, stencil or combined attachment over such memory at
-  `storeAction = DontCare` completes with its draw's own values, and `loadAction = Load` completes
-  too, so those shapes are ours to keep rather than refuse; the same attachments at
-  `storeAction = Store` fault, as does storing a multisample primary into such memory. Resolving
-  *into* such memory is unknown — no page fault in 520 processes, but almost all of them were
-  recovery victims, so the cell has no denominator — and nothing is built for it. On macOS the
-  import's read-only view of the pages keeps all of those out of the pages anyway, so the open
-  shapes are off macOS, where the import is of the
-  caller's own pages and the word is never set: making it set there means honouring bit 24 without
-  a read-only view (`Device::no_copy_options`, `host_lie`'s `drops_writes`) and measuring what the
-  drivers then do, since ANV lost the device and RADV failed every submission over read-only
-  imported pages. Announced meanwhile as `private-resource-option` and `read-only-pages-written`.
+- **GPU writes into read-only memory reach it off macOS.** Metal drops what a shader or the blit
+  engine writes into memory whose backing is read-only (no-copy memory of its private option bit 24,
+  or pages replaced read-only): a kernel's or a draw stage's stores, through a bound slot or an
+  address loaded out of an argument buffer, a blit fill and a visibility result complete, and
+  neither a later command buffer nor the CPU sees them, though a later command of the same command
+  buffer may read them back from the GPU's caches; what its atomics do there is unmeasured. A render
+  pass's store-out over such memory (`storeAction = Store`, or a multisample primary stored there)
+  ends its command buffer in error (`MTLCommandBufferErrorDomain` /
+  `kIOGPUCommandBufferCallbackErrorPageFault`), while attachments at `storeAction = DontCare` or
+  `loadAction = Load` complete; resolving *into* such memory is unknown (no page fault in 520
+  processes, almost all of them recovery victims). On macOS the runtime imports such pages through a
+  read-only view of them (`read_only_view.rs`), which takes the GPU's writes nowhere as Metal's
+  memory does. Elsewhere the import is of the caller's own pages and the GPU's writes reach them:
+  honouring bit 24 there means a read-only import (`Device::no_copy_options`, `host_lie`'s
+  `drops_writes`) and measuring what the drivers then do, since ANV lost the device and RADV failed
+  every submission over read-only imported pages. Announced meanwhile as `private-resource-option`
+  and `read-only-pages-written`.
 
 - **A function linked from a module that declares function constants** is refused
   (`Unsupported{Linking; NotImplemented}` at a surviving call to the stub, `canon::link`), keyed on

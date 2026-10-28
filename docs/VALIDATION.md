@@ -155,14 +155,9 @@ context refuses to open without the layer instead (`candidate::platform::device`
 Whether the layer's synchronization checks see a kernel's write of a buffer it binds is asked of
 the layer, never of its version: the positive control
 (`runtime_lane::sync_coverage::layer_sees_kernel_writes`, one dispatch writing an untracked
-buffer through the runtime's recording, then a copy of it with nothing between) runs first. A
-store through a descriptor view is an `OpSelect` of the slot's place and the stage's store sink on
-a device with variable pointers (`lower::access::sink`), which the layer does not trace to the
-descriptor, while it reports the same store through a plain access chain: so measured with Ubuntu
-26.04's layer (1.4.341, arm64 lavapipe) and Homebrew's (1.4.363, MoltenVK on an M3 Max) alike,
-which then see no kernel's write of a bound buffer at all. Where the control finds the layer
-blind, each `sync_coverage` test
-whose hazard needs a kernel's write, and `parity::sequences::lane`'s hazard control, prints
+buffer through the runtime's recording, then a copy of it with nothing between) runs first.
+Where the control finds the layer blind, each `sync_coverage` test whose hazard needs a kernel's
+write, and `parity::sequences::lane`'s hazard control, prints
 `LAYER-BLIND-KERNEL-WRITES <test>: ...` naming what it did not check, and requires the layer to
 have reported nothing of the rest of its run.
 

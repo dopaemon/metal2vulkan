@@ -1002,20 +1002,7 @@ impl StageTable {
             textures: self.textures.iter().map(|(i, t)| (*i, t.shape())).collect(),
             samplers: self.samplers.iter().map(|(i, s)| (*i, s.shape())).collect(),
             threadgroup_lengths: self.threadgroup_lengths.clone(),
-            dropped_store_buffers: self.dropped_stores(),
         }
-    }
-
-    /// [`StageTable::dropped_store_buffers`] over the slots this table binds a buffer at, the
-    /// shape's word: a bit of an unbound slot names nothing a store can reach, so leaving it out
-    /// keeps one shape for the draws of one set of bindings.
-    fn dropped_stores(&self) -> u32 {
-        let bound = self
-            .buffers
-            .keys()
-            .filter(|i| **i < u32::BITS)
-            .fold(0u32, |m, i| m | 1 << i);
-        self.dropped_store_buffers & bound
     }
 
     /// Whether its shape is the empty one, which [`BindState::shape`] leaves out.
@@ -1034,7 +1021,6 @@ impl StageTable {
             textures,
             samplers,
             threadgroup_lengths,
-            dropped_store_buffers,
         } = shape;
         let buffer_shapes = (self.buffers.iter())
             .map(|(i, b)| (*i, b.shape(self.class_alignment(*i, view_base_alignment))));
@@ -1044,7 +1030,6 @@ impl StageTable {
             && texture_shapes.eq(textures.iter().map(|(i, t)| (*i, *t)))
             && sampler_shapes.eq(samplers.iter().map(|(i, s)| (*i, *s)))
             && self.threadgroup_lengths == *threadgroup_lengths
-            && self.dropped_stores() == *dropped_store_buffers
     }
 
     /// The alignment above the vertex fetch's that the bind offset class of a buffer at index
@@ -1230,14 +1215,6 @@ pub struct StageTable {
     /// runtime leaves out a slot it finds bound at moving offsets, so that its draws keep one shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub at_bind_views: u64,
-    /// The buffer slots (bit `i` for index `i`) bound to memory whose GPU writes Metal drops,
-    /// which the runtime sets: no-copy memory of Metal's private option bit 24, or pages a
-    /// consumer replaced read-only (`metal2vulkan-runtime`'s `read_only_view.rs`). A function's
-    /// stores through such a slot are dropped and nothing else of the draw or dispatch changes
-    /// (`SpecKey::DroppedStoreSlots`, `lower::access::emit::store_one`), as Metal drops a shader's
-    /// stores to such memory and completes. A slot left out (none, the default) keeps its stores.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub dropped_store_buffers: u32,
 }
 
 /// What the consumer knows of a Metal acceleration structure bound at a buffer slot.
@@ -1902,11 +1879,6 @@ pub struct StageShape {
     pub textures: BTreeMap<u32, TextureShape>,
     pub samplers: BTreeMap<u32, BoundSamplerShape>,
     pub threadgroup_lengths: BTreeMap<u32, u32>,
-    /// The bound buffer slots whose GPU writes are dropped
-    /// ([`StageTable::dropped_store_buffers`] over the slots this shape binds a buffer at), which
-    /// a function that stores through a buffer slot reads (`SpecKey::DroppedStoreSlots`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub dropped_store_buffers: u32,
 }
 
 /// The shape of a bound buffer.

@@ -2005,31 +2005,9 @@ fn descriptor(
         // (`neutral.rs`): zeros of a length the device's own limits fix cannot have changed since
         // it was made, and before this every draw and dispatch that bound one took a fresh
         // zero-filled region, each past half the upload arena's chunk and so a dedicated 64 KiB
-        // `VkBuffer` allocated and written to zero.
-        //
-        // A WRITABLE binding keeps a region of its own per command, for either of two reasons:
-        //
-        // - A `ZeroBuffer` at a writable binding is one a shader may READ as well as store
-        //   through, and it must read zero, so one buffer shared by every command of the device
-        //   would hand a later command the zeros an earlier one overwrote.
-        // - A `Sink` is never read by anything (the kind's own contract: "No shader ever observes
-        //   its contents"; it holds dropped and out-of-bounds stores, `lower::access::sink`), so
-        //   sharing one would hand no command another's bytes. What forbids sharing it is the
-        //   Vulkan memory model: two commands with no memory dependency between them, both
-        //   storing to the same bytes, are "operations that access overlapping sets of memory
-        //   locations ... at least one of [which] is a write" with no location-ordered relation,
-        //   which is a data race, and "Applications must ensure that no data races occur during
-        //   the execution of their application" (the Memory Model appendix's "Data Race"; the
-        //   synchronization chapter puts the same thing as "write-after-write hazards need
-        //   appropriate memory dependencies ... If an application does not include dependencies
-        //   to solve these hazards, it results in a data race"). The rule asks for no reader, and
-        //   failing a normative requirement is undefined behaviour for the whole application, not
-        //   just for the bytes raced over. A shared sink would therefore need a barrier between
-        //   every pair of commands that bind one, which costs more than the region it saves and
-        //   would order dispatches Metal lets run concurrently.
-        //
-        // What a sink's region costs a dispatch is one region and nothing else
-        // (`tests::neutral_zeros_shared`).
+        // `VkBuffer` allocated and written to zero. A WRITABLE binding keeps its own region, as
+        // every binding did: the one buffer is shared by every command of the device, so a
+        // shader that could store through the binding would write zeros another command reads.
         WriteSource::Neutral(
             NeutralResource::ZeroBuffer { min_bytes } | NeutralResource::Sink { min_bytes },
         ) => {

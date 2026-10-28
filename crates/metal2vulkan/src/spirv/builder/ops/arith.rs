@@ -6,8 +6,8 @@ use crate::spirv::builder::ops::{err, Num};
 use crate::spirv::error::{BResult, OperandRule};
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConstBits, ConstKind, Constant, Contraction, GlslOp, Inst, Shape, StorageClass, Type,
-    UnOp, ValueOrigin,
+    BinOp, ConstBits, ConstKind, Constant, Contraction, GlslOp, Inst, Shape, Type, UnOp,
+    ValueOrigin,
 };
 
 impl FunctionBuilder<'_> {
@@ -318,26 +318,16 @@ impl FunctionBuilder<'_> {
     }
 
     /// `OpSelect`: `cond` is a `bool` or a `bool` vector with the objects' component count; the
-    /// objects share one data type, or one `StorageBuffer` pointer type, which
-    /// `VariablePointersStorageBuffer` allows (no opaque value and no pointer of another logical
-    /// class). Result: that type.
+    /// objects share one data type (no opaque value or logical pointer). Result: that type.
     pub fn select(&mut self, cond: Value, t: Value, f: Value) -> BResult<Value> {
         const OP: crate::spv::Op = crate::spv::Op::Select;
         let c = self.want(OP, 0, cond, Num::is_bool)?;
         let ty = self.value_ty(t)?;
         let facts = *self.mb().types().facts(ty)?;
-        let storage_pointer = matches!(
-            self.mb().types().get(ty),
-            Ok(Type::Pointer {
-                class: StorageClass::StorageBuffer,
-                ..
-            })
-        );
-        if (!matches!(
+        if !matches!(
             facts.shape,
             Shape::Plain | Shape::Implicit | Shape::Explicit
-        ) && !storage_pointer)
-            || facts.runtime_sized
+        ) || facts.runtime_sized
         {
             return Err(err(OP, OperandRule::Category(1)));
         }

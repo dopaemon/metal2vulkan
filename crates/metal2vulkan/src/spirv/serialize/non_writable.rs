@@ -11,12 +11,9 @@
 //! memory copy, atomic, or image write reaches it or any other variable of its binding (a Metal
 //! buffer slot's word view and its narrow views, `ModuleBuilder::resource_view`, are one memory, so
 //! a view nothing writes still holds memory another view writes). A pointer or image is traced to
-//! the variables it may come from through `OpAccessChain`, `OpLoad` of an image,
-//! `OpImageTexelPointer`, and `OpSelect`, whose two arms are each traced: a dropped store through
-//! a descriptor view selects between its slot's place and the stage's write-only sink
-//! (`lower::access::sink`), two known variables, and writes one of them. A written pointer or
-//! image with a branch of its derivation the trace cannot root (a function parameter, a phi, a
-//! loaded pointer) counts as a write to every variable of its kind, so a variable is never marked
+//! its variable through `OpAccessChain`, `OpLoad` of an image, and `OpImageTexelPointer`; a written
+//! pointer or image that does not trace to one variable (a function parameter, a phi, a selected
+//! value) counts as a write to every variable of its kind, so a variable is never marked
 //! `NonWritable` while something may write it.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,58 +57,47 @@ pub(super) fn read_only_resources(m: &TypedModule) -> BResult<BTreeSet<GlobalId>
     if candidates.is_empty() {
         return Ok(out);
     }
-    // The values each traced pointer or image may derive from: one for a derivation that holds
-    // one place, two for an `OpSelect` of two pointers.
-    let mut from: BTreeMap<Value, Vec<Value>> = BTreeMap::new();
+    // What each traced value derives from.
+    let mut from: BTreeMap<Value, Value> = BTreeMap::new();
     for b in &m.blocks {
         for node in &b.insts {
             let Some(r) = node.result else { continue };
             match &node.inst {
                 Inst::AccessChain { base, .. } => {
-                    from.insert(r, vec![*base]);
+                    from.insert(r, *base);
                 }
                 Inst::ImageTexelPointer { image, .. } => {
-                    from.insert(r, vec![*image]);
-                }
-                Inst::Select { t, f, .. } if traced(m, m.value(r)?.ty)? => {
-                    from.insert(r, vec![*t, *f]);
+                    from.insert(r, *image);
                 }
                 Inst::Load { ptr, .. } if is_image(m, m.value(r)?.ty)? => {
-                    from.insert(r, vec![*ptr]);
+                    from.insert(r, *ptr);
                 }
                 _ => {}
             }
         }
     }
-    // The variables `v` may be, or `None` where a branch of its derivation ends somewhere the
-    // trace cannot root. Each step moves to operands of the instruction that defined the value,
-    // and a value is visited once, so the walk ends.
-    let roots = |v: Value| -> BResult<Option<BTreeSet<GlobalId>>> {
-        let mut out = BTreeSet::new();
-        let mut stack = vec![v];
-        let mut seen = BTreeSet::new();
-        while let Some(v) = stack.pop() {
-            if !seen.insert(v) {
-                continue;
-            }
+    let root = |mut v: Value| -> BResult<Option<GlobalId>> {
+        // Each step moves to an operand defined earlier in the derivation; the map is finite, so
+        // the walk ends within its size.
+        for _ in 0..=from.len() {
             match m.value(v)?.origin {
-                ValueOrigin::Global(g) => {
-                    out.insert(g);
-                }
+                ValueOrigin::Global(g) => return Ok(Some(g)),
                 ValueOrigin::Inst(_) => match from.get(&v) {
-                    Some(sources) => stack.extend(sources.iter().copied()),
+                    Some(b) => v = *b,
                     None => return Ok(None),
                 },
                 _ => return Ok(None),
             }
         }
-        Ok(Some(out))
+        Ok(None)
     };
     let mut written: BTreeSet<GlobalId> = BTreeSet::new();
     let mut every: BTreeSet<Kind> = BTreeSet::new();
     let mut write = |v: Value, kind: Kind| -> BResult<()> {
-        match roots(v)? {
-            Some(gs) => written.extend(gs),
+        match root(v)? {
+            Some(g) => {
+                written.insert(g);
+            }
             None => {
                 every.insert(kind);
             }
@@ -226,14 +212,6 @@ fn pointer_class(m: &TypedModule, v: Value) -> BResult<Option<StorageClass>> {
 
 fn is_image(m: &TypedModule, t: TypeId) -> BResult<bool> {
     Ok(matches!(m.types.get(t)?, Type::Image(_)))
-}
-
-/// Whether a value of type `t` is one the trace follows: a pointer or an image.
-fn traced(m: &TypedModule, t: TypeId) -> BResult<bool> {
-    Ok(matches!(
-        m.types.get(t)?,
-        Type::Pointer { .. } | Type::Image(_)
-    ))
 }
 
 /// Whether `t` is a storage image (or storage texel buffer), or an array of them.

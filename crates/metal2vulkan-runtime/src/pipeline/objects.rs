@@ -1291,8 +1291,8 @@ fn needs_of(
 /// device's `maxDescriptorSetUniformBuffersDynamic` and `maxDescriptorSetStorageBuffersDynamic`
 /// take them; every other binding stays of its own type.
 ///
-/// A binding each stage using it uses through **several** variables (a slot or store sink reached
-/// through its word view and its narrow or `uvec4` unit views) stays static where the device does
+/// A binding each stage using it uses through **several** variables (a slot reached through its
+/// word view and its narrow or `uvec4` unit views) stays static where the device does
 /// not take such a binding dynamically, which the device answers itself
 /// ([`takes_multi_variable_dynamic`]): it is one driver's shader-translation defect, not a limit
 /// of Vulkan, which bounds the variables at a binding nowhere.
@@ -1301,8 +1301,8 @@ fn dynamic_bindings(device: &Device, layout: &PipelineLayout, push_set_zero: boo
         return Vec::new();
     };
     // Asked of the device only where a binding needs the answer, so a layout of one variable a
-    // binding -- every layout but the few with a narrow-unit store sink or a slot read through
-    // several types -- compiles nothing.
+    // binding -- every layout but the few with a slot read or written through several types --
+    // compiles nothing.
     let several =
         set.bindings.iter().any(|b| b.variables > 1) && takes_multi_variable_dynamic(device);
     dynamic_numbers(set, device.shared().dynamic_buffers, several)

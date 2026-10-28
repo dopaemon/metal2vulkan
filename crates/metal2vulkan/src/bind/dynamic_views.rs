@@ -1,8 +1,8 @@
 //! The device self-check module: a storage-buffer binding one entry point uses through **several
 //! variables**.
 //!
-//! A plan's slot or store sink declares one variable per view at its binding -- a word view, and
-//! the narrow and `uvec4` unit views an access of it needs (`memory::views`, all of them at the one
+//! A plan's slot declares one variable per view at its binding -- a word view, and the narrow and
+//! `uvec4` unit views an access of it needs (`memory::views`, all of them at the one
 //! binding, so the stage counts one descriptor). A consumer that binds such a descriptor
 //! *dynamically* (`VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC`, the offset given as the set is
 //! bound) lets commands that differ only in that offset share one descriptor set; a consumer that

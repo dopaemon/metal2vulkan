@@ -304,11 +304,6 @@ impl Execute for CpuInterp {
                 // A single-region dispatch: `SpecKey::MultiRegion` keeps its default 0, so the
                 // region words are never read.
                 (PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-                // No slot's writes dropped: the word stays 0.
-                (
-                    PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)),
-                    _,
-                ) => {}
                 other => return Err(format!("unexpected push field {other:?}")),
             }
         }

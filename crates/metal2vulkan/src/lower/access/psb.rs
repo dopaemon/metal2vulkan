@@ -21,14 +21,6 @@
 //! load's value `select(inb, v, 0)`. A contained store lands in the sink, which no shader reads
 //! observably. Only `Containment::UnsafeOff` omits it.
 //!
-//! **A dropped store** takes the same address selection: a store through a slot bound to memory
-//! whose GPU writes Metal drops lands in the sink too, under the draw's or dispatch's
-//! `SpecKey::DroppedStoreSlots` word rather than the bounds check
-//! (`lower::access::emit::writable`, `prepare`'s `keeps`). Both conditions join into the one
-//! `select` of the address, so neither is a branch: a branch around the store would also move
-//! every value the store consumes into its block, which changes what Apple's fast-math
-//! instructions answer.
-//!
 //! The leaf itself (`memory::leaf`) sees a word memory based at the 4-aligned address below the
 //! access, and the access's byte offset within that word (0 to 3).
 
@@ -121,12 +113,6 @@ pub struct PsbAccess {
 
 /// Prepare an `n`-byte access of root `root` (a static slot whose window starts at `start`) at
 /// the `u32` displacement `m` from its bind offset, for the table at `table` (a `u64`).
-///
-/// `keeps` is the condition under which the slot's memory keeps the GPU's writes, for a store
-/// through a slot whose memory may be memory Metal drops them in
-/// (`lower::access::emit::writable`): it joins the containment condition in the one address
-/// selection, so a dropped store lands in the sink and the module branches on neither. `None` for
-/// a load, an atomic, and a store through a slot that has no such word.
 pub fn prepare(
     fb: &mut FunctionBuilder<'_>,
     table: Value,
@@ -135,7 +121,6 @@ pub fn prepare(
     start: i64,
     n: u32,
     contained: bool,
-    keeps: Option<Value>,
 ) -> BResult<PsbAccess> {
     let host = entry_field(fb, table, root, HOST)?;
     let size = entry_field(fb, table, root, SIZE)?;
@@ -151,38 +136,23 @@ pub fn prepare(
         signed: false,
     })?;
     let low = fb.convert(ConvOp::UConvert, low, u32_)?;
-    let inb = match contained {
-        true => Some(crate::memory::contain::in_bounds(
-            fb,
-            off,
-            size,
-            u64::from(n),
-        )?),
-        false => None,
-    };
-    // The access lands at its own address where it is contained and where the memory keeps the
-    // GPU's writes; under either condition's negation it lands in the write-only sink, which no
-    // shader reads.
-    let at_own = match (inb, keeps) {
-        (Some(inb), Some(keeps)) => Some(fb.binary(BinOp::LogicalAnd, inb, keeps)?),
-        (Some(inb), None) => Some(inb),
-        (None, Some(keeps)) => Some(keeps),
-        (None, None) => None,
-    };
-    let (base, low) = match at_own {
-        Some(at_own) => {
-            let sink = entry_field(fb, table, SINK_ROOT, HOST)?;
-            let base = fb.select(at_own, base, sink)?;
-            let zero = fb.u32_const(0)?;
-            let zero = fb.module().const_value(zero)?;
-            (base, fb.select(at_own, low, zero)?)
-        }
-        None => (base, low),
-    };
+    if !contained {
+        return Ok(PsbAccess {
+            mem: PsbMem::at(base),
+            off: low,
+            inb: None,
+        });
+    }
+    let inb = crate::memory::contain::in_bounds(fb, off, size, u64::from(n))?;
+    let sink = entry_field(fb, table, SINK_ROOT, HOST)?;
+    let base = fb.select(inb, base, sink)?;
+    let zero = fb.u32_const(0)?;
+    let zero = fb.module().const_value(zero)?;
+    let low = fb.select(inb, low, zero)?;
     Ok(PsbAccess {
         mem: PsbMem::at(base),
         off: low,
-        inb,
+        inb: Some(inb),
     })
 }
 

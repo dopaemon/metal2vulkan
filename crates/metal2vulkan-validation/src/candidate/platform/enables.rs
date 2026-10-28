@@ -999,8 +999,9 @@ members! {
     V11.v11.multiview_tessellation_shader => Some(F::MultiviewTessellationShader);
     V11.v11.multiview_geometry_shader => Some(F::MultiviewGeometryShader);
     V11.v11.shader_draw_parameters => Some(F::ShaderDrawParameters);
-    V11.v11.variable_pointers => Some(F::VariablePointers);
-    V11.v11.variable_pointers_storage_buffer => Some(F::VariablePointersStorageBuffer);
+    V11.v11.variable_pointers => None, registry = "variablePointers";
+    V11.v11.variable_pointers_storage_buffer => None,
+        registry = "variablePointersStorageBuffer";
     V12.v12.sampler_mirror_clamp_to_edge => Some(F::SamplerMirrorClampToEdge);
     V12.v12.storage_buffer8_bit_access => Some(F::StorageBuffer8BitAccess);
     V12.v12.uniform_and_storage_buffer8_bit_access => Some(F::UniformAndStorageBuffer8BitAccess);
@@ -1518,16 +1519,19 @@ pub(super) fn old_engine_list(supported: &FeatureChain, available: &Available) -
         F::ShaderBufferFloat32AtomicAdd,
         F::ShaderSharedFloat32AtomicAdd,
         F::FragmentShaderBarycentric,
-        F::VariablePointers,
-        F::VariablePointersStorageBuffer,
     ] {
         let member = member_of(feature).expect("every listed feature has a member");
         enables.copy(member, supported, available);
     }
-    // The one member the engine's vocabulary does not name.
-    let float_controls2 = named_member(Structure::FloatControls2, "shader_float_controls2")
-        .expect("every named member is listed");
-    enables.copy(float_controls2, supported, available);
+    // The members the engine's vocabulary does not name.
+    for (structure, name) in [
+        (Structure::V11, "variable_pointers"),
+        (Structure::V11, "variable_pointers_storage_buffer"),
+        (Structure::FloatControls2, "shader_float_controls2"),
+    ] {
+        let member = named_member(structure, name).expect("every named member is listed");
+        enables.copy(member, supported, available);
+    }
     let maintenance5 = MEMBERS
         .iter()
         .find(|member| member.structure == Structure::Maintenance5)

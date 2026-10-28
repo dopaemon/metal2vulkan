@@ -86,18 +86,14 @@ fn run_kernel(plan: &Plan, m: &TypedModule) -> Vec<u32> {
         spec.insert(SpecKey::LocalSize(axis), v);
     }
     spec.insert(SpecKey::FlatLocalSize, 4);
-    // Zero push bytes: each buffer is bound at its start, the dispatch is one region at the
-    // grid's origin, and no slot's stores are dropped
-    // (`PushField::Specialized(SpecKey::DroppedStoreSlots)`, which a kernel that stores through a
-    // buffer slot reads; `tests::engine_dropped_stores` runs it set).
+    // Zero push bytes: each buffer is bound at its start, and the dispatch is one region at the
+    // grid's origin.
     for f in &plan.push.fields {
         assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");
         assert!(
             matches!(
                 f.field,
-                PushField::SlotBindOffset(_)
-                    | PushField::DispatchRegion
-                    | PushField::Specialized(SpecKey::DroppedStoreSlots(_))
+                PushField::SlotBindOffset(_) | PushField::DispatchRegion
             ),
             "unexpected push field {f:?}"
         );

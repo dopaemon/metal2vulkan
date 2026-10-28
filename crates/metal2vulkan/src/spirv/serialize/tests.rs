@@ -922,10 +922,9 @@ fn read_only_storage_images_of_graphics_stages_are_non_writable() {
 /// The conservative rule: a write through a value that does not trace to one variable (here a
 /// function parameter: an image value written by `OpImageWrite`, or an image pointer used by a
 /// texel-pointer atomic) counts as a write to every variable of its kind, so no storage image is
-/// `NonWritable`, including one the module only reads; a storage buffer is unaffected. (A logical
-/// `StorageBuffer` pointer the trace cannot root has no builder-made witness: the builder refuses
-/// such a parameter or phi, and a select of two of them is traced through both arms,
-/// [`a_store_through_a_select_of_two_pointers_writes_only_its_arms`].)
+/// `NonWritable`, including one the module only reads; a storage buffer is unaffected. (The
+/// builder refuses untraceable logical `StorageBuffer` pointers: parameters, phis, and selects
+/// of them need variable pointers; so the buffer kind's fallback has no builder-made witness.)
 #[test]
 fn an_untraced_write_keeps_every_resource_of_its_kind_writable() {
     use crate::spirv::ir::{AtomicOp, ImageOperands, Scope, Semantics};
@@ -1002,42 +1001,5 @@ fn an_untraced_write_keeps_every_resource_of_its_kind_writable() {
             vec![slot(ResourceKind::Buffer, 0)],
             "through_pointer: {through_pointer}"
         );
-    }
-}
-
-/// A store through an `OpSelect` of two storage-buffer pointers writes the variables both arms
-/// root at, and nothing else: the shape a dropped store through a descriptor view takes, where one
-/// arm is the slot's place and the other the stage's write-only sink (`lower::access::sink`). The
-/// buffer the module only reads keeps `NonWritable`, which it would lose if the selected pointer
-/// counted as a write to every storage buffer.
-#[test]
-fn a_store_through_a_select_of_two_pointers_writes_only_its_arms() {
-    for model in [ExecModel::Vertex, ExecModel::Fragment, ExecModel::GLCompute] {
-        let build = || {
-            let mut b = ModuleBuilder::new();
-            let u32_ = int(&mut b, 32, false);
-            let read = ssbo(&mut b, 0, u32_, 4);
-            let own = ssbo(&mut b, 1, u32_, 4);
-            let sink = ssbo(&mut b, 2, u32_, 4);
-            let main = compute(&mut b, |f| {
-                let zero = cval(f, u32_, 0);
-                let src = elem_ptr(f, read, zero);
-                let x = f.load(src, MemAccess::default()).expect("load");
-                // A condition the builder cannot fold, so the select survives to the words.
-                let cond = f.binary(BinOp::IEqual, x, zero).expect("compare");
-                let at_own = elem_ptr(f, own, zero);
-                let at_sink = elem_ptr(f, sink, zero);
-                let place = f.select(cond, at_own, at_sink).expect("select");
-                f.store(place, x, MemAccess::default()).expect("store");
-            });
-            b.entry(model, main, modes_for(model)).expect("entry");
-            b.finalize().expect("finalize")
-        };
-        let r = serialize(build()).expect("serialize");
-        let want = match model {
-            ExecModel::GLCompute => vec![],
-            _ => vec![slot(ResourceKind::Buffer, 0)],
-        };
-        assert_eq!(non_writable_resources(&r), want, "{model:?}");
     }
 }

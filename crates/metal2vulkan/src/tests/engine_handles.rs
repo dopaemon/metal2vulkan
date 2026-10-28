@@ -279,12 +279,10 @@ fn selected_samplers_switch_per_combination() {
     // samplers in each arm.
     assert_eq!(uses(&a, "sampler.sample.switch"), 2);
     assert_eq!(count(&a, OP_SWITCH), 1 + 1 + 2);
-    // Combined bindings: (t, ss[0]), (t, ss[1]), and each of t, u with s0 and s1; the buffer
-    // slot; and the stage's write-only store sink, which its store through that slot selects its
-    // place in (`lower::access::sink`).
+    // Combined bindings: (t, ss[0]), (t, ss[1]), and each of t, u with s0 and s1.
     assert_eq!(
         a.interface.descriptors.len(),
-        6 + 1 + 1,
+        6 + 1,
         "{:?}",
         a.interface.descriptors
     );

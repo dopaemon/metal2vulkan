@@ -335,12 +335,10 @@ impl DeviceProperties {
     /// `replaceBackingWithRanges:readOnly:`). Metal has no query of its own for this: it is one of
     /// the runtime's, so that a consumer can tell what it may stop guarding.
     ///
-    /// A shader's stores through a buffer slot bound to such memory are dropped on **every**
-    /// device, whatever this answers: the stage's dropped-store word gates them
-    /// (`read_only_view.rs`). This answers yes only where the memory itself takes the GPU's
-    /// writes nowhere, so that Metal's other shapes hold too: a store through an address loaded out
-    /// of an argument buffer or a pointer, a blit fill and a visibility result all complete and
-    /// leave the pages as they were, and a colour attachment with
+    /// This answers yes only where the memory itself takes the GPU's writes nowhere, as Metal's
+    /// does, so that every shape Metal answers holds: a shader's stores through a buffer slot or
+    /// through an address loaded out of an argument buffer or a pointer, a blit fill and a
+    /// visibility result all complete and leave the pages as they were, and a colour attachment with
     /// [`StoreAction::Store`](crate::StoreAction::Store), a resolve target or a depth or stencil
     /// attachment over such memory ends its command buffer in error. On macOS, where the device
     /// imports the pages through a read-only view of them, that is yes; elsewhere the import is of

@@ -299,16 +299,7 @@ fn a_compute_pipeline_compiles_from_a_function() {
         assert_eq!(pipe.stage.entry_point, "main");
         assert_eq!(pipe.stage.stage, crate::vk::ShaderStage::COMPUTE);
         assert_eq!(pipe.layout.sets.len(), 1);
-        // Buffer 0's storage view, and on a profile that can select between two descriptors'
-        // pointers (`variablePointers` with `variablePointersStorageBuffer`) the kernel's
-        // write-only store sink, which its dropped store selects into instead of branching
-        // (`lower::access::sink`). `vk12-floor` has neither feature and keeps the branch.
-        let expected_bindings = 1 + usize::from(stem != "vk12-floor");
-        assert_eq!(
-            pipe.layout.sets[0].bindings.len(),
-            expected_bindings,
-            "{stem}"
-        );
+        assert_eq!(pipe.layout.sets[0].bindings.len(), 1, "{stem}");
         assert_eq!(pipe.metal_info.max_total_threads_per_threadgroup, 64);
         assert_eq!(pipe.metal_info.thread_execution_width, 32);
         assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 0);

@@ -219,8 +219,6 @@ fn push_bytes(plan: &Plan) -> Vec<u8> {
                 out[at..at + 8].copy_from_slice(&STATUS.to_le_bytes())
             }
             PushField::SlotBindOffset(_) => {}
-            // No slot's writes dropped: the word stays 0.
-            PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

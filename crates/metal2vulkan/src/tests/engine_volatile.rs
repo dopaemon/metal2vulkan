@@ -134,8 +134,6 @@ fn resources(plan: &Plan, bufs: &[Vec<u32>]) -> Resources {
             (PushField::SlotBindOffset(_), PushLoc::Push { offset }) => {
                 push[offset as usize..offset as usize + 4].fill(0)
             }
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

@@ -183,8 +183,6 @@ fn resources(plan: &Plan, bytes: Vec<u8>) -> Resources {
             }
             // A single-region dispatch: the region is unused.
             (PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

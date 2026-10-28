@@ -271,8 +271,6 @@ pub(super) fn run_samples(
             // A bound value the function reads as data, which the interpreter writes from the
             // specialization it is given.
             (PushField::Specialized(_), PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("{what}: unexpected push field {other:?}"),
         }
     }

@@ -59,16 +59,6 @@ pub enum VkFeature {
     UniformBufferStandardLayout,
     VulkanMemoryModel,
     VulkanMemoryModelDeviceScope,
-    /// `variablePointersStorageBuffer` (Vulkan 1.1, or `VK_KHR_variable_pointers`): a
-    /// `StorageBuffer` pointer an instruction selects rather than an access chain alone, which
-    /// Vulkan also requires enabled beside [`VkFeature::VariablePointers`].
-    VariablePointersStorageBuffer,
-    /// `variablePointers` (Vulkan 1.1, or `VK_KHR_variable_pointers`): such a pointer whose arms
-    /// point into **two** memory objects, which the narrower feature's capability refuses
-    /// ("Variable pointers must point into the same structure"). It is what sends a dropped store
-    /// through a slot's descriptor view to the stage's write-only sink with no branch
-    /// (`lower::access::sink`).
-    VariablePointers,
     WorkgroupMemoryExplicitLayout,
     WorkgroupMemoryExplicitLayout8BitAccess,
     WorkgroupMemoryExplicitLayout16BitAccess,

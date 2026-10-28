@@ -213,8 +213,6 @@ fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
     for f in &plan.push.fields {
         match (f.field, f.loc) {
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

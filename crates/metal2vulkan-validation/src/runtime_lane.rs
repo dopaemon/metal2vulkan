@@ -1250,10 +1250,6 @@ fn dynamic_input_assembly(device: &Device) -> bool {
 ///   what its shaders could: the index bounds pass's idle draw in `draw_bases`, `patches`' draws
 ///   of no patches), and it does not model a fragment shader interlock's critical sections; layer
 ///   1.4.341 also drops every write-after-write of a bound descriptor it finds while recording.
-///   It traces no store through an `OpSelect` of two storage-buffer pointers to its descriptor
-///   (1.4.341 and 1.4.363 alike), the form every store through a descriptor view takes on a
-///   device with variable pointers (`lower::access::sink`), so it sees no kernel's write of a
-///   bound buffer there at all.
 ///   A clean run is evidence for the other accesses alone (`runtime_lane/sync_coverage.rs` holds
 ///   the controls, and asks the layer whether it sees a kernel's write:
 ///   `sync_coverage::layer_sees_kernel_writes`).

@@ -567,10 +567,6 @@ fn capture_push(plan: &Plan, run: &IndexedRun<'_>, index_address: u64, stride: u
             PushField::RootTableAddress => TABLE.to_le_bytes().to_vec(),
             PushField::SlotBindOffset(_) => vec![0; 4],
             PushField::VertexBufferStride(_) => stride.to_le_bytes().to_vec(),
-            // No slot's writes dropped: the word stays 0.
-            PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {
-                vec![0; 4]
-            }
             other => panic!("unexpected push field {other:?}"),
         };
         out[at..at + bytes.len()].copy_from_slice(&bytes);
@@ -742,10 +738,6 @@ fn an_indexed_capture_reads_each_vertex_from_its_index() {
                     .iter()
                     .flat_map(|w| w.to_le_bytes())
                     .collect(),
-                // No slot's writes dropped: the word stays 0.
-                PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)) => {
-                    vec![0; 4]
-                }
                 other => panic!("{what}: unexpected push field {other:?}"),
             };
             push[at..at + bytes.len()].copy_from_slice(&bytes);

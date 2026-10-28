@@ -373,8 +373,6 @@ fn resources(plan: &Plan, bytes: usize, spec: &[(SpecKey, u64)]) -> Resources {
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
             // A bound value read as data, which the interpreter writes from `spec`.
             (PushField::Specialized(_), PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

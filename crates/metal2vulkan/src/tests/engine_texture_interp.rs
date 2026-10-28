@@ -133,8 +133,6 @@ fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
             // 0: no channel narrower than the written word, every integer lane as written (the
             // interpreter's images hold words; the kernels write in-range values).
             (PushField::TextureIntegerChannels(_), PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

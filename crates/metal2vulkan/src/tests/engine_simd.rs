@@ -94,11 +94,7 @@ fn run_all(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize) -
         assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");
         // A zero residual: buffer 0 is bound at its start.
         assert!(
-            matches!(
-                f.field,
-                PushField::SlotBindOffset(_)
-                    | PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_))
-            ),
+            matches!(f.field, PushField::SlotBindOffset(_)),
             "unexpected push field {f:?}"
         );
     }

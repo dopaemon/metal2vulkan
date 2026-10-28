@@ -424,8 +424,6 @@ fn with_enabled_refuses_sets_breaking_a_co_enable_rule() {
             VkFeature::RobustBufferAccess2,
             VkFeature::MultiviewTessellationShader,
             VkFeature::MultiviewGeometryShader,
-            VkFeature::VariablePointers,
-            VkFeature::VariablePointersStorageBuffer,
         ],
     );
     d.features.extend(BUFFER_UPDATE_AFTER_BIND.iter().copied());

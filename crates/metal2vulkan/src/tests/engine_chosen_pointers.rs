@@ -149,8 +149,6 @@ fn dispatch(
     for f in &plan.push.fields {
         match (f.field, f.loc) {
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("{kernel}: unexpected push field {other:?}"),
         }
     }

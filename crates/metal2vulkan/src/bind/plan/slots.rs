@@ -207,7 +207,6 @@ pub(crate) fn bound_value(
         SpecKey::SparseTexture(slot) => sparse_texture(shape, slot),
         SpecKey::ConstantLanes(slot) => constant_lanes(shape, slot),
         SpecKey::OffsetBaseAxes(slot) => offset_base_axes(shape, slot),
-        SpecKey::DroppedStoreSlots(stage) => u64::from(dropped_store_slots(shape, stage)),
         SpecKey::RangeAtBindOffset(slot) => match resources.slots.get(&slot) {
             Some(SlotInterface::Buffer(b)) => u64::from(range_at_bind_offset(
                 b,
@@ -244,18 +243,6 @@ pub(crate) fn record_specialized(
         }
     }
     Ok(())
-}
-
-/// The `SpecKey::DroppedStoreSlots` of `stage` for `shape`: the stage's buffer slots bound to
-/// memory whose GPU writes Metal drops (`StageShape::dropped_store_buffers`, over the slots the
-/// shape binds a buffer at), whose stores the stage's function drops
-/// (`lower::access::emit::store_one`). A stage the shape holds nothing for binds nothing, so none
-/// of its stores is dropped.
-pub(crate) fn dropped_store_slots(shape: &BindShape, stage: Stage) -> u32 {
-    shape
-        .stages
-        .get(&stage)
-        .map_or(0, |s| s.dropped_store_buffers)
 }
 
 /// Whether `shape` binds anything at `slot`.

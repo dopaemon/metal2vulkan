@@ -685,8 +685,6 @@ members! {
     V11.v11.multiview_tessellation_shader => MultiviewTessellationShader;
     V11.v11.multiview_geometry_shader => MultiviewGeometryShader;
     V11.v11.shader_draw_parameters => ShaderDrawParameters;
-    V11.v11.variable_pointers_storage_buffer => VariablePointersStorageBuffer;
-    V11.v11.variable_pointers => VariablePointers;
     V12.v12.sampler_mirror_clamp_to_edge => SamplerMirrorClampToEdge;
     V12.v12.storage_buffer8_bit_access => StorageBuffer8BitAccess;
     V12.v12.uniform_and_storage_buffer8_bit_access => UniformAndStorageBuffer8BitAccess;

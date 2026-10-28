@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 1130 |
+| ledger rows (a case whose gap is recorded) | 1129 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2549,7 +2549,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-kernel-store-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
-| `host-page-writes-kernel-store-read-only` | Metal drops a kernel's stores into memory whose backing is read-only, and a later command of the same command buffer reads them back from the GPU's caches (the … |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |
 | `host-page-writes-visibility-read-only` | Metal DROPS what a shader or the blit engine writes into memory whose backing is read-only, silently and with no error, and we land the write. Metal's rule is m… |

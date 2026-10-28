@@ -68,11 +68,6 @@ fn texel_formats_are_push_fields_and_other_bound_values_specializations() {
             }
             for f in &a.interface.push.fields {
                 if let PushField::Specialized(key) = f.field {
-                    // A kernel that stores through a buffer slot also pushes the stage's
-                    // dropped-store word, which no pipeline's key carries either.
-                    if matches!(key, SpecKey::DroppedStoreSlots(_)) {
-                        continue;
-                    }
                     assert!(
                         matches!(key, SpecKey::TexelFormat(_)),
                         "{what}: a pushed {key:?}"

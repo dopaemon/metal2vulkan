@@ -40,8 +40,6 @@ mod engine_device_replay;
 mod engine_dispatch;
 mod engine_divergent_barriers;
 mod engine_draw_bases;
-mod engine_dropped_store_sink;
-mod engine_dropped_stores;
 mod engine_dynamic_libraries;
 mod engine_dynamic_roots;
 mod engine_extended_range;

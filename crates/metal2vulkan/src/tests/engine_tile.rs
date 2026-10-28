@@ -228,8 +228,6 @@ fn run_images(
                     spec.insert(SpecKey::MultiRegion, 1);
                 }
             }
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }
@@ -673,8 +671,6 @@ fn run_memory(
         match (f.field, f.loc) {
             // One region, every buffer bound at its start.
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

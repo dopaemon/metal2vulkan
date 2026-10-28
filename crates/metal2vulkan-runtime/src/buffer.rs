@@ -3356,17 +3356,6 @@ impl Buffer {
         }
     }
 
-    /// Whether the GPU's writes into the buffer's bytes are dropped, as Metal drops them for
-    /// no-copy memory of its private option bit 24 and for pages replaced read-only
-    /// (`read_only_view.rs`): a heap's buffer answers its heap's. A dispatch's or draw's stores
-    /// through a slot the buffer is bound at are dropped in the shader
-    /// (`StageTable::dropped_store_buffers`, `SpecKey::DroppedStoreSlots`), and the buffer's
-    /// memory keeps them out as well where the device imports the pages through a read-only view
-    /// of them.
-    pub(super) fn drops_writes(&self) -> bool {
-        self.pages_cell().is_some_and(|cell| cell.drops_writes())
-    }
-
     /// `device`.
     pub fn device(&self) -> &Device {
         &self.0.device

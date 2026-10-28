@@ -613,11 +613,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                     SyntheticBinding::Imageblock => WriteSource::Imageblock,
                     // The command buffer's status, on a device that does not address buffers.
                     SyntheticBinding::ExecutionStatus => WriteSource::ExecutionStatus,
-                    // The stage's write-only store sink, which a dropped store through a
-                    // descriptor view lands in (`lower::access::sink`). No shader reads it.
-                    SyntheticBinding::StoreSink => WriteSource::Neutral(NeutralResource::Sink {
-                        min_bytes: NeutralResource::SINK_BYTES,
-                    }),
                     other => return Err(internal(format!("a compute binding {other:?}"))),
                 },
                 BindingSource::Texture(slot) => {

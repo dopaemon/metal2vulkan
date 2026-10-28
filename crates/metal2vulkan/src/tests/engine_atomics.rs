@@ -172,11 +172,6 @@ fn resources(plan: &Plan, init: &[Vec<u32>], threads: u32) -> Resources {
             (PushField::ExecutionStatusAddress, PushLoc::Push { offset }) => {
                 (offset, Some(STATUS_AT))
             }
-            // No slot's writes dropped: the word stays 0.
-            (
-                PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)),
-                PushLoc::Push { offset },
-            ) => (offset, None),
             other => panic!("unexpected push field {other:?}"),
         };
         let at = at as usize;
@@ -1156,8 +1151,6 @@ fn device_address_atomics_are_exact_and_contained() {
             (PushField::RootTableAddress, PushLoc::Push { offset }) => {
                 push[offset as usize..offset as usize + 8].copy_from_slice(&TABLE.to_le_bytes())
             }
-            // No slot's writes dropped: the word stays 0.
-            (PushField::Specialized(crate::pipeline::sym::SpecKey::DroppedStoreSlots(_)), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

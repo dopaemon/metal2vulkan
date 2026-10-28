@@ -21,7 +21,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::memory::blob::BlobUse;
 use crate::memory::contain::{self, Check};
-use crate::memory::leaf::{self, k32, Leaf};
+use crate::memory::leaf::{self, k32, Leaf, WordOps};
 use crate::memory::plan::{ConstGlobalForm, MemoryPlan};
 use crate::memory::provenance::{Repr, RootSetId};
 use crate::memory::views;
@@ -312,7 +312,7 @@ pub fn load_view(
     checked: bool,
 ) -> BResult<SValue> {
     // The blob is read-only: its words are the same on every load, which stay plain.
-    let mut mem = ViewMem::plain(view);
+    let mut mem = ViewMem(view, WordOps::default(), views::UnitViews::NONE);
     if !checked {
         return leaf::load(fb, &mut mem, leaf, off);
     }

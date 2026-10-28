@@ -231,7 +231,7 @@ pub fn psb_read(
     n: u32,
     contained: bool,
 ) -> BResult<SourceRead> {
-    let a = psb::prepare(fb, table, slot_root(buffer), m, start, n, contained, None)?;
+    let a = psb::prepare(fb, table, slot_root(buffer), m, start, n, contained)?;
     Ok(SourceRead {
         mem: SourceMem(Mem::Psb(a.mem)),
         off: a.off,

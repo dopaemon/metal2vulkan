@@ -279,16 +279,6 @@ pub enum SyntheticBinding {
     /// writes as `WriteSource::ExecutionStatus`. A stage module of a device that addresses buffers
     /// reaches the buffer by device address ([`PushField::ExecutionStatusAddress`]) instead.
     ExecutionStatus,
-    /// The write-only sink a dropped store lands in: a storage buffer of
-    /// [`NeutralResource::SINK_BYTES`](crate::bind::NeutralResource::SINK_BYTES) bytes the binder
-    /// binds as `WriteSource::Neutral(NeutralResource::Sink { .. })`, one storage descriptor of a
-    /// stage that stores through a buffer slot's descriptor view
-    /// (`lower::access::sink`). A store the draw's or dispatch's
-    /// [`SpecKey::DroppedStoreSlots`] word drops selects a pointer into it instead of the slot's,
-    /// so the store runs with no branch of its own. No shader reads it. A stage that reaches its
-    /// written slots by device address needs none: the root table's entry 1 is the same sink
-    /// (`memory::roots::SINK_ROOT`).
-    StoreSink,
     /// The resident root table.
     RootTable,
     /// The handle table.
@@ -793,15 +783,6 @@ pub enum SpecKey {
     /// which a driver can load into registers ahead of the shader (Mesa's ANV does so only for a
     /// uniform load at a constant offset); elsewhere at the residual plus the offset.
     RangeAtBindOffset(SlotRef),
-    /// Which of the stage's buffer slots are bound to memory whose GPU writes Metal drops (`u32`,
-    /// default 0): bit `n` for `[[buffer(n)]]`, over the slots a stage can hold (Metal's 31
-    /// argument-table entries, so every bit of the word). A stage reads it only where it stores
-    /// through a buffer slot, and a store it sets the bit for is dropped
-    /// (`lower::access::emit::store_one`), as Metal drops the GPU's writes to such memory
-    /// (`metal2vulkan-runtime`'s `read_only_view.rs`). It is never a specialization constant and
-    /// no pipeline's key carries it (`SpecKey::data_only`): one pipeline runs with any mask, and
-    /// a function that stores pays one uniform branch per store.
-    DroppedStoreSlots(Stage),
 }
 
 impl SpecKey {
@@ -829,17 +810,7 @@ impl SpecKey {
     /// least. Every other key stays a specialization; read as data, the bound sampler's word, say,
     /// made one NVIDIA making cost about four times a specialized one.
     pub fn read_as_data(self) -> bool {
-        matches!(
-            self,
-            SpecKey::TexelFormat(_) | SpecKey::DroppedStoreSlots(_)
-        )
-    }
-
-    /// Whether the key is read as data alone: no stage declares a specialization constant of it,
-    /// so nothing localizes one (`lower::specialized::emit_entry`) and no pipeline's key carries
-    /// it. A function reads it from its push field where it reads it at all.
-    pub(crate) fn data_only(self) -> bool {
-        matches!(self, SpecKey::DroppedStoreSlots(_))
+        matches!(self, SpecKey::TexelFormat(_))
     }
 }
 

@@ -247,25 +247,6 @@ pub fn compile_with(
     )
 }
 
-/// [`compile`] with the function constants `consts` supplied: the artifact a pipeline built with
-/// those values holds.
-pub fn compile_specialized(
-    bitcode: &[u8],
-    entry: &str,
-    p: &DeviceProfile,
-    consts: &FunctionConstantValues,
-) -> Result<Arc<FunctionArtifact>, Error> {
-    compile_bitcode(
-        bitcode,
-        EntryRef::Name(entry),
-        consts,
-        p,
-        &LowerInputs::new(),
-        &mut meter(),
-        SPIRV_WORDS,
-    )
-}
-
 /// [`compile`], also returning the plan and the finished typed module whose serialization the
 /// artifact holds (`compile_bitcode_kept`): one compile, so the CPU interpreter runs the module
 /// whose words `link_and_validate` links and validates, not a second compile of the same source.
@@ -529,7 +510,6 @@ pub fn interlocked_coherence(words: &[u32]) -> Result<CoherentAccesses, String> 
     let mut constants: HashMap<u32, u32> = HashMap::new();
     let mut types: HashMap<u32, u32> = HashMap::new();
     let mut roots: HashMap<u32, u32> = HashMap::new();
-    let mut selected: HashMap<u32, (u32, u32)> = HashMap::new();
     let at = |inst: &[u32], i: usize| -> Result<u32, String> {
         inst.get(i)
             .copied()
@@ -570,25 +550,11 @@ pub fn interlocked_coherence(words: &[u32]) -> Result<CoherentAccesses, String> 
                     roots.insert(at(inst, 2)?, r);
                 }
             }
-            // A selected pointer (a dropped store's place, `lower::access::sink`) has the roots of
-            // both arms: it is coherent only where each one is.
-            Op::Select => {
-                let (a, b) = (at(inst, 4)?, at(inst, 5)?);
-                if roots.contains_key(&a) && roots.contains_key(&b) {
-                    selected.insert(at(inst, 2)?, (a, b));
-                }
-            }
             _ => {}
         }
     }
     let device_scope = |id: u32| constants.get(&id) == Some(&DEVICE);
-    let decorated = |id: u32| {
-        let own = |id: u32| roots.get(&id).is_some_and(|r| coherent.contains(r));
-        match selected.get(&id) {
-            Some(&(a, b)) => own(a) && own(b),
-            None => own(id),
-        }
-    };
+    let decorated = |id: u32| roots.get(&id).is_some_and(|r| coherent.contains(r));
     for (op, inst) in &insts {
         let (ptr, mask_at, load) = match op {
             Op::Load => (at(inst, 3)?, 4, true),

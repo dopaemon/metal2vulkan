@@ -3438,14 +3438,12 @@ field	metal2vulkan::bind::ShadowMergeModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::StageInRegion.origin	pub origin: [u32; 3]
 field	metal2vulkan::bind::StageInRegion.size	pub size: [u32; 3]
 field	metal2vulkan::bind::StageShape.buffers	pub buffers: BTreeMap<u32, BufferShape>
-field	metal2vulkan::bind::StageShape.dropped_store_buffers	pub dropped_store_buffers: u32
 field	metal2vulkan::bind::StageShape.samplers	pub samplers: BTreeMap<u32, BoundSamplerShape>
 field	metal2vulkan::bind::StageShape.textures	pub textures: BTreeMap<u32, TextureShape>
 field	metal2vulkan::bind::StageShape.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
 field	metal2vulkan::bind::StageTable.acceleration_structures	pub acceleration_structures: BTreeMap<u32, BoundAccelerationStructure>
 field	metal2vulkan::bind::StageTable.at_bind_views	pub at_bind_views: u64
 field	metal2vulkan::bind::StageTable.buffers	pub buffers: BTreeMap<u32, BoundBuffer>
-field	metal2vulkan::bind::StageTable.dropped_store_buffers	pub dropped_store_buffers: u32
 field	metal2vulkan::bind::StageTable.samplers	pub samplers: BTreeMap<u32, BoundSampler>
 field	metal2vulkan::bind::StageTable.textures	pub textures: BTreeMap<u32, BoundTexture>
 field	metal2vulkan::bind::StageTable.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
@@ -12669,8 +12667,6 @@ variant	metal2vulkan::device::VkFeature::TessellationShader	TessellationShader
 variant	metal2vulkan::device::VkFeature::UniformAndStorageBuffer16BitAccess	UniformAndStorageBuffer16BitAccess
 variant	metal2vulkan::device::VkFeature::UniformAndStorageBuffer8BitAccess	UniformAndStorageBuffer8BitAccess
 variant	metal2vulkan::device::VkFeature::UniformBufferStandardLayout	UniformBufferStandardLayout
-variant	metal2vulkan::device::VkFeature::VariablePointers	VariablePointers
-variant	metal2vulkan::device::VkFeature::VariablePointersStorageBuffer	VariablePointersStorageBuffer
 variant	metal2vulkan::device::VkFeature::VertexAttributeAccessBeyondStride	VertexAttributeAccessBeyondStride
 variant	metal2vulkan::device::VkFeature::VertexAttributeInstanceRateDivisor	VertexAttributeInstanceRateDivisor
 variant	metal2vulkan::device::VkFeature::VertexAttributeInstanceRateZeroDivisor	VertexAttributeInstanceRateZeroDivisor
@@ -13683,7 +13679,6 @@ variant	metal2vulkan::pipeline::SpecKey::AmplificationCount	AmplificationCount
 variant	metal2vulkan::pipeline::SpecKey::BicubicTexels	BicubicTexels(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
-variant	metal2vulkan::pipeline::SpecKey::DroppedStoreSlots	DroppedStoreSlots(Stage)
 variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize
 variant	metal2vulkan::pipeline::SpecKey::ImageblockHeight	ImageblockHeight
 variant	metal2vulkan::pipeline::SpecKey::ImageblockWidth	ImageblockWidth
@@ -13754,7 +13749,6 @@ variant	metal2vulkan::pipeline::SyntheticBinding::RootTable	RootTable
 variant	metal2vulkan::pipeline::SyntheticBinding::SamplerTable	SamplerTable
 variant	metal2vulkan::pipeline::SyntheticBinding::ShadowStencil	ShadowStencil
 variant	metal2vulkan::pipeline::SyntheticBinding::StencilStandIn	StencilStandIn
-variant	metal2vulkan::pipeline::SyntheticBinding::StoreSink	StoreSink
 variant	metal2vulkan::pipeline::SyntheticBinding::TessellationFactors	TessellationFactors
 variant	metal2vulkan::pipeline::SyntheticBinding::TessellationRecords	TessellationRecords
 variant	metal2vulkan::pipeline::SyntheticBinding::TessellationWork	TessellationWork
