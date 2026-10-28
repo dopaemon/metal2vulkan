@@ -832,6 +832,14 @@ type AfterCommit = (CommandBufferStatus, Result<(), Error>, Result<(), Error>);
 /// refused, as after Metal's commit. A command buffer committed after it on the same queue, the
 /// copy back, waits behind it: it reads the pass's color, and the completed handlers run in
 /// commit order. Under Worker both commits' own work ran once, behind the end.
+///
+/// The pass commits behind a command buffer of its queue that waits for an unsignalled event,
+/// raised once the answers after the commit were read: Metal's commit returns before the command
+/// buffer is scheduled, and its status may read `Scheduled` from then on (here, as soon as the
+/// scheduler's thread submitted it), but one committed behind a command buffer of its queue an
+/// event holds reads `Committed` until the event is raised (conformance case
+/// `event-held-command-buffer`, measured on an M3 Max), so the status is read where Metal fixes
+/// it under both policies.
 #[test]
 fn a_commit_after_an_end_in_flight_returns_and_keeps_its_order() {
     let scratch = Scratch::new("deferred-commit");
@@ -847,6 +855,15 @@ fn a_commit_after_an_end_in_flight_returns_and_keeps_its_order() {
             move || {
                 let state = rectangle_state(&device);
                 let queue = device.new_command_queue().unwrap();
+                let gate = device.new_shared_event().unwrap();
+                let held = queue.command_buffer().unwrap();
+                held.encode_wait_for_event(EventRef::from(&gate), 1)
+                    .unwrap();
+                let word = device.new_buffer(4, ResourceOptions::shared()).unwrap();
+                let mut fill = held.blit_command_encoder().unwrap();
+                fill.fill_buffer(&word, 0..4, 0).unwrap();
+                fill.end_encoding().unwrap();
+                held.commit().unwrap();
                 let command_buffer = queue.command_buffer().unwrap();
                 let target = target(&device);
                 let event = device.new_event().unwrap();
@@ -872,6 +889,7 @@ fn a_commit_after_an_end_in_flight_returns_and_keeps_its_order() {
                     command_buffer.commit(),
                     command_buffer.add_completed_handler(Box::new(|_| ())),
                 );
+                gate.set_signaled_value(1);
                 let copy = queue.command_buffer().unwrap();
                 let back = copy_back(&device, &copy, &target);
                 let ran = Arc::clone(&order);
