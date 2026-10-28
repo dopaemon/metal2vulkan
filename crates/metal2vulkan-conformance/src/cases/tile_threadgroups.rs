@@ -93,7 +93,9 @@ const EVEN_SHAPES: &[&[[u32; 2]]] = &[
 /// running and reads what came back. The list holds exactly the kinds measured on the two venues of
 /// this round, MoltenVK 1.4.2 on this M3 Max and lavapipe in the local container. A third venue
 /// that announces a kind not here fails the case until its kind is added, which is the model
-/// working: an announced difference nobody named is not an announced difference.
+/// working: an announced difference nobody named is not an announced difference. The device's own
+/// answers, such as the NaN encoding it copies the blur's `RGBA16Float` attachment with
+/// (`device-nan-encoding`), are the suite's to declare ([`crate::replay::NATIVE_NOTES`]).
 pub const TILE_PASS_NOTICES: &[Degradation] = &[
     // The attachments a tile dispatch stages are copied into its scratch before the dispatch and
     // back after it (`render/tile_dispatch.rs`), which is what a tile dispatch costs on a device
@@ -101,9 +103,6 @@ pub const TILE_PASS_NOTICES: &[Degradation] = &[
     Degradation::TileDispatchScratch,
     // The pass is split at the barrier the tile dispatch's scratch needs.
     Degradation::RenderPassSplit,
-    // A render target of a format whose NaN encoding the device copies its own way: the blur's
-    // `RGBA16Float` attachment.
-    Degradation::DeviceNanEncoding,
     // A device that splits a fragment quad at a clipped edge where Metal keeps it whole. Announced
     // on lavapipe. Nothing of these cases reads a quad's grouping -- the tile order is the answer,
     // and it compares exactly -- so the kind is declared and no value is loosened.

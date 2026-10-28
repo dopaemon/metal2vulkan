@@ -116,7 +116,6 @@ use metal2vulkan::metal::{
     CompareFunction, PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter,
     SamplerMipFilter, TextureType, TextureUsage,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose slot kernels sample through the runtime sampler at `[[sampler(0)]]` beside a
 /// constexpr sampler of their own.
@@ -955,20 +954,12 @@ impl Case for SamplerCrossings {
         // a border colour, a level clamp and a comparison -- so nothing is emulated; what is
         // declared is what a device announces about its own sampling and its own memory.
         //
-        // The sets differ row by row and are stated row by row, because which rows announce what
-        // is a measurement rather than a rule:
-        //
-        // - the `Shared` buffer each row writes its samples into, for all eight rows (the RTX
-        //   5080);
-        // - `float-sample-filter`, where the device filters a float texture its own way, for the
-        //   address-mode triples and the three mip-filter rows (llvmpipe and the 5080).
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if matches!(self.family, Family::Axes | Family::MipFilters(_)) {
-            named.push(crate::replay::notice_allowance(
-                Degradation::FloatSampleFilter.code(),
-            ));
-        }
-        named
+        // The one declared is the `Shared` buffer each row writes its samples into, for all eight
+        // rows (the RTX 5080). Where the device filters a float texture its own way
+        // (`float-sample-filter`, the address-mode triples and the three mip-filter rows on
+        // llvmpipe and the 5080), the note is the device's own answer, which the suite declares
+        // for every case (`crate::replay::NATIVE_NOTES`).
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

@@ -465,30 +465,21 @@ impl Case for PixelSamplers {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Metal announces nothing, so a notice of ours is a difference at the notices site.
-        // These are the two kinds a run of this round provoked: on lavapipe an argument buffer's
-        // pixel sampler is handed to the device's own, and the device converts an 8-bit texel to a
-        // float its own way. A venue that announces another kind — `pixel-sampler-scaling`, which
-        // neither venue here provoked — reads as divergent at that site until whoever adds the
-        // venue names it with a run behind it.
+        // This is the kind a run of this round provoked: on lavapipe an argument buffer's pixel
+        // sampler is handed to the device's own. A venue that announces another kind —
+        // `pixel-sampler-scaling`, which neither venue here provoked — reads as divergent at that
+        // site until whoever adds the venue names it with a run behind it. The device's own
+        // conversion of a texel, its filter and its sRGB decode are native notes the suite
+        // declares for every case (`crate::replay::NATIVE_NOTES`).
         //
-        // One more is named from the run that shows it, which is what the paragraph above asks
-        // for: on lavapipe the device decodes an sRGB code its own way (`srgb-texel-decode`).
-        //
-        // **Every one of these is a declaration and loosens nothing.** Each sits at the notices
-        // site alone, so a texel that differs still fails the case wherever it differs.
-        [
-            Degradation::ArgumentPixelSamplerScaling,
-            Degradation::FloatSampleFilter,
-            Degradation::SrgbTexelDecode,
-        ]
-        .iter()
-        .map(|kind| notice_allowance(kind.code()))
-        .chain([
+        // **Each is a declaration and loosens nothing.** Each sits at the notices site alone, so
+        // a texel that differs still fails the case wherever it differs.
+        vec![
+            notice_allowance(Degradation::ArgumentPixelSamplerScaling.code()),
             // The buffer each pass writes its sampled texels into is `Shared`
             // ([`crate::replay::shared_memory_notice`]).
             crate::replay::shared_memory_notice(),
-        ])
-        .collect()
+        ]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

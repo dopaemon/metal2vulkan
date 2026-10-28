@@ -103,7 +103,6 @@ use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Regio
 use metal2vulkan::metal::{
     BlendFactor as F, BlendOperation as O, ColorWriteMask as M, PixelFormat,
 };
-use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, FILLS, FILL_FLOAT, VERTEX,
@@ -854,21 +853,16 @@ impl Case for BlendInteraction {
         // modelled: a device whose sRGB blend is not Metal's is divergent, which is the honest
         // verdict rather than a tolerance that would hide the thing this cross exists to find.
         //
-        // What is declared is the notice set, and each entry is a declaration at the notices site
-        // that moves no texel.
-        //
-        // `device-color-conversion` and `shared-in-system-memory` are every row's: the first is
-        // the device's own conversion into the attachment where it is not Metal's, the second the
-        // venue's memory model for the `Shared` buffer every row reads its texels back through
-        // (`crate::replay::shared_memory_notice`).
+        // What is declared is the notice set, a declaration at the notices site that moves no
+        // texel: `shared-in-system-memory`, the venue's memory model for the `Shared` buffer every
+        // row reads its texels back through (`crate::replay::shared_memory_notice`). Every row also
+        // announces `device-color-conversion`, the device's own conversion into the attachment,
+        // which the suite declares for every case (`crate::replay::NATIVE_NOTES`).
         //
         // Measured on the RTX 5080 Laptop (615.71.09) and on llvmpipe (Mesa 26.2.4): all four rows
         // announced both, each with the case declaring none (replay-nvidia.log,
         // replay-llvmpipe.log).
-        vec![
-            crate::replay::notice_allowance(Degradation::DeviceColorConversion.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1448,8 +1442,9 @@ mod tests {
                     case.name()
                 );
             }
-            // The device's conversion and the venue's memory model, for every row.
-            assert_eq!(case.allowances().len(), 2, "{}", case.name());
+            // The venue's memory model, for every row; the device's own conversion into the
+            // attachment is the suite's native declaration.
+            assert_eq!(case.allowances().len(), 1, "{}", case.name());
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();
             let stated: BTreeSet<&str> = inputs.iter().map(|input| input.name.as_str()).collect();

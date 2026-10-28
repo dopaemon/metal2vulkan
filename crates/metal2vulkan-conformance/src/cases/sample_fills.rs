@@ -453,19 +453,17 @@ impl Case for SampleFills {
             ));
         }
         // What a multisample fill and its read-back announce on a device that needs them: the
-        // drawn depth copy, a depth texture's denormals, and shared storage in
-        // system memory. Metal announces none of them, so the notices site differs on such a
-        // device, and the difference is justified where one of these fired.
+        // drawn depth copy, a shadowed texture view, and shared storage in system memory. Metal
+        // announces none of them, so the notices site differs on such a device, and the
+        // difference is justified where one of these fired. A depth texture's denormals and a
+        // `Depth32Float` target's signed test (`depth-denormals`, `signed-depth-test`) are the
+        // device's own answers, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`); every depth word still compares exactly.
         use metal2vulkan_runtime::Degradation as D;
         for kind in [
             D::DrawnDepthCopy,
-            D::DepthDenormals,
             D::SharedInSystemMemory,
             D::ShadowedTextureView,
-            // A `Depth32Float` target a write may give a negative value or a NaN, whose test and
-            // store the device does not take as Metal's. Announced on lavapipe for the
-            // four-sample d32 rows. Declared only; every depth word still compares exactly.
-            D::SignedDepthTest,
         ] {
             allowances.push(notice_allowance(kind.code()));
         }

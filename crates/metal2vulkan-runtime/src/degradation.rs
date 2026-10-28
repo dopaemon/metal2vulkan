@@ -2060,6 +2060,13 @@ degradations! {
         FunctionStorageAssumed = "function-storage-assumed";
         QuadsCountedBeforeDiscard = "quads-counted-before-discard";
         ViewBaseTexelOffset = "view-base-texel-offset";
+        /// Class: native colour conversion. The device converts a fragment function's colour into
+        /// the attachment, blended or not, or a function's `float` texel into a storage texture,
+        /// where it is not measured to make Metal's codes: near a tie between two codes it may
+        /// store the other one. Recorded bound past one code, on lavapipe against plain Metal on
+        /// an Apple M3 Max: a blend into an 8-bit unorm attachment within 2 codes; a function that
+        /// fetches an 8-bit sRGB attachment and writes it again within 2 codes; a blend into an
+        /// 8-bit sRGB attachment within 4 codes. Another device is not bounded past one code.
         DeviceColorConversion = "device-color-conversion";
         DeviceInterpolation = "device-interpolation";
         QuadsSplitByClipping = "quads-split-by-clipping";
@@ -2114,11 +2121,12 @@ degradations! {
         /// Class: native device sampling. The device's own conversion of a texel's codes answers
         /// the pipeline's reads, samples and gathers with a `float` result, on a device whose
         /// sampler is not Metal's. Recorded bound, of a texel whose access reads one texel of one
-        /// level: an 8- or 16-bit normalized code within one `f32` ulp of Metal's `c / (2^b - 1)`
-        /// where measured (lavapipe's reciprocal product); a 5- or 6-bit channel the device widens
-        /// by replicating its bits within 0.18 of a code (ANV, NVIDIA; a 4-bit channel's exact); a
-        /// half-float or small-float NaN in the device's encoding, where Metal answers
-        /// `0x7fc00000`.
+        /// level: an 8-, 10- or 16-bit normalized code within one `f32` ulp of Metal's
+        /// `c / (2^b - 1)` where measured (lavapipe's reciprocal product); a 4-, 5- or 6-bit
+        /// channel within one `f32` ulp where the device converts it by the reciprocal (lavapipe),
+        /// and within 0.18 of a code where it widens a 5- or 6-bit channel by replicating its bits
+        /// (ANV, NVIDIA; a 4-bit channel's replication exact); a half-float or small-float NaN in
+        /// the device's encoding, where Metal answers `0x7fc00000`.
         DeviceTexelConversion = "device-texel-conversion";
         /// Class: native vertex input. The device's fixed-function vertex input converts a
         /// normalized vertex attribute's codes (the 8- and 16-bit normalized formats of either

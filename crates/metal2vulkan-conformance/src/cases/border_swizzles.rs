@@ -35,7 +35,7 @@
 //! Nothing here can fault a GPU: one compute pass a sampler, three read-only textures, three
 //! threads, no loop.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Input, MetalSource, SamplerSpec, Side,
 };
@@ -47,15 +47,9 @@ use metal2vulkan::metal::{
     PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, TextureSwizzle,
     TextureSwizzleChannels,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture the case runs, whose entry point is its own name.
 const FIXTURE: &str = "a2_clamp_to_zero";
-
-/// The bound `PrecisionNote::DeviceTexelConversion` states (`device-texel-conversion`), one `f32`
-/// ulp for 8- and 16-bit codes, as these sites hold it: a word of the float's bits, where
-/// one ulp of a positive finite float is a difference of one in the word.
-const LEDGERS_TEXEL_CONVERSION_ULPS_AS_WORDS: f64 = 1.0;
 
 /// Each texture's side: 4 by 4 texels, every texel the same value, so a sample inside reads the
 /// format's texel and a sample outside reads only border texels.
@@ -299,21 +293,12 @@ impl Case for BorderSwizzles {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Under the default policy the sample goes to the device's own sampler and the texel's
-        // `float` value is the device's conversion of its codes, which the runtime announces as
-        // `device-sampling` and `device-texel-conversion`. Metal announces neither, so the set of
-        // notices differs, and the two notice allowances cover that site.
+        // The sample goes to the device's own sampler and the texel's `float` value is the
+        // device's conversion of its codes, which the runtime announces as `device-sampling` and
+        // `device-texel-conversion` off Metal's own texture unit: native notes the suite declares
+        // for every case, which loosen no word. A word the device's conversion moves is a
+        // `known-gaps.tsv` row of the venue.
         //
-        // The sampled words themselves may differ too. These samplers filter nearest, so the
-        // linear filter's bound is not what bounds them: the bound is the one
-        // `device-texel-conversion` states, one `f32` ulp for 8- and 16-bit codes, which is what
-        // every format here holds. The words are recorded as the `u32` bit patterns of those
-        // floats, so one ulp is a difference of one in the word --
-        // `every_recorded_word_is_a_positive_finite_float` pins the range that makes the two the
-        // same thing. The bound is the note's number: a run that exceeds it is the note's claim
-        // failing, which is what this allowance exists to catch. On a device whose sampler is
-        // Metal's neither notice fires, no justification holds, and every word is compared
-        // exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -325,23 +310,7 @@ impl Case for BorderSwizzles {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut all = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::DeviceSampling.code()),
-            crate::replay::notice_allowance(Degradation::DeviceTexelConversion.code()),
-        ];
-        for (swizzle, _) in swizzles() {
-            for (sampler, _, _) in SAMPLERS {
-                all.push(Allowance::new(
-                    format!("case/{swizzle}/{sampler}/words"),
-                    Loosening::Absolute(LEDGERS_TEXEL_CONVERSION_ULPS_AS_WORDS),
-                    Justification::Degradation(
-                        Degradation::DeviceTexelConversion.code().to_owned(),
-                    ),
-                ));
-            }
-        }
-        all
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -666,84 +635,6 @@ mod tests {
             "{checked} channels checked; Metal's recorded texels differ from the lane's \
              rule:\n{}",
             differ.join("\n")
-        );
-        assert!(
-            unrecorded.is_empty(),
-            "no recording yet for {unrecorded:?}: run `conformance record` on a Mac"
-        );
-    }
-
-    /// Every word a read of this case writes is the bit pattern of a positive finite `float` no
-    /// greater than one.
-    ///
-    /// That range is what makes this case's bounded allowance mean what it says. The words are
-    /// recorded as `u32`, so the allowance bounds `|a - b|` on the words, and over this range a
-    /// difference of one in the word is exactly one `f32` ulp -- the bound
-    /// `device-texel-conversion` states for the device's texel conversion. Outside it (a negative value, an infinity, a NaN)
-    /// the two would stop being the same thing, so this test fails rather than letting the
-    /// allowance quietly mean something else.
-    ///
-    /// The lanes' other two words are the blank fill, which neither side writes and both hold
-    /// identically, so the allowance's one step over them is a tolerance on a number that does not
-    /// move rather than a loosening of a float.
-    #[test]
-    fn every_recorded_word_is_a_positive_finite_float() {
-        let mut unrecorded = Vec::new();
-        let mut wrong = Vec::new();
-        let mut checked = 0usize;
-        for format in &FORMATS {
-            let recording = match crate::recording::read(format.name) {
-                Ok(recording) => recording,
-                Err(_) => {
-                    unrecorded.push(format.name);
-                    continue;
-                }
-            };
-            for answer in &recording.answers {
-                for outcome in &answer.outcomes {
-                    for (swizzle_name, _) in swizzles() {
-                        for (sampler_name, _, _) in SAMPLERS {
-                            let site = format!("{swizzle_name}/{sampler_name}");
-                            let node = outcome
-                                .transcript
-                                .root
-                                .child(&site)
-                                .and_then(|node| node.child("words"));
-                            let Some(node) = node else { continue };
-                            let Value::Bytes(bytes) = &node.observed.value else {
-                                continue;
-                            };
-                            for lane in 0..COORDS.len() {
-                                for read in 0..3 {
-                                    for channel in 0..4 {
-                                        let at = (lane * PER_LANE + read) * 16 + channel * 4;
-                                        let word = u32::from_le_bytes(
-                                            bytes[at..at + 4].try_into().expect("four bytes"),
-                                        );
-                                        let value = f32::from_bits(word);
-                                        checked += 1;
-                                        if !(value.is_finite() && (0.0..=1.0).contains(&value))
-                                            && wrong.len() < 24
-                                        {
-                                            wrong.push(format!(
-                                                "{}/{site} lane {lane} read {read} channel \
-                                                 {channel}: {value} (0x{word:08x})",
-                                                format.name
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            wrong.is_empty(),
-            "{checked} words checked; these are not a positive finite float in [0, 1], so a \
-             difference of one in the word is no longer one ulp:\n{}",
-            wrong.join("\n")
         );
         assert!(
             unrecorded.is_empty(),

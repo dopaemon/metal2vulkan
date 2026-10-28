@@ -1044,14 +1044,17 @@ pub struct CostRecord {
     /// venue, and then nothing in the record is claimed to be independent of the selection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contrasted: Option<String>,
-    /// The degrade-notice codes the measurement's runs announced, sorted.
+    /// The degrade-notice codes the measurement's runs announced, sorted, but the device's native
+    /// answers ([`crate::replay::degrading`]).
     ///
     /// **This is what keeps a device's gap from reading as a cost win.** A count that is lower
     /// because the device did less of the case — it lacks the exact form, so the runtime announced
     /// a notice and did something cheaper — is not work we saved. A run whose announced set is not
     /// this one did a different amount of work, so it is [`CostVerdict::Unmeasured`] against these
     /// bounds rather than compared with them: the same rule the correctness half applies when it
-    /// keeps a device's honest gap out of the pass and the failure counts.
+    /// keeps a device's honest gap out of the pass and the failure counts. A native note is not in
+    /// it, here or in the run's set: the native form is the only one built, so it marks no
+    /// different amount of work.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub degraded: Vec<String>,
     /// The most each count the runs moved reached. A count absent from here is bounded at zero, so
@@ -1647,14 +1650,17 @@ pub fn judge(
     }
     // A device that could not do the case exactly did less of it, and its lower counts are its
     // gap and not our saving. Comparing such a run with a measurement of a different gap would
-    // read the gap as a win, so the two are not comparable at all.
-    if record.degraded != degraded {
+    // read the gap as a win, so the two are not comparable at all. The device's native answers
+    // count on neither side, the record's included, since one taken before the rule left them out
+    // may still hold them.
+    let degraded = crate::replay::degrading(degraded.iter().cloned());
+    let measured = crate::replay::degrading(record.degraded.iter().cloned());
+    if measured != degraded {
         return CostVerdict::Unmeasured {
             why: format!(
-                "this run announced {degraded:?} and the measurement announced {:?}, so the two \
-                 did not do the same amount of the case: a count lower because the device lacks \
-                 the exact form is the device's gap, not a cost we saved",
-                record.degraded
+                "this run announced {degraded:?} and the measurement announced {measured:?}, so \
+                 the two did not do the same amount of the case: a count lower because the \
+                 device lacks the exact form is the device's gap, not a cost we saved",
             ),
         };
     }
@@ -1767,8 +1773,9 @@ pub struct CaseCost {
     /// Why the run stopped before the case finished, where it did. Its counts are of a part of the
     /// case, so nothing is recorded or gated from them.
     pub stopped: Option<String>,
-    /// The degrade-notice codes the runs announced, sorted: what the device could not do exactly,
-    /// and so how much of the case the counts are of.
+    /// The degrade-notice codes the runs announced, sorted, but the device's native answers
+    /// ([`crate::replay::degrading`]): what the device could not do exactly, and so how much of
+    /// the case the counts are of.
     pub degraded: Vec<String>,
     /// How long the longest run took, in nanoseconds. **Advisory, and it stays advisory.**
     ///

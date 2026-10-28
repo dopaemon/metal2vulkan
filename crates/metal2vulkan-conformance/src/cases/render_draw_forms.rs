@@ -153,10 +153,11 @@ const RUNS: u32 = 8;
 ///
 /// Each is a declaration over the notices site and loosens no value: an `RGBA32Uint` texel is the
 /// `uint4` the fragment function returned, so every channel of every case still compares exactly.
+///
+/// The vertex stage's own arithmetic on a device whose float arithmetic is not Metal's
+/// (`device-arithmetic`) is the device's own answer, which the suite declares for every case
+/// ([`crate::replay::NATIVE_NOTES`]).
 const PASS_NOTICES: &[Degradation] = &[
-    // The vertex stage's own compiler rewrote its arithmetic as it made the pipeline, on a device
-    // whose float arithmetic is not Metal's.
-    Degradation::DeviceArithmetic,
     // The vertex function writes `[[point_size]]`, which a device without `shaderPointSize`'s
     // guarantee takes as its own point size rather than Metal's.
     Degradation::DevicePointSize,

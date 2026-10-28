@@ -24,7 +24,6 @@
 //! Nothing here can fault a GPU: one compute pass a kernel, three textures each, one thread a
 //! texel inside the texture, no loop and no sampling.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -32,7 +31,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture both kernels live in.
 const FIXTURE: &str = "xr_planes";
@@ -271,18 +269,6 @@ impl Case for ExtendedRangePlanes {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The kernels write `half` into a storage texture, which a device whose half texel writes
-        // are not Metal's encodes its own way; the runtime announces that at the dispatch. Only
-        // the notice set is loosened: every texel still compares exactly, so a device that does
-        // encode as Metal shows as announced with nothing differing, and one that does not shows
-        // the texel. The allowance fails the case if the notice stops firing, so it cannot outlive
-        // the reason for it.
-        vec![crate::replay::notice_allowance(
-            Degradation::DeviceNanEncoding.code(),
-        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

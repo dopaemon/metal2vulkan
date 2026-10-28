@@ -65,7 +65,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::{PixelFormat, PrimitiveType};
-use metal2vulkan_runtime::Degradation;
 
 /// The format every texture of the family carries: a `float` stored as it is, so nothing of a
 /// normalized conversion stands between a value and its cross-check.
@@ -274,17 +273,6 @@ impl Subject {
         }
     }
 
-    /// Whether either function the row runs divides a `float`, which is the shape that decides
-    /// its `device-arithmetic` declaration.
-    ///
-    /// `tob_sample` divides the pixel's position by the sampled texture's extent and
-    /// `scout_write_f` divides a coordinate by 7 and by 5; `tob_solid`, `tob_write` and
-    /// `scout_read_f` divide nothing, and the two rows made of those compare exact on both venues
-    /// measured.
-    fn divides_a_float(&self) -> bool {
-        matches!(self.crossing, Crossing::KernelToFragment)
-    }
-
     /// The render pipeline the row makes.
     fn pipeline(&self) -> RenderPipelineSpec<'static> {
         RenderPipelineSpec::new(RECT, self.functions().0, &COLOR_STATE)
@@ -305,18 +293,11 @@ impl Case for ComputeRenderChain {
         // value of every row is exact or it is a bug, and the one notice a stored colour could
         // carry -- the normalized conversion -- cannot apply, because nothing here stores a
         // normalized channel.
-        // `device-arithmetic` is declared by the rows whose functions do the arithmetic the note
-        // covers: our side records it where a float division, remainder, square root, fused
-        // multiply-add or dot product takes Vulkan's precision bounds rather than correct rounding,
-        // which happens on a device whose float functions are not Metal's own
-        // (`metal2vulkan::pipeline::artifact`'s `PrecisionNote::DeviceArithmetic`). Which device
-        // that is, is the device's answer; which rows can announce it is the case's, and it is the
-        // ones whose functions divide a float.
-        //
-        // Measured: it fires on lavapipe and not on MoltenVK on this M3 Max, and on lavapipe every
-        // value compared **exactly** -- the whole difference was the announcement, which is what
-        // makes declaring it a declaration and not a tolerance. Metal announces nothing, so a
-        // notice of ours has to be declared or the comparison cannot be made at all.
+        // A row whose functions divide a float (`tob_sample` divides the pixel's position by the
+        // sampled texture's extent, `scout_write_f` a coordinate by 7 and by 5) announces
+        // `device-arithmetic` on a device whose float functions are not Metal's own, a native
+        // note the suite declares for every case. Measured: it fires on lavapipe and not on
+        // MoltenVK on this M3 Max, and on lavapipe every value compared **exactly**.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -328,13 +309,7 @@ impl Case for ComputeRenderChain {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if self.subject.divides_a_float() {
-            named.push(crate::replay::notice_allowance(
-                Degradation::DeviceArithmetic.code(),
-            ));
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -821,13 +796,13 @@ mod tests {
     }
 
     /// No row of the family loosens a value: every allowance is a notice declaration on the
-    /// notices site, and the one notice declared is the one the row's own functions imply.
+    /// notices site, and the one notice declared is the venue's memory model.
     #[test]
     fn no_row_loosens_a_value() {
         use crate::allowance::Justification;
         for case in all() {
             // Every allowance is a notice declaration on the notices site, so no row loosens a
-            // value, and the one notice declared is the one the row's own functions imply.
+            // value, and the one notice declared is the venue's memory model.
             let codes: Vec<String> = case
                 .allowances()
                 .iter()
@@ -845,9 +820,9 @@ mod tests {
                 })
                 .collect();
             assert_eq!(
-                codes.contains(&Degradation::DeviceArithmetic.code().to_owned()),
-                case.subject.divides_a_float(),
-                "{}: the device-arithmetic notice is declared by the wrong row",
+                codes,
+                [metal2vulkan_runtime::Degradation::SharedInSystemMemory.code()],
+                "{}",
                 case.name()
             );
             assert_eq!(case.metal_source(), MetalSource::Run);

@@ -34,7 +34,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture the kernel lives in.
 const FIXTURE: &str = "xr_two_planes";
@@ -93,11 +92,6 @@ pub struct HalfWriteNans {
     name: &'static str,
     format: PixelFormat,
     shape: Shape,
-    /// Whether one word of the format holds every channel. A packed format's channel is narrower
-    /// than the `half` written into it, so it has no room for a NaN's payload and what reaches the
-    /// texel is the device's own encoding; a format whose word is one channel stores the bits it
-    /// was handed.
-    packed: bool,
 }
 
 /// Every format the lane writes: the three 16-bit float widths, the three 32-bit float widths, and
@@ -108,13 +102,11 @@ pub fn all() -> Vec<HalfWriteNans> {
         name,
         format,
         shape: Shape { word, words },
-        packed: false,
     };
     let whole_texel = |name, format, word| HalfWriteNans {
         name,
         format,
         shape: Shape { word, words: 1 },
-        packed: true,
     };
     vec![
         channels(
@@ -216,15 +208,12 @@ impl Case for HalfWriteNans {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The kernel writes `half` into a storage texture, and only the notice set is loosened, so
-        // every stored word still compares exactly whatever the device does.
-        //
-        // The loosening is carried by the formats that cannot hold a NaN's bits: a channel narrower
-        // than the half it is given has no room for the payload, so what reaches the texel is the
-        // device's own encoding and the runtime announces it. The float and half formats store the
-        // bits they are handed, so a run of them needs no tolerance at all — and this round's runs
-        // on both venues confirmed it, which is why they name none. A device that does encode its
-        // own way there shows the word it stored beside Metal's rather than passing quietly.
+        // The kernel writes `half` into a storage texture, and every stored word compares exactly
+        // whatever the device does. A format that cannot hold a NaN's bits (a channel narrower
+        // than the half it is given has no room for the payload) stores the device's own encoding
+        // and the runtime announces it (`device-nan-encoding`), the device's own answer, which the
+        // suite declares for every case (`crate::replay::NATIVE_NOTES`). A device that encodes its
+        // own way shows the word it stored beside Metal's rather than passing quietly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -236,13 +225,7 @@ impl Case for HalfWriteNans {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if self.packed {
-            named.push(crate::replay::notice_allowance(
-                Degradation::DeviceNanEncoding.code(),
-            ));
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -180,7 +180,6 @@ use crate::render::{
 };
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{BlendFactor as F, BlendOperation as O, ColorWriteMask, PixelFormat};
-use metal2vulkan_runtime::Degradation;
 
 use super::extended_range_targets::{
     fixture, fixture_inputs, not_read, program, shader_refs, shape, FILLS, FILL_FLOAT, VERTEX,
@@ -1272,25 +1271,22 @@ impl Case for BlendSweep {
         // a difference in the blend and not in a rounding, and a tolerance written here would hide
         // exactly the bug the sweep exists to find.
         //
-        // Two notice declarations, both at the notices site and neither touching a texel.
-        //
-        // `device-color-conversion` is the device's own conversion into the attachment where it is
-        // not Metal's. Its own definition says validation derives no tolerance and no explanation
-        // from it, so this is a declaration only: a row whose texels also differ stays divergent
-        // on those texels, which is the finding.
-        //
-        // `shared-in-system-memory` is the venue's memory model rather than anything of this
-        // family's: every row reads its texels back through a `Shared` buffer, and a device
+        // One notice declaration, at the notices site and touching no texel:
+        // `shared-in-system-memory`, the venue's memory model rather than anything of this
+        // family's. Every row reads its texels back through a `Shared` buffer, and a device
         // without unified memory holds that buffer in host-cached system memory
         // (`crate::replay::shared_memory_notice`).
+        //
+        // `device-color-conversion`, the device's own conversion into the attachment where it is
+        // not Metal's, is the device's answer, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`). Its own definition says validation derives no tolerance
+        // and no explanation from it, so a row whose texels also differ stays divergent on those
+        // texels, which is the finding.
         //
         // Measured on the RTX 5080 Laptop (615.71.09): all 11 rows announced both with the case
         // declaring neither, and on llvmpipe (Mesa 26.2.4) all 11 announced
         // `device-color-conversion` (replay-nvidia.log, replay-llvmpipe.log).
-        vec![
-            crate::replay::notice_allowance(Degradation::DeviceColorConversion.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1889,8 +1885,9 @@ mod tests {
                     case.name()
                 );
             }
-            // The device's own conversion into the attachment, and the venue's memory model.
-            assert_eq!(case.allowances().len(), 2, "{}", case.name());
+            // The venue's memory model, for every row; the device's own conversion into the
+            // attachment is the suite's native declaration.
+            assert_eq!(case.allowances().len(), 1, "{}", case.name());
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();
             let stated: BTreeSet<&str> = inputs.iter().map(|input| input.name.as_str()).collect();

@@ -1055,6 +1055,16 @@ pub enum PrecisionNote {
     /// stores the device's blend arithmetic (NVIDIA's 615.71.09 one `f32` ulp from Metal's in some
     /// source-over sums, a NaN as `0x7fffffff` where Metal stores `0x7fc00000`).
     ///
+    /// The recorded bound past one code, measured on lavapipe (LLVM 21.1.8) against the conformance
+    /// suite's recordings of plain Metal on an Apple M3 Max under macOS 27.0.1: a blend into an
+    /// 8-bit unorm attachment (`RGBA8Unorm`, `ARGB8Unorm`) stores within 2 codes of Metal's; a
+    /// fragment function that fetches an 8-bit sRGB attachment and writes it again, within 2 codes
+    /// once a later draw reads an earlier one's code (the device's decode,
+    /// [`PrecisionNote::SrgbTexelDecode`], beside its encode); a blend into an 8-bit sRGB
+    /// attachment, within 4 codes. Another device is not bounded past one code: an NVIDIA RTX 5080
+    /// Laptop GPU's blend into an 8-bit sRGB attachment stored up to 11 codes from Metal's in the
+    /// same suite.
+    ///
     /// Also: a function writes a `float` (or `half`) texel to a storage texture that may hold a
     /// normalized or half-float format, or `ARGB8Unorm`, which the device converts where it is not
     /// measured to store Metal's codes (`DriverDeviation::MetalNormStorageWrites`,
@@ -1565,13 +1575,15 @@ pub enum PrecisionNote {
     /// texture slot or a heap texture (not a heap's texture buffer,
     /// [`PrecisionNote::DeviceNanEncoding`]). The recorded bound, of a texel whose access reads
     /// one texel of one level:
-    /// - an 8- or 16-bit normalized code `c`: Metal's `c / (2^b - 1)` correctly rounded; the
-    ///   device's within one `f32` ulp of it where measured (lavapipe multiplies by the
-    ///   reciprocal: some 8-bit codes one ulp high, a 16-bit code and 512 `Depth16Unorm` codes one
-    ///   ulp low);
-    /// - a 5- or 6-bit channel of a packed format: the device may widen it by replicating its
-    ///   bits (ANV, NVIDIA), within 0.18 of a code (`1 / (2^b - 1)`) where it replicates to 8
-    ///   bits; a 4-bit channel's replication is exact;
+    /// - an 8-, 10- or 16-bit normalized code `c`: Metal's `c / (2^b - 1)` correctly rounded;
+    ///   the device's within one `f32` ulp of it where measured (lavapipe multiplies by the
+    ///   reciprocal: some 8-bit codes one ulp high, some 10-bit codes of `BGR10A2Unorm`, a 16-bit
+    ///   code and 512 `Depth16Unorm` codes one ulp low);
+    /// - a 4-, 5- or 6-bit channel of a packed format: the device may widen it by replicating its
+    ///   bits (ANV, NVIDIA), within 0.18 of a code (`1 / (2^b - 1)`) where it replicates a 5- or
+    ///   6-bit channel to 8 bits and exactly for a 4-bit one; or convert it by the reciprocal,
+    ///   within one `f32` ulp of Metal's `c / (2^b - 1)` (lavapipe: some codes of `ABGR4Unorm`
+    ///   one ulp high, and of `A1BGR5Unorm`, `B5G6R5Unorm` and `BGR5A1Unorm` one ulp apart);
     /// - a half-float or small-float texel's NaN: the device's encoding, where Metal answers
     ///   `0x7fc00000`;
     /// - every other class: the device's value, which Metal's matches.

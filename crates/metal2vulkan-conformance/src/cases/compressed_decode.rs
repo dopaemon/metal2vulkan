@@ -35,7 +35,7 @@
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -44,7 +44,6 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose kernel reads a texture's texels as floats.
 const FIXTURE: &str = "format_scout";
@@ -63,11 +62,6 @@ const TEXEL_BYTES: usize = 16;
 
 /// The textures read per format, as the lane reads them.
 const ROUNDS: u64 = 4;
-
-/// The bound `PrecisionNote::DeviceTexelConversion` states (`device-texel-conversion`): one `f32`
-/// ulp for 8- and 16-bit codes. It is the note's number, copied here so a run that exceeds it
-/// fails rather than being re-fitted to whatever a device answers.
-const LEDGERS_TEXEL_CONVERSION_ULPS: u32 = 1;
 
 /// How Metal decodes a format's block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,16 +271,12 @@ impl Case for CompressedDecode {
 
     fn allowances(&self) -> Vec<Allowance> {
         // A driver not measured to decode this format as Metal does reads the device's decode of
-        // the texture's own BC image, announced `compressed-texel-decode`, a native note the
-        // suite declares for every case: it loosens no texel, and a texel it moves is a
-        // `known-gaps.tsv` row of the venue.
-        // A texel's `float` value is the device's conversion of its decoded codes, not
-        // Metal's exact one, which the runtime announces as `device-texel-conversion`, whose
-        // note bounds it at one `f32` ulp for 8- and 16-bit codes, so the bound here is the
-        // note's number and not a measurement of this chip: a run that exceeds one ulp is the
-        // note's claim failing, which is what this allowance exists to catch. On a device whose
-        // sampler is Metal's the notice does not fire, the justification does not hold, and every
-        // texel is compared exactly.
+        // the texture's own BC image, announced `compressed-texel-decode`, and a texel's `float`
+        // value is the device's conversion of its decoded codes, announced
+        // `device-texel-conversion`: both native notes the suite declares for every case. They
+        // loosen no texel, and a texel they move is a `known-gaps.tsv` row of the venue. On a
+        // device whose sampler is Metal's neither fires, and every texel compares exactly there
+        // too.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -298,15 +288,7 @@ impl Case for CompressedDecode {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut all = vec![crate::replay::shared_memory_notice()];
-        for round in 0..ROUNDS {
-            all.push(Allowance::new(
-                format!("case/round/{round}/texels"),
-                Loosening::Ulps(LEDGERS_TEXEL_CONVERSION_ULPS),
-                Justification::Degradation(Degradation::DeviceTexelConversion.code().to_owned()),
-            ));
-        }
-        all
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

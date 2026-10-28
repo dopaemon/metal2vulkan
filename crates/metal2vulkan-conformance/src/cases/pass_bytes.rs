@@ -9,7 +9,7 @@
 //! difference hides and where one word moving is a readable failure. None reads a texture or an
 //! input buffer, each binds one buffer, and none can fault a GPU.
 
-use crate::allowance::{Allowance, Justification, Loosening};
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -17,13 +17,12 @@ use crate::replay::NOTICES_SITE;
 use crate::transcript::{
     ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Transcript, Value,
 };
-use metal2vulkan_runtime::Degradation;
 
 /// The threads in one threadgroup.
 const THREADS_PER_GROUP: u32 = 64;
 
 /// A column of the words each thread writes: the words of one answer, compared apart from the
-/// others, because a case loosens one answer and not its neighbours.
+/// others, so a diff names the answer that moved and not its neighbours.
 #[derive(Clone, Copy, Debug)]
 pub struct Column {
     /// The site's name under `output`.
@@ -32,14 +31,6 @@ pub struct Column {
     pub first_word: u32,
     /// The words it holds.
     pub words: u32,
-    /// The degrade notices that justify this column's words differing from Metal's at all, where
-    /// one of them was announced. Empty means the column compares exactly on every device.
-    ///
-    /// A fast-math transcendental is the case: a device that does not compute Metal's own
-    /// announces it, and how far its answer lies from Metal's is the device's, not a bound the
-    /// suite can state. So such a column is unchecked where the notice fired — counted and
-    /// reported, never silently — and exact everywhere else.
-    pub notices: &'static [Degradation],
 }
 
 impl Column {
@@ -49,39 +40,20 @@ impl Column {
             name,
             first_word,
             words,
-            notices: &[],
-        }
-    }
-
-    /// A column whose words may differ where one of `notices` was announced.
-    const fn noted(
-        name: &'static str,
-        first_word: u32,
-        words: u32,
-        notices: &'static [Degradation],
-    ) -> Self {
-        Self {
-            name,
-            first_word,
-            words,
-            notices,
         }
     }
 }
 
-/// The whole of a thread's words as one column, for a case that loosens none of them.
+/// The whole of a thread's words as one column, for a case that compares them as one.
 const EVERY_WORD: &str = "words";
 
-/// The notices a device announces where its arithmetic or its transcendental functions are not
-/// Metal's.
-const NOT_METALS_MATHS: &[Degradation] = &[
-    Degradation::DeviceTranscendentals,
-    Degradation::DeviceArithmetic,
-];
-
-/// The columns of `a1_half_tanh_regimes`'s two words.
+/// The columns of `a1_half_tanh_regimes`'s two words. A device that does not compute Metal's own
+/// transcendental functions or arithmetic announces it (`device-transcendentals`,
+/// `device-arithmetic`): the device's own answers, which the suite declares for every case
+/// (`crate::replay::NATIVE_NOTES`) and which loosen no word, so both columns compare exactly and a
+/// word the device's maths moves is a `known-gaps.tsv` row of the venue.
 const TANH_COLUMNS: &[Column] = &[
-    Column::noted("fast-float-tanh", 0, 1, NOT_METALS_MATHS),
+    Column::exact("fast-float-tanh", 0, 1),
     Column::exact("half-tanh", 1, 1),
 ];
 
@@ -212,11 +184,6 @@ impl PassBytes {
         }
     }
 
-    /// The site one column's words sit at, under the case's root.
-    fn column_path(&self, column: &Column) -> String {
-        format!("case/output/{}", column.name)
-    }
-
     /// The `output` node of `bytes`: one child per column, each holding the whole read-back under
     /// its own layout, so every byte offset a diff prints is the buffer's own.
     fn output_node(&self, bytes: Vec<u8>) -> Node {
@@ -262,37 +229,11 @@ impl Case for PassBytes {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One allowance per noted column and notice, and one over the notices site for each: a
-        // device that announced the notice may differ in that column and holds that notice in its
-        // set, and a device that announced none of them compares every column exactly and must
-        // hold none.
-        let mut allowances: Vec<Allowance> = self
-            .columns()
-            .iter()
-            .flat_map(|column| {
-                let path = self.column_path(column);
-                column.notices.iter().flat_map(move |kind| {
-                    [
-                        Allowance::new(
-                            path.clone(),
-                            Loosening::Unchecked,
-                            Justification::notice(*kind),
-                        ),
-                        Allowance::new(
-                            format!("case/{NOTICES_SITE}/*"),
-                            Loosening::Unchecked,
-                            Justification::notice(*kind),
-                        ),
-                    ]
-                })
-            })
-            .collect();
         // The pass's input and output buffers are `Shared`, and a device with no unified memory
         // keeps a `Shared` allocation in system memory because that is the only memory both sides
         // can reach. It is the venue's memory model rather than a column's answer, so it is
         // declared at the notices site alone and loosens no column.
-        allowances.push(crate::replay::shared_memory_notice());
-        allowances
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

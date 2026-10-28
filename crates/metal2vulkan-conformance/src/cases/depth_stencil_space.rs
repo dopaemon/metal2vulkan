@@ -1181,16 +1181,15 @@ impl Case for DepthCodes {
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
         //
-        // Two more, both declarations: a `DontCare` depth store our side keeps where Metal may
-        // drop it (`dont-care-store`, announced by this row on the 5080 and on llvmpipe, Mesa
-        // 26.2.4, with the case declaring it nowhere), and a normalized depth the device converts
-        // where it is not measured to store Metal's code (`unorm-depth-rounding`; expected on
-        // both, unmeasured since the device's own conversion became the only form). Neither
-        // loosens a depth code.
+        // One more, a declaration: a `DontCare` depth store our side keeps where Metal may drop
+        // it (`dont-care-store`, announced by this row on the 5080 and on llvmpipe, Mesa 26.2.4,
+        // with the case declaring it nowhere). It loosens no depth code. A normalized depth the
+        // device converts where it is not measured to store Metal's code
+        // (`unorm-depth-rounding`) is the device's own answer, which the suite declares for every
+        // case (`crate::replay::NATIVE_NOTES`).
         vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::DontCareStore.code()),
-            crate::replay::notice_allowance(Degradation::UnormDepthRounding.code()),
         ]
     }
 
@@ -2913,8 +2912,8 @@ mod tests {
             }
             // Every row declares the venue's memory notice. Three declare more: the depth-slot row
             // the separate depth and stencil attachments it is the only case to take, and the two
-            // depth rows what a driver that is not Metal announced for their `DontCare` store and
-            // their normalized depth.
+            // depth rows what a driver that is not Metal announced for their `DontCare` store (their
+            // normalized depth is the device's own answer, the suite's to declare).
             let named: std::collections::BTreeSet<&str> = allowed
                 .iter()
                 .filter_map(|allowance| match &allowance.justified_by {
@@ -2930,7 +2929,7 @@ mod tests {
             let wanted: usize = match case.name() {
                 name if name == DepthSlot.name() => 2,
                 "depthstencil-depth-compares" => 2,
-                "depthstencil-depth-codes" => 3,
+                "depthstencil-depth-codes" => 2,
                 _ => 1,
             };
             assert_eq!(named.len(), wanted, "{}", case.name());

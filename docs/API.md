@@ -2817,7 +2817,13 @@ bound.
   even and the device's store as it rounds a `float` (toward zero on every measured driver, one
   unit in the last place, a finite value past 65504 stored as 65504); and a fragment function's
   `float` blend into a 16-bit float attachment through the pixel interlock on a device not
-  measured to round a `half` store as Metal does.
+  measured to round a `half` store as Metal does. The recorded bound past one code, measured on
+  lavapipe against plain Metal on an Apple M3 Max: a blend into an 8-bit unorm attachment
+  (`RGBA8Unorm`, `ARGB8Unorm`) within 2 codes of Metal's; a fragment function that fetches an 8-bit
+  sRGB attachment and writes it again, within 2 codes once a later draw reads an earlier one's code
+  (with `srgb-texel-decode`); a blend into an 8-bit sRGB attachment, within 4 codes. Another device
+  is not bounded past one code (an NVIDIA RTX 5080 Laptop GPU's blend into an 8-bit sRGB attachment
+  stored up to 11 codes from Metal's).
   Also a render pass's clear of a normalized, sRGB,
   packed 16-bit, half or small-float color attachment to a color whose conversion is in question
   (a normalized channel within 1/1024 of a midpoint between two codes, an sRGB channel inside its
@@ -3011,7 +3017,15 @@ bound.
 - `metal2vulkan-degrade-device-texel-conversion` (precision).
   `PrecisionNote::DeviceTexelConversion`: Native device sampling (a texel conversion): the module
   hands a read, sample or gather with a `float` result the device's own conversion of the texel's
-  codes, off Apple's GPUs (`VkProperty::MetalSampler` keeps Metal's value).
+  codes, off Apple's GPUs (`VkProperty::MetalSampler` keeps Metal's value). Recorded bound, of a
+  texel read from one texel of one level: an 8-, 10- or 16-bit normalized code within one `f32`
+  ulp of Metal's `c / (2^b - 1)` where measured (lavapipe multiplies by the reciprocal: some 8-bit
+  codes one ulp high; some 10-bit `BGR10A2Unorm`, a 16-bit and 512 `Depth16Unorm` codes one ulp
+  low); a 4-, 5- or 6-bit channel of a packed format within one `f32` ulp where the device converts
+  it by the reciprocal (lavapipe: some `ABGR4Unorm` codes one ulp high), and within 0.18 of a code
+  where it widens a 5- or 6-bit channel by replicating its bits (ANV, NVIDIA; a 4-bit channel's
+  replication is exact); a half-float or small-float texel's NaN in the device's encoding, where
+  Metal answers `0x7fc00000`; every other class Metal's value.
 - `metal2vulkan-degrade-device-vertex-conversion` (precision).
   `PrecisionNote::DeviceVertexConversion`: Native vertex input (a conversion): a render pipeline's
   vertex descriptor gives a normalized format (`UCharNormalized` through `Short4Normalized` of

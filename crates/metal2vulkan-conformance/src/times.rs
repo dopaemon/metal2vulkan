@@ -55,6 +55,10 @@
 //! cost is therefore not comparable with Metal's, and the row is
 //! [`TimeVerdict::Unmeasured`] rather than a fast row. Without that rule a device's honest gap
 //! reads as a cost win, which is the most flattering lie the suite could tell.
+//!
+//! A note of the device's native answer ([`crate::replay::NATIVE_NOTES`]) is not such a notice:
+//! the native form is the only one the runtime builds, so it marks no cheaper work, and the rule
+//! counts every notice but those ([`crate::replay::degrading`]).
 
 use crate::watch::Watcher;
 use serde::{Deserialize, Serialize};
@@ -135,7 +139,8 @@ pub struct CaseRound {
     pub window_process_cpu: u64,
     /// Why the run stopped before the case finished, where it did.
     pub stopped: Option<String>,
-    /// The degrade-notice codes the run announced, sorted.
+    /// The degrade-notice codes the run announced, sorted, but the device's native answers
+    /// ([`crate::replay::degrading`]).
     pub degraded: Vec<String>,
 }
 
@@ -628,18 +633,21 @@ pub fn classify(metal: &CaseTimes, ours: &CaseTimes) -> Comparison {
                 .to_owned(),
         };
     }
-    if !ours.degraded.is_empty() {
+    // A leg's figures stored before the rule left the native notes out may still hold them.
+    let ours_codes = crate::replay::degrading(ours.degraded.iter().cloned());
+    if !ours_codes.is_empty() {
         return Comparison::Noticed {
             leg: Leg::Ours,
-            codes: ours.degraded.clone(),
+            codes: ours_codes,
             ours: ours.spend,
             metal: metal.spend,
         };
     }
-    if !metal.degraded.is_empty() {
+    let metal_codes = crate::replay::degrading(metal.degraded.iter().cloned());
+    if !metal_codes.is_empty() {
         return Comparison::Noticed {
             leg: Leg::Metal,
-            codes: metal.degraded.clone(),
+            codes: metal_codes,
             ours: ours.spend,
             metal: metal.spend,
         };
@@ -1479,6 +1487,20 @@ mod tests {
             other => panic!("a degraded leg a millionth of Metal's cost read {other:?}"),
         }
         assert_eq!(verdict.ratio(), None);
+    }
+
+    /// A native note is not a degrade notice for this rule: the device's native form is the only
+    /// one built, so a leg that announced one did the same work, and the margin judges it.
+    #[test]
+    fn a_leg_that_announced_only_native_notes_is_judged() {
+        let metal = case_of("m", 1_000, 0, 0);
+        let mut ours = case_of("o", 2_000, 0, 0);
+        ours.degraded = vec![crate::replay::NATIVE_NOTES[0].code().to_owned()];
+        assert!(
+            matches!(judge(&metal, &ours), TimeVerdict::Within { .. }),
+            "{:?}",
+            judge(&metal, &ours)
+        );
     }
 
     /// A run that stopped part way did a part of the case, on either leg, so nothing is compared

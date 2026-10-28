@@ -91,7 +91,6 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture the kernel lives in, and its entry point.
 const FIXTURE: &str = "hrd_half_read";
@@ -351,16 +350,13 @@ impl Case for HalfTexelNans {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A **notice declaration**, not a tolerance: it says what our side announces, so the case
-        // can be read beside Metal, which announces nothing, and it loosens **no recorded word**.
-        // It is chosen from the case's own shape -- a `half` result of a float texel, which is the
-        // access the runtime raises the kind for -- never from the device.
-        //
-        // Nothing loosens a stored half here, and nothing may: `device-nan-encoding`'s own
-        // definition in `pipeline/artifact.rs` ends "Validation derives no tolerance from it", so a
-        // tolerance written from it would be this suite overruling the contract it exists to test.
-        // The three 16-bit float formats are therefore left **divergent** on this round's MoltenVK,
-        // with the measured difference in the module docs above.
+        // The device's NaN encoding of a `half` result of a float texel (`device-nan-encoding`) is
+        // its own answer, which the suite declares for every case (`crate::replay::NATIVE_NOTES`),
+        // and nothing loosens a stored half: the note's own definition in `pipeline/artifact.rs`
+        // ends "Validation derives no tolerance from it", so a tolerance written from it would be
+        // this suite overruling the contract it exists to test. The three 16-bit float formats are
+        // therefore left **divergent** on this round's MoltenVK, with the measured difference in
+        // the module docs above.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -372,10 +368,7 @@ impl Case for HalfTexelNans {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::DeviceNanEncoding.code()),
-        ]
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -34,7 +34,6 @@ use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use metal2vulkan_runtime::Degradation;
 
 /// Every texture's width; each is one row.
 const W: u64 = 4;
@@ -300,14 +299,10 @@ impl Case for FormatCopies {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A device that flushes denormal depth values announces it once, and a `Depth32Float`
-        // texture is where that shows (lavapipe does; this Mac does not). The bytes the copies
-        // moved still compare exactly: the only site loosened is the set of notices, which Metal
-        // holds empty, and the allowance fails the case if the notice did not fire.
-        //
-        // Only a pair that touches `Depth32Float` names it. A `Depth16Unorm` or `Stencil8` pair
-        // holds no 32-bit float depth for a device to flush, so the notice cannot fire there and
-        // naming it would be a tolerance nothing can justify.
+        // A device that flushes denormal depth values announces `depth-denormals`, and a
+        // `Depth32Float` texture is where that shows (lavapipe does; this Mac does not). It is the
+        // device's own answer, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`), and the bytes the copies moved still compare exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -319,14 +314,7 @@ impl Case for FormatCopies {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        let pair = self.pair();
-        if pair.from == PixelFormat::Depth32Float || pair.to == PixelFormat::Depth32Float {
-            named.push(crate::replay::notice_allowance(
-                Degradation::DepthDenormals.code(),
-            ));
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

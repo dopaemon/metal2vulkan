@@ -89,12 +89,10 @@ fn one_replay_pass(
             (Ok(before), Ok(after)) => Ok(after.since(&before)),
             (Err(why), _) | (_, Err(why)) => Err(why),
         };
-        let mut degraded: Vec<String> = match &replayed {
-            Ok(replayed) => replayed.ours.announced_notices().into_keys().collect(),
+        let degraded = match &replayed {
+            Ok(replayed) => crate::replay::degrading(replayed.ours.announced_notices().into_keys()),
             Err(_) => Vec::new(),
         };
-        degraded.sort();
-        degraded.dedup();
         report.add_cost(cost_row(
             case.as_ref(),
             &venue_label,
@@ -269,8 +267,7 @@ pub fn cost_on_under(
                 format!("{what}, at {}", abort.at)
             });
             announced.extend(sites.finish().announced_notices().into_keys());
-            announced.sort();
-            announced.dedup();
+            let announced = crate::replay::degrading(announced);
             if round == 0 {
                 held.push(CaseCost {
                     case: case.name().to_owned(),
@@ -776,10 +773,9 @@ fn timed<S: Side>(case: &dyn Case, side: S) -> Result<crate::times::CaseRound, S
     let on_cpu_after = crate::clocks::thread_cpu_nanos();
     let process_cpu_after = crate::clocks::process_cpu_nanos();
     let observed = timer.take();
-    let mut degraded = side.announced();
-    degraded.extend(sites.finish().announced_notices().into_keys());
-    degraded.sort();
-    degraded.dedup();
+    let mut announced = side.announced();
+    announced.extend(sites.finish().announced_notices().into_keys());
+    let degraded = crate::replay::degrading(announced);
     let stopped = abort.map(|abort| {
         let what = abort
             .failure

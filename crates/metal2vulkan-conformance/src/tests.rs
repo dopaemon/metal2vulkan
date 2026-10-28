@@ -1215,6 +1215,32 @@ fn the_native_notes_hold_every_native_kind_once() {
     }
 }
 
+/// No case names a native note, at the notices site or at a value. The suite declares each one
+/// for every case, so a case's own declaration states the suite's rule a second time; and a value
+/// loosened by one is a tolerance the note's own documentation says validation derives from none.
+/// A value the device's native answer moves is a `known-gaps.tsv` row instead, scoped to the
+/// venue whose device answers so.
+#[test]
+fn no_case_names_a_native_note() {
+    use crate::replay::NATIVE_NOTES;
+    let mut named = Vec::new();
+    for case in crate::cases::all() {
+        for allowance in case.allowances() {
+            let Justification::Degradation(code) = &allowance.justified_by else {
+                continue;
+            };
+            if NATIVE_NOTES.iter().any(|kind| kind.code() == code) {
+                named.push(format!(
+                    "{} names {code} at {}",
+                    case.name(),
+                    allowance.path
+                ));
+            }
+        }
+    }
+    assert!(named.is_empty(), "{}:\n{}", named.len(), named.join("\n"));
+}
+
 /// A case that names two notices separately must see **both** fire. Before the subset check the
 /// walk stopped at the first covering allowance that held, so a case declaring two announced
 /// notices read "3 named, 2 fired, 1 never fired" and its second declaration was permanently dead
@@ -4475,6 +4501,58 @@ fn a_run_with_no_bound_that_stands_is_unmeasured_and_says_why() {
     assert!(
         elsewhere.contains("half-nan-quieted") && elsewhere.contains("device's gap"),
         "{elsewhere}"
+    );
+}
+
+/// The degraded-set rule counts no native note ([`crate::replay::degrading`]). The device's native
+/// form is the only one the runtime builds, so a run that announced one did the same work as one
+/// that did not: a record that holds one (as a record taken before the rule may) compares with a
+/// run that announced none, and the other way about. A notice that is not native still keeps the
+/// two apart.
+#[test]
+fn the_degraded_set_rule_counts_no_native_note() {
+    let native = crate::replay::NATIVE_NOTES[0].code().to_owned();
+    let record = |degraded: Vec<String>| crate::cost::CostRecord {
+        venue: "the measured venue".to_owned(),
+        runs: 2,
+        measured: "two runs".to_owned(),
+        contrasted: None,
+        degraded,
+        bounds: [("queue_submissions".to_owned(), 1)].into_iter().collect(),
+        moving: Default::default(),
+        composed: Default::default(),
+        ceilings: Default::default(),
+        per_state: None,
+        unmeasurable: None,
+    };
+    let found = crate::cost::Counts::read("WorkCounts {\n    queue_submissions: 1,\n}").unwrap();
+    let judged = |record: &crate::cost::CostRecord, degraded: &[String]| {
+        crate::cost::judge(
+            std::slice::from_ref(record),
+            "the measured venue",
+            true,
+            &found,
+            0,
+            None,
+            degraded,
+        )
+        .word()
+    };
+    assert_eq!(judged(&record(vec![native.clone()]), &[]), "within");
+    assert_eq!(
+        judged(&record(Vec::new()), std::slice::from_ref(&native)),
+        "within"
+    );
+    assert_eq!(
+        judged(
+            &record(vec![native.clone()]),
+            &["half-nan-quieted".to_owned()]
+        ),
+        "unmeasured"
+    );
+    assert_eq!(
+        crate::replay::degrading([native, "b".to_owned(), "a".to_owned(), "b".to_owned()]),
+        ["a", "b"]
     );
 }
 

@@ -35,10 +35,11 @@
 //!
 //! **Not one byte of this family is loosened.** Every row's bytes are Metal's own on MoltenVK, on
 //! lavapipe and on an RTX 5080 Laptop, so the only field that may differ is the set of degrade
-//! notices our side announced. One row names a notice of its own: lavapipe cannot hold Metal's
-//! denormal depths (`depth-denormals`), named on the row that announced it, not on the family.
+//! notices our side announced. The depth row's on lavapipe, which cannot hold Metal's denormal
+//! depths (`depth-denormals`), is the device's own answer, which the suite declares for every case
+//! ([`crate::replay::NATIVE_NOTES`]).
 //!
-//! Every row names one more, and it belongs to the venue rather than to any row: the declaration
+//! Every row names one notice, and it belongs to the venue rather than to any row: the declaration
 //! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
 //! announces for the `Shared` buffer each row reads its answer back through.
 //!
@@ -100,7 +101,6 @@ use crate::allowance::Allowance;
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
 use crate::transcript::{Node, Observed, Sites, Value};
 use crate::work::{Done, Plane, Resource, Step, Storage, TextureKind, TextureSpec, Work};
-use metal2vulkan_runtime::Degradation;
 
 /// The byte a resource is filled with before it is released, so the memory the row's second
 /// allocation may be handed held something nothing else would produce. The lane's own byte.
@@ -843,48 +843,24 @@ const fn chain(size: [u64; 2], levels: u64, wide: u64) -> Shape {
     }
 }
 
-/// One texture row: its case name, its shape, its storage mode, and the degrade notices a device
-/// that cannot hold this shape exactly announces for it.
+/// One texture row: its case name, its shape and its storage mode.
 ///
-/// Metal announces none, so the notices site is the only field of a row that may differ at all —
-/// every byte compares exactly on both venues of this round — and each kind listed is what
-/// justifies that one difference. A row that announced a kind it does not list fails until the kind
-/// is added, which is the model working.
+/// Metal announces no notice, so the notices site is the only field of a row that may differ at
+/// all — every byte compares exactly on both venues of this round.
 struct Row {
     case: &'static str,
     shape: Shape,
     storage: Storage,
-    notices: &'static [Degradation],
 }
 
-/// A row of `shape` in `storage` that a device holds exactly, announcing nothing.
+/// A row of `shape` in `storage`.
 const fn row(case: &'static str, shape: Shape, storage: Storage) -> Row {
     Row {
         case,
         shape,
         storage,
-        notices: &[],
     }
 }
-
-/// A row of `shape` in `storage` whose shape a device may not hold exactly, announcing `notices`.
-const fn degraded(
-    case: &'static str,
-    shape: Shape,
-    storage: Storage,
-    notices: &'static [Degradation],
-) -> Row {
-    Row {
-        case,
-        shape,
-        storage,
-        notices,
-    }
-}
-
-/// What a device whose depth format cannot hold Metal's denormal depths announces for a
-/// `Depth32Float` target: lavapipe announces it for the depth row, MoltenVK announces nothing.
-const DEPTH_DENORMALS: &[Degradation] = &[Degradation::DepthDenormals];
 
 /// Every texture row of the family.
 ///
@@ -975,11 +951,10 @@ const TEXTURES: &[Row] = &[
         RGBA8_PLAIN,
         Storage::Private,
     ),
-    degraded(
+    row(
         "fresh-texture-depth32float-private",
         DEPTH32FLOAT,
         Storage::Private,
-        DEPTH_DENORMALS,
     ),
     row(
         "fresh-chain-32x32-private",
@@ -1110,14 +1085,7 @@ impl Case for FreshTexture {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        let mut allowances = vec![shared_memory_notice()];
-        allowances.extend(
-            self.row
-                .notices
-                .iter()
-                .map(|kind| crate::replay::notice_allowance(kind.code())),
-        );
-        allowances
+        vec![shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -2069,16 +2037,17 @@ mod tests {
     /// field that may differ is the set of notices our side announced.
     ///
     /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
-    /// row's; **only** the one row a venue announced something of its own for names a second
-    /// kind, and each names the kind that venue announced, and so do the three pattern rows whose
-    /// read blits out of a texture Metal keeps compressed in a format whose canonical encoding the
-    /// device's copy may keep apart from Metal's (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the
-    /// notes lavapipe announced). A row whose notices were a guess would show here as a row
-    /// loosening a site nothing needed.
+    /// row's; **only** the three pattern rows whose read blits out of a texture Metal keeps
+    /// compressed in a format whose canonical encoding the device's copy may keep apart from
+    /// Metal's (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the notes lavapipe announced) name a
+    /// second kind. A row whose notices were a guess would show here as a row loosening a site
+    /// nothing needed.
     #[test]
     fn a_row_loosens_the_notices_site_alone() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
-        let shared = Degradation::SharedInSystemMemory.code().to_owned();
+        let shared = metal2vulkan_runtime::Degradation::SharedInSystemMemory
+            .code()
+            .to_owned();
         for case in all() {
             let allowances = case.allowances();
             for allowance in &allowances {
@@ -2093,19 +2062,8 @@ mod tests {
                 .count();
             assert_eq!(declared, 1, "{}", case.name());
         }
-        let named: Vec<&str> = TEXTURES
-            .iter()
-            .filter(|row| !row.notices.is_empty())
-            .map(|row| row.case)
-            .collect();
-        assert_eq!(named, vec!["fresh-texture-depth32float-private"]);
         for row in TEXTURES {
-            assert_eq!(
-                FreshTexture { row }.allowances().len(),
-                1 + row.notices.len(),
-                "{}",
-                row.case
-            );
+            assert_eq!(FreshTexture { row }.allowances().len(), 1, "{}", row.case);
         }
         // Everything else is held to Metal exactly, the venue's own notice apart.
         for (case, storage) in BUFFERS {

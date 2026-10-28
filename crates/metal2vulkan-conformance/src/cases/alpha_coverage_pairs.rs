@@ -194,9 +194,10 @@ struct Row {
     /// The degrade notices a driver that is not Metal announced **for this row**, beside the one
     /// every row declares ([`crate::replay::shared_memory_notice`]).
     ///
-    /// A measured set, row by row, and not a rule fitted to the rows: the six sets below are what
-    /// the RTX 5080 Laptop (615.71.09) and llvmpipe (Mesa 26.2.4) printed, and every one of them
-    /// is a declaration at the notices site that moves no coverage and no texel.
+    /// A measured set, row by row, and not a rule fitted to the rows: the three sets below are what
+    /// the RTX 5080 Laptop (615.71.09) and llvmpipe (Mesa 26.2.4) printed, less the device's own
+    /// answers the suite declares for every case, and every one of them is a declaration at the
+    /// notices site that moves no coverage and no texel.
     notices: &'static [Degradation],
 }
 
@@ -218,24 +219,16 @@ impl Row {
     }
 }
 
-/// What a **four-sample** row with an alpha output and `alphaToCoverage` **on** announced: the
-/// coverage of a clipped edge split per sample (`clipped-coverage-split`), the device's own
-/// conversion into the attachment (`device-color-conversion`), the sample outputs written in a
-/// loop (`looped-sample-outputs`) and the resolve done by a draw rather than the store
-/// (`shader-resolve`).
+/// What a **four-sample** row with an alpha output announced: the coverage of a clipped edge split
+/// per sample (`clipped-coverage-split`), the sample outputs written in a loop
+/// (`looped-sample-outputs`) and the resolve done by a draw rather than the store
+/// (`shader-resolve`), with `alphaToCoverage` on or off. With it on, the device's own conversion
+/// of the alpha into the attachment (`device-color-conversion`) fires too, which the suite
+/// declares for every case ([`crate::replay::NATIVE_NOTES`]).
 ///
-/// Measured on the RTX 5080 Laptop (615.71.09) for all eight such rows, each divergent on the
+/// Measured on the RTX 5080 Laptop (615.71.09) for all ten such rows, each divergent on the
 /// notices site and nothing else (replay-nvidia.log).
-const A2C_ON_MULTISAMPLE: &[Degradation] = &[
-    Degradation::ClippedCoverageSplit,
-    Degradation::DeviceColorConversion,
-    Degradation::LoopedSampleOutputs,
-    Degradation::ShaderResolve,
-];
-
-/// The same, with `alphaToCoverage` **off**: no alpha reaches the device's conversion, so
-/// `device-color-conversion` does not fire. Measured on the 5080 for both such rows.
-const A2C_OFF_MULTISAMPLE: &[Degradation] = &[
+const ALPHA_MULTISAMPLE: &[Degradation] = &[
     Degradation::ClippedCoverageSplit,
     Degradation::LoopedSampleOutputs,
     Degradation::ShaderResolve,
@@ -246,59 +239,52 @@ const A2C_OFF_MULTISAMPLE: &[Degradation] = &[
 /// on llvmpipe for both such rows.
 const NO_ALPHA_MULTISAMPLE: &[Degradation] = &[Degradation::ShaderResolve];
 
-/// A single-sample row with an alpha the device converts: no resolve, no sample loop. Measured on
-/// the 5080 and on llvmpipe for `a2c-on-1-alpha-50`.
-const SINGLE_CONVERTED: &[Degradation] = &[Degradation::DeviceColorConversion];
-
-/// A single-sample row whose store announces nothing but the device's own arithmetic, which the
-/// suite declares for every case ([`crate::replay::NATIVE_NOTES`]): `a2c-off-1-alpha-50` and
-/// `a2one-on-1-mask-no-alpha`.
-const SINGLE_PLAIN: &[Degradation] = &[];
-
-/// A single-sample **blended** row: the blend's factors read the source alpha, so what reaches the
-/// attachment is the device's own conversion and not one our side rounded. Measured on the 5080
-/// and on llvmpipe for both `a2one-*-1-blend-source-alpha` rows.
-const SINGLE_BLEND: &[Degradation] = &[Degradation::DeviceColorConversion];
+/// A single-sample row, whose store announces nothing but the device's own answers, which the suite
+/// declares for every case ([`crate::replay::NATIVE_NOTES`]): the device's conversion of an alpha
+/// under `alphaToCoverage` or of a blend whose factors read the source alpha
+/// (`device-color-conversion`, measured on the 5080 and on llvmpipe for `a2c-on-1-alpha-50` and
+/// both `a2one-*-1-blend-source-alpha` rows), and its arithmetic.
+const SINGLE: &[Degradation] = &[];
 
 /// Every row, grouped by the question it answers. Each group's prose is in the module header.
 const ROWS: &[Row] = &[
     // The control: the same alpha with the field off, so every coverage below is the field's doing.
     Row {
-        notices: A2C_OFF_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-off-4-alpha-50", false, 0.5)
     },
     // The sweep that gives `floor(alpha * samples)`.
     Row {
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-00", true, 0.0)
     },
     Row {
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-25", true, 0.25)
     },
     Row {
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50", true, 0.5)
     },
     Row {
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-75", true, 0.75)
     },
     Row {
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-100", true, 1.0)
     },
     // The sample-count cross: the cell that pins `floor` against round-to-nearest.
     Row {
         name: "a2c-on-1-alpha-50",
         samples: 1,
-        notices: SINGLE_CONVERTED,
+        notices: SINGLE,
         ..Row::sweep("a2c-on-1-alpha-50", true, 0.5)
     },
     Row {
         name: "a2c-off-1-alpha-50",
         samples: 1,
-        notices: SINGLE_PLAIN,
+        notices: SINGLE,
         ..Row::sweep("a2c-off-1-alpha-50", false, 0.5)
     },
     // The write-mask cross: the coverage must not move, and only the stored alpha may.
@@ -307,26 +293,26 @@ const ROWS: &[Row] = &[
         write_mask: ColorWriteMask::RED
             .union(ColorWriteMask::GREEN)
             .union(ColorWriteMask::BLUE),
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50-mask-no-alpha", true, 0.5)
     },
     // The sample-mask cross, with its own control: the AND is only visible in the stored texel.
     Row {
         name: "a2c-off-4-alpha-50-shadermask-5",
         report: Report::Masked(0b0101),
-        notices: A2C_OFF_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-off-4-alpha-50-shadermask-5", false, 0.5)
     },
     Row {
         name: "a2c-on-4-alpha-50-shadermask-5",
         report: Report::Masked(0b0101),
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50-shadermask-5", true, 0.5)
     },
     Row {
         name: "a2c-on-4-alpha-50-shadermask-a",
         report: Report::Masked(0b1010),
-        notices: A2C_ON_MULTISAMPLE,
+        notices: ALPHA_MULTISAMPLE,
         ..Row::sweep("a2c-on-4-alpha-50-shadermask-a", true, 0.5)
     },
     // The independent cell: no alpha component, so nothing for the field to read.
@@ -347,7 +333,7 @@ const ROWS: &[Row] = &[
         name: "a2one-off-1-blend-source-alpha",
         samples: 1,
         blended: true,
-        notices: SINGLE_BLEND,
+        notices: SINGLE,
         ..Row::sweep("a2one-off-1-blend-source-alpha", false, 0.5)
     },
     Row {
@@ -355,7 +341,7 @@ const ROWS: &[Row] = &[
         samples: 1,
         alpha_to_one: true,
         blended: true,
-        notices: SINGLE_BLEND,
+        notices: SINGLE,
         ..Row::sweep("a2one-on-1-blend-source-alpha", false, 0.5)
     },
     Row {
@@ -365,7 +351,7 @@ const ROWS: &[Row] = &[
         write_mask: ColorWriteMask::RED
             .union(ColorWriteMask::GREEN)
             .union(ColorWriteMask::BLUE),
-        notices: SINGLE_PLAIN,
+        notices: SINGLE,
         ..Row::sweep("a2one-on-1-mask-no-alpha", false, 0.5)
     },
 ];

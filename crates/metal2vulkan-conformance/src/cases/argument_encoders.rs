@@ -74,7 +74,6 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{DataType, PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
-use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose kernel takes a texture and a sampler in an argument buffer. The same one
 /// `pixel_samplers` uses for its `arg` source, so this family needs no fixture of its own.
@@ -526,19 +525,17 @@ impl Case for ArgumentEncoderCase {
         Ok(inputs)
     }
 
-    /// The notices a venue may announce for the sampling these cases do, each declared on its own
-    /// code.
+    /// The notices a venue may announce for these cases: shared storage in system memory, the
+    /// venue's own.
     ///
     /// Nothing of a value is loosened here: every sampled word, the encoder's own facts and the
     /// argument buffer's changed-word mask are compared exactly on every venue, which is what the
     /// texels buy. The texture holds the sixteen patterns of each component at 0 or 255, so every
     /// sampled component is exactly 0.0 or 1.0 wherever the sampling happens, and a filter, a
-    /// denormal or a decode a device does its own way cannot move a word of that.
-    ///
-    /// The two codes were measured, not guessed: Apple Metal announces neither for this work and
-    /// llvmpipe announces both, so a run on either venue alone would have left the
-    /// other's set undeclared. Only the two cases that dispatch declare them; the three that
-    /// encode and read back never sample, so a declaration there would never fire.
+    /// denormal or a decode a device does its own way cannot move a word of that. What the two
+    /// cases that dispatch announce of the sampling on llvmpipe, the device's filter and its sRGB
+    /// decode (`float-sample-filter`, `srgb-texel-decode`), are the device's own answers, which the
+    /// suite declares for every case (`crate::replay::NATIVE_NOTES`).
     fn allowances(&self) -> Vec<Allowance> {
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
@@ -551,15 +548,7 @@ impl Case for ArgumentEncoderCase {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if self.dispatches {
-            named.extend(
-                [Degradation::FloatSampleFilter, Degradation::SrgbTexelDecode]
-                    .into_iter()
-                    .map(|notice| crate::replay::notice_allowance(notice.code())),
-            );
-        }
-        named
+        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

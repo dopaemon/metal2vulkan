@@ -326,19 +326,19 @@ impl Case for RestartIndices {
         // **Nothing is loosened.** Every draw here is the direct indexed form, which reaches no
         // bounds pass, and every texel of every cell still compares exactly.
         //
-        // Three kinds are declared over the notices site. The vertex stage's own compiler rewrites
-        // its arithmetic on a device whose float arithmetic is not Metal's
-        // (`device-arithmetic`); the vertex function writes `[[point_size]]`, which a device
-        // without `shaderPointSize`'s guarantee takes as its own (`device-point-size`); and the
-        // positions, indices, marks, frames and read-back are all `Shared`, which a device with no
-        // unified memory keeps in system memory because that is the only memory both sides can
-        // reach (`shared-in-system-memory`). The last two belong to the venue -- its point-size
-        // guarantee and its memory model -- rather than to a primitive type or an index type.
-        [Degradation::DeviceArithmetic, Degradation::DevicePointSize]
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .chain([crate::replay::shared_memory_notice()])
-            .collect()
+        // Two kinds are declared over the notices site. The vertex function writes
+        // `[[point_size]]`, which a device without `shaderPointSize`'s guarantee takes as its own
+        // (`device-point-size`); and the positions, indices, marks, frames and read-back are all
+        // `Shared`, which a device with no unified memory keeps in system memory because that is
+        // the only memory both sides can reach (`shared-in-system-memory`). Both belong to the
+        // venue -- its point-size guarantee and its memory model -- rather than to a primitive
+        // type or an index type. The vertex stage's arithmetic on a device whose float arithmetic
+        // is not Metal's (`device-arithmetic`) is the device's own answer, which the suite
+        // declares for every case (`crate::replay::NATIVE_NOTES`).
+        vec![
+            crate::replay::notice_allowance(Degradation::DevicePointSize.code()),
+            crate::replay::shared_memory_notice(),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

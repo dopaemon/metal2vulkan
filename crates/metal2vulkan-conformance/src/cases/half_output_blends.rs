@@ -454,13 +454,12 @@ impl Case for HalfOutputBlends {
         // six formats are therefore left **divergent** on this round's MoltenVK, with the measured
         // counts in the module docs above.
         //
-        // Two more of the same shape are declared from the run that shows them: a device whose own
-        // conversion into the attachment is not Metal's (`device-color-conversion`, lavapipe) and
-        // one whose NaN encoding in a half-float target is its own (`device-nan-encoding`). Both
-        // are declarations at the notices site and neither loosens a stored code -- which matters
-        // most for `device-color-conversion`, whose own definition says validation derives no
-        // tolerance and no explanation from it and a difference stays a mismatch for review. The
-        // rows stay divergent on their texels, on both venues.
+        // Two more of the same shape show in the runs: a device whose own conversion into the
+        // attachment is not Metal's (`device-color-conversion`, lavapipe) and one whose NaN
+        // encoding in a half-float target is its own (`device-nan-encoding`). Both are the
+        // device's own answers, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`), and neither loosens a stored code. The rows stay
+        // divergent on their texels, on both venues.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -472,17 +471,10 @@ impl Case for HalfOutputBlends {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                [
-                    Degradation::HalfOutputFastMathBlend,
-                    Degradation::DeviceColorConversion,
-                    Degradation::DeviceNanEncoding,
-                ]
-                .into_iter()
-                .map(|kind| crate::replay::notice_allowance(kind.code())),
-            )
-            .collect()
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::HalfOutputFastMathBlend.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

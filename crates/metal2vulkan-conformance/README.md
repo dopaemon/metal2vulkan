@@ -381,7 +381,9 @@ were not theirs, after it had held still over seven rounds of an earlier measure
 **A device's gap is not a cost win.** A count that is lower because the device lacks the exact form,
 so the runtime announced a notice and did something cheaper, is the device's gap and not work we
 saved. A record carries the notices its measurement announced and refuses to compare a run that
-announced otherwise. Four things make a run `unmeasured` rather than a pass, each said in words: a
+announced otherwise. The device's native answers (`replay::NATIVE_NOTES`) count on neither side
+(`replay::degrading`): the native form is the only one the runtime builds, so a native note marks
+no cheaper work. Four things make a run `unmeasured` rather than a pass, each said in words: a
 venue the measurement was not taken on, a selection that is not the whole case set (a case's counts
 depend on what ran before it in the same process), a run that stopped part way, and a run the device
 degraded otherwise.
@@ -502,7 +504,8 @@ ratio is on the **totals**, so a call is weighted by how often it runs.
 **The degraded-set rule, which matters more here than for counts.** A leg that announced a degrade
 notice did a different amount of work: the device lacked the exact form and the runtime did something
 cheaper and said so. Its cost is `unmeasured`, never a fast row. Without that rule a device's honest
-gap reads as a cost win, which is the most flattering lie the suite could tell.
+gap reads as a cost win, which is the most flattering lie the suite could tell. A native note is no
+such notice and counts for neither leg, as for counts.
 
 **But the rule withholds the verdict and no longer deletes the figures, which it used to.** Every
 function that pooled, ranked or printed a figure asked `judge` whether a case was `unmeasured` and
