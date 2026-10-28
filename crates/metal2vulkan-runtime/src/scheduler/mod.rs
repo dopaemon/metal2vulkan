@@ -777,6 +777,19 @@ impl Scheduler {
         self.shared.woken(Woken::Host, asleep);
     }
 
+    /// Whether a CPU decode into a decoded twin is queued or running ([`decode_queued`] and not
+    /// yet [`decode_finished`]): a test waits for none to be left before it counts the copies a
+    /// call of its own makes, as the decode thread's copies into the twins count alike
+    /// (`WorkCounts::host_texel_copies`).
+    ///
+    /// [`decode_queued`]: Self::decode_queued
+    /// [`decode_finished`]: Self::decode_finished
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn decodes_pending(&self) -> bool {
+        let state = lock(self.shared.inbox.state());
+        !state.decodes.is_empty() || state.untracked_decodes > 0
+    }
+
     /// Whether this thread is the scheduler's (a submission check runs on it).
     pub(crate) fn is_current(&self) -> bool {
         lock(&self.thread)

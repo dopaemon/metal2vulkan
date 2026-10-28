@@ -6,13 +6,23 @@
 //! last batch, or that is scheduled where its last batch goes: it passes and leaves every batch
 //! of it to the scheduler's thread, which runs those handlers, as it does today.
 //!
+//! Nor does it submit a batch of a queue whose batches wait in the scheduler's group
+//! (`command_buffer/group.rs`), which is the scheduler thread's to hold and to send: under the
+//! default `CompletionPolicy::Grouped`, on a driver measured to merge a submission that signals
+//! nothing into the next (`DriverFact::SubmissionsWithoutSignalsMerge`), that is every queue. So
+//! the waiter's own submissions are counted under `CompletionPolicy::Exact`, where no queue's
+//! batches group on any driver, and under the default each test checks that a waiting thread
+//! submits nothing where the device's batches group, and submits as under `Exact` elsewhere.
+//!
 //! Device tests: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects.
 
+use crate::command_buffer::merges_submissions;
 use crate::{
     CommandBuffer, CommandQueue, Device, DeviceKind, DeviceOptions, ResourceOptions,
     ShaderCacheOptions,
 };
+use metal2vulkan::device::{CompletionPolicy, DevicePolicy};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::ThreadId;
@@ -39,9 +49,12 @@ impl Drop for Scratch {
 }
 
 /// The device the cfg selects: a CPU device under `m2v_cpu_icd`, else a GPU, its shader cache
-/// in `cache`.
-fn device(cache: &Path) -> Device {
+/// in `cache`, its policy the default's with `completion`.
+fn device(cache: &Path, completion: CompletionPolicy) -> Device {
+    let mut policy = DevicePolicy::default();
+    policy.completion = completion;
     let options = DeviceOptions {
+        policy,
         kinds: match cfg!(m2v_cpu_icd) {
             true => vec![DeviceKind::Cpu],
             false => vec![
@@ -110,7 +123,8 @@ fn rounds(device: &Device, queue: &CommandQueue, besides: Besides) -> Passed {
 
 /// A thread that commits and then waits submits its own batch: at least one of [`ROUNDS`] does
 /// (the scheduler's thread, woken by the commit, may have taken it in first, and then the waiting
-/// thread finds the inbox empty and sleeps, as it did before).
+/// thread finds the inbox empty and sleeps, as it did before). Under `CompletionPolicy::Exact`,
+/// so on every driver; under the default, as [`under_the_default`] says.
 ///
 /// A command buffer with a submission or a scheduled handler is never submitted by a waiting
 /// thread: it passes, taking the commit into the order, and submits no batch of it. Each handler
@@ -120,7 +134,7 @@ fn rounds(device: &Device, queue: &CommandQueue, besides: Besides) -> Passed {
 #[test]
 fn a_thread_about_to_block_submits_what_it_committed_unless_a_handler_must_run() {
     let scratch = Scratch::new();
-    let device = device(&scratch.0);
+    let device = device(&scratch.0, CompletionPolicy::Exact);
     let queue = device.new_command_queue().unwrap();
     let waiting = std::thread::current().id();
     let plain = rounds(&device, &queue, Besides::Nothing);
@@ -157,6 +171,39 @@ fn a_thread_about_to_block_submits_what_it_committed_unless_a_handler_must_run()
             !held.handler_threads.contains(&waiting),
             "a {besides:?} ran on the thread waiting in wait_until_completed"
         );
+    }
+    drop(queue);
+    drop(device);
+    under_the_default(&scratch.0, "completion", |device, queue| {
+        rounds(device, queue, Besides::Nothing).batches
+    });
+}
+
+/// Under the default `CompletionPolicy::Grouped`: where the device's batches group (its driver
+/// merges a submission that signals nothing into the next, `merges_submissions`), every batch of
+/// a queue is the scheduler thread's to hold in its group, so a thread waiting for its `wait`
+/// submits none of [`ROUNDS`] (`scheduler::plain_ready`) and the scheduler's thread submits them
+/// all; elsewhere it submits at least one, as under `Exact`. `submitted` runs the plain rounds
+/// and answers the batches the waiters submitted.
+fn under_the_default(cache: &Path, wait: &str, submitted: impl Fn(&Device, &CommandQueue) -> u64) {
+    let device = device(cache, CompletionPolicy::Grouped);
+    let queue = device.new_command_queue().unwrap();
+    let groups = merges_submissions(&device.properties().driver_facts);
+    let batches = submitted(&device, &queue);
+    println!(
+        "under the default, batches grouping {groups}: submitted by waiters for the {wait}: \
+         {batches} batches of {ROUNDS} waits"
+    );
+    match groups {
+        true => assert_eq!(
+            batches, 0,
+            "a thread waiting for the {wait} submitted a batch of a queue whose batches group"
+        ),
+        false => assert!(
+            batches >= 1,
+            "no thread waiting for the {wait} submitted its own batch over {ROUNDS} waits under \
+             the default, on a device whose batches do not group"
+        ),
     }
     drop(queue);
     drop(device);
@@ -208,7 +255,8 @@ fn scheduled_rounds(device: &Device, queue: &CommandQueue, besides: Besides) -> 
 
 /// A thread that commits and then waits for the **scheduling** submits its own batch too: at
 /// least one of [`ROUNDS`] does, counted over that wait alone rather than over the wait for the
-/// completion that follows it.
+/// completion that follows it. Under `CompletionPolicy::Exact`, so on every driver; under the
+/// default, as [`under_the_default`] says.
 ///
 /// Its claim on the batches behind it is the weaker one -- the scheduling is established by the
 /// submission of the command buffer's last batch, which another thread's work may have to come
@@ -219,7 +267,7 @@ fn scheduled_rounds(device: &Device, queue: &CommandQueue, besides: Besides) -> 
 #[test]
 fn a_thread_waiting_for_the_scheduling_submits_what_it_committed_unless_a_handler_must_run() {
     let scratch = Scratch::new();
-    let device = device(&scratch.0);
+    let device = device(&scratch.0, CompletionPolicy::Exact);
     let queue = device.new_command_queue().unwrap();
     let waiting = std::thread::current().id();
     let plain = scheduled_rounds(&device, &queue, Besides::Nothing);
@@ -255,4 +303,7 @@ fn a_thread_waiting_for_the_scheduling_submits_what_it_committed_unless_a_handle
     }
     drop(queue);
     drop(device);
+    under_the_default(&scratch.0, "scheduling", |device, queue| {
+        scheduled_rounds(device, queue, Besides::Nothing).batches
+    });
 }

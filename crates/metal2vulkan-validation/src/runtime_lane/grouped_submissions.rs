@@ -34,6 +34,12 @@
 //! and each submission handler runs as its batch is taken, held or submitted, before the command
 //! buffer reads `Scheduled` and before its scheduled handler.
 //!
+//! The event scenarios ([`event_scenario`]) signal and wait for a plain event (`MTLEvent`), whose
+//! wait chains on the `VkQueue`: a wait for a signal a held batch carries is a Vulkan wait only
+//! the group's end meets, so it sends the group and goes after it. A shared event's wait is
+//! never handed to Vulkan (the runtime's `event_timeline.rs`): the scheduler holds it until its
+//! value is reached, so it waits for no held signal and sends no group at a wait.
+//!
 //! `grouped_completion_delays` (a measurement, not a check) prints how late the host sees each
 //! command buffer complete under each `CompletionPolicy`: [`BATCHES`] command buffers of
 //! [`DELAY_FILL`] bytes of fill each, released together by an event the host raises, a round at a
@@ -338,13 +344,14 @@ fn the_exact_completion_submits_each_batch_alone() {
     }
 }
 
-/// One command buffer of an event scenario: its queue (0 or 1), the value of the shared event `E`
-/// it waits for first, if any, and the value it signals `E` with last, if any; between them it
-/// fills `fills` times [`LARGE_FILL`] bytes of a buffer they share, then a buffer of its own. The
-/// first command buffer on queue 0 waits for a gate the host raises once every one is committed,
-/// so they are found ready together. The shared buffer takes its first work (a new private
-/// buffer's fill) in a command buffer of its own before them: a batch that takes first work goes
-/// at once, never in a group, so the first step would otherwise go alone.
+/// One command buffer of an event scenario: its queue (0 or 1), the value of the plain event `E`
+/// (`MTLEvent`, the module docs) it waits for first, if any, and the value it signals `E` with
+/// last, if any; between them it fills `fills` times [`LARGE_FILL`] bytes of a buffer they share,
+/// then a buffer of its own. The first command buffer on queue 0 waits for a gate the host raises
+/// once every one is committed, so they are found ready together. The shared buffer takes its
+/// first work (a new private buffer's fill) in a command buffer of its own before them: a batch
+/// that takes first work goes at once, never in a group, so the first step would otherwise go
+/// alone.
 #[derive(Clone, Copy)]
 struct Step {
     queue: usize,
@@ -369,7 +376,9 @@ struct Scenario {
 }
 
 /// Run `steps` under `completion` on a validated device: every command buffer completes without
-/// error and fills its buffer, `E` ends at `last`, and the layer reports nothing.
+/// error and fills its buffer, `E` ends at `last` (a command buffer committed after the counts
+/// are read, waiting for `E` at `last`, completes: no host call reads a plain event's value), and
+/// the layer reports nothing.
 fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Scenario {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
@@ -384,7 +393,7 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
             device.new_command_queue().unwrap(),
         ];
         let gate = device.new_shared_event().unwrap();
-        let event = device.new_shared_event().unwrap();
+        let event = device.new_event().unwrap();
         let large = (steps.iter().any(|step| step.fills > 0)).then(|| {
             device
                 .new_buffer(LARGE_FILL, ResourceOptions::private())
@@ -454,13 +463,21 @@ fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Sc
                 .count();
             assert_eq!(wrong, 0, "buffer {at}: bytes off its command buffer's fill");
         }
-        assert!(
-            event.wait_until_signaled_value(last, WAIT),
-            "E never reached {last}: {}",
-            event.signaled_value()
-        );
-        assert_eq!(event.signaled_value(), last);
         let after = device.work_counts();
+        // `E` reached `last`: a wait for it, behind every signal submitted, completes. No step
+        // signals above `last`.
+        let reached = queues[0].command_buffer().unwrap();
+        reached
+            .encode_wait_for_event(EventRef::from(&event), last)
+            .unwrap();
+        reached.commit().unwrap();
+        reached.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(reached.error(), None, "the wait for E at {last}");
+        assert_eq!(
+            reached.status(),
+            CommandBufferStatus::Completed,
+            "the wait for E at {last}"
+        );
         Scenario {
             grouped: after.grouped_submissions - before.grouped_submissions,
             batches: after.batches_grouped - before.batches_grouped,
