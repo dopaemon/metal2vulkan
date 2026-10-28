@@ -2545,6 +2545,7 @@ field	metal2vulkan-runtime::WorkCounts.depth_attachments_moved	pub depth_attachm
 field	metal2vulkan-runtime::WorkCounts.depth_instances_held	pub depth_instances_held: u64
 field	metal2vulkan-runtime::WorkCounts.descriptor_keys_built	pub descriptor_keys_built: u64
 field	metal2vulkan-runtime::WorkCounts.detached_storage_reaches	pub detached_storage_reaches: u64
+field	metal2vulkan-runtime::WorkCounts.device_copy_textures	pub device_copy_textures: u64
 field	metal2vulkan-runtime::WorkCounts.device_memory_allocated	pub device_memory_allocated: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_gated	pub dirty_copies_in_gated: u64
 field	metal2vulkan-runtime::WorkCounts.dirty_copies_in_skipped	pub dirty_copies_in_skipped: u64

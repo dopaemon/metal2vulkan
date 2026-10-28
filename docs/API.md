@@ -269,6 +269,12 @@ before a use and back (merged back: only the bytes the commands changed) after a
 is bound to the pages, and `Texture::vk_image` gives `None` for it. A texture in place renders and
 is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
 attachment stand-in, whose copies touch its texels alone.
+On a discrete GPU, a texture whose policy and usage take the image in place, over a no-copy
+buffer whose memory carries a log of its writes (`HostMemory::with_dirty_pages`), tracked, one
+slice laid out as one copy, is instead a device copy (`WorkCounts::device_copy_textures`, whatever
+the check answered): a shadow whose copies in take only the bands of rows the log reports changed
+(`dirty_copies_in_gated` and kin). Its notice is not announced: it holds the bytes wherever a
+command reads it.
 A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its
 first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image over a buffer of the
 runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its

@@ -294,6 +294,7 @@ pub(crate) struct Counters {
     shadows_zeroed: AtomicU64,
     shadows_over_fresh_pages: AtomicU64,
     host_textures_in_place: AtomicU64,
+    device_copy_textures: AtomicU64,
     dma_buf_textures_in_place: AtomicU64,
     fresh_page_textures_in_place: AtomicU64,
     pitched_host_images: AtomicU64,
@@ -2028,6 +2029,11 @@ impl Counters {
     /// buffer imported (`fresh_pages.rs`).
     pub(crate) fn shadow_over_fresh_pages(&self) {
         (self.shadows_over_fresh_pages).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture over host pages was made a device copy of them (`texture.rs`).
+    pub(crate) fn device_copy_texture(&self) {
+        self.device_copy_textures.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A texture over host pages of `class` was made an image in place over them (`in_place.rs`),
@@ -4207,6 +4213,12 @@ pub struct WorkCounts {
     /// place, where the device's check passed for their class (`HostPageTexturePolicy::InPlace`):
     /// no shadow, and no copy in or back.
     pub host_textures_in_place: u64,
+    /// Textures over host pages that `host_textures_in_place` would count (or a shadow made
+    /// before the check answered or where it failed), made instead a copy in the device's memory
+    /// on a discrete GPU, where their memory carries a log of its writes
+    /// (`HostMemory::with_dirty_pages`): a shadow whose copies in take only the rows the log
+    /// reports changed (`dirty_copies_in_gated` and kin), announced nowhere.
+    pub device_copy_textures: u64,
     /// Of `host_textures_in_place`, those over pages imported as dma-bufs: each a
     /// `DRM_FORMAT_MOD_LINEAR` image over a dma-buf of its own pages (also counted in
     /// `dma_buf_images`).
@@ -5186,6 +5198,7 @@ impl Device {
             shadowed_textures: counters.shadowed_textures.load(Ordering::Relaxed),
             shadows_over_fresh_pages: counters.shadows_over_fresh_pages.load(Ordering::Relaxed),
             host_textures_in_place: counters.host_textures_in_place.load(Ordering::Relaxed),
+            device_copy_textures: counters.device_copy_textures.load(Ordering::Relaxed),
             dma_buf_textures_in_place: counters.dma_buf_textures_in_place.load(Ordering::Relaxed),
             fresh_page_textures_in_place: counters
                 .fresh_page_textures_in_place

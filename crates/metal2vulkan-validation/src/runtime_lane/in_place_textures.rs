@@ -62,7 +62,7 @@ const FRESH: u64 = 40 << 20;
 
 /// The lane's options with textures over host pages taken in place where the check passes: the
 /// lane's devices otherwise take the exact answers, under which every one is a shadow.
-fn in_place(options: &mut DeviceOptions) {
+pub(super) fn in_place(options: &mut DeviceOptions) {
     options.policy.host_page_textures = HostPageTexturePolicy::InPlace;
 }
 
@@ -105,7 +105,11 @@ fn refused(before: &WorkCounts, after: &WorkCounts) -> u64 {
 }
 
 /// A texture of `format`, `w` by `h`, `ShaderRead` alone, over `buffer` with rows `bpr` apart.
-fn sampled(buffer: &Buffer, format: PixelFormat, (w, h, bpr): (u64, u64, u64)) -> Texture {
+pub(super) fn sampled(
+    buffer: &Buffer,
+    format: PixelFormat,
+    (w, h, bpr): (u64, u64, u64),
+) -> Texture {
     let mut d = TextureDescriptor::texture_2d(format, w, h, false);
     d.usage = TextureUsage::SHADER_READ;
     d.resource_options = buffer.resource_options();

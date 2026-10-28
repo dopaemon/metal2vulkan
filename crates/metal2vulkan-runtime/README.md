@@ -228,7 +228,13 @@ the runtime made.
   (`shadowed-texture`, naming why) for every other texture there (under
   `HostPageTexturePolicy::Shadow`, one that renders or writes, one made before the check answered
   or whose check did not pass), where the device's linear images cannot hold Metal's layout, and
-  where the rows lie with bytes between them.
+  where the rows lie with bytes between them. On a discrete GPU, a texture whose policy and usage
+  take the image in place, over a no-copy buffer whose memory carries a log of its writes
+  (`HostMemory::with_dirty_pages`), tracked and laid out as one copy, is instead such a copy in
+  the device's memory, announced nowhere, whatever the check answered: its copies in take only the
+  rows the log reports changed, so the GPU reads the surface from its own memory, where in place it
+  reads the pages across the bus at every sample (`WorkCounts::device_copy_textures`). Exact either
+  way; integrated GPUs, CPU devices and memory without a log keep the image in place.
 - **Two-plane YCbCr textures** (`YCBCR8_420_2P` and its kin over a surface's planes) hold an
   image of the texels Metal reads, converted from the planes before a command buffer's first use
   where they changed. Where `has_unified_memory`, a function that only samples a `YCBCR8_420_2P`

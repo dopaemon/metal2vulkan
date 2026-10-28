@@ -2176,7 +2176,21 @@ impl Device {
             None if texels.buffer.in_fresh_pages() => Some(PagesClass::Fresh),
             _ => None,
         };
+        // On a discrete GPU, a texture whose policy and usage take the image in place, over pages
+        // whose memory carries a log, is a device copy instead: a shadow whose copies in take
+        // only the rows the log reports changed (`dirty_pages.rs`), so the GPU reads the texels
+        // from its own memory, where in place it reads the pages across the bus at every sample.
+        // It binds no image to the pages, so the in-place check's verdict is not asked.
+        let device_copy = match class {
+            Some(class) if !in_place::checking() && !texels.buffer.detached() => {
+                let policy = self.compile_device().policy().host_page_textures;
+                in_place::in_place(policy, usage, class, |_| Verdict::Passed).is_ok()
+                    && texels.device_copy(self)
+            }
+            _ => false,
+        };
         let why = match class {
+            Some(_) if device_copy => String::new(),
             Some(class) => {
                 let checking = in_place::checking();
                 let cause = if texels.buffer.detached() {
@@ -2359,6 +2373,15 @@ impl Device {
         let copies = texels.shadow_copies(image.raw.get(), image.identity, aspects, views)?;
         // Its copies keep its own image, which it presents again once the bytes lie in pages.
         self.stand_in_while_detached(&texels.buffer, &image)?;
+        // A device copy degrades nothing: it holds the bytes wherever a command reads them.
+        if device_copy {
+            self.shared().counts.device_copy_texture();
+            return Ok(Storage::Shadow {
+                image: image.shared(),
+                texels,
+                copies: Arc::new(copies),
+            });
+        }
         let (offset, bytes_per_row) = (texels.layout.offset, texels.layout.row_pitch);
         self.degrade(Degradation::ShadowedTexture, || {
             let format = descriptor.pixel_format;

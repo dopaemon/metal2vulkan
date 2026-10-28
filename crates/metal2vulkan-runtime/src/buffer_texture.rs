@@ -1363,6 +1363,23 @@ impl Texels {
     /// copied in place (`shadow_copy_back.rs`), and its merges read the texels through `unorm`,
     /// its image's view of its own 8-bit unsigned normalized format, where given so
     /// (`shadow_merge.rs`). Refused as `new_buffer` refuses the staging buffer.
+    /// Whether these texels take a device copy on `device` (`texture.rs`, `dirty_pages.rs`): on
+    /// a discrete GPU, tracked, over host pages whose memory carries a log, where the shadow's
+    /// copy in is one region straight from the texels' place in the buffer's `VkBuffer` (one
+    /// slice, rows that share no bytes, a first texel at a multiple of the texel's size there),
+    /// the copy in a log decides.
+    pub(super) fn device_copy(&self, device: &Device) -> bool {
+        let layout = &self.layout;
+        let (_, at) = self.buffer.at_for(layout.offset, ReadApart::Texture);
+        let logged = (self.buffer.host_pages()).is_some_and(|pages| pages.dirty().is_some());
+        device.properties().kind == crate::DeviceKind::Discrete
+            && self.tracked()
+            && layout.slices == 1
+            && layout.shared_bytes() == 0
+            && at.is_multiple_of(self.texel_bytes)
+            && logged
+    }
+
     pub(super) fn shadow_copies(
         &self,
         image: vk::Image,
