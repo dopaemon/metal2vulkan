@@ -196,6 +196,7 @@
         "object_churn.vk_images_destroyed": 1,
         "object_churn.vk_images_made": 1,
         "pooled_memory_blocks_made": 3,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 1,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 1,
@@ -209,6 +210,10 @@
         "trail_waits": 1,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
+      },
+      "moving": {
+        "batches_submitted_by_waiters": 0,
+        "gate_waits_slept": 0
       },
       "composed": {
         "device_memory_allocated": 201326592

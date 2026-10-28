@@ -556,6 +556,7 @@
         "device_memory_allocated": 268435584,
         "dispatch_pipelines_pooled": 1,
         "encoder_command_buffers_begun": 5,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 3,
         "finales_folded": 3,
         "functions_shared": 1,
@@ -564,11 +565,13 @@
         "host_texel_copies": 3,
         "images_started_on_the_host": 1,
         "new_buffer_bytes_cleared": 608,
+        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 7,
         "object_churn.buffers_recycled": 4,
         "object_churn.images_own_memory": 1,
         "object_churn.textures_image": 1,
         "object_churn.vk_buffer_bindings": 3,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_buffers_made": 3,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 1,
@@ -576,6 +579,7 @@
         "object_churn.vk_images_made": 1,
         "pipeline_layouts_made": 1,
         "pooled_memory_blocks_made": 4,
+        "primaries_begun_ahead": 1,
         "queue_submissions": 3,
         "queues_sharing_a_vk_queue": 1,
         "sampler_sets_made": 1,
@@ -595,7 +599,9 @@
         "wakes_spared": 21
       },
       "moving": {
-        "batches_submitted_by_waiters": 1
+        "batches_submitted_by_waiters": 1,
+        "commands_replayed.begin_command_buffer": 2,
+        "gate_waits_slept": 2
       },
       "composed": {
         "batches_submitted_by_waiters": 2,

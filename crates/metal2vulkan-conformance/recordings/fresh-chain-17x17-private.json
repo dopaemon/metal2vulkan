@@ -263,7 +263,7 @@
         "wakes_spared": 21
       },
       "moving": {
-        "batches_submitted_by_waiters": 2,
+        "batches_submitted_by_waiters": 1,
         "commands_replayed.begin_command_buffer": 2
       },
       "composed": {

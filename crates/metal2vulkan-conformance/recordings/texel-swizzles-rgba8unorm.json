@@ -751,6 +751,7 @@
         "bare_starts": 5,
         "batches_held_past_a_look": 5,
         "batches_with_none_pending": 5,
+        "bound_notices_made": 5,
         "command_buffers_begun": 21,
         "command_buffers_begun_batch_barriers": 5,
         "command_buffers_begun_batch_work": 1,
@@ -759,6 +760,7 @@
         "command_buffers_begun_segments": 5,
         "command_buffers_deferred": 15,
         "command_buffers_replayed": 15,
+        "command_buffers_replayed_inline": 8,
         "command_buffers_submitted": 21,
         "commands_replayed.begin_command_buffer": 15,
         "commands_replayed.cmd_bind_descriptor_sets": 5,
@@ -794,11 +796,11 @@
         "queue_submissions": 5,
         "queues_sharing_a_vk_queue": 1,
         "scheduled_where_submitted": 5,
-        "scheduler_passes": 20,
+        "scheduler_passes": 18,
         "scheduler_passes_by_waiters": 5,
         "scheduler_sleeps": 11,
         "scheduler_wakes_commit": 5,
-        "scheduler_wakes_host": 9,
+        "scheduler_wakes_host": 10,
         "shader_modules_made": 1,
         "slot_returns": 5,
         "spare_command_pools_taken": 10,
@@ -807,10 +809,11 @@
         "trail_waits": 5,
         "variant_pipelines_made": 5,
         "wakes_completion_waiters": 5,
-        "wakes_spared": 37
+        "wakes_spared": 38
       },
       "moving": {
-        "heads_held_for_host_steps": 10
+        "batches_held_past_a_look": 3,
+        "heads_held_for_host_steps": 6
       },
       "composed": {
         "command_buffers_begun": 21,

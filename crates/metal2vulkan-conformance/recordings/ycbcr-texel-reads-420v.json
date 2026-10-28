@@ -332,13 +332,11 @@
         "gate_waits_slept": 1,
         "images_started_on_the_host": 1,
         "new_buffer_bytes_cleared": 27200,
-        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 5,
         "object_churn.buffers_recycled": 2,
         "object_churn.images_own_memory": 1,
         "object_churn.textures_shadow": 1,
         "object_churn.vk_buffer_bindings": 3,
-        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_buffers_made": 3,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 2,
@@ -368,7 +366,8 @@
         "wakes_spared": 7,
         "ycbcr_conversion_scratch_buffers": 1,
         "ycbcr_conversion_scratch_bytes": 2536,
-        "ycbcr_refreshes": 1
+        "ycbcr_refreshes": 1,
+        "ycbcr_textures_in_place": 1
       },
       "moving": {
         "batches_submitted_by_waiters": 0

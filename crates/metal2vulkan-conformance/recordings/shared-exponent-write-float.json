@@ -278,6 +278,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 3,
         "command_buffers_replayed": 3,
+        "command_buffers_replayed_inline": 1,
         "command_buffers_submitted": 5,
         "commands_replayed.begin_command_buffer": 3,
         "commands_replayed.cmd_bind_descriptor_sets": 1,
@@ -334,7 +335,7 @@
         "wakes_spared": 8
       },
       "moving": {
-        "heads_held_for_host_steps": 2
+        "heads_held_for_host_steps": 1
       },
       "composed": {
         "command_buffers_begun": 5,

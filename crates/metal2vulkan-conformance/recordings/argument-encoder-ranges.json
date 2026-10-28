@@ -450,6 +450,9 @@
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-set-past-layout-support"
+      ],
       "bounds": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
@@ -458,6 +461,7 @@
         "bare_starts": 1,
         "batches_submitted_by_waiters": 1,
         "batches_with_none_pending": 1,
+        "bound_notices_made": 1,
         "command_buffers_begun": 5,
         "command_buffers_begun_batch_barriers": 1,
         "command_buffers_begun_batch_work": 1,

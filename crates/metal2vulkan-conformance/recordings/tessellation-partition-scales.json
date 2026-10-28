@@ -1030,6 +1030,7 @@
         "command_buffers_begun_segments": 16,
         "command_buffers_deferred": 96,
         "command_buffers_replayed": 80,
+        "command_buffers_replayed_inline": 80,
         "command_buffers_submitted": 64,
         "commands_replayed.begin_command_buffer": 96,
         "commands_replayed.cmd_begin_render_pass": 16,
@@ -1067,10 +1068,10 @@
         "linked_use_questions_asked": 12,
         "live_tables_uploaded": 1,
         "new_buffer_bytes_cleared": 2131424,
-        "object_churn.buffers_evicted": 3,
+        "object_churn.buffers_evicted": 2,
         "object_churn.buffers_parked": 21,
         "object_churn.buffers_recycled": 21,
-        "object_churn.vk_buffers_destroyed": 3,
+        "object_churn.vk_buffers_destroyed": 2,
         "passes_not_inline_layouts": 16,
         "pipeline_layouts_made": 1,
         "pipeline_layouts_shared": 3,
@@ -1082,7 +1083,7 @@
         "render_passes_begun_instances": 16,
         "render_passes_made": 1,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 6,
+        "scheduler_passes": 5,
         "scheduler_passes_by_waiters": 1,
         "scheduler_sleeps": 4,
         "scheduler_wakes_commit": 1,
@@ -1099,11 +1100,12 @@
         "variant_pipelines_made": 4,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 1,
-        "wakes_spared": 8
+        "wakes_handler_threads": 2,
+        "wakes_spared": 11
       },
       "moving": {
-        "heads_held_for_host_steps": 4
+        "batches_held_past_a_look": 0,
+        "heads_held_for_host_steps": 0
       },
       "composed": {
         "argument_samplers_taken": 4,

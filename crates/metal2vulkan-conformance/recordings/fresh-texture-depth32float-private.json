@@ -240,7 +240,6 @@
         "scheduler_passes_by_waiters": 3,
         "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 3,
-        "signed_depth_switch_ons": 1,
         "slot_returns": 3,
         "spare_command_pools_taken": 6,
         "submit_infos": 3,

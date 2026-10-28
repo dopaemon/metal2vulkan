@@ -1242,7 +1242,7 @@
         "host_texel_copies": 33,
         "images_started_on_the_host": 2,
         "new_buffer_bytes_cleared": 19680,
-        "object_churn.buffers_evicted": 6,
+        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 71,
         "object_churn.buffers_recycled": 71,
         "object_churn.images_evicted": 9,
@@ -1250,7 +1250,7 @@
         "object_churn.images_parked": 28,
         "object_churn.images_recycled": 17,
         "object_churn.textures_image": 16,
-        "object_churn.vk_buffers_destroyed": 6,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_bindings": 13,
         "object_churn.vk_images_destroyed": 11,
         "object_churn.vk_images_made": 13,
@@ -1273,7 +1273,7 @@
         "submit_infos": 21,
         "trail_waits": 21,
         "wakes_completion_waiters": 21,
-        "wakes_spared": 149
+        "wakes_spared": 148
       },
       "moving": {
         "batches_submitted_by_waiters": 9,

@@ -174,6 +174,7 @@
         "completion_arms_after_a_wake": 1,
         "device_memory_allocated": 201326592,
         "encoder_command_buffers_begun": 1,
+        "encoder_primaries_begun_ahead": 1,
         "fence_waits": 1,
         "finales_folded": 1,
         "gate_waits": 1,
@@ -206,6 +207,7 @@
       },
       "moving": {
         "batches_submitted_by_waiters": 0,
+        "commands_replayed.begin_command_buffer": 0,
         "gate_waits_slept": 0
       },
       "composed": {

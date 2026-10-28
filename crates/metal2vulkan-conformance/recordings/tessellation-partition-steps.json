@@ -719,6 +719,7 @@
         "command_buffers_begun_segments": 8,
         "command_buffers_deferred": 48,
         "command_buffers_replayed": 48,
+        "command_buffers_replayed_inline": 9,
         "command_buffers_submitted": 32,
         "commands_replayed.begin_command_buffer": 48,
         "commands_replayed.cmd_begin_render_pass": 8,
@@ -771,9 +772,9 @@
         "render_passes_begun_instances": 8,
         "render_passes_made": 1,
         "scheduled_where_submitted": 1,
-        "scheduler_passes": 11,
+        "scheduler_passes": 10,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 10,
+        "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 9,
         "shader_modules_made": 10,
@@ -791,7 +792,7 @@
         "wakes_spared": 8
       },
       "moving": {
-        "heads_held_for_host_steps": 9
+        "heads_held_for_host_steps": 7
       },
       "composed": {
         "argument_samplers_taken": 8,

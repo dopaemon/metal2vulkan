@@ -344,6 +344,7 @@
         "bare_starts": 1,
         "batches_held_past_a_look": 1,
         "batches_with_none_pending": 1,
+        "bound_notices_made": 1,
         "command_buffers_begun": 8,
         "command_buffers_begun_batch_barriers": 1,
         "command_buffers_begun_batch_work": 1,
@@ -353,6 +354,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 6,
         "command_buffers_replayed": 6,
+        "command_buffers_replayed_inline": 6,
         "command_buffers_submitted": 5,
         "commands_replayed.begin_command_buffer": 6,
         "commands_replayed.cmd_begin_render_pass": 1,
@@ -431,7 +433,7 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 4,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 2,
+        "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 2,
         "shader_modules_made": 2,
@@ -444,11 +446,12 @@
         "trail_waits": 1,
         "variant_pipelines_made": 2,
         "wakes_completion_waiters": 1,
-        "wakes_handler_threads": 1,
-        "wakes_spared": 7
+        "wakes_handler_threads": 2,
+        "wakes_spared": 8
       },
       "moving": {
-        "heads_held_for_host_steps": 2
+        "batches_held_past_a_look": 0,
+        "heads_held_for_host_steps": 0
       },
       "composed": {
         "addressable_buffers_made": 1,

@@ -351,9 +351,6 @@
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
-      "degraded": [
-        "metal2vulkan-degrade-device-nan-encoding"
-      ],
       "bounds": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 1,
@@ -401,7 +398,7 @@
         "object_churn.images_own_memory": 1,
         "object_churn.textures_image": 1,
         "object_churn.vk_image_bindings": 1,
-        "object_churn.vk_image_views_made": 2,
+        "object_churn.vk_image_views_made": 1,
         "object_churn.vk_images_destroyed": 3,
         "object_churn.vk_images_made": 3,
         "pipeline_layouts_made": 1,

@@ -1783,11 +1783,11 @@
         "graphics_pipelines_looked_up": 32,
         "linked_use_questions_asked": 12,
         "new_buffer_bytes_cleared": 4262512,
-        "object_churn.buffers_evicted": 18,
+        "object_churn.buffers_evicted": 2,
         "object_churn.buffers_parked": 36,
         "object_churn.buffers_recycled": 18,
         "object_churn.vk_buffer_bindings": 18,
-        "object_churn.vk_buffers_destroyed": 18,
+        "object_churn.vk_buffers_destroyed": 2,
         "object_churn.vk_buffers_made": 18,
         "passes_not_inline_layouts": 32,
         "pipeline_layouts_made": 1,
@@ -1815,6 +1815,9 @@
         "variants_taken_back": 4,
         "wakes_completion_waiters": 1,
         "wakes_spared": 7
+      },
+      "moving": {
+        "batches_submitted_by_waiters": 0
       },
       "composed": {
         "argument_samplers_taken": 4,

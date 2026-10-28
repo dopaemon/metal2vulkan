@@ -175,6 +175,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 7,
         "command_buffers_replayed": 7,
+        "command_buffers_replayed_inline": 7,
         "command_buffers_submitted": 11,
         "commands_replayed.begin_command_buffer": 7,
         "commands_replayed.cmd_begin_render_pass": 4,
@@ -206,7 +207,7 @@
         "gate_waits": 1,
         "gate_waits_slept": 1,
         "new_buffer_bytes_cleared": 93392,
-        "object_churn.buffers_evicted": 1,
+        "object_churn.buffers_evicted": 3,
         "object_churn.buffers_parked": 5,
         "object_churn.buffers_recycled": 4,
         "object_churn.images_evicted": 7,
@@ -214,7 +215,7 @@
         "object_churn.images_parked": 7,
         "object_churn.textures_image": 7,
         "object_churn.vk_buffer_bindings": 1,
-        "object_churn.vk_buffers_destroyed": 1,
+        "object_churn.vk_buffers_destroyed": 3,
         "object_churn.vk_buffers_made": 1,
         "object_churn.vk_image_bindings": 7,
         "object_churn.vk_image_views_made": 9,
@@ -232,6 +233,7 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 2,
         "scheduler_passes_by_waiters": 1,
+        "scheduler_sleep_slices": 1,
         "scheduler_sleeps": 2,
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 1,
@@ -242,7 +244,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 7
+        "wakes_spared": 8
       },
       "composed": {
         "device_memory_allocated": 201326720

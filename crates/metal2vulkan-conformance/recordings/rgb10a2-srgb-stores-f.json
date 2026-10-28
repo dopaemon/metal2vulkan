@@ -262,6 +262,7 @@
         "bare_starts": 2,
         "batches_submitted_by_waiters": 2,
         "batches_with_none_pending": 2,
+        "bound_notices_made": 1,
         "command_buffers_begun": 4,
         "command_buffers_begun_batch_work": 1,
         "command_buffers_begun_encoders": 2,

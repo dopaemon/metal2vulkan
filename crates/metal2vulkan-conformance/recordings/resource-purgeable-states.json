@@ -2304,9 +2304,7 @@
         "object_churn.vk_image_bindings": 8,
         "object_churn.vk_images_destroyed": 8,
         "object_churn.vk_images_made": 8,
-        "pooled_memory_blocks_made": 3,
-        "scheduler_sleep_slices": 1,
-        "scheduler_sleeps": 1
+        "pooled_memory_blocks_made": 3
       },
       "composed": {
         "device_memory_allocated": 201326592

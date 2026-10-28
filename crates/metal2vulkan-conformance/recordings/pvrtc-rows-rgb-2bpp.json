@@ -726,7 +726,7 @@
         "wakes_spared": 70
       },
       "moving": {
-        "batches_submitted_by_waiters": 3,
+        "batches_submitted_by_waiters": 2,
         "commands_replayed.begin_command_buffer": 9,
         "gate_waits_slept": 9
       },

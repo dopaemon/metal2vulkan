@@ -1960,6 +1960,7 @@
         "bare_starts": 16,
         "batches_submitted_by_waiters": 16,
         "batches_with_none_pending": 16,
+        "bound_notices_made": 1,
         "command_buffers_begun": 80,
         "command_buffers_begun_batch_barriers": 16,
         "command_buffers_begun_batch_work": 16,

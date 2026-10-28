@@ -505,6 +505,7 @@
         "command_buffers_begun_segments": 4,
         "command_buffers_deferred": 9,
         "command_buffers_replayed": 9,
+        "command_buffers_replayed_inline": 4,
         "command_buffers_submitted": 11,
         "commands_replayed.begin_command_buffer": 9,
         "commands_replayed.cmd_bind_descriptor_sets": 4,
@@ -547,9 +548,9 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 4,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 2,
+        "scheduler_sleeps": 3,
         "scheduler_wakes_commit": 1,
-        "scheduler_wakes_host": 4,
+        "scheduler_wakes_host": 5,
         "shader_modules_made": 1,
         "slot_returns": 1,
         "spare_command_pools_taken": 2,
@@ -557,7 +558,7 @@
         "trail_waits": 1,
         "variant_pipelines_made": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 8
+        "wakes_spared": 7
       },
       "moving": {
         "command_buffers_begun": 6,

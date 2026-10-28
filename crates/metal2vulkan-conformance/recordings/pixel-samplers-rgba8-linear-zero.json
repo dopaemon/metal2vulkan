@@ -647,6 +647,11 @@
       "runs": 8,
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
+      "degraded": [
+        "metal2vulkan-degrade-argument-pixel-sampler-scaling",
+        "metal2vulkan-degrade-pixel-sampler-scaling",
+        "metal2vulkan-degrade-set-past-layout-support"
+      ],
       "bounds": {
         "addressable_buffers_made": 2,
         "arena_pools_made": 2,
@@ -656,7 +661,7 @@
         "batches_held_past_a_look": 1,
         "batches_submitted_by_waiters": 3,
         "batches_with_none_pending": 4,
-        "bound_notices_made": 1,
+        "bound_notices_made": 3,
         "command_buffers_begun": 14,
         "command_buffers_begun_batch_barriers": 3,
         "command_buffers_begun_batch_work": 1,
@@ -695,10 +700,12 @@
         "host_texel_copies": 1,
         "images_started_on_the_host": 1,
         "new_buffer_bytes_cleared": 64288,
+        "object_churn.buffers_evicted": 1,
         "object_churn.buffers_parked": 12,
         "object_churn.buffers_recycled": 12,
         "object_churn.images_own_memory": 1,
         "object_churn.textures_image": 1,
+        "object_churn.vk_buffers_destroyed": 1,
         "object_churn.vk_image_bindings": 1,
         "object_churn.vk_image_views_made": 1,
         "object_churn.vk_images_destroyed": 1,

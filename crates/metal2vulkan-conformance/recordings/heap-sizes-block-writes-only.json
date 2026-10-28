@@ -986,11 +986,11 @@
       "measured": "8 run(s) of the whole selection on Apple M3 Max, in the case set's own order, the largest each count reached",
       "contrasted": "8 run(s) of each case on its own on Apple M3 Max, nothing before it on the device, the largest each count reached",
       "bounds": {
-        "object_churn.making_sites_dropped": 15,
-        "object_churn.vk_images_destroyed": 23,
-        "object_churn.vk_images_made": 23,
-        "requirement_images_made": 15,
-        "requirement_limits_asked": 15
+        "object_churn.making_sites_dropped": 16,
+        "object_churn.vk_images_destroyed": 24,
+        "object_churn.vk_images_made": 24,
+        "requirement_images_made": 16,
+        "requirement_limits_asked": 16
       }
     }
   ],

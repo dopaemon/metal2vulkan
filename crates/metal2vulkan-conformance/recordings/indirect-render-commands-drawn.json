@@ -550,6 +550,7 @@
         "command_buffers_begun_segments": 1,
         "command_buffers_deferred": 8,
         "command_buffers_replayed": 8,
+        "command_buffers_replayed_inline": 8,
         "command_buffers_submitted": 7,
         "commands_replayed.begin_command_buffer": 8,
         "commands_replayed.cmd_begin_render_pass": 2,
@@ -619,7 +620,7 @@
         "scheduled_where_submitted": 1,
         "scheduler_passes": 2,
         "scheduler_passes_by_waiters": 1,
-        "scheduler_sleeps": 2,
+        "scheduler_sleeps": 1,
         "scheduler_wakes_commit": 1,
         "scheduler_wakes_host": 1,
         "set_zero_sets_reused": 1,
@@ -634,7 +635,7 @@
         "variant_pipelines_made": 1,
         "variants_taken_back": 1,
         "wakes_completion_waiters": 1,
-        "wakes_spared": 7
+        "wakes_spared": 8
       },
       "composed": {
         "addressable_buffers_made": 1,
