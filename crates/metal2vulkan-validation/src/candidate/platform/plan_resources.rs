@@ -8,10 +8,11 @@
 //!   table, each stage's constant blob, and the zero and sink neutrals are buffers this module
 //!   allocates;
 //! - a texture write views the slot's image with the plan's `ImageViewDesc` (type, format,
-//!   component mapping, aspect, layout, and level: a storage slot's level views, view the authored
-//!   texture's one level at element 0 and neutrals past it). Each bound texture is one image of its
-//!   authored type, format, and extent, uploaded before the work and left in the one layout its
-//!   views name (a plan whose views of one texture name two layouts is not implemented);
+//!   component mapping, aspect, layout, and levels: a whole-texture view holds every level, an
+//!   element of a storage slot's level views its one level, the plan's neutrals past the
+//!   texture's last). Each bound texture is one image of its authored type, format, extent, and
+//!   levels, every level uploaded before the work and left in the one layout its views name (a
+//!   plan whose views of one texture name two layouts is not implemented);
 //! - a heap entry views its member's image the same way, at its element of the heap array: a
 //!   used texture's (by consumer token, an argument-buffer texture) or a bound one's (by slot), one
 //!   image per texture whatever writes view it (every view of one member takes one layout); each
@@ -53,7 +54,7 @@ use super::sparse_images::{create_sparse_image, create_tile_mapped_image};
 use crate::candidate::engine::guards::{GuardCount, GuardReach};
 use crate::candidate::engine::{bind_refusal, CaseStructure};
 use crate::check::admission::{ExecutorError, NotSupported};
-use crate::literal::LiteralTexture;
+use crate::literal::{texture_layout, LiteralTexture, TextureLayout};
 use ash::vk;
 use metal2vulkan::bind::{
     sampler_desc, ArgumentSampler, DescriptorBytes, DescriptorRange, DescriptorWrite,
@@ -64,6 +65,7 @@ use metal2vulkan::device::Device;
 use metal2vulkan::metal::sampler::{OpaqueBlackBorder, SamplerUse};
 use metal2vulkan::pipeline::StorageAttachmentView;
 use metal2vulkan::pipeline::{SlotRef, Stage};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -185,19 +187,31 @@ struct SlotImage {
     aspect: vk::ImageAspectFlags,
     extent: vk::Extent3D,
     layers: u32,
+    /// Its mipmap levels, the texture's.
+    levels: u32,
     /// The layout every view of the image names.
     layout: vk::ImageLayout,
     /// The authored contents, uploaded before the work; `None` for a multisampled image, which
     /// its own initializer submission wrote per sample and left in `GENERAL`.
     staging: Option<HostBuffer>,
-    /// The copies from `staging` that upload the image: its whole extent, or a sparse image's
-    /// mapped texels alone.
+    /// The copies from `staging` that upload the image: each level's whole extent, or a sparse
+    /// image's mapped texels alone.
     copies: Vec<vk::BufferImageCopy>,
     /// The final contents, when the texture is the observed output.
     readback: Option<HostBuffer>,
     /// The image holds 32-bit float depth, which its upload writes: the run's
     /// `restricted-depth-upload` on a device without `VK_EXT_depth_range_unrestricted`.
     float_depth: bool,
+}
+
+impl SlotImage {
+    /// Every level and layer of the image.
+    fn range(&self) -> vk::ImageSubresourceRange {
+        vk::ImageSubresourceRange {
+            level_count: self.levels,
+            ..range(self.aspect, self.layers)
+        }
+    }
 }
 
 /// One neutral image.
@@ -825,10 +839,13 @@ impl<'a> PlanResources<'a> {
         desc: &ImageViewDesc,
     ) -> Result<vk::ImageView, ExecutorError> {
         let view_type: vk::ImageViewType = desc.view_type.into();
-        // A level view holds its one level; every image here has one level, so a whole-texture view
-        // is level 0.
+        // A level view holds its one level, a whole-texture view every level of the image.
         let range = vk::ImageSubresourceRange {
             base_mip_level: desc.level.unwrap_or(0),
+            level_count: match desc.level {
+                Some(_) => 1,
+                None => vk::REMAINING_MIP_LEVELS,
+            },
             ..range(desc.aspect.into(), layer_count(view_type))
         };
         let info = vk::ImageViewCreateInfo::default()
@@ -1052,17 +1069,16 @@ impl<'a> PlanResources<'a> {
             .images
             .values()
             .filter(|image| image.staging.is_some())
-            .map(|image| (image.image, image.aspect, image.layers))
+            .map(|image| (image.image, image.range()))
             .chain(
                 self.neutral_images
                     .values()
-                    .map(|image| (image.image, image.aspect, image.layers)),
+                    .map(|image| (image.image, range(image.aspect, image.layers))),
             )
-            .map(|(image, aspect, layers)| {
-                barrier(
+            .map(|(image, range)| {
+                range_barrier(
                     image,
-                    aspect,
-                    layers,
+                    range,
                     (vk::AccessFlags::empty(), vk::ImageLayout::UNDEFINED),
                     (
                         vk::AccessFlags::TRANSFER_WRITE,
@@ -1077,10 +1093,9 @@ impl<'a> PlanResources<'a> {
             .values()
             .filter(|image| image.staging.is_none())
             .map(|image| {
-                barrier(
+                range_barrier(
                     image.image,
-                    image.aspect,
-                    image.layers,
+                    image.range(),
                     (
                         vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                             | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
@@ -1111,17 +1126,16 @@ impl<'a> PlanResources<'a> {
             .images
             .values()
             .filter(|image| image.staging.is_some())
-            .map(|image| (image.image, image.aspect, image.layers, image.layout))
+            .map(|image| (image.image, image.range(), image.layout))
             .chain(
                 self.neutral_images
                     .values()
-                    .map(|image| (image.image, image.aspect, image.layers, image.layout)),
+                    .map(|image| (image.image, range(image.aspect, image.layers), image.layout)),
             )
-            .map(|(image, aspect, layers, layout)| {
-                barrier(
+            .map(|(image, range, layout)| {
+                range_barrier(
                     image,
-                    aspect,
-                    layers,
+                    range,
                     (
                         vk::AccessFlags::TRANSFER_WRITE,
                         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -1220,10 +1234,9 @@ impl<'a> PlanResources<'a> {
                 let Some(readback) = &image.readback else {
                     continue;
                 };
-                let to_source = [barrier(
+                let to_source = [range_barrier(
                     image.image,
-                    image.aspect,
-                    image.layers,
+                    image.range(),
                     (vk::AccessFlags::SHADER_WRITE, image.layout),
                     (
                         vk::AccessFlags::TRANSFER_READ,
@@ -1485,6 +1498,16 @@ pub(super) fn barrier(
     image: vk::Image,
     aspect: vk::ImageAspectFlags,
     layers: u32,
+    src: (vk::AccessFlags, vk::ImageLayout),
+    dst: (vk::AccessFlags, vk::ImageLayout),
+) -> vk::ImageMemoryBarrier<'static> {
+    range_barrier(image, range(aspect, layers), src, dst)
+}
+
+/// The layout transition of the subresources `range` of `image`.
+fn range_barrier(
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
     (src_access, old): (vk::AccessFlags, vk::ImageLayout),
     (dst_access, new): (vk::AccessFlags, vk::ImageLayout),
 ) -> vk::ImageMemoryBarrier<'static> {
@@ -1496,7 +1519,7 @@ pub(super) fn barrier(
         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(image)
-        .subresource_range(range(aspect, layers))
+        .subresource_range(range)
 }
 
 /// A device-local image of `info` with its memory bound.
@@ -1704,13 +1727,16 @@ pub(super) fn multisample_initializer_support(
     )
 }
 
-/// The image of the texture `label`: its authored type, format, and extent, one level, the
-/// usages its descriptors need plus transfers, mutable-format when a view's format differs from
-/// the texture's own (a storage alias), the one layout every view names, and a host readback when
-/// it is the `observed` output. A sparse texture is a sparse resident image, or, where the plan
-/// answers its residency from a tile map (`emulated`), what the runtime makes of it: a sparse
-/// resident image with each block that holds a mapped tile bound, its unmapped texels zero, where
-/// the context makes one, else an ordinary image holding its mapped texels and zero elsewhere.
+/// The image of the texture `label`: its authored type, format, extent, and levels, the usages
+/// its descriptors need plus transfers, mutable-format when a view's format differs from the
+/// texture's own (a storage alias), the one layout every view names, and a host readback when it
+/// is the `observed` output. Each level is uploaded whole from its bytes ([`level_uploads`]). A
+/// mipmapped texture is one the case checker admits (`case::mips`): single-sample, not sparse,
+/// and an input, which no executor reads back. A sparse texture is a sparse resident image, or,
+/// where the plan answers its residency from a tile map (`emulated`), what the runtime makes of
+/// it: a sparse resident image with each block that holds a mapped tile bound, its unmapped
+/// texels zero, where the context makes one, else an ordinary image holding its mapped texels and
+/// zero elsewhere.
 fn create_slot_image(
     context: &VulkanContext,
     label: &str,
@@ -1733,25 +1759,18 @@ fn create_slot_image(
             "{label} viewed in two layouts by one plan"
         )));
     }
-    // This context makes and uploads one level; the runtime path makes every level a case
-    // declares.
-    if texture.mip_levels != 1 {
+    let literal = texture.layout()?;
+    let (image_type, extent) = image_shape(texture.texture_type, &literal)
+        .ok_or_else(|| format!("{label} is a texture buffer, not an image"))?;
+    let multisampled = literal.sample_count != 1;
+    // Levels only where the checker admits them: a multisampled or sparse image is made and
+    // uploaded one level, and a readback copies one.
+    if texture.mip_levels != 1 && (multisampled || texture.sparse.is_some() || observed) {
         return Err(not_implemented(format!(
-            "{label}: a mipmapped texture ({} levels) on the executor's own context",
+            "{label}: a mipmapped texture ({} levels) that is multisampled, sparse, or read back",
             texture.mip_levels
         )));
     }
-    let literal = texture.layout()?;
-    let (image_type, extent) = match texture.texture_type {
-        T::D1 | T::D1Array => (vk::ImageType::TYPE_1D, [literal.width, 1, 1]),
-        T::D3 => (
-            vk::ImageType::TYPE_3D,
-            [literal.width, literal.height, literal.depth],
-        ),
-        T::Buffer => return Err(format!("{label} is a texture buffer, not an image").into()),
-        _ => (vk::ImageType::TYPE_2D, [literal.width, literal.height, 1]),
-    };
-    let multisampled = literal.sample_count != 1;
     if multisampled {
         multisample_initializer_support(context, label, format, aspect, &literal)?;
     }
@@ -1776,17 +1795,12 @@ fn create_slot_image(
     if texture_use.storage {
         usage |= vk::ImageUsageFlags::STORAGE;
     }
-    let extent = vk::Extent3D {
-        width: extent[0],
-        height: extent[1],
-        depth: extent[2],
-    };
     let info = vk::ImageCreateInfo::default()
         .flags(flags)
         .image_type(image_type)
         .format(format)
         .extent(extent)
-        .mip_levels(1)
+        .mip_levels(texture.mip_levels)
         .array_layers(literal.array_layers)
         .samples(sample_count(literal.sample_count)?)
         .tiling(vk::ImageTiling::OPTIMAL)
@@ -1822,9 +1836,10 @@ fn create_slot_image(
         }
         _ => None,
     };
+    let (level_bytes, level_copies) = level_uploads(texture, aspect)?;
     let upload: &[u8] = match &mapped {
         Some((bytes, _)) => bytes,
-        None => &texture.bytes,
+        None => &level_bytes,
     };
     let (image, memory, copies) = if let Some(sparse) = tile_mapped {
         (sparse.image, sparse.memory, sparse.copies)
@@ -1838,10 +1853,7 @@ fn create_slot_image(
         (sparse.image, sparse.memory, sparse.copies)
     } else {
         let (image, memory) = create_image(context, label, &info)?;
-        let whole = vk::BufferImageCopy::default()
-            .image_subresource(layers(aspect, literal.array_layers))
-            .image_extent(extent);
-        (image, memory, vec![whole])
+        (image, memory, level_copies)
     };
     let destroy = || {
         // SAFETY: the image and memory were created above and are unused.
@@ -1900,12 +1912,89 @@ fn create_slot_image(
         aspect,
         extent,
         layers: literal.array_layers,
+        levels: texture.mip_levels,
         layout,
         staging,
         copies,
         readback,
         float_depth: is_float_depth(format),
     })
+}
+
+/// The image type and extent of a texture of `texture_type` laid out as `layout`; `None` for a
+/// texture buffer, which is no image.
+fn image_shape(
+    texture_type: crate::case::TextureType,
+    layout: &TextureLayout,
+) -> Option<(vk::ImageType, vk::Extent3D)> {
+    use crate::case::TextureType as T;
+    let (image_type, [width, height, depth]) = match texture_type {
+        T::Buffer => return None,
+        T::D1 | T::D1Array => (vk::ImageType::TYPE_1D, [layout.width, 1, 1]),
+        T::D3 => (
+            vk::ImageType::TYPE_3D,
+            [layout.width, layout.height, layout.depth],
+        ),
+        _ => (vk::ImageType::TYPE_2D, [layout.width, layout.height, 1]),
+    };
+    Some((
+        image_type,
+        vk::Extent3D {
+            width,
+            height,
+            depth,
+        },
+    ))
+}
+
+/// The bytes and copies that upload every level of `texture`, whose image has `aspect`: one copy
+/// per level, of its whole extent and every layer, from that level's bytes
+/// ([`LiteralTexture::level`]). Each level starts at a multiple of the texel size and of 4, as a
+/// copy's `bufferOffset` must (`VUID-vkCmdCopyBufferToImage-dstImage-07975` and `-07978`), so
+/// the bytes are the literal's own unless a level ends off that alignment, where the next starts
+/// past zero padding.
+fn level_uploads(
+    texture: &LiteralTexture,
+    aspect: vk::ImageAspectFlags,
+) -> Result<(Cow<'_, [u8]>, Vec<vk::BufferImageCopy>), String> {
+    let texel = texture.format.bytes_per_pixel() * texture.sample_count as usize;
+    // The least common multiple of the texel size and 4.
+    let align = [1, 2, 4]
+        .into_iter()
+        .map(|texels| texels * texel)
+        .find(|bytes| bytes % 4 == 0)
+        .expect("four texels' bytes are a multiple of 4");
+    let levels = (0..texture.mip_levels)
+        .map(|level| texture.level(level))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (mut copies, mut starts) = (Vec::with_capacity(levels.len()), Vec::new());
+    let (mut end, mut padded) = (0usize, false);
+    for (level, (dimensions, bytes)) in (0..).zip(&levels) {
+        let start = end.next_multiple_of(align);
+        padded |= start != end;
+        let layout = texture_layout(texture.texture_type, *dimensions, texture.sample_count)?;
+        let (_, extent) =
+            image_shape(texture.texture_type, &layout).ok_or("a texture buffer is no image")?;
+        copies.push(
+            vk::BufferImageCopy::default()
+                .buffer_offset(start as vk::DeviceSize)
+                .image_subresource(vk::ImageSubresourceLayers {
+                    mip_level: level,
+                    ..layers(aspect, layout.array_layers)
+                })
+                .image_extent(extent),
+        );
+        starts.push(start);
+        end = start + bytes.len();
+    }
+    if !padded {
+        return Ok((Cow::Borrowed(&texture.bytes), copies));
+    }
+    let mut staged = vec![0; end];
+    for ((_, bytes), start) in levels.iter().zip(starts) {
+        staged[start..start + bytes.len()].copy_from_slice(bytes);
+    }
+    Ok((Cow::Owned(staged), copies))
 }
 
 #[cfg(test)]

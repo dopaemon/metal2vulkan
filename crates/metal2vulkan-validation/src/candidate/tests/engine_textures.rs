@@ -1,11 +1,12 @@
 //! The engine compute candidate with textures, texture buffers, texture arrays, and samplers
-//! on a device: the owned `texture_ops` and `sampling` kernels and the public `texture_array_width`
-//! kernel, planned by the binder and executed under `VK_LAYER_KHRONOS_validation`, against
-//! expectations derived from their MSL. `G-linux`'s `m2v_cpu_icd` step runs these on lavapipe.
-//! Every kernel is loop-free.
+//! on a device: the owned `texture_ops`, `sampling`, and `msf_mip_levels` kernels and the public
+//! `texture_array_width` kernel, planned by the binder and executed on the executor's own context
+//! under `VK_LAYER_KHRONOS_validation`, against expectations derived from their MSL. `G-linux`'s
+//! `m2v_cpu_icd` step runs these on lavapipe. Every kernel is loop-free.
 
 use super::engine_compute::run;
 use crate::candidate::engine::{resources, ComputeCase, ComputeOutput};
+use crate::case::mips::level_dimensions;
 use crate::case::{
     ResourceRole, SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource,
     TextureFormat, TextureType,
@@ -303,6 +304,103 @@ fn cube_and_cube_array_faces_read_the_authored_layers() {
     expected.extend(face(10));
     expected.extend([1.0, 2.0, 1.0, 0.0]);
     assert_eq!(run.output, floats(&expected));
+}
+
+/// A mipmapped texture of `texture_type`, `format`, and level 0 extent `dimensions` with
+/// `levels` levels, every texel of level `level` and layer `layer` holding `value(level, layer)`
+/// (`case::mips`'s layout: level 0 first, each level's layers in order).
+fn mipmapped(
+    texture_type: TextureType,
+    format: TextureFormat,
+    dimensions: [u32; 3],
+    levels: u32,
+    value: impl Fn(u32, u32) -> Vec<u8>,
+) -> LiteralTexture {
+    let mut bytes = Vec::new();
+    for level in 0..levels {
+        let extent = level_dimensions(texture_type, dimensions, level);
+        let layout = crate::literal::texture_layout(texture_type, extent, 1).unwrap();
+        let texels = layout.width * layout.height * layout.depth;
+        for layer in 0..layout.array_layers {
+            bytes.extend(value(level, layer).repeat(texels as usize));
+        }
+    }
+    LiteralTexture {
+        role: ResourceRole::Input,
+        mip_levels: levels,
+        ..texture(0, texture_type, format, dimensions, bytes)
+    }
+}
+
+/// The first channel of what `msf_mip_levels`'s kernel `entry` samples through its nearest
+/// sampler with a nearest mip filter at each level of `texture` (thread `i` at `level(i)`), on
+/// this executor's own context; the kernel writes `stride` `float4`s a thread.
+fn nearest_at_each_level(entry: &str, texture: LiteralTexture, stride: usize) -> Vec<f32> {
+    let levels = texture.mip_levels;
+    let length = 16 * stride * levels as usize;
+    let mut case = kernel(
+        entry,
+        vec![texture],
+        Vec::new(),
+        [levels, 1, 1],
+        ComputeOutput::Buffer {
+            binding: 1,
+            offset: 0,
+            length: length as u64,
+        },
+    );
+    let at: Vec<f32> = (0..levels).map(|level| level as f32).collect();
+    case.buffers = BTreeMap::from([(0, floats(&at)), (1, vec![0xab; length])]);
+    let run = run(&case, &fixture("msf_mip_levels.ll")).unwrap();
+    run.output
+        .chunks(16 * stride)
+        .map(|thread| f32::from_le_bytes(thread[..4].try_into().unwrap()))
+        .collect()
+}
+
+/// Every level of a mipmapped texture is the image's own level, uploaded from its own bytes:
+/// `msf_mip_levels`'s kernels sample a 2D, a 3D, a cube, and slice 1 of a 2D array texture at
+/// each level, nearest, and read the value that level holds (a 2D array's and a cube's in its
+/// layer). The `r8_unorm` 2D texture's 1-byte level 2 starts past padding: its 3x3 level 1 ends
+/// off the 4-byte alignment a copy's offset needs.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn each_level_of_a_mipmapped_texture_holds_its_own_texels() {
+    let level_and_layer = |level: u32, layer: u32| level as f32 + 100.0 * layer as f32;
+    let r32 = |level, layer| level_and_layer(level, layer).to_le_bytes().to_vec();
+    for (entry, texture_type, dimensions, levels, layer, stride) in [
+        ("msf_lvl2d", TextureType::D2, [8, 8, 1], 4, 0, 2),
+        ("msf_lvl3d", TextureType::D3, [4, 4, 4], 3, 0, 1),
+        ("msf_lvlcube", TextureType::Cube, [4, 4, 6], 3, 0, 1),
+        ("msf_lvlarray", TextureType::D2Array, [4, 4, 3], 3, 1, 1),
+    ] {
+        let texture = mipmapped(
+            texture_type,
+            TextureFormat::R32Float,
+            dimensions,
+            levels,
+            r32,
+        );
+        let expected: Vec<f32> = (0..levels).map(|l| level_and_layer(l, layer)).collect();
+        assert_eq!(
+            nearest_at_each_level(entry, texture, stride),
+            expected,
+            "{entry}"
+        );
+    }
+    let code = |level: u32| 40 * level as u8 + 7;
+    let texture = mipmapped(
+        TextureType::D2,
+        TextureFormat::R8Unorm,
+        [6, 6, 1],
+        3,
+        |l, _| vec![code(l)],
+    );
+    let codes: Vec<u8> = nearest_at_each_level("msf_lvl2d", texture, 2)
+        .into_iter()
+        .map(|value| (value * 255.0).round() as u8)
+        .collect();
+    assert_eq!(codes, (0..3).map(code).collect::<Vec<_>>());
 }
 
 /// A depth texture read and a multisampled integer texture read of one sample, which this
