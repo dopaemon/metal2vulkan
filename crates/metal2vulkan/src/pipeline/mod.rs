@@ -131,9 +131,9 @@ pub use layout::{
 };
 pub use link::heap_unused_while_pending;
 pub use lower_inputs::{
-    AliasView, AmplificationDraws, BlendEquation, CaptureForm, ChannelWrite, ColorGroup,
-    ExtendedRangeColor, FactorLane, FetchedAttachment, FramebufferFetchInputs, LoweringInputs,
-    RotatedBlendForm, StorageImageChoice, StorageImageClass, VertexFetch, VertexFetchProjection,
+    AliasView, AmplificationDraws, BlendEquation, ChannelWrite, ColorGroup, ExtendedRangeColor,
+    FactorLane, FetchedAttachment, FramebufferFetchInputs, LoweringInputs, RotatedBlendForm,
+    StorageImageChoice, StorageImageClass, VertexFetch, VertexFetchProjection,
     ViewportCompensation,
 };
 pub use table::FunctionHandle;

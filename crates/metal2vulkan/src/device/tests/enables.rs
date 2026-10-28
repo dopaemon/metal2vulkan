@@ -67,16 +67,26 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
         }
         // Every listed feature with a member is recommended (the committed profiles list only
         // exposed features whose extensions' requirements are listed), except the buffer
-        // update-after-bind features VUID 10247 forbids beside `robustBufferAccess`.
+        // update-after-bind features VUID 10247 forbids beside `robustBufferAccess`, and
+        // `VK_EXT_depth_bias_control`'s, an extension the core reads nothing of.
         let forbidden = |f: VkFeature| {
             !desc.robust_buffer_access_update_after_bind
                 && desc.has(VkFeature::RobustBufferAccess)
                 && BUFFER_UPDATE_AFTER_BIND.contains(&f)
         };
+        let unread = [
+            VkFeature::DepthBiasControl,
+            VkFeature::FloatRepresentation,
+            VkFeature::DepthBiasExact,
+        ];
+        assert!(
+            !rec.extensions.contains(&VkExtension::ExtDepthBiasControl),
+            "{stem}"
+        );
         for &f in &desc.features {
             assert_eq!(
                 rec.features.contains(&f),
-                f.exposure().has_member(desc.api_version) && !forbidden(f),
+                f.exposure().has_member(desc.api_version) && !forbidden(f) && !unread.contains(&f),
                 "{stem}: {f:?}"
             );
             if forbidden(f) {

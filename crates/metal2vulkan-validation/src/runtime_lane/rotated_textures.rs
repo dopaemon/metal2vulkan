@@ -13,7 +13,8 @@
 //! every tile of a pass that draws (announced once, `RotatedLoadTiles`) and none of one that does
 //! not, as Metal; a resolve lands as a store does; the bytes between the plane's rows stay. A
 //! rotated texture of a padded 10-bit or extended-range format that such a pass loads keeps its
-//! codes with the bits they leave unused as Metal's tile store makes them. CPU access and blits
+//! codes and the bits they leave unused, the device's store, where Metal's tile store makes those
+//! bits canonical (announced, `ExtendedRangeBitsKept`). CPU access and blits
 //! address the plane as the texture's own extent at the plane's rows, turned or not, refused where
 //! those rows run past the buffer; a fragment's `read()` sees the stored frame unturned. A view of the texture in another 8-bit RGBA format acts as the
 //! texture does; other views are refused. The creators refuse what Metal asserts on, and the
@@ -564,16 +565,15 @@ fn loads_of_rotation_4_land_mirrored_and_passes_without_draws_keep_every_texel()
     quiet(&messages);
 }
 
-/// A texel of the rotated attachments [`unused_bits_of_rotated_textures_are_metals`] loads: the
+/// A texel of the rotated attachments [`unused_bits_of_rotated_textures_are_kept`] loads: the
 /// format, its bytes, the write mask its draw takes, its bytes at the stored texel `(sx, sy)`
-/// (codes naming the texel and channel, the bits they leave unused not Metal's), Metal's store
-/// of those bytes, and its drawn texel's bytes, where the mask writes one.
+/// (codes naming the texel and channel, the bits they leave unused not Metal's), and its drawn
+/// texel's bytes, where the mask writes one.
 struct UnusedBitsCase {
     pf: PixelFormat,
     texel: u64,
     mask: ColorWriteMask,
     named: fn((u64, u64)) -> Vec<u8>,
-    stored: fn(&[u8]) -> Vec<u8>,
     drawn: Option<Vec<u8>>,
 }
 
@@ -590,17 +590,9 @@ fn padded_named((sx, sy): (u64, u64), channels: u64) -> Vec<u8> {
         .collect()
 }
 
-/// Metal's store of padded words: each word's low six bits zeroed.
-fn padded_stored(bytes: &[u8]) -> Vec<u8> {
-    bytes
-        .chunks(2)
-        .flat_map(|w| (u16::from_le_bytes([w[0], w[1]]) & !0x3f).to_le_bytes())
-        .collect()
-}
-
 /// The cases: `R10Unorm_X6` and `RG10Unorm_X12` drawn in codes 341 and 682 (the color
 /// `(1/3, 2/3, 0, 1)`, exactly), and `BGR10_XR` under an empty write mask, its bits 30 and 31
-/// zero or one by texel (Metal's store sets them).
+/// zero or one by texel (Metal's store would set them).
 fn unused_bits_cases() -> [UnusedBitsCase; 3] {
     [
         UnusedBitsCase {
@@ -608,7 +600,6 @@ fn unused_bits_cases() -> [UnusedBitsCase; 3] {
             texel: 2,
             mask: ColorWriteMask::ALL,
             named: |at| padded_named(at, 1),
-            stored: padded_stored,
             drawn: Some((341u16 << 6).to_le_bytes().to_vec()),
         },
         UnusedBitsCase {
@@ -616,7 +607,6 @@ fn unused_bits_cases() -> [UnusedBitsCase; 3] {
             texel: 4,
             mask: ColorWriteMask::ALL,
             named: |at| padded_named(at, 2),
-            stored: padded_stored,
             drawn: Some(
                 [341u16 << 6, 682 << 6]
                     .iter()
@@ -633,10 +623,6 @@ fn unused_bits_cases() -> [UnusedBitsCase; 3] {
                 let top = (sx + 2 * sy) % 4;
                 ((top << 30 | codes) as u32).to_le_bytes().to_vec()
             },
-            stored: |bytes| {
-                let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                (word | 0xc000_0000).to_le_bytes().to_vec()
-            },
             drawn: None,
         },
     ]
@@ -645,28 +631,21 @@ fn unused_bits_cases() -> [UnusedBitsCase; 3] {
 /// Rotated textures of `R10Unorm_X6`, `RG10Unorm_X12` and `BGR10_XR` ([`unused_bits_cases`]), of
 /// every rotation, a frame of one 32x32 tile and one of two each way, over planes whose texels
 /// name their stored position: a pass that loads the texture and draws its top-left 8x4 texels
-/// stores the drawn texels where the mask writes them and leaves every other texel's codes where
-/// a load and a store put them (at rotation 4 the mirror [`loaded_from`] gives), the bits they
-/// leave unused as Metal's store makes them (a padded word's low six bits zeroed, `BGR10_XR`'s bits
-/// 30 and 31 set), the bytes between rows kept. That is Metal's store in each tile the draw
-/// reaches (on an M4 and the consumer's runs of them on an M3 Max; the
-/// turns): the runtime rewrites the twin of the pass's frame after its copy in, so no pass
-/// announces `extended-range-bits-kept`. In a frame of two tiles the one the draw does not reach is
-/// rewritten as well, where Metal keeps its texels' bytes (`unreached-tiles-rewritten`, announced
-/// by each such pass), but where capture replay found the draw's reach (a texture that is not a
-/// rotated frame, once its capture form is made): that pass keeps it, Metal's answer, and announces
-/// nothing.
+/// stores the drawn texels where the mask writes them and leaves every other texel's bytes where
+/// a load and a store put them (at rotation 4 the mirror [`loaded_from`] gives), the bits their
+/// codes leave unused as they were, the bytes between rows kept: the device's store, where
+/// Metal's makes those bits canonical in each tile the draw reaches (a padded word's low six bits
+/// zeroed, `BGR10_XR`'s bits 30 and 31 set). Each pass announces `extended-range-bits-kept`.
 #[test]
-fn unused_bits_of_rotated_textures_are_metals() {
-    use super::extended_range_blends::{EXTENDED_RANGE_BITS, UNREACHED_TILES};
+fn unused_bits_of_rotated_textures_are_kept() {
+    use super::extended_range_blends::EXTENDED_RANGE_BITS;
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     // Each pass's announcement says which reach it took (below).
     let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
-        options.announce_each = UNREACHED_TILES.into_iter().collect();
+        options.announce_each = EXTENDED_RANGE_BITS.into_iter().collect();
     })
     .unwrap();
-    let mut announced = 0;
     let lane = Lane::new(&device);
     let color: Vec<u8> = [1.0f32 / 3.0, 2.0 / 3.0, 0.0, 1.0]
         .iter()
@@ -695,7 +674,7 @@ fn unused_bits_of_rotated_textures_are_metals() {
                     for sx in 0..sw {
                         put(&mut before, (sx, sy), &(case.named)((sx, sy)));
                         let from = loaded_from(rotation, sw, (sx, sy));
-                        put(&mut want, (sx, sy), &(case.stored)(&(case.named)(from)));
+                        put(&mut want, (sx, sy), &(case.named)(from));
                     }
                 }
                 if let Some(drawn) = &case.drawn {
@@ -727,39 +706,19 @@ fn unused_bits_of_rotated_textures_are_metals() {
                 command_buffer.commit().unwrap();
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
                 assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-                // A pass whose draws' reach capture replay found (a texture that is not a
-                // rotated frame, once its capture form is made: `render/capture.rs`) rewrites the
-                // tile the draw reaches alone and keeps every other texel's bytes, Metal's answer;
-                // one that announces rewrites every tile.
                 let counted = super::degrade_notices::counts(&messages.take_notices());
                 assert_eq!(
                     counted.get(&EXTENDED_RANGE_BITS[0]),
-                    None,
+                    Some(&1),
                     "{what}: {counted:?}"
                 );
-                let reached = |(x, y): (u64, u64)| x < 32 && y < 32;
-                if counted.contains_key(&UNREACHED_TILES[0]) {
-                    announced += 1;
-                } else {
-                    let mut exact = before.clone();
-                    for y in 0..h {
-                        for x in (0..w).filter(|&x| reached((x, y))) {
-                            let (sx, sy) = stored_at(rotation, (w, h), (x, y));
-                            let at = (sy * bpr + sx * case.texel) as usize;
-                            let texel = at..at + case.texel as usize;
-                            exact[texel.clone()].copy_from_slice(&want[texel]);
-                        }
-                    }
-                    want = exact;
-                }
                 if let Some(at) = first_difference(&bytes_of(&plane), &want, bpr) {
                     panic!("{what}: {at} (texels counted as 4 bytes)");
                 }
-                eprintln!("ROTATED-UNUSED-BITS {what}: Metal's bytes");
+                eprintln!("ROTATED-UNUSED-BITS {what}: the kept bytes");
             }
         }
     }
-    assert!(announced > 0, "a frame of two tiles announces");
     quiet(&messages);
 }
 

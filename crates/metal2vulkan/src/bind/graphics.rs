@@ -118,7 +118,7 @@
 //!   sample, no depth or stencil attachment, no rasterizer discard, no memory the vertex or
 //!   fragment function writes, no attachment in the storage form or input attachment, no
 //!   imageblock, tile memory, shader-side stencil or tests, no interlocked or shadowed colors, no
-//!   capture form, no tessellation or mesh stages, and no amplified or layered draw. Every other
+//!   tessellation or mesh stages, and no amplified or layered draw. Every other
 //!   slot the shape names is left out, and the plan's `variant.snapshot_textures` says which it
 //!   kept. Its plan binds each slot's snapshot (`WriteSource::SnapshotTexels`) and leaves which of
 //!   the two draws runs to the consumer (`PushHole::SnapshotPhase`, zero in the plan's bytes);
@@ -157,20 +157,6 @@
 //!   without the early-tests variant, runs the variant whose function runs both,
 //!   `VariantKey::shader_stencil`, in a pass with a depth and a stencil attachment; a pass with a
 //!   stencil attachment alone is `NotImplemented(FramebufferFetch)` at it.)
-//! - **Capture form**. A pipeline compiled under `VariantKey::captured_positions`
-//!   (`RuntimeFact::CapturedPositions`), which a consumer asks for and no bind shape does, plans
-//!   its own variant. Its draws leave `PushHole::CaptureAddress` to the consumer (the first
-//!   record's address) and write `PushField::CaptureLayout` from the draw. A direct draw
-//!   without an index buffer is the vertices form's: its first vertex, vertex count, first
-//!   instance and 0. A direct indexed draw is the indexed form's: it runs without indices as
-//!   `index count` vertices from 0 with its instances, its layout `[restarts, index count, base
-//!   instance, base vertex]` (`restarts` 1 for a line or triangle strip, from
-//!   `BindState::primitive_type`; `MissingPrimitiveType` without one), leaves
-//!   `PushHole::CaptureIndexAddress` to the consumer (its first index's address), and reads its
-//!   indices in the vertex stage as storage (`DrawCommands::uses`).
-//!   A draw of the other form is `NeedsVariant` with that form; an indexed draw whose indices run
-//!   past its buffer or whose index offset is not a multiple of the index size, an indirect draw,
-//!   and an amplified one are `NotImplemented(TileReach)`.
 //! - **Draws.** A Metal draw maps to the Vulkan draw of the same arguments; an indirect draw is
 //!   GPU-side unless a stage reads `BaseVertexInstance` from push constants or the plan is
 //!   multiview, in which case `indirect_needs_arguments` asks for the CPU read.
@@ -179,9 +165,10 @@
 //!   primitive (`BindState::primitive_type`; `MissingPrimitiveType` without one), a direct or
 //!   indirect draw's alike. An indexed draw of such a pipeline, whose vertices primitives share,
 //!   runs its de-indexed variant of the draw's index type (`BindShape::primitive_id_indices`,
-//!   `VariantKey::primitive_id_indices`) as the indexed capture form's draw: `index count`
-//!   vertices from 0, layout `[0, index count, base instance, base vertex]`, its indices read in
-//!   the vertex stage at `PushHole::CaptureIndexAddress`; any other draw of that variant is
+//!   `VariantKey::primitive_id_indices`): `index count` vertices from 0 with its instances,
+//!   layout `[0, index count, base instance, base vertex]` (`PushField::CaptureLayout`), leaving
+//!   `PushHole::CaptureIndexAddress` to the consumer (its first index's address), and reading its
+//!   indices in the vertex stage as storage (`DrawCommands::uses`); any other draw of that variant is
 //!   `NeedsVariant` without it. A strip, an indirect indexed draw, indices past their buffer and
 //!   an indexed draw of a plan without the form are `NotImplemented(PrimitiveId)`. A draw of one
 //!   of Metal's private primitive types in the private list form (`BindShape::private_list`,
@@ -354,7 +341,7 @@ use crate::pipeline::sym::{
     Axis, DispatchKeys, PushField, SlotClass, SlotRef, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::vertex::{VertexAttribute, VertexStride};
-use crate::pipeline::{AmplificationDraws, CaptureForm, ViewportCompensation};
+use crate::pipeline::{AmplificationDraws, ViewportCompensation};
 use crate::vk;
 
 /// A Metal draw call.
@@ -486,7 +473,7 @@ pub struct DrawCommands {
     /// dynamic strides makes static pipeline state.
     pub vertex_strides: Vec<(u32, u32)>,
     /// The draw's own resources beyond the plan's `uses`: its index buffer and indirect
-    /// arguments. A capture variant's indexed draw reads its indices in the vertex stage as storage
+    /// arguments. A de-indexed draw reads its indices in the vertex stage as storage
     /// (`VERTEX_SHADER`, from the index offset over its indices), by address, and binds no index
     /// buffer.
     pub uses: Vec<ResourceUse>,
@@ -1116,15 +1103,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 .iter()
                 .any(|f| f.field == PushField::AmplificationLayerOffset)
     });
-    // A capture variant's record slots name a vertex and an instance, not a view or an
-    // amplification: an amplified draw would write each record once per amplification.
-    let captured_positions = p.dependencies.iter().find_map(|d| match d.fact {
-        RuntimeFact::CapturedPositions { form } => Some(form),
-        _ => None,
-    });
-    if captured_positions.is_some() && shape.vertex_amplification.count > 1 {
-        return Err(not_implemented(Feature::TileReach));
-    }
     // A pipeline whose vertex function writes the primitive ID's varying runs an indexed draw
     // in its de-indexed form, of the draw's index type.
     let writes_primitive_ids = p.interface.push.iter().any(|pl| {
@@ -1357,7 +1335,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // nothing else either draw writes, tests, or orders: one sample, no depth or stencil, no
     // memory either function writes, no attachment, imageblock, tile memory, stencil shadow or
     // stand-in of the storage form or an input attachment, and no other interlock. A tessellation
-    // or mesh pipeline's, a capture variant's, and an amplified or layered draw's are not built.
+    // or mesh pipeline's, and an amplified or layered draw's are not built.
     // The device makes the variant's pipeline: its feedback loop flag and dynamic write masks
     // need `attachmentFeedbackLoopLayout` and `extendedDynamicState3ColorWriteMask`.
     // Every other slot the shape names is left out, and the consumer reads it as it would without
@@ -1382,7 +1360,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         && tile_memory.is_none()
         && records.is_none()
         && !mesh
-        && captured_positions.is_none()
         && interlocked_colors.is_empty()
         && extended_shadows.is_empty()
         && shape.vertex_amplification.count <= 1
@@ -1682,7 +1659,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 field.field,
                 PushField::RootTableAddress
                     | PushField::ExecutionStatusAddress
-                    | PushField::CaptureAddress
                     | PushField::CaptureIndexAddress
                     | PushField::MergedDrawAddress
                     | PushField::SnapshotPhase
@@ -1691,12 +1667,9 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             match field.field {
                 PushField::RootTableAddress => reads_root_table = true,
                 PushField::ExecutionStatusAddress => {}
-                // A capture variant's records, its draw's indices, and its draw's layout: the
-                // addresses are the consumer's holes, the layout instantiation writes from the
-                // draw.
-                PushField::CaptureAddress
-                | PushField::CaptureIndexAddress
-                | PushField::CaptureLayout
+                // A de-indexed or private list draw's indices, and its draw's layout: the address
+                // is the consumer's hole, the layout instantiation writes from the draw.
+                PushField::CaptureIndexAddress | PushField::CaptureLayout
                     if stage == Stage::Vertex => {}
                 PushField::BaseVertexInstance if stage == Stage::Vertex => {}
                 // A merged draw replay's header: the consumer's hole.
@@ -2536,9 +2509,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.shader_tests = shader_tests;
     variant.shader_stencil = shader_stencil;
     variant.window_depth_varying = window_depth_varying;
-    // A pipeline compiled in the capture form states its variant: a consumer asks for it, and no
-    // bind shape does.
-    variant.captured_positions = captured_positions;
     variant.primitive_id_indices = primitive_id_indices;
     variant.quad_primitive_ids = quad_primitive_ids;
     variant.private_list = private_list;
@@ -2611,7 +2581,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 .shader_tests
                 .is_some()
                 .then_some(ShaderTestsTemplate),
-            capture: captured_positions,
             deindexed: primitive_id_indices,
             private_list,
             storage_kept: storage_kept(p)?,
@@ -2793,27 +2762,12 @@ impl BindingPlan {
         }
         // An indexed draw of a pipeline that writes the primitive ID runs on its de-indexed
         // variant of the draw's index type, and every other draw on the variant without it.
-        if t.capture.is_none() && t.deindexed.is_some() {
-            let asked = match *draw {
-                DrawCall::Indexed { .. } => capture_form(draw)?.index_type(),
-                _ => None,
-            };
+        if t.deindexed.is_some() {
+            let asked = draw_index_type(draw);
             if asked != t.deindexed {
                 return Err(BindError::NeedsVariant {
                     variant: Box::new(VariantKey {
                         primitive_id_indices: asked,
-                        ..self.variant.clone()
-                    }),
-                });
-            }
-        }
-        // A draw of the other capture form runs on that form's variant.
-        if let Some(form) = t.capture {
-            let asked = capture_form(draw)?;
-            if asked != form {
-                return Err(BindError::NeedsVariant {
-                    variant: Box::new(VariantKey {
-                        captured_positions: Some(asked),
                         ..self.variant.clone()
                     }),
                 });
@@ -4099,111 +4053,29 @@ fn multiview_instances(limit: Option<u32>, draw: &DrawCall) -> Result<(), BindEr
     )))
 }
 
-/// The capture form `draw` runs on: a direct draw without an index buffer the vertices form, a
-/// direct indexed draw the indexed form of its index type. An indirect draw's counts are the
-/// GPU's, and a patch or mesh draw has no vertex function's vertices: each is not implemented
-/// (`Feature::TileReach`).
-fn capture_form(draw: &DrawCall) -> Result<CaptureForm, BindError> {
+/// The index type of `draw`, a direct indexed draw of one of Metal's index types; `None` for any
+/// other draw.
+fn draw_index_type(draw: &DrawCall) -> Option<metal::IndexType> {
     match *draw {
-        DrawCall::Primitives { .. } => Ok(CaptureForm::Vertices),
         DrawCall::Indexed { index_type, .. } if index_type == vk::IndexType::UINT16 => {
-            Ok(CaptureForm::Indexed(metal::IndexType::UInt16))
+            Some(metal::IndexType::UInt16)
         }
         DrawCall::Indexed { index_type, .. } if index_type == vk::IndexType::UINT32 => {
-            Ok(CaptureForm::Indexed(metal::IndexType::UInt32))
+            Some(metal::IndexType::UInt32)
         }
-        _ => Err(not_implemented(Feature::TileReach)),
+        _ => None,
     }
 }
 
-/// How a draw of a capture variant runs: `PushField::CaptureLayout`'s words, from which each
-/// vertex's record slot follows, and for the indexed form the Vulkan draw it runs as and its index
-/// read.
-struct CaptureDraw {
+/// How an indexed draw runs on the primitive ID's de-indexed variant
+/// ([`deindexed_draw`]): `PushField::CaptureLayout`'s words, the Vulkan draw it runs as and its
+/// index read.
+struct DeindexedDraw {
     layout: [u32; 4],
-    /// The indexed form's draw: without indices, `index count` vertices from 0, with the draw's
-    /// instances.
-    command: Option<vk::DrawCommand>,
-    /// The indexed form's read of its indices, from the index offset, as storage in the vertex
-    /// stage.
-    indices: Option<ResourceUse>,
-}
-
-/// How `draw` (whose `overrun` is [`index_overrun`]'s, of primitive type `primitive`) runs on a
-/// capture variant of `form`: a draw of the vertices form as it is, with layout `[vertex start,
-/// vertex count, base instance, 0]`; one of the indexed form as `index count` vertices from 0,
-/// with layout `[restarts, index count, base instance, base vertex]`, `restarts` 1 for a line or
-/// triangle strip, which Metal restarts at the all-ones index (`MissingPrimitiveType` without a
-/// primitive type). An indexed draw whose indices run past its buffer, or whose index offset is
-/// not a multiple of the index size, is not implemented (`feature`, the form's). A draw of
-/// another form never reaches here (`instantiate_draw` asks for its variant).
-fn capture_draw(
-    form: CaptureForm,
-    draw: &DrawCall,
-    overrun: Option<IndexOverrun>,
-    primitive: Option<metal::PrimitiveType>,
-    feature: Feature,
-) -> Result<CaptureDraw, BindError> {
-    match (capture_form(draw)?, *draw) {
-        (
-            asked @ CaptureForm::Vertices,
-            DrawCall::Primitives {
-                vertex_start,
-                vertex_count,
-                base_instance,
-                ..
-            },
-        ) if asked == form => Ok(CaptureDraw {
-            layout: [vertex_start, vertex_count, base_instance, 0],
-            command: None,
-            indices: None,
-        }),
-        (
-            asked @ CaptureForm::Indexed(_),
-            DrawCall::Indexed {
-                index_type,
-                index_count,
-                index_offset,
-                instance_count,
-                base_vertex,
-                base_instance,
-                ..
-            },
-        ) if asked == form => {
-            let size = index_bytes(index_type)
-                .ok_or_else(|| internal("an indexed capture draw without an index size"))?;
-            if overrun.is_some() || !index_offset.is_multiple_of(size) {
-                return Err(not_implemented(feature));
-            }
-            let restarts = match primitive.ok_or(BindError::MissingPrimitiveType)? {
-                metal::PrimitiveType::LineStrip | metal::PrimitiveType::TriangleStrip => 1,
-                metal::PrimitiveType::Point
-                | metal::PrimitiveType::Line
-                | metal::PrimitiveType::Triangle => 0,
-            };
-            Ok(CaptureDraw {
-                // The base vertex's two's-complement bits: the function adds it wrapping.
-                layout: [restarts, index_count, base_instance, base_vertex as u32],
-                command: Some(vk::DrawCommand::Draw {
-                    vertex_count: index_count,
-                    instance_count,
-                    first_vertex: 0,
-                    first_instance: base_instance,
-                }),
-                indices: Some(ResourceUse {
-                    resource: UseTarget::IndexBuffer,
-                    access: AccessSet::READ,
-                    class: AccessClass::Storage,
-                    stages: vk::PipelineStageFlags2::VERTEX_SHADER,
-                    range: Some(ByteRange {
-                        offset: 0,
-                        len: u64::from(index_count) * size,
-                    }),
-                }),
-            })
-        }
-        _ => Err(internal("a draw of another capture form than its plan's")),
-    }
+    /// Without indices, `index count` vertices from 0, with the draw's instances.
+    command: vk::DrawCommand,
+    /// Its read of its indices, from the index offset, as storage in the vertex stage.
+    indices: ResourceUse,
 }
 
 /// `PushField::VerticesPerPrimitive` for `draw` of primitive type `primitive`
@@ -4211,7 +4083,7 @@ fn capture_draw(
 /// strip or points. The vertex function reads the draw's first vertex as its base vertex, an
 /// indirect draw's from its arguments as the GPU draws it. An indexed draw shares a vertex among
 /// primitives, whose flat inputs read it alike: it runs `from_zero`, its indices drawn as
-/// vertices from 0 (the de-indexed or the indexed capture form, [`capture_draw`]), and is
+/// vertices from 0 (the de-indexed form, [`deindexed_draw`]), and is
 /// otherwise `NotImplemented(PrimitiveId)`. A draw in the private list form (`listed`) is the
 /// consumer's list, run without indices whatever its call: twice that where it lists Metal's
 /// quads or quad strip as two triangles a quad (`quads`), whose primitive Metal counts once.
@@ -4237,33 +4109,70 @@ fn vertices_per_primitive(
 }
 
 /// How an indexed draw runs on the primitive ID's de-indexed variant of index type `ty`
-/// (`VariantKey::primitive_id_indices`): as the indexed capture form's draw ([`capture_draw`]),
-/// `index count` vertices from 0 without indices, with layout `[0, index count, base instance,
-/// base vertex]`, its indices read in the vertex stage. A line or triangle strip, which Metal
-/// restarts at the all-ones index, an indexed draw whose indices run past its buffer or whose
-/// index offset is not a multiple of the index size, and any other draw are
-/// `NotImplemented(PrimitiveId)` (`MissingPrimitiveType` without a primitive type).
+/// (`VariantKey::primitive_id_indices`): `index count` vertices from 0 without indices, with the
+/// draw's instances, its layout `[0, index count, base instance, base vertex]`, its indices read
+/// in the vertex stage. A line or triangle strip, which Metal restarts at the all-ones index, an
+/// indexed draw whose indices run past its buffer or whose index offset is not a multiple of the
+/// index size, and any other draw are `NotImplemented(PrimitiveId)` (`MissingPrimitiveType`
+/// without a primitive type). A draw of another index type never reaches here
+/// (`instantiate_draw` asks for its variant).
 fn deindexed_draw(
     ty: metal::IndexType,
     draw: &DrawCall,
     overrun: Option<IndexOverrun>,
     primitive: Option<metal::PrimitiveType>,
-) -> Result<CaptureDraw, BindError> {
-    match (primitive.ok_or(BindError::MissingPrimitiveType)?, draw) {
-        (
-            metal::PrimitiveType::Point
-            | metal::PrimitiveType::Line
-            | metal::PrimitiveType::Triangle,
-            DrawCall::Indexed { .. },
-        ) => capture_draw(
-            CaptureForm::Indexed(ty),
-            draw,
-            overrun,
-            primitive,
-            Feature::PrimitiveId,
-        ),
-        _ => Err(not_implemented(Feature::PrimitiveId)),
+) -> Result<DeindexedDraw, BindError> {
+    let listed = match primitive.ok_or(BindError::MissingPrimitiveType)? {
+        metal::PrimitiveType::Point
+        | metal::PrimitiveType::Line
+        | metal::PrimitiveType::Triangle => true,
+        metal::PrimitiveType::LineStrip | metal::PrimitiveType::TriangleStrip => false,
+    };
+    let DrawCall::Indexed {
+        index_type,
+        index_count,
+        index_offset,
+        instance_count,
+        base_vertex,
+        base_instance,
+        ..
+    } = *draw
+    else {
+        return Err(not_implemented(Feature::PrimitiveId));
+    };
+    if !listed {
+        return Err(not_implemented(Feature::PrimitiveId));
     }
+    if draw_index_type(draw) != Some(ty) {
+        return Err(internal(
+            "a de-indexed draw of another index type than its plan's",
+        ));
+    }
+    let size = index_bytes(index_type)
+        .ok_or_else(|| internal("a de-indexed draw without an index size"))?;
+    if overrun.is_some() || !index_offset.is_multiple_of(size) {
+        return Err(not_implemented(Feature::PrimitiveId));
+    }
+    Ok(DeindexedDraw {
+        // The base vertex's two's-complement bits: the function adds it wrapping.
+        layout: [0, index_count, base_instance, base_vertex as u32],
+        command: vk::DrawCommand::Draw {
+            vertex_count: index_count,
+            instance_count,
+            first_vertex: 0,
+            first_instance: base_instance,
+        },
+        indices: ResourceUse {
+            resource: UseTarget::IndexBuffer,
+            access: AccessSet::READ,
+            class: AccessClass::Storage,
+            stages: vk::PipelineStageFlags2::VERTEX_SHADER,
+            range: Some(ByteRange {
+                offset: 0,
+                len: u64::from(index_count) * size,
+            }),
+        },
+    })
 }
 
 /// The commands of `draw` of `state`, written over `out` (`BindingPlan::instantiate_draw_into`):
@@ -4299,18 +4208,11 @@ fn instantiate(
     } = out;
     let overrun = index_overrun(t.robust_index_fetch, draw);
     let (command, base) = vk_draw(draw, overrun);
-    let capture = match (t.capture, t.deindexed) {
-        (Some(form), _) => Some(capture_draw(
-            form,
-            draw,
-            overrun,
-            state.primitive_type,
-            Feature::TileReach,
-        )?),
-        (None, Some(ty)) => Some(deindexed_draw(ty, draw, overrun, state.primitive_type)?),
-        (None, None) => None,
+    let deindexed = match t.deindexed {
+        Some(ty) => Some(deindexed_draw(ty, draw, overrun, state.primitive_type)?),
+        None => None,
     };
-    let command = capture.as_ref().and_then(|c| c.command).unwrap_or(command);
+    let command = deindexed.as_ref().map_or(command, |d| d.command);
     // A mesh render pipeline makes mesh draws, and only it does.
     let mesh = match (&t.mesh, mesh_threads(draw)) {
         (Some(m), Some(_)) => Some(mesh_draw(m, draw, command)?),
@@ -4388,7 +4290,6 @@ fn instantiate(
             let bytes: FieldBytes = match f.field {
                 PushField::RootTableAddress
                 | PushField::ExecutionStatusAddress
-                | PushField::CaptureAddress
                 | PushField::CaptureIndexAddress
                 | PushField::MergedDrawAddress
                 | PushField::SnapshotPhase
@@ -4404,7 +4305,6 @@ fn instantiate(
                         PushField::ExecutionStatusAddress => {
                             PushHole::ExecutionStatusAddress { stages, offset }
                         }
-                        PushField::CaptureAddress => PushHole::CaptureAddress { stages, offset },
                         PushField::SnapshotPhase => PushHole::SnapshotPhase { stages, offset },
                         PushField::MergedDrawAddress => {
                             PushHole::MergedDrawAddress { stages, offset }
@@ -4416,9 +4316,9 @@ fn instantiate(
                     });
                     continue;
                 }
-                PushField::CaptureLayout => match &capture {
-                    Some(c) => FieldBytes::words(c.layout.iter().copied()),
-                    None => return Err(internal("a capture layout without its capture form")),
+                PushField::CaptureLayout => match &deindexed {
+                    Some(d) => FieldBytes::words(d.layout.iter().copied()),
+                    None => return Err(internal("a draw layout without its de-indexed form")),
                 },
                 PushField::ShadowStencilState => {
                     let Some(shadow) = &t.shadow_stencil else {
@@ -4509,7 +4409,7 @@ fn instantiate(
                     FieldBytes::words(base)
                 }
                 PushField::VerticesPerPrimitive => {
-                    let from_zero = capture.as_ref().is_some_and(|c| c.command.is_some());
+                    let from_zero = deindexed.is_some();
                     let form = (from_zero, t.private_list, state.quad_primitive_ids);
                     FieldBytes::of(
                         &vertices_per_primitive(draw, state.primitive_type, form)?.to_le_bytes(),
@@ -4716,10 +4616,10 @@ fn instantiate(
         Some(m) => (m.dispatch, Some(m.specialization)),
         None => (None, None),
     };
-    // The indexed capture form reads its indices in the vertex stage, by address, and binds no
-    // index buffer.
+    // The de-indexed form reads its indices in the vertex stage, by address, and binds no index
+    // buffer.
     uses.clear();
-    match capture.as_ref().and_then(|c| c.indices) {
+    match deindexed.as_ref().map(|d| d.indices) {
         Some(indices) => uses.push(indices),
         None => draw_uses(uses, draw, overrun, t.tessellation.as_ref()),
     }

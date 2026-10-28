@@ -5,7 +5,7 @@
 //! [`ExecutionStatus::decode`] after the last one (a `SHADER_WRITE -> HOST_READ` barrier first);
 //! the resident-set miss counter, the indirect clamp, the device replay's preprocess, the index
 //! bounds pass, an absent argument's read, the mesh and tessellation scans, a sample through a
-//! cubic argument sampler, the capture settle, and a sequentially consistent fence write the words
+//! cubic argument sampler, and a sequentially consistent fence write the words
 //! named here.
 
 /// The `ExecutionStatus` buffer.
@@ -26,9 +26,7 @@ impl ExecutionStatus {
     /// What the buffer's bytes report after the command buffer ran. The consumer maps `overflow`, a
     /// replay fault, an index pool overflow, an absent argument read, a mesh records fault, a mesh
     /// grid Metal's GPU discards or the device cannot launch, and a cubic argument sampler's sample
-    /// to a command-buffer execution error, treats resident-set
-    /// misses by its own policy, and announces a captured reach the rule does not answer as its
-    /// pass's fallback to every tile.
+    /// to a command-buffer execution error, and treats resident-set misses by its own policy.
     pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport {
         let word = |w: StatusWord| {
             let at = w.byte_offset() as usize;
@@ -46,7 +44,6 @@ impl ExecutionStatus {
             index_pool_overflow: bits.contains(StatusBits::INDEX_POOL_OVERFLOW),
             absent_argument_read: bits.contains(StatusBits::ABSENT_ARGUMENT_READ),
             cubic_argument_sampler: bits.contains(StatusBits::CUBIC_ARGUMENT_SAMPLER),
-            captured_reach_unmeasured: bits.contains(StatusBits::CAPTURED_REACH_UNMEASURED),
             mesh_grid_discarded: bits.contains(StatusBits::MESH_GRID_DISCARDED),
             mesh_grid_past_limits: bits.contains(StatusBits::MESH_GRID_PAST_LIMITS),
             mesh_records_overflow: (bits.contains(StatusBits::MESH_RECORDS_OVERFLOW)).then(|| {
@@ -115,11 +112,6 @@ pub struct StatusReport {
     /// `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): no result of the command buffer is then Metal's.
     pub cubic_argument_sampler: bool,
-    /// A pass's captured primitives held one whose tiles the tile reach rule does not answer (one
-    /// across the near or far plane under depth clipping, or one past what was measured), so the
-    /// capture settle took every tile of the pass's mask (`bind::CaptureSettleModule`): the
-    /// pass's reach is the announced fallback, not its draws' tiles.
-    pub captured_reach_unmeasured: bool,
     /// An indirect mesh draw's arguments pass (or an emulated one's object arguments pass) met an
     /// object grid that Metal's GPU discards (`StatusBits::MESH_GRID_DISCARDED`): that draw drew
     /// nothing, and the command buffer fails as Metal's does (`MTLCommandBufferErrorInternal`).
@@ -244,10 +236,6 @@ impl StatusBits {
     /// (`RuntimeFact::CubicArgumentSampler`): its result is the device's through a nearest
     /// placeholder, not Metal's.
     pub const CUBIC_ARGUMENT_SAMPLER: StatusBits = StatusBits(1 << 6);
-    /// A capture settle found its pass's tile reach header counting a primitive near-far or
-    /// unmeasured, and set every tile of the pass's mask (`bind::CaptureSettleModule`): the pass
-    /// takes the announced fallback.
-    pub const CAPTURED_REACH_UNMEASURED: StatusBits = StatusBits(1 << 7);
     /// A tessellation scan found no room in the command buffer's records pool for an emulated
     /// tessellation draw's records, or the draw's records passed a `u32`, and the draw drew
     /// nothing (`bind::TessellationScanModule`); the fault words name the command buffer's first
@@ -363,7 +351,6 @@ mod tests {
             StatusBits::ABSENT_ARGUMENT_READ,
             StatusBits::MESH_RECORDS_OVERFLOW,
             StatusBits::CUBIC_ARGUMENT_SAMPLER,
-            StatusBits::CAPTURED_REACH_UNMEASURED,
         ];
         let mut all = 0u32;
         for b in bits {
@@ -420,11 +407,6 @@ mod tests {
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
         assert!(c.cubic_argument_sampler && !c.absent_argument_read && !c.overflow);
-        assert!(!c.captured_reach_unmeasured && !r.captured_reach_unmeasured);
-        let mut reach = [0u8; 32];
-        reach[0..4].copy_from_slice(&StatusBits::CAPTURED_REACH_UNMEASURED.0.to_le_bytes());
-        let u = ExecutionStatus::decode(&reach);
-        assert!(u.captured_reach_unmeasured && !u.cubic_argument_sampler && !u.overflow);
         assert!(r.absent_argument_read && !r.index_pool_overflow && !r.overflow);
         assert_eq!(r.mesh_records_overflow, None);
         bytes = [0u8; 32];

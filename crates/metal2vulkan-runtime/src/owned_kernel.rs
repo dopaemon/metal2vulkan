@@ -37,10 +37,9 @@ use crate::shader_cache::driver::Making;
 use ash::vk;
 use metal2vulkan::bind::{
     MipmapFilterKernel, RewritePhase, RewriteProgram, ShadowMergeRead, ShadowTexelView,
-    TessellationScanKernel, TexelWords, YCbCrCodes, YCbCrConversion,
+    TessellationScanKernel, YCbCrCodes, YCbCrConversion,
 };
 use metal2vulkan::metal::format::ExtendedRange;
-use metal2vulkan::metal::PixelFormat;
 use std::collections::HashMap;
 
 /// A crate-owned module the runtime dispatches.
@@ -163,22 +162,9 @@ pub(super) enum OwnedModule {
     /// `bind::ycbcr_write_module`: a 4:4:4 YCbCr texture's written texels encoded into its
     /// surface's two planes (`ycbcr.rs`), its write shadow bound as a storage image.
     YCbCrWrite,
-    /// `bind::unused_bits_module` of one format held as one kind of words: an extended-range,
-    /// padded 10-bit or bfloat texture's words in the tiles a mask names rewritten as Metal's tile
-    /// store leaves them, before a pass that loads it and draws (`render/unused_bits_load.rs`).
-    UnusedBits(PixelFormat, TexelWords),
     /// `bind::tiled_texels_module`: a heap texture's elements moved between its image's tight
     /// copy and Metal's tiles in the heap's bytes (`texture/heap_tiled.rs`).
     TiledTexels,
-    /// `bind::capture_assembly_module`: a pass's capture records assembled into its primitives
-    /// (`render/capture.rs`).
-    CaptureAssembly,
-    /// `bind::tile_reach_module`: a pass's primitives binned into the tiles they reach. Needs
-    /// `shaderInt64`: a device without it fails to build it with `Unsupported`.
-    TileReach,
-    /// `bind::capture_settle_module`: the mask made every tile where a primitive's reach was not
-    /// measured, reported in the status words.
-    CaptureSettle,
     /// `bind::extended_shadow_module` of one form: an extended-range attachment's `half` shadow
     /// set from its codes before the instance whose draws first hold it
     /// (`render/extended_shadow.rs`). Two storage images: the codes, then the shadow.
@@ -454,27 +440,6 @@ impl OwnedModule {
                     .map_err(Error::Compile)?;
                 Ok((module.spirv.to_vec(), 3, 0))
             }
-            OwnedModule::UnusedBits(format, words) => {
-                let device = device.compile_device();
-                let module = metal2vulkan::bind::unused_bits_module(device, format, words)
-                    .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 3, 0))
-            }
-            OwnedModule::CaptureAssembly => {
-                let module = metal2vulkan::bind::capture_assembly_module(device.compile_device())
-                    .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 3, 0))
-            }
-            OwnedModule::TileReach => {
-                let module = metal2vulkan::bind::tile_reach_module(device.compile_device())
-                    .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 3, 0))
-            }
-            OwnedModule::CaptureSettle => {
-                let module = metal2vulkan::bind::capture_settle_module(device.compile_device())
-                    .map_err(Error::Compile)?;
-                Ok((module.spirv.to_vec(), 3, 0))
-            }
             OwnedModule::ExtendedShadowLoad(form) => {
                 let device = device.compile_device();
                 let module = metal2vulkan::bind::extended_shadow_module(device, form)
@@ -585,11 +550,7 @@ pub(super) struct OwnedKernels {
     two_plane_texels: Option<OwnedKernel>,
     plane_bytes_copy: Option<OwnedKernel>,
     ycbcr_write: Option<OwnedKernel>,
-    unused_bits: HashMap<(PixelFormat, TexelWords), OwnedKernel>,
     tiled_texels: Option<OwnedKernel>,
-    capture_assembly: Option<OwnedKernel>,
-    tile_reach: Option<OwnedKernel>,
-    capture_settle: Option<OwnedKernel>,
     extended_shadow_loads: HashMap<ExtendedRange, OwnedKernel>,
     predication_step: Option<OwnedKernel>,
     twin_decodes: HashMap<TwinDecode, OwnedKernel>,
@@ -628,9 +589,6 @@ impl OwnedKernels {
             self.plane_bytes_copy,
             self.ycbcr_write,
             self.tiled_texels,
-            self.capture_assembly,
-            self.tile_reach,
-            self.capture_settle,
             self.predication_step,
         ]
         .into_iter()
@@ -644,7 +602,6 @@ impl OwnedKernels {
         .chain(self.index_rewrite_runs.values().copied())
         .chain(self.ycbcr_converts.values().copied())
         .chain(self.ycbcr_samples.values().copied())
-        .chain(self.unused_bits.values().copied())
         .chain(self.extended_shadow_loads.values().copied())
         .chain(self.twin_decodes.values().copied())
         .chain(self.tessellation_scans.values().copied())
@@ -695,9 +652,6 @@ impl OwnedKernels {
             OwnedModule::YCbCrSample(sampler, codes) => {
                 self.ycbcr_samples.get(&(sampler, codes)).copied()
             }
-            OwnedModule::UnusedBits(format, words) => {
-                self.unused_bits.get(&(format, words)).copied()
-            }
             OwnedModule::ExtendedShadowLoad(form) => self.extended_shadow_loads.get(&form).copied(),
             OwnedModule::TwinDecode(decode) => self.twin_decodes.get(&decode).copied(),
             OwnedModule::TessellationScan(kernel) => self.tessellation_scans.get(&kernel).copied(),
@@ -734,9 +688,6 @@ impl OwnedKernels {
             }
             OwnedModule::YCbCrSample(sampler, codes) => {
                 self.ycbcr_samples.insert((sampler, codes), kernel);
-            }
-            OwnedModule::UnusedBits(format, words) => {
-                self.unused_bits.insert((format, words), kernel);
             }
             OwnedModule::ExtendedShadowLoad(form) => {
                 self.extended_shadow_loads.insert(form, kernel);
@@ -788,7 +739,6 @@ impl OwnedKernels {
             | OwnedModule::IndexRewriteRun(_)
             | OwnedModule::YCbCrConvert(..)
             | OwnedModule::YCbCrSample(..)
-            | OwnedModule::UnusedBits(..)
             | OwnedModule::ExtendedShadowLoad(_)
             | OwnedModule::TwinDecode(_)
             | OwnedModule::TessellationScan(_) => return None,
@@ -813,9 +763,6 @@ impl OwnedKernels {
             OwnedModule::PlaneBytesCopy => &mut self.plane_bytes_copy,
             OwnedModule::YCbCrWrite => &mut self.ycbcr_write,
             OwnedModule::TiledTexels => &mut self.tiled_texels,
-            OwnedModule::CaptureAssembly => &mut self.capture_assembly,
-            OwnedModule::TileReach => &mut self.tile_reach,
-            OwnedModule::CaptureSettle => &mut self.capture_settle,
             OwnedModule::PredicationStep => &mut self.predication_step,
         })
     }

@@ -188,8 +188,9 @@ pub enum FormatEmulation {
     /// function reads and writes through its slot's [`ExtendedRange`] variant
     /// (`LoweringInputs::extended_range`), converting Metal's values in the shader. Exact for a
     /// sampled image a function fetches from and for a storage image; admitted for those usages
-    /// and for a color attachment, whose render pass clears and loads the raw codes as Metal's does
-    /// (`clear_texel`; the runtime's load pass). Metal filters no bfloat texel (a linear sample
+    /// and for a color attachment, whose render pass clears the raw codes as Metal's does
+    /// (`clear_texel`) and keeps the codes its draws do not write, where Metal's pass takes them
+    /// through `half` (the runtime's `extended-range-bits-kept`). Metal filters no bfloat texel (a linear sample
     /// reads the nearest texel) and blends none (its validation asserts), so a filter and a blend
     /// are not admitted.
     Bfloat,
@@ -349,9 +350,9 @@ pub enum ExtendedRange {
     /// a `half` read with ties away from zero), and alpha's 2-bit code `a` reads `a / 3`
     /// correctly rounded and a write stores the exact product of the value, clamped to `[0, 1]`
     /// (a NaN 0), with 3, rounded to nearest. A render pass's store rounds a `float` output to
-    /// `half` toward zero first, a clear goes through `half` (nearest even), and a pass that loads
-    /// it and draws elsewhere writes each color code back as `R10Unorm_X6_sRGB`'s
-    /// ([`load_code`](Self::load_code)), alpha kept.
+    /// `half` toward zero first, a clear goes through `half` (nearest even), and Metal's pass that
+    /// loads it and draws elsewhere writes each color code back as `R10Unorm_X6_sRGB`'s, alpha
+    /// kept, where the device's pass keeps the codes (the runtime's `extended-range-bits-kept`).
     Rgb10A2Srgb,
     /// `R16Bfloat` (26): a bfloat code (the top 16 bits of an IEEE `float`) in a little-endian
     /// 16-bit word, held as `R16_UINT` ([`FormatEmulation::Bfloat`]). Measured on an Apple M4
@@ -736,41 +737,6 @@ impl ExtendedRange {
             ExtendedRange::R16Bfloat => [rgba[0], 0, 0, 0],
             ExtendedRange::Rg16Bfloat => [rgba[0], rgba[1], 0, 0],
             ExtendedRange::Rgba16Bfloat => rgba,
-        }
-    }
-
-    /// The code a padded form's word of code `c` holds after a render pass that loads it and
-    /// draws, where no draw writes it: Metal's pass reads the word and writes it back, its
-    /// decoded value encoded again (an Apple M4 and an Apple M3 Max, byte-identical). `c` itself
-    /// for `R10Unorm_X6` and `RG10Unorm_X12`; `R10Unorm_X6_sRGB`'s write of its read, which moves
-    /// the 23 codes no write stores, and so does each color channel's code of `RGB10A2Unorm_sRGB`
-    /// (an Apple M3 Max under macOS 27.0.1, every code; its alpha's code stays);
-    /// `RG10Unorm_X12_sRGB`'s write code of `c`. A bfloat form's code
-    /// `c` (each channel's 16-bit word) holds the code a `Clear` of its value stores under
-    /// [`ClearRoute::ThroughHalf`] ([`clear_texel`](Self::clear_texel)): the `float` of its bits
-    /// rounded to `half` to nearest even (past the largest `half`, the infinity), then the bfloat
-    /// code nearest that, ties to even, a NaN `0x7fc0` (an Apple M4 under macOS 27.0.1: every code
-    /// of each bfloat format through a pass that loads it and draws into another attachment; 56,829
-    /// codes move). The M4's pass alone is measured. `None` for another form, or a code past the
-    /// form's (1023, or a bfloat form's `0xffff`).
-    pub fn load_code(self, c: u32) -> Option<u32> {
-        if self.bfloat() {
-            let c = u16::try_from(c).ok()?;
-            let value = f64::from(f32::from_bits(u32::from(c) << 16));
-            return Some(self.clear_texel([value; 4], ClearRoute::ThroughHalf)[0]);
-        }
-        let at = usize::try_from(c).ok().filter(|&c| c < 1024)?;
-        match self {
-            ExtendedRange::R10X6 | ExtendedRange::Rg10X12 => Some(c),
-            ExtendedRange::R10X6Srgb | ExtendedRange::Rgb10A2Srgb => {
-                let step = padded_srgb::R10X6_SRGB_DECODE_STEPS[at];
-                let first = &padded_srgb::R10X6_SRGB_ENCODE_FIRST;
-                Some(first.partition_point(|&f| f <= step).saturating_sub(1) as u32)
-            }
-            ExtendedRange::Rg10X12Srgb => {
-                Some(u32::from(padded_srgb::RG10X12_SRGB_WRITE_CODES[at]))
-            }
-            _ => None,
         }
     }
 }

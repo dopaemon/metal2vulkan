@@ -1335,9 +1335,11 @@ bound.
 - `metal2vulkan-degrade-unorm-depth-bias` (precision). `UnormDepthBias`: A draw biases a
   `Depth16Unorm` depth by a constant, or by a slope alone, which brings Metal's constant unit, on a
   device whose driver is not measured to store Metal's codes so
-  (`DriverDeviation::MetalDepth16BiasedStores`): the device biases and converts the depth. Cost: a
-  biased depth can store a code next to Metal's: the device rounds the biased sum its own way, and
-  without depthBiasExact counts the bias in its own unit.
+  (`DriverDeviation::MetalDepth16BiasedStores`): the device biases by Metal's constant in its own
+  unit and converts the depth. Cost: a biased depth can store another code than Metal's: the
+  device biases by the constant c in its own unit, up to twice 2^-16, where Metal biases by c + 1
+  units of 1/65535 (c - 1 below 0, one unit for a slope alone), and rounds the biased sum its own
+  way.
 - `metal2vulkan-degrade-unorm-depth-rounding` (precision). `UnormDepthRounding`: A draw tests or
   writes a `Depth16Unorm` depth on a device whose driver is not measured to convert a depth to
   Metal's code (`DriverDeviation::MetalDepth16Stores`), or a pass clears one to a depth that a
@@ -2034,21 +2036,24 @@ bound.
   the bytes Metal's blit reads from outside the texels: from outside the planes below a width of 4,
   and those an earlier blit left in a row's padding or past a plane, which Metal keeps.
 - `metal2vulkan-degrade-extended-range-bits-kept` (precision). `ExtendedRangeBitsKept`: A draw in a
-  render pass that loads a color attachment of an extended-range or padded 10-bit format
+  render pass that loads a color attachment of an extended-range, padded 10-bit or bfloat format
   (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins,
-  and `RGB10A2Unorm_sRGB`) and does not discard it at the store, where the pass's load pass does
-  not take it: a multisampled attachment, a texture held as a shadow of another image or of a
-  heap's bytes, a sparse one, or one whose image the device does not copy both ways (a padded format takes no multisample texture). Also, once per device, a GPU blit
-  into, out of or between textures of which one is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal
-  keeps losslessly compressed: Metal's blit moves the texels through the compression, which clears
-  the same bits and clamps the same alpha, where the device's copy keeps the bytes. Cost: the
-  texels the pass's draws do not write keep their bytes; Metal's pass keeps their codes but rewrites
-  the bits they leave unused in each tile a draw reaches (BGR10_XR's bits 30 and 31 to ones,
-  BGRA10_XR's low six bits of each field to zeros, the two-plane color word's top two bits to zeros)
-  and clamps BGRA10_XR's alpha code to [384, 894]: a texel whose bytes no Metal write left (uploaded
-  bytes, or an alpha code past 894) keeps bytes Metal's pass would change, and a blit through a
-  BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; every such texel
-  reads the same value either way.
+  `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat` and `RGBA16Bfloat`) and does not discard it at the
+  store, on every device: the device's pass keeps the bytes its draws do not write, where Metal's
+  pass writes each 32 x 32 tile a draw reaches back through its tile store. Also, once per device, a
+  GPU blit into, out of or between textures of which one is a `BGRA10_XR` or `BGRA10_XR_sRGB`
+  texture Metal keeps losslessly compressed: Metal's blit moves the texels through the compression,
+  which clears the same bits and clamps the same alpha, where the device's copy keeps the bytes.
+  Cost: the texels the pass's draws do not write keep their bytes; Metal's pass rewrites, in each
+  tile a draw reaches, the bits their codes leave unused (BGR10_XR's bits 30 and 31 to ones,
+  BGRA10_XR's low six bits of each field, the two-plane color word's top two bits and a padded
+  word's low six bits to zeros), clamps BGRA10_XR's alpha code to [384, 894], moves a padded sRGB
+  twin's code through its table and a bfloat code through half (out of half's range to an infinity
+  or zero, a NaN to 0x7fc0): a texel whose bytes no Metal write left (uploaded bytes, an alpha code
+  past 894, a bfloat code off half's grid) keeps bytes Metal's pass would change, and a blit
+  through a BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; an
+  extended-range texel reads the same value either way, a bfloat code off half's grid reads its own
+  value where Metal's reads the half it was moved to.
 - `metal2vulkan-degrade-snorm-minimum-kept` (precision). `SnormMinimumKept`: A draw in a render pass
   that loads a single-sampled color attachment of a signed normalized format (`R8Snorm`, `RG8Snorm`,
   `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`) and does not discard it at the store. Cost:
@@ -2186,19 +2191,6 @@ bound.
   read_write access) that does not name it reads what an earlier such write left in the stand-in's
   sink, where Metal drops those writes and reads zero; a sampled read, and a size query, are
   Metal's.
-- `metal2vulkan-degrade-unreached-tiles-rewritten` (precision). `UnreachedTilesRewritten`: A render
-  pass that loads a color attachment of an extended-range, padded 10-bit or bfloat format
-  (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`, `RG10Unorm_X12` and their sRGB twins,
-  `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat` and `RGBA16Bfloat`), stores it and draws,
-  whose load pass rewrites every 32 x 32 tile of its render area: Metal's pass rewrites
-  only the tiles a draw's primitives reach, and every tile only where a color attachment of the pass
-  is cleared and stored (announced where none is, or where the pass renders more than one layer).
-  Cost: in tiles no draw reaches the pass rewrites what Metal keeps: the unused bits made canonical
-  (BGR10_XR's bits 30 and 31 ones, BGRA10_XR's low six bits of each field and the two-plane color
-  word's top two bits zeros) and BGRA10_XR alpha codes clamped to [384, 894], so an out-of-range raw
-  alpha reads back changed, a padded word's low six bits zeroed (an sRGB twin's code moved through
-  Metal's table), a bfloat code moved through half (out of half's range to an infinity or zero, a
-  NaN to 0x7fc0); the tiles a draw reaches are Metal's.
 - `metal2vulkan-degrade-zero-layer-map-after-release` (precision). `ZeroLayerMapAfterRelease`: A
   draw in a render pass over a rasterization-rate map of no layers that was made after the device
   released a map of one or more layers, or reset from one of layers. Cost: the draws write nothing,

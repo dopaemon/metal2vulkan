@@ -27,8 +27,9 @@
 //!   Metal stores `0x00000000` in each (`rgb10a2-srgb-stores-f` and `-h`).
 //! - **Loads.** A 1024 x 4 target holding every color code in each channel and each alpha code,
 //!   loaded and stored by a pass whose draw writes another attachment alone: `load <i> <before>
-//!   <after>`. Each color code moves as `R10Unorm_X6_sRGB`'s does (`ExtendedRange::load_code`,
-//!   the runtime's load pass), alpha's stays.
+//!   <after>`. Each color code moves as `R10Unorm_X6_sRGB`'s does through Metal's table, alpha's
+//!   stays; the device's store keeps every code (`extended-range-bits-kept`), so the lane holds
+//!   it to the words loaded and prints Metal's digest beside it.
 //!
 //! The device's `isRGB10A2GammaSupported` answers as the texture's linear filter does. A
 //! difference is printed on an `RGB10A2-SRGB-DIFFERS` line.
@@ -459,7 +460,7 @@ fn blit_words(lane: &Lane, target: &Texture, (width, height): (u64, u64)) -> Vec
     words(&read_buffer(&back, 0, length).unwrap())
 }
 
-/// Clears, a draw's stores and a loading pass's rewrite of a 586 attachment are Metal's.
+/// Clears and a draw's stores of a 586 attachment are Metal's; a loading pass keeps its words.
 #[test]
 fn passes_clear_store_and_load_rgb10a2_srgb_as_metal_does() {
     let (messages, _cache, lane) = lane_with(|_| {});
@@ -653,8 +654,12 @@ fn passes_clear_store_and_load_rgb10a2_srgb_as_metal_does() {
         writeln!(text, "load {i} {b:08x} {a:08x}").unwrap();
     }
     covers(&text, after.len(), "loads");
-    if digest(&text) != LOADS {
-        wrong.push(format!("loads {} (Metal's {LOADS})", digest(&text)));
+    println!("RGB10A2-SRGB-LOADS {}: Metal's {LOADS}", digest(&text));
+    if after != before {
+        let moved = before.iter().zip(&after).filter(|(b, a)| b != a).count();
+        wrong.push(format!(
+            "loads: {moved} words moved, where the device's store keeps them"
+        ));
     }
     for line in &wrong {
         println!("RGB10A2-SRGB-DIFFERS {}: {line}", lane.device.name());

@@ -53,8 +53,8 @@ use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
 };
 use crate::pipeline::lower_inputs::{
-    BlendEquation, CaptureForm, ChannelWrite, ColorGroup, ExtendedRangeColor, FactorLane,
-    RotatedBlendForm, VertexFetch,
+    BlendEquation, ChannelWrite, ColorGroup, ExtendedRangeColor, FactorLane, RotatedBlendForm,
+    VertexFetch,
 };
 use crate::pipeline::stage_io::{
     CoverageLoop, CoverageLoopRefusal, DepthCompares, DepthMode, Interpolation as IoInterpolation,
@@ -876,7 +876,6 @@ codec_enum! {
         VertexDepthClamp,
         BlendColor,
         ShaderTestsState,
-        CaptureAddress,
         CaptureLayout,
         CaptureIndexAddress,
         StorageKeptChannels,
@@ -1176,7 +1175,6 @@ codec_enum! {
     WordAttachment { Packed16 { fields }, Srgb8 { fields }, Rgb9e5 }
     FactorLane { Zero, One, Output(f0) }
     RotatedBlendForm { Premultiplied, Unmeasured }
-    CaptureForm { Vertices, Indexed(f0) }
     TextureWriteRoundingMode { TowardZero, NearestEven }
     CompareFunction { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always }
     CoverageLoopRefusal {
@@ -1247,7 +1245,6 @@ codec_enum! {
         CubicSampler { slot },
         CubicArgumentSampler { stage },
         ShaderTests { formatless, multisampled, planes },
-        CapturedPositions { form },
         HeapRawSamples { stage, sampler },
         ShaderStencilTest { formatless },
         ExtendedRangeInputBlend { color, blend, kept },

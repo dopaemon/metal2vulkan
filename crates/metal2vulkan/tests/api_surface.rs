@@ -399,7 +399,6 @@ surface! {
         struct AliasView N;
         struct AmplificationDraws N;
         struct BlendEquation N;
-        enum CaptureForm N;
         enum ChannelWrite N;
         struct ColorGroup N;
         struct ExtendedRangeColor N;
@@ -646,17 +645,8 @@ surface! {
         fn shadow_merge_kept_image_module;
         struct ShadowMergeImageModule N;
         enum ShadowMergeRead E;
-        fn unused_bits_module;
-        struct UnusedBitsModule N;
         fn extended_shadow_module;
         struct ExtendedShadowModule N;
-        fn tile_reach_module;
-        struct TileReachModule N;
-        fn capture_assembly_module;
-        struct CaptureAssemblyModule N;
-        fn capture_settle_module;
-        struct CaptureSettleModule N;
-        enum TexelWords N;
         struct BlockDecodeModule N;
         fn astc_decode_module;
         struct AstcDecode N;
@@ -956,7 +946,6 @@ surface! {
         fn polygon_mode;
         fn depth_clamp_enable;
         struct DepthBias N;
-        enum DepthBiasUnit N;
         fn depth_bias;
     }
     "metal::vertex" => metal2vulkan::metal::vertex {

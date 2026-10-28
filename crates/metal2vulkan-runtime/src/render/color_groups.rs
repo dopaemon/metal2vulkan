@@ -75,7 +75,6 @@
 //!   its texture. A draw that reads its own group's attachments where it runs in that group alone
 //!   reads them as in any pass (`texture/attached_reads.rs`).
 
-use super::capture;
 use super::extended_shadow::ExtendedShadows;
 use super::{
     reads_handles, DrawingState, Opening, RenderLog, RenderLowering, RenderPipelineState,
@@ -419,16 +418,13 @@ pub(super) struct Ended {
     pub(super) core: EncoderCore,
     pub(super) residency: Residency,
     pub(super) log: Option<RenderLog>,
-    /// A rebind may encode the encoder again from its log: its end captured no draws' tile
-    /// reach, whose tally lies in the command buffer (`render/capture.rs`).
-    pub(super) keeps_log: bool,
     pub(super) later: Option<Box<Later>>,
 }
 
 impl Ended {
     /// The pass's later color groups drawn (the module docs), each over the encoder's core from
-    /// its log: the core, what the first group's encoder made resident, and the log where a
-    /// rebind may encode the encoder again from it.
+    /// its log: the core, what the first group's encoder made resident, and the log, from which
+    /// a rebind may encode the encoder again.
     pub(super) fn with_later_groups(
         self,
     ) -> Result<(EncoderCore, Residency, Option<RenderLog>), Error> {
@@ -436,7 +432,6 @@ impl Ended {
             mut core,
             residency,
             log,
-            mut keeps_log,
             later,
         } = self;
         if let Some(later) = later {
@@ -452,12 +447,11 @@ impl Ended {
                     ));
                 }
                 let ended = encoder.end_pass()?;
-                keeps_log &= ended.keeps_log;
                 core = ended.core;
                 core.device().shared().counts.color_group_pass();
             }
         }
-        Ok((core, residency, log.filter(|_| keeps_log)))
+        Ok((core, residency, log))
     }
 }
 
@@ -631,10 +625,8 @@ impl RenderLowering {
         !depth_stencil && !writes_colors(state, g.group.colors().len())
     }
 
-    /// A later group skips the draw: the pass's draws are no longer kept for capture replay in
-    /// that group's pass, whose reach is then the host's (`render/capture.rs`).
+    /// A later group skips the draw, counted.
     pub(super) fn group_skipped(&mut self) {
-        self.keeping = capture::Keeping::Stopped;
         self.core
             .device()
             .shared()

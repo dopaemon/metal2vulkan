@@ -358,22 +358,4 @@ impl Upload {
         }
         bytes
     }
-
-    /// The region's bytes as the device left them, under [`read`](Self::read)'s contract.
-    pub(super) fn read_bytes(&self) -> Vec<u8> {
-        let Some(mapped) = self.buffer.contents() else {
-            unreachable!("upload chunks are Shared buffers")
-        };
-        let mut bytes = vec![0; self.len as usize];
-        // SAFETY: the region lies inside the mapping, and no command writes it any more (the
-        // caller's contract); the memory is host-coherent.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                mapped.as_ptr().add(self.offset as usize),
-                bytes.as_mut_ptr(),
-                bytes.len(),
-            );
-        }
-        bytes
-    }
 }

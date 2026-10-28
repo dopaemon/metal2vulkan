@@ -92,7 +92,8 @@ fn a_regions_tail_reads_zero_over_a_dirty_chunk() {
             FIRST_CHUNK_BYTES,
             "the region is the whole chunk"
         );
-        assert_eq!(region.read_bytes(), poison, "the poison was written");
+        let whole = region.read::<{ FIRST_CHUNK_BYTES as usize }>();
+        assert_eq!(whole.as_slice(), poison, "the poison was written");
     }
     until("the chunk was parked", || parked() > before_parked);
     // The chunk comes back for the next arena of the same making, holding the poison.
@@ -103,7 +104,7 @@ fn a_regions_tail_reads_zero_over_a_dirty_chunk() {
         .upload(&device, &data, 64)
         .expect("a short region of a recycled chunk");
     let cleared = device.work_counts().new_buffer_bytes_cleared - before;
-    let bytes = region.read_bytes();
+    let bytes = region.read::<64>();
     assert_eq!(&bytes[..8], &data, "the region holds its data");
     assert_eq!(
         &bytes[8..],

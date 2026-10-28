@@ -545,11 +545,10 @@ impl RenderLowering {
         if !icb.descriptor().inherit_pipeline_state {
             self.writers.runs(icb.written().named().writes);
         }
-        // An execution rewrites an extended-range or padded attachment as a draw does, of reset
-        // commands too, and a signed normalized one's minimum codes, and an
+        // An execution keeps an extended-range, padded or bfloat attachment's texels as a draw
+        // does, of reset commands too, and a signed normalized one's minimum codes, and an
         // `RGB9E5Float` one's words.
         self.degrade_kept_attachments();
-        self.rewrites_unused_bits = true;
         self.degrade_extended_range_execution();
         // Its commands write the extended-range colors' codes alone: the shadows end.
         self.end_extended_shadows();
@@ -654,8 +653,6 @@ impl RenderLowering {
         // Its pixels are not bounded by a viewport the host knows of.
         self.drawn.everywhere();
         self.coverage.everywhere();
-        // Nor do its positions run again before the pass (`render/capture.rs`).
-        self.keeping = super::capture::Keeping::Stopped;
         let inherited = icb.descriptor().inherit_buffers;
         // An execution's commands take their flat inputs from the first vertex whatever the
         // encoder's provoking vertex mode (Metal probes on the M3 Max, macOS 27.0.1).
@@ -2388,7 +2385,6 @@ impl RenderExecution {
             tile_dispatch_calls: 0,
             replaying: true,
             rerouting: false,
-            keeping: super::capture::Keeping::Stopped,
             forms,
             replayed: None,
             drawn_before: snapshot.drawn.clone(),
@@ -2410,9 +2406,6 @@ impl RenderExecution {
             // A pass that executes render commands keeps its attachments over buffers in place
             // (`kept_bytes.rs`), whatever its draws read.
             inputs_read: BTreeSet::new(),
-            // The encoder that executes the commands records the pass's load pass
-            // (`defer_execution`); this one records only the commands' draws.
-            rewrites_unused_bits: false,
             kept_attachments: None,
             // The executing encoder announces for the execution (`defer_execution`).
             extended_written: BTreeSet::new(),

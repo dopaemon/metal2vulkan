@@ -846,17 +846,13 @@ pub enum PushField {
     /// Device address of the `ExecutionStatus` buffer: a function that counts resident-set misses
     /// has dynamic roots, so it reaches memory by device address already.
     ExecutionStatusAddress,
-    /// Device address (`u64`) of the draw's first capture record, which a vertex function
-    /// compiled under `LoweringInputs::captured_positions` writes its vertices' records from
-    /// (`RuntimeFact::CapturedPositions`): a hole the consumer fills
-    /// (`PushHole::CaptureAddress`), placed with the other addresses so the vertex window
+    /// Device address (`u64`) of the first index a de-indexed draw reads
+    /// (`LoweringInputs::primitive_id_indices`): the index buffer's address plus the draw's index
+    /// buffer offset, a multiple of the index size; or of a private list form draw's list
+    /// (`LoweringInputs::private_list`). A vertex function compiled in either form reads its
+    /// stream position's raw index there: a hole the consumer fills
+    /// (`PushHole::CaptureIndexAddress`), placed with the other addresses so the vertex window
     /// always holds it.
-    CaptureAddress,
-    /// Device address (`u64`) of the first index an indexed capture draw reads
-    /// (`CaptureForm::Indexed`): the index buffer's address plus the draw's index buffer offset,
-    /// a multiple of the index size. A vertex function compiled in that form reads its stream
-    /// position's raw index there: a hole the consumer fills (`PushHole::CaptureIndexAddress`),
-    /// placed beside `CaptureAddress`.
     CaptureIndexAddress,
     /// Device address (`u64`) of a merged draw replay's header (`bind::replay`'s `merged.rs`),
     /// which a vertex function compiled under `LoweringInputs::merged_draws` reads its corner's
@@ -1009,15 +1005,11 @@ pub enum PushField {
     /// clip mode is `MTLDepthClipModeClamp` in bit 4; words 1 and 2 the bits of viewport 0's near
     /// and far depth (`f32`); word 3 is 0 (`bind::shader_tests_words`).
     ShaderTestsState,
-    /// The draw's capture layout for a vertex function compiled under
-    /// `LoweringInputs::captured_positions` (`RuntimeFact::CapturedPositions`), a `uvec4`. In the
-    /// vertices form: the draw's first vertex, its vertex count, its first instance, and 0. In the
-    /// indexed form, whose draw runs from vertex 0: 1 where the draw restarts at the index type's
-    /// all-ones index (a line or triangle strip, `BindState::primitive_type`) and 0 otherwise,
-    /// the index count, the first instance, and the base vertex. Stream position `p` (`VertexIndex`
-    /// less the first vertex in the vertices form, `VertexIndex` itself in the indexed form) of
-    /// instance `i` writes record `p + (i - first instance) · count` from
-    /// `PushField::CaptureAddress`.
+    /// The draw's layout for a vertex function compiled in the primitive ID's de-indexed form
+    /// (`LoweringInputs::primitive_id_indices`), a `uvec4`, of a draw run from vertex 0: 0, the
+    /// index count, the first instance, and the base vertex. Stream position `p = VertexIndex`
+    /// reads its raw index at `PushField::CaptureIndexAddress`, and its vertex is that index plus
+    /// the base vertex.
     CaptureLayout,
     /// The channels each storage-form color attachment's write keeps from its texel, where the
     /// fragment function takes them from the draw: one `u32` whose bits `4c` to `4c + 3` are color
@@ -1176,7 +1168,6 @@ mod tests {
         let ordered = [
             PushField::RootTableAddress,
             PushField::ExecutionStatusAddress,
-            PushField::CaptureAddress,
             PushField::CaptureIndexAddress,
             PushField::SnapshotPhase,
             PushField::DispatchRegion,

@@ -14,19 +14,17 @@
 //! (every code the rule's), and found that a slope alone brings the one unit: [`SLOPE_ALONE`], flat
 //! triangles (so the slope adds nothing itself) under a constant of 0.
 //!
-//! The device converts every depth, biased or not: the runtime records Metal's bias where the
-//! device pins Vulkan's unit (`metal::state::depth_bias`), and the device rounds the sum and
-//! converts it its own way. Where the profile takes `DriverDeviation::MetalDepth16Stores` an
-//! unbiased depth stores Metal's code, and where it takes `DriverDeviation::MetalDepth16BiasedStores`
-//! a biased one: RADV (Mesa 26.2.4, the Radeon 780M) stored every code Metal's, and MoltenVK (1.4.1,
-//! an M4), which hands Metal its constant, too (both deviations). ANV (Mesa 26.2.4) stored every
-//! unbiased code Metal's (the first), but rounded some biased sums near a code's midpoint to
-//! nearest, storing the code next to Metal's. Lavapipe (Mesa 26.0.8 and 26.2.4) scaled every depth
-//! by 65535 as a `float` and rounded a tie to even (0.9 as 58982), and NVIDIA's (615.71.09) stored
-//! the code below Metal's for a depth up to 0.55 of a code above a midpoint (0.5 as 32767). Where
-//! the profile lacks a deviation the runtime announces it, `unorm-depth-rounding` for any depth
-//! tested or written and `unorm-depth-bias` for a biased one, and the lane prints the codes that
-//! differ from Metal's without holding them.
+//! The device biases and converts every depth: the runtime records Metal's constant in the
+//! device's own unit (`metal::state::depth_bias`), and the device rounds the sum and converts it
+//! its own way. Where the profile takes `DriverDeviation::MetalDepth16Stores` an unbiased depth
+//! stores Metal's code, and where it takes `DriverDeviation::MetalDepth16BiasedStores` a biased one:
+//! MoltenVK (1.4.1, an M4), which hands Metal its constant, takes both. RADV (Mesa 26.2.4, the
+//! Radeon 780M) and ANV (Mesa 26.2.4) stored every unbiased code Metal's (the first). Lavapipe (Mesa
+//! 26.0.8 and 26.2.4) scaled every depth by 65535 as a `float` and rounded a tie to even (0.9 as
+//! 58982), and NVIDIA's (615.71.09) stored the code below Metal's for a depth up to 0.55 of a code
+//! above a midpoint (0.5 as 32767). Where the profile lacks a deviation the runtime announces it,
+//! `unorm-depth-rounding` for any depth tested or written and `unorm-depth-bias` for a biased one,
+//! and the lane prints the codes that differ from Metal's without holding them.
 //!
 //! The render pass's depth decides what a draw stores, whatever the pipeline names: the cases
 //! drawn by a pipeline that names no depth store the same codes.

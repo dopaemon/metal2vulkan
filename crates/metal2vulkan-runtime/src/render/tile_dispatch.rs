@@ -1237,8 +1237,6 @@ impl RenderLowering {
         // Its pixels are not bounded by a viewport the host knows of.
         self.drawn.everywhere();
         self.coverage.everywhere();
-        // Nor do its positions run again before the pass (`render/capture.rs`).
-        self.keeping = super::capture::Keeping::Stopped;
         let executed = || ExecutedPipeline::Compute(Arc::clone(variant.shared_pipeline()));
         match (&made_pipelines, creation) {
             (Some(made), _) => self.core.executed(|| {

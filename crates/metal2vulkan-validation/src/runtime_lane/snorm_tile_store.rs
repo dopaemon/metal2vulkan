@@ -11,7 +11,7 @@
 //!
 //! The runtime keeps the device's load and store, so the texels keep their codes and words, and
 //! a draw in such a pass announces `snorm-minimum-kept` or `shared-exponent-kept`, naming the
-//! attachment, with no load pass. On a driver whose pass stores them as Metal's
+//! attachment. On a driver whose pass stores them as Metal's
 //! (`DriverFact::TileStoreIsMetals`: MoltenVK, whose pass is a Metal pass) the texels take Metal's
 //! codes and words, and nothing is announced.
 
@@ -113,17 +113,11 @@ fn metals_store(lane: &Lane) -> bool {
         .contains(&DriverFact::TileStoreIsMetals)
 }
 
-/// The load passes the lane's device recorded so far.
-fn load_passes(lane: &Lane) -> u64 {
-    lane.device.work_counts().unused_bits_load_passes
-}
-
 /// A pass that loads a 4² target of each signed normalized format holding the minimum code in
-/// every channel and draws under a write mask of none of its channels, recording no load pass:
-/// where the device's store is Metal's, every texel takes the code above and nothing is
+/// every channel and draws under a write mask of none of its channels: where the device's store is Metal's, every texel takes the code above and nothing is
 /// announced; else every code stays and `snorm-minimum-kept` is announced once (the device asks
 /// for it at each occurrence), naming color 0 and its format. A pass that loads the minimum codes
-/// again and draws nothing keeps every one, records no load pass and announces nothing, as
+/// again and draws nothing keeps every one and announces nothing, as
 /// Metal's keeps every texel.
 #[test]
 fn a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so() {
@@ -138,15 +132,12 @@ fn a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so() {
             .new_render_pipeline_state(&unwritten(&lane, pf), &PipelineOptions::default())
             .unwrap();
         let (t, bytes) = minimum_codes(&lane, pf, texel, code);
-        let before = load_passes(&lane);
         lane.run(&pass(&t, LoadAction::Load), |l, e, h| {
             l.draw(e, h, &pipeline, 0.5)
         })
         .unwrap();
-        let loads = load_passes(&lane) - before;
         let got = lane.read(&t, (0, 0), texel, BlitOption::None);
         let notices = messages.take_notices();
-        assert_eq!(loads, 0, "{pf:?}: load passes");
         if metals {
             let raised = filled(texel, above);
             assert!(got == raised, "{pf:?}: not Metal's codes: {got:02x?}");
@@ -166,13 +157,7 @@ fn a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so() {
             assert!(named, "{pf:?}: the notice names no color 0");
         }
         upload(&t, texel, &bytes);
-        let before = load_passes(&lane);
         lane.run(&pass(&t, LoadAction::Load), |_, _, _| {}).unwrap();
-        assert_eq!(
-            load_passes(&lane),
-            before,
-            "{pf:?}: a pass of no draw's load pass"
-        );
         let got = lane.read(&t, (0, 0), texel, BlitOption::None);
         assert!(
             got == bytes,
@@ -189,7 +174,7 @@ fn a_drawing_pass_keeps_a_snorm_minimum_code_and_says_so() {
 
 /// A pass that loads a 4² `RGB9E5Float` target whose every word is unnormalized (mantissas 1, 2
 /// and 3 under the exponent 20: its largest mantissa below 256) and draws under a write mask of
-/// none of its channels, recording no load pass: where the device's store is Metal's, every word
+/// none of its channels: where the device's store is Metal's, every word
 /// takes Metal's (mantissas 128, 256 and 384 under the exponent 13) and nothing is announced;
 /// else every word stays and `shared-exponent-kept` is announced once (the device asks for it at
 /// each occurrence), naming color 0 and its format. A pass that loads it and draws nothing
@@ -232,15 +217,12 @@ fn a_drawing_pass_keeps_an_unnormalized_shared_exponent_word_and_says_so() {
     let bytes = word.to_le_bytes().repeat((SIZE * SIZE) as usize);
     t.replace_region(Region::new_2d(0, 0, SIZE, SIZE), 0, 0, &bytes, 4 * SIZE, 0)
         .unwrap();
-    let before = load_passes(&lane);
     lane.run(&pass(&t, LoadAction::Load), |l, e, h| {
         l.draw(e, h, &pipeline, 0.5)
     })
     .unwrap();
-    let loads = load_passes(&lane) - before;
     let got = lane.read(&t, (0, 0), 4, BlitOption::None);
     let notices = messages.take_notices();
-    assert_eq!(loads, 0, "{pf:?} on {name}: load passes");
     if metals {
         let normalized = metal.to_le_bytes().repeat((SIZE * SIZE) as usize);
         assert!(

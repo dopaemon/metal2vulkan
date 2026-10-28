@@ -1975,24 +1975,6 @@ fn padded_srgb_forms_read_and_write_metals_codes() {
             assert_eq!(*g, want, "{form:?} values {r}, {gr}");
         }
     }
-    // The crate's clear texels and load codes agree with the write rule (the runtime's clear
-    // writes `clear_texel`, its load pass `load_code`).
-    for c in 0..1024u32 {
-        let read = step(c << 6);
-        let code = padded_srgb_code(ExtendedRange::R10X6Srgb, read);
-        assert_eq!(
-            ExtendedRange::R10X6Srgb.load_code(c),
-            Some(code),
-            "code {c}"
-        );
-        let read = linear(c << 6);
-        let code = padded_srgb_code(ExtendedRange::Rg10X12Srgb, read);
-        assert_eq!(
-            ExtendedRange::Rg10X12Srgb.load_code(c),
-            Some(code),
-            "code {c}"
-        );
-    }
 }
 
 /// `a / 3` correctly rounded to `f32` (`a` below 4): the `f64` quotient's neighbours compared
@@ -2088,12 +2070,7 @@ fn rgb10a2_srgb_reads_and_writes_metals_codes() {
         let word = code(0) | code(1) << 10 | code(2) << 20 | alpha_code(v[3]) << 30;
         assert_eq!(*g, [word, 0, 0, 0], "values {v:?}");
     }
-    // The crate's clear texels and load codes agree with the rules (the runtime's clear writes
-    // `clear_texel`, its load pass `load_code`, alpha kept).
-    for c in 0..1024u32 {
-        let code = padded_srgb_code(ExtendedRange::R10X6Srgb, step(c));
-        assert_eq!(form.load_code(c), Some(code), "code {c}");
-    }
+    // The crate's clear texels agree with the rules (the runtime's clear writes `clear_texel`).
     let half = |v: f64| crate::float16::f16_bits_to_f32(crate::float16::f32_to_f16_bits(v as f32));
     for color in [
         [0.25, 0.5, 0.75, 0.4],

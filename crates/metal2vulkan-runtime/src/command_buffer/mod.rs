@@ -630,8 +630,6 @@ pub(super) struct State {
     /// A direct mesh draw's object grid lay past what runs (`render/mesh_arguments.rs`): the
     /// command buffer fails as for `ExecutionStatus`'s `MESH_GRID_PAST_LIMITS`.
     mesh_grid_past: bool,
-    /// The captured passes' tile masks, which its completion counts (`render/capture.rs`).
-    pub(super) capture_tallies: Vec<CaptureTally>,
     /// The index pool of the commands' index bounds and rewrite passes (`index_bounds.rs`,
     /// `index_rewrite.rs`), once a draw needs it: its counter in the arena, starting at 0, and
     /// its lease of its queue's block, which its indices lie in (`gpu_pools.rs`).
@@ -1821,7 +1819,6 @@ impl CommandBuffer {
                 descriptors: DescriptorArena::default(),
                 status_words: None,
                 mesh_grid_past: false,
-                capture_tallies: Vec::new(),
                 index_pool: None,
                 mesh_pool: None,
                 mesh_draws: 0,
@@ -4260,9 +4257,6 @@ impl CommandBufferShared {
     /// waiters once the transition's [`Hold`] (and every other) is gone, and they wait for the
     /// trails below the mark. Waits from inside these steps answer as [`own`] says.
     fn complete(self: &Arc<Self>, result: Result<(), CommandBufferError>) {
-        // A capture replay found a primitive whose reach was not measured: its pass rewrote
-        // every tile, announced once the lock is let go (below).
-        let mut unmeasured_reach = false;
         // A thread sleeps on `changed`, as the state's lock below reads.
         let parked;
         // Its command pool, where it settled, whose primary the device's spares begin ahead once
@@ -4385,12 +4379,7 @@ impl CommandBufferShared {
                         state.status = CommandBufferStatus::Error;
                         state.error = Some(CommandBufferError::CubicArgumentSampler);
                     }
-                    unmeasured_reach = report.captured_reach_unmeasured;
                     state.report = Some(report);
-                    let counts = &self.device.shared().counts;
-                    for tally in &state.capture_tallies {
-                        counts.capture_reach_tallied(tally.found(), tally.bound);
-                    }
                 }
                 Err(error) => {
                     state.status = CommandBufferStatus::Error;
@@ -4410,7 +4399,6 @@ impl CommandBufferShared {
             // failure turns to `Error`.
             self.answer(&state);
             state.status_words = None;
-            state.capture_tallies.clear();
             // Its heap versions, uploads, pools and descriptor pools go once its completed
             // handlers ran (below).
             released_versions = state.heaps.clear();
@@ -4452,18 +4440,6 @@ impl CommandBufferShared {
         // handler of its runs: a detach from one of them detaches (`detach.rs`).
         drop(submitted_holds);
         self.wake_parked(parked);
-        if unmeasured_reach {
-            self.device
-                .degrade(Degradation::UnreachedTilesRewritten, || {
-                    (
-                        "a render pass whose draws' tile reach capture replay found".to_owned(),
-                        "a primitive crossed the near or far plane, or lay past what Metal's tile \
-                         rule was measured over, so the pass rewrote every 32x32 tile of its \
-                         render area where Metal's rewrites only the tiles its primitives reach"
-                            .to_owned(),
-                    )
-                });
-        }
         let buffer = CommandBuffer(Arc::clone(self));
         // Each handler leaves the queue under the lock and runs without it, in the order added
         // (a handler may query the command buffer).
@@ -4569,37 +4545,6 @@ impl CommandBufferShared {
     }
 }
 
-/// A captured pass's tile mask, copied where the host reads it once the command buffer completes
-/// (`render/capture.rs`), and the tiles its draws' viewports and scissors reach: the counts
-/// `WorkCounts::capture_reach_tiles_found` and its kin.
-pub(super) struct CaptureTally {
-    /// The mask's copy: one bit a tile, tile `t` bit `t % 32` of word `t / 32`.
-    pub(super) mask: Upload,
-    /// The tiles of the pass's grid: the bits past them count nothing.
-    pub(super) grid: u64,
-    /// The tiles the draws' viewports and scissors reach.
-    pub(super) bound: u64,
-}
-
-impl CaptureTally {
-    /// The tiles the mask names, once the command buffer completed.
-    fn found(&self) -> u64 {
-        let bytes = self.mask.read_bytes();
-        let mut found = 0u64;
-        for (word, bits) in bytes.as_chunks::<4>().0.iter().enumerate() {
-            let first = word as u64 * 32;
-            let within = self.grid.saturating_sub(first).min(32);
-            let live = match within {
-                32 => u32::MAX,
-                n => (1u32 << n) - 1,
-            };
-            let bits = u32::from_le_bytes([bits[0], bits[1], bits[2], bits[3]]);
-            found += u64::from((bits & live).count_ones());
-        }
-        found
-    }
-}
-
 /// A command buffer's transition, run in its queue's context.
 pub(crate) struct Transition {
     /// The command buffer, held until the transition ran.
@@ -4619,14 +4564,9 @@ enum To {
 
 impl Transition {
     /// The transition of the command buffer `buffer` holds to `Completed` or `Error`, with
-    /// `result`: plain where it has no completed handler (none is added after the commit) and no
-    /// pass that captured its tiles' reach, the one notice it announces as it completes
-    /// (`render/capture.rs`).
+    /// `result`: plain where it has no completed handler (none is added after the commit).
     fn finished(buffer: Hold<CommandBufferShared>, result: Result<(), CommandBufferError>) -> Self {
-        let plain = {
-            let state = lock(&buffer.state);
-            state.completed.is_empty() && state.capture_tallies.is_empty()
-        };
+        let plain = lock(&buffer.state).completed.is_empty();
         Transition {
             buffer,
             to: To::Finished(result),

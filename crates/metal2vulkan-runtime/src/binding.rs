@@ -134,10 +134,6 @@ pub(super) struct Tables<'a> {
     tile_memory: Option<&'a Buffer>,
     /// The address-mode maps the command's runtime samplers are bound with (`address_map.rs`).
     sampler_maps: SamplerMaps,
-    /// A capture draw's addresses (`render/capture.rs`): of its first capture record, and of its
-    /// first index where it is indexed. Its `PushHole::CaptureAddress` and
-    /// `PushHole::CaptureIndexAddress` take them.
-    capture: Option<(u64, Option<u64>)>,
     /// A de-indexed draw's first index's address (`VariantKey::primitive_id_indices`): its
     /// `PushHole::CaptureIndexAddress` takes it.
     indices: Option<u64>,
@@ -180,7 +176,6 @@ impl<'a> Tables<'a> {
             control_point_indices: None,
             tile_memory: None,
             sampler_maps: SamplerMaps::default(),
-            capture: None,
             indices: None,
             snapshots: None,
             merged_header: None,
@@ -204,15 +199,6 @@ impl<'a> Tables<'a> {
             && self
                 .snapshots
                 .is_some_and(|s| s.slots.contains(&slot.index))
-    }
-
-    /// The tables, with a capture draw's addresses: of its first capture `records`, and of its
-    /// first index (`indices`) where it is indexed (`render/capture.rs`).
-    pub(super) fn with_capture(self, records: u64, indices: Option<u64>) -> Tables<'a> {
-        Tables {
-            capture: Some((records, indices)),
-            ..self
-        }
     }
 
     /// The tables, with a merged draw replay's header's address (`Tables::merged_header`).
@@ -725,24 +711,13 @@ pub(super) fn bind_into(
             PushHole::CommandRecordsAddress { .. } => {
                 return Err(Error::NotImplemented(RuntimeGap::CommandReplay));
             }
-            // A capture draw's first record, and its first index where it is indexed
-            // (`Tables::with_capture`).
-            PushHole::CaptureAddress { stages, offset } => Hole {
-                stages: stages.into(),
-                offset,
-                address: tables
-                    .capture
-                    .map(|(records, _)| records)
-                    .ok_or_else(|| internal("a capture hole without capture records"))?,
-            },
+            // A de-indexed draw's first index, or a private list's (`Tables::with_indices`).
             PushHole::CaptureIndexAddress { stages, offset } => Hole {
                 stages: stages.into(),
                 offset,
                 address: tables
-                    .capture
-                    .and_then(|(_, indices)| indices)
-                    .or(tables.indices)
-                    .ok_or_else(|| internal("a capture index hole without capture indices"))?,
+                    .indices
+                    .ok_or_else(|| internal("an index hole without its indices"))?,
             },
             // A merged draw replay's header, which its vertex function finds its command in.
             PushHole::MergedDrawAddress { stages, offset } => Hole {
@@ -2289,24 +2264,6 @@ pub(super) struct CommandUses {
 }
 
 impl CommandUses {
-    /// Add `other`'s uses, as one command's: a key either names stays named, and the keys both
-    /// reach through the resident set alone stay so (`render/capture.rs`, whose draws record
-    /// as one command).
-    pub(super) fn merge(&mut self, other: CommandUses) {
-        let named = |uses: &CommandUses| -> BTreeSet<ResourceKey> {
-            uses.uses
-                .iter()
-                .map(|used| used.key)
-                .filter(|key| !uses.resident.contains(key))
-                .collect()
-        };
-        let (own, theirs) = (named(self), named(&other));
-        self.resident.retain(|key| !theirs.contains(key));
-        let reached = other.resident.into_iter().filter(|key| !own.contains(key));
-        self.resident.extend(reached);
-        self.uses.extend(other.uses);
-    }
-
     /// Add `used`, which names its key.
     pub(super) fn push(&mut self, used: Use<ResourceKey>) {
         self.resident.remove(&used.key);

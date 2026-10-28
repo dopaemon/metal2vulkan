@@ -482,11 +482,9 @@ calls! {
     CmdSetPrimitiveRestartEnable => c"vkCmdSetPrimitiveRestartEnable",
     // A render encoder's extension commands, each on a device that has it
     // ([`COLOR_WRITE_MASK_CALLS`](crate::device::prime::COLOR_WRITE_MASK_CALLS),
-    // [`DEPTH_BIAS_CALLS`](crate::device::prime::DEPTH_BIAS_CALLS),
     // [`SIZED_INDEX_BIND_CALLS`](crate::device::prime::SIZED_INDEX_BIND_CALLS)), through the
     // entry point the device gave (`vkCmdBindIndexBuffer2KHR` where it enables that form).
     CmdSetColorWriteMask => c"vkCmdSetColorWriteMaskEXT",
-    CmdSetDepthBias2 => c"vkCmdSetDepthBias2EXT",
     CmdBindIndexBuffer2 => c"vkCmdBindIndexBuffer2",
     // The objects a render encoder's lowering makes as it draws (its pass's render pass and
     // framebuffer, stand-in and scratch images, `creation.rs`), on the device's lowering thread

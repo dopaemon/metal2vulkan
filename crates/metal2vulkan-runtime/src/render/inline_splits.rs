@@ -243,14 +243,14 @@ pub(super) struct SplitBegin {
 impl RenderLowering {
     /// Whether the draw about to record into `next` begins a new instance that records inline
     /// after the current one (the module docs; `records`: the draw records, `made` its pipeline,
-    /// `capture` a capture draw, `stood` a stand-in arriving with it); where it does, the current
+    /// `stood` a stand-in arriving with it); where it does, the current
     /// instance's copies planned, which the draw records once installed. `None` where it does
     /// not, or where the plan is refused (the pass's end plans it again, and refuses it there).
     pub(super) fn inline_split(
         &mut self,
         next: &Next,
         stood: Option<&PassLayout>,
-        (records, made, capture): (bool, bool, bool),
+        (records, made): (bool, bool),
     ) -> Option<SplitBegin> {
         let inline_first::Inline::Begun(begun) = &self.inline else {
             return None;
@@ -271,7 +271,6 @@ impl RenderLowering {
         let admitted = begun.splits
             && records
             && made
-            && !capture
             && self.current.inline
             && !self.current.continues
             && !self.replaying

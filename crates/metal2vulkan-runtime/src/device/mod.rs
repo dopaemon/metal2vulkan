@@ -68,7 +68,7 @@ use super::mipmap_scratch::MipmapScratch;
 use super::owned_kernel::OwnedKernels;
 use super::recycle::{self, BufferMaking, Recycler};
 use super::released_programs::Keepers;
-use super::render_state::{depth_bias_command, DepthBiasCommand, DepthRanges};
+use super::render_state::DepthRanges;
 use super::render_target::KeptRenderPasses;
 use super::resource_ids::{ResourceIds, SamplerIdReads};
 use super::sample_planes::PlanesObjects;
@@ -320,9 +320,6 @@ pub(super) struct DeviceShared {
     /// The command that binds an index buffer range of a size, where the device enabled
     /// `maintenance5` (`draw_source.rs`).
     pub(super) sized_index_bind: Option<SizedIndexBind>,
-    /// The command that records a depth bias of a pinned unit, where the device enabled
-    /// `VK_EXT_depth_bias_control` (`render_state.rs`).
-    pub(super) depth_bias_command: Option<DepthBiasCommand>,
     /// The mesh draw commands, where the device enabled `meshShader` (`render/mesh.rs`).
     pub(super) mesh_draws: Option<MeshDraws>,
     /// `vkCmdPushDescriptorSet`, from Vulkan 1.4 or `VK_KHR_push_descriptor`
@@ -1408,15 +1405,6 @@ impl Device {
             }
         });
         // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
-        let depth_bias_command = unsafe {
-            loader_word.restore();
-            depth_bias_command(&instance.raw, &raw, &enabled)
-        }
-        .map(|bias| {
-            // SAFETY: the device's own command of that name.
-            unsafe { crate::recorder::through(recording.as_ref(), Command::CmdSetDepthBias2, bias) }
-        });
-        // SAFETY: as above; the loader serves `vkGetDeviceProcAddr` once the word is put back.
         let color_write_masks = unsafe {
             loader_word.restore();
             ColorWriteMasks::load(&instance.raw, &raw, &enabled)
@@ -1439,7 +1427,6 @@ impl Device {
         let drawn = prime::PrimedDraws {
             dynamic: extended_dynamic_state,
             color_write_masks,
-            depth_bias: depth_bias_command,
             sized_index_bind,
         };
         // Before the exit hook is registered for this device (below): the first call of each
@@ -1475,7 +1462,6 @@ impl Device {
                     extended_dynamic_state: false,
                     primitive_restart: false,
                     color_write_masks: false,
-                    depth_bias: false,
                     sized_index_bind: false,
                     ycbcr_conversion: ycbcr_formats.primer().is_some(),
                 }),
@@ -1773,7 +1759,6 @@ impl Device {
             shared_pointer_imports: OnceLock::new(),
             extended_dynamic_state,
             sized_index_bind,
-            depth_bias_command,
             mesh_draws,
             push_descriptor,
             pushes_after_pipeline_binds,

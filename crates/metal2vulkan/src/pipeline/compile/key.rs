@@ -418,13 +418,6 @@ pub fn function_key(
         h.bytes(b"cubic-samplers")
             .bytes(format!("{:?}", inputs.cubic_samplers).as_bytes());
     }
-    // Appended only when set; the indexed form adds its index type.
-    if let Some(form) = inputs.captured_positions {
-        h.bytes(b"captured-positions");
-        if let Some(ty) = form.index_type() {
-            h.bytes(b"indexed").u64(u64::from(ty.as_raw()));
-        }
-    }
     // Appended only when set, in its derived `Debug` form, as `dropped_colors` is: the shadowed
     // variant of a function whose fetch inputs already hold the color (a blend's) is otherwise the
     // unshadowed one's key, and a cache would hand it the unshadowed artifact.

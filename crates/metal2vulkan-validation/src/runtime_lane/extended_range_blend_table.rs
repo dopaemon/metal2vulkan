@@ -13,10 +13,10 @@
 //! 0 through a blit, a two-plane format's alpha bytes as `round(255 a)` of a `float` read. Where it
 //! lies: a texture of the device's own, a placement heap's, and (the two-plane formats) one over
 //! the planes of a `'b3a8'` surface, whose bytes are read where Metal keeps them. A pass that
-//! announces `extended-range-bits-kept` (a heap's two-plane texture, a shadow of the heap's bytes
-//! the load pass does not take) keeps the bits the codes leave unused in the texels its draws do
-//! not write, where Metal's pass rewrites them: its bands are compared with those bits as Metal's
-//! pass leaves them ([`as_metal_leaves`]), the codes exactly. A differing band is printed on an
+//! announces `extended-range-bits-kept` (every pass that loads the target: the device's store)
+//! keeps the bits the codes leave unused in the texels its draws do not write, where Metal's pass
+//! rewrites them: its bands are compared with those bits as Metal's pass leaves them
+//! ([`as_metal_leaves`]), the codes exactly. A differing band is printed on an
 //! `XR-TABLE-DIFFERS` line.
 //!
 //! The table of the probe built without fast math (`xr_blends::safe_table`) is
@@ -796,12 +796,15 @@ fn a_memoryless_color_2_blends_as_a_stored_color_does() {
     })
     .unwrap();
     let (stored_plane, stored_alpha) = bytes_of(&lane, (&stored, None), layout, &table);
+    // The pass loads color 0, so its texels the draws do not write keep their bytes, the device's
+    // store (`extended-range-bits-kept`): each band is compared with the bits its codes leave unused
+    // as Metal's pass leaves them, the codes exactly.
     for (row, _) in &made {
         let at = row.config * BAND;
-        let band = &stored_plane[4 * at..4 * (at + BAND)];
+        let band = as_metal_leaves(layout, &stored_plane[4 * at..4 * (at + BAND)]);
         let alpha_band = &stored_alpha[at..at + BAND];
         assert_eq!(
-            (xr_blends::fnv(band), xr_blends::fnv(alpha_band)),
+            (xr_blends::fnv(&band), xr_blends::fnv(alpha_band)),
             (row.plane, row.alpha),
             "cfg {}: the stored color 0 is not Metal's",
             row.config

@@ -1001,7 +1001,6 @@ impl VariantObjects {
             0.0,
             0.0,
             0.0,
-            None,
             self.device.compile_device().profile(),
         )
         .map_err(|error| internal(&format!("a depth bias of no factors refused: {error:?}")))?;

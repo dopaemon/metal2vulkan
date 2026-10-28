@@ -21,12 +21,8 @@
 //! selected value), is the function's: the guest never holds the status buffer's address, so no
 //! write of the guest's is taken for the product's.
 //!
-//! A vertex function's capture records are the product's too: they hand the draw's clip positions
-//! to the tile reach kernel, and a capture variant writes memory exactly where the function does.
-//! They are written at the push block's `CaptureAddress` member plus the vertex's record offset, so
-//! the trace also ends at an `OpIAdd` whose one operand is a load of either address member,
-//! whatever the other: the guest holds neither address, so no sum of the guest's has such an
-//! operand.
+//! The trace also ends at an `OpIAdd` whose one operand is a load of the address member, whatever
+//! the other: the guest does not hold the address, so no sum of the guest's has such an operand.
 //!
 //! An emulated mesh function's records (`Synthetic(MeshRecords)`) are the product's too, traced as
 //! the status buffer's binding is: they hand the function's outputs to the pipeline's synthesized
@@ -112,8 +108,7 @@ struct Status<'m> {
     shadows: Vec<Value>,
     /// The push block's variable.
     block: Option<Value>,
-    /// The indices of its `ExecutionStatusAddress` and `CaptureAddress` members, the product's
-    /// addresses.
+    /// The indices of its `ExecutionStatusAddress` members, the product's address.
     members: Vec<u32>,
     /// The defining instruction of every access chain, `OpConvertUToPtr`, `OpIAdd`, and load;
     /// empty when the module reaches no status buffer.
@@ -155,12 +150,7 @@ impl<'m> Status<'m> {
                     s.members = m
                         .push_members()
                         .iter()
-                        .filter(|p| {
-                            matches!(
-                                p.field,
-                                PushField::ExecutionStatusAddress | PushField::CaptureAddress
-                            )
-                        })
+                        .filter(|p| matches!(p.field, PushField::ExecutionStatusAddress))
                         .map(|p| p.index)
                         .collect();
                     s.block = Some(g.value);
@@ -212,7 +202,7 @@ impl<'m> Status<'m> {
         self.shadows.contains(&image)
     }
 
-    /// Whether pointer `ptr` addresses the `ExecutionStatus` buffer or a capture record.
+    /// Whether pointer `ptr` addresses the `ExecutionStatus` buffer.
     fn addresses(&self, m: &TypedModule, ptr: Value) -> BResult<bool> {
         let mut v = ptr;
         // Each step moves to an operand of the value's defining instruction, which SSA defines
@@ -236,7 +226,7 @@ impl<'m> Status<'m> {
                 }) => match (constant(m, *a)?, constant(m, *b)?) {
                     (false, true) => *a,
                     (true, false) => *b,
-                    // A product address plus any offset (a capture record's).
+                    // The product's address plus any offset.
                     (false, false) => {
                         return Ok(self.loads_member(m, *a)? || self.loads_member(m, *b)?)
                     }
@@ -249,7 +239,7 @@ impl<'m> Status<'m> {
         Ok(false)
     }
 
-    /// Whether `v` is a load of one of the push block's product address members.
+    /// Whether `v` is a load of the push block's product address member.
     fn loads_member(&self, m: &TypedModule, v: Value) -> BResult<bool> {
         match self.defs.get(&v) {
             Some(Inst::Load { ptr, .. }) => self.is_member(m, *ptr),
@@ -257,8 +247,7 @@ impl<'m> Status<'m> {
         }
     }
 
-    /// Whether `ptr` points to the push block's `ExecutionStatusAddress` or `CaptureAddress`
-    /// member.
+    /// Whether `ptr` points to the push block's `ExecutionStatusAddress` member.
     fn is_member(&self, m: &TypedModule, ptr: Value) -> BResult<bool> {
         let (Some(block), Some(Inst::AccessChain { base, indices, .. })) =
             (self.block, self.defs.get(&ptr))

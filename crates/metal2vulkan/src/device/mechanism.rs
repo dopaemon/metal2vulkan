@@ -222,9 +222,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The planner admits a listed cubic sampler beside the stage's sampler table; the
         // function marks the `ExecutionStatus` buffer where it reaches one.
         RuntimeFact::CubicArgumentSampler { .. } => Mechanism::PlanTimeCheck,
-        // A pipeline compiled in the capture form, which a consumer asks for; its plans state
-        // it, and the binder writes each draw's capture layout.
-        RuntimeFact::CapturedPositions { .. } => Mechanism::Variant,
         // The planner refuses a texture a heap holds by its raw texels alone that a plan names
         // beside the stage; a consumer's own heap announces one.
         RuntimeFact::HeapRawSamples { .. } => Mechanism::PlanTimeCheck,

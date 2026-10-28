@@ -33,7 +33,7 @@
 //!   commands or a tile dispatch, whose commands write the codes alone, gives up every shadow:
 //!   the codes hold the encode of the last `half` written, and the draws after it see them, as
 //!   before the shadow. None starts again in the pass. Not while the encoder records an
-//!   execution's commands or a capture draw (`render/capture.rs`), which bind no shadow.
+//!   execution's commands, which bind no shadow.
 //! - **The announcement**. A draw that held a color's shadow read what Metal's tile memory holds,
 //!   so `extended-range-blends-stored-codes` names only the colors a draw read from the codes
 //!   (`degrade_extended_range_blends`, `ExtendedShadows::held`).
@@ -413,10 +413,10 @@ fn color(
 
 impl RenderLowering {
     /// The shadows a draw binds: the held ones, none while the encoder records an execution's
-    /// commands or a capture draw.
+    /// commands.
     pub(super) fn extended_shadows_bound(&self) -> &BTreeSet<u32> {
         static NONE: BTreeSet<u32> = BTreeSet::new();
-        match self.replaying || self.capture_addresses().is_some() {
+        match self.replaying {
             true => &NONE,
             false => &self.extended.live,
         }
@@ -430,7 +430,6 @@ impl RenderLowering {
         if !self.extended.holds
             || self.replaying
             || self.rerouting
-            || self.capture_addresses().is_some()
             || pipeline.descriptor().vertex().is_none()
         {
             return Ok(());
@@ -540,7 +539,7 @@ impl RenderLowering {
     /// Once a draw of `pipeline` installed its instance: the shadows that instance first holds
     /// are set before it, and what it may write is noted.
     pub(super) fn installed_extended_draw(&mut self, pipeline: &DrawingState) {
-        if self.replaying || self.capture_addresses().is_some() {
+        if self.replaying {
             return;
         }
         let at = self.earlier.len();

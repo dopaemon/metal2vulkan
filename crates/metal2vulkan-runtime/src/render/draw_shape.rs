@@ -538,8 +538,8 @@ impl ShapeInputs<'_> {
             .as_ref()
             .and_then(|ds| ds.depth_format)
             .or(settings.hidden.then_some(HIDDEN_DEPTH_FORMAT));
-        let bias = self.state.vk_depth_bias(topology, depth_format, profile)?;
-        let depth_bias = DepthBiasRecord::of(&bias, device.shared().depth_bias_command)?;
+        let bias = self.state.vk_depth_bias(topology, profile)?;
+        let depth_bias = DepthBiasRecord::of(&bias);
         // A 16-bit unorm depth, biased or not, stores Metal's codes where the driver is measured
         // to (`render_state::announce_unorm_depth`).
         render_state::announce_unorm_depth(device, depth_format, &fixed.depth_stencil, &bias);

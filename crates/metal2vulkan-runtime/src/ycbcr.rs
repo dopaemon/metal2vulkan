@@ -994,8 +994,8 @@ struct YCbCrLoad {
     groups: [u32; 2],
 }
 
-/// The side of the tiles Metal loads and stores a render pass's attachment by
-/// (`bind::tile_reach`): a pass that loads a two-plane YCbCr attachment stores every texel of
+/// The side of the tiles Metal loads and stores a render pass's attachment by (32 x 32 on Apple's
+/// GPUs): a pass that loads a two-plane YCbCr attachment stores every texel of
 /// each tile it reaches, its codes re-encoded from what the tile loaded.
 const TILE: u32 = 32;
 

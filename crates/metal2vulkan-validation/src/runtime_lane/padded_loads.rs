@@ -20,21 +20,17 @@
 //!
 //! Metal's pass that loads such a texture and draws writes every word of its render area rounded
 //! up to 32 texels back, the words no fragment writes and the channels the mask leaves out as
-//! the write of their code's read (`ExtendedRange::load_code`: their code with its low six bits
-//! zeroed, an `_sRGB` twin's through Metal's table). The runtime rewrites them so before the
-//! pass (`render/unused_bits_load.rs`), so every case is Metal's, and none announces
-//! `extended-range-bits-kept` (once `padded-bits-kept`). (The probes' passes also cleared and
-//! stored a second color attachment, under which Metal's pass rewrites every tile of the render
-//! area, the tiles no draw reaches too. The lane's draw of no vertices and its scissored draw have
-//! it too, since without it the first reaches no tile and the pass keeps every word, and the second
-//! only the tiles its scissor rectangle overlaps; the lane's other passes have none, and their
-//! draws reach every tile alike.) The device's work counts show the path ran: one load pass per
-//! case that draws, none for the case that does not, over the region's texels
-//! (`WorkCounts::unused_bits_load_passes` and `unused_bits_load_texels`).
+//! the write of their code's read (their code with its low six bits zeroed, an `_sRGB` twin's
+//! through Metal's table). The device's store keeps those words (`render/tile_store.rs`), and
+//! every pass that draws announces `extended-range-bits-kept`: a case whose draw writes every
+//! word is Metal's, and in every other case each word the draw does not write keeps its bytes.
+//! (The probes' passes also cleared and stored a second color attachment, under which Metal's
+//! pass rewrites every tile of the render area, the tiles no draw reaches too. The lane's draw of
+//! no vertices and its scissored draw have it too, as the probes' did.)
 
 use super::degrade_notices::counts;
 use super::extended_range_targets::digest;
-use super::resolves::{lane, quiet, Lane};
+use super::resolves::{lane_with, quiet, Lane};
 use super::{buffer_with, read_buffer};
 use crate::candidate::runtime_samples::{library, shape};
 use metal2vulkan::metal::{
@@ -636,66 +632,82 @@ fn run(lane: &Lane, (pf, bits, pass): (PixelFormat, u64, Pass)) -> (Vec<u8>, boo
     (words, padded)
 }
 
-/// The load passes case `pass` records and the texels they zero: none where it does not draw,
-/// else one over its render area (the attachment's, or the smaller render target size) rounded
-/// up to 32 texels a side, within the attachment.
-fn loads(pass: Pass) -> (u64, u64) {
-    // The render area and the attachment's extent: a texture buffer's is its one row.
-    let ((w, h), within) = match pass {
-        Pass::Undrawn => return (0, 0),
-        Pass::TextureBuffer => ((WIDTH, 1), (WIDTH, 1)),
-        Pass::Sized(w, h) => ((w, h), (WIDTH, HEIGHT)),
-        _ => ((WIDTH, HEIGHT), (WIDTH, HEIGHT)),
+/// Whether case `(bits, pass)`'s draw writes channel `c` of texel `(x, y)`: a channel its
+/// write mask keeps (red 8, green 4), in a texel the draw covers (the whole texture, the scissor
+/// rectangle, the smaller render target size, a texture buffer's one row; none for a draw of no
+/// vertices or no draw).
+fn writes((bits, pass): (u64, Pass), (x, y): (u64, u64), c: u64) -> bool {
+    let channel = [8, 4][c as usize];
+    let covered = match pass {
+        Pass::Whole | Pass::Executed | Pass::ArrayView | Pass::ArrayViewOfOne => true,
+        Pass::Scissored => (37..37 + 54).contains(&x) && (13..13 + 57).contains(&y),
+        Pass::Sized(w, h) => x < w && y < h,
+        Pass::TextureBuffer => y == 0,
+        Pass::NoVertices | Pass::Undrawn => false,
     };
-    let region = |side: u64, within: u64| side.next_multiple_of(32).min(within);
-    (1, region(w, within.0) * region(h, within.1))
+    covered && bits & channel != 0
 }
 
-/// Every case's words are Metal's, the bytes between the rows stay, no case announces
-/// `extended-range-bits-kept`, and each case that draws recorded one load pass over its region's texels
-/// (the module docs).
+/// Every case keeps the words its draw does not write and the bytes between the rows, a case
+/// whose draw writes every word is Metal's, and every case that draws announces
+/// `extended-range-bits-kept` (the module docs).
 #[test]
-fn a_loading_pass_that_draws_leaves_metals_padded_words() {
-    let (messages, _cache, lane) = lane();
+fn a_loading_pass_that_draws_keeps_the_padded_words_it_does_not_write() {
+    let kept = Degradation::ExtendedRangeBitsKept;
+    let (messages, _cache, lane) =
+        lane_with(|options| options.announce_each = [kept].into_iter().collect());
     let mut differ = Vec::new();
-    let (mut passes, mut texels) = (0, 0);
+    let (mut whole, mut kept_words) = (0, 0);
     for case in METAL {
         let (pf, bits, pass, metal) = case;
-        let before = lane.device.work_counts();
-        let (words, padded) = run(&lane, (pf, bits, pass));
-        let after = lane.device.work_counts();
-        let recorded = (
-            after.unused_bits_load_passes - before.unused_bits_load_passes,
-            after.unused_bits_load_texels - before.unused_bits_load_texels,
-        );
-        assert_eq!(
-            recorded,
-            loads(pass),
-            "{pf:?} {bits} {pass:?}: the load passes"
-        );
-        passes += recorded.0;
-        texels += recorded.1;
+        let channels = match pf {
+            PixelFormat::R10UnormX6 | PixelFormat::R10UnormX6SRGB => 1,
+            _ => 2,
+        };
+        let (got, padded) = run(&lane, (pf, bits, pass));
         assert!(
             padded,
             "{pf:?} {bits} {pass:?}: the bytes between the rows changed"
         );
-        let got = digest(&words);
-        if got != metal {
-            eprintln!("PADDED-LOADS-DIFFERS {pf:?} mask {bits} {pass:?}: {got}");
+        let input = words(channels);
+        let mut every = true;
+        let mut moved = 0;
+        for (i, (g, w)) in got.chunks(2).zip(input.chunks(2)).enumerate() {
+            let i = i as u64;
+            let (texel, c) = (i / channels, i % channels);
+            if writes((bits, pass), (texel % WIDTH, texel / WIDTH), c) {
+                continue;
+            }
+            every = false;
+            kept_words += 1;
+            moved += u64::from(g != w);
+        }
+        if moved > 0 {
+            eprintln!("PADDED-LOADS-DIFFERS {pf:?} mask {bits} {pass:?}: {moved} words moved");
             differ.push(case);
         }
+        if every {
+            whole += 1;
+            let got = digest(&got);
+            if got != metal {
+                eprintln!("PADDED-LOADS-DIFFERS {pf:?} mask {bits} {pass:?}: {got}");
+                differ.push(case);
+            }
+        }
         let announced = counts(&messages.take_notices());
-        assert!(
-            !announced.contains_key(&Degradation::ExtendedRangeBitsKept),
+        assert_eq!(
+            announced.contains_key(&kept),
+            pass != Pass::Undrawn,
             "{pf:?} {bits} {pass:?}: {announced:?}"
         );
     }
     eprintln!(
-        "PADDED-LOADS {} cases, {} differ: {passes} load passes recorded, {texels} texels zeroed",
+        "PADDED-LOADS {} cases, {} differ: {whole} drawn whole against Metal's, {kept_words} \
+         words kept",
         METAL.len(),
         differ.len()
     );
-    assert!(passes > 0 && texels > 0, "no load pass ran");
+    assert!(whole > 0 && kept_words > 0, "no case of either kind ran");
     assert!(
         differ.is_empty(),
         "{} of {} cases differ: {differ:?}",

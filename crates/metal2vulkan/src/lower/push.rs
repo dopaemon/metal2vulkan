@@ -70,7 +70,6 @@ pub const fn shape(f: PushField) -> FieldShape {
     match f {
         PushField::RootTableAddress
         | PushField::ExecutionStatusAddress
-        | PushField::CaptureAddress
         | PushField::CaptureIndexAddress
         | PushField::MergedDrawAddress
         | PushField::CommandRecordsAddress
@@ -109,7 +108,7 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::ShaderTestsState => FieldShape::UVec4Array(1),
         // The faces' stencil words, the references, and a zero word.
         PushField::ShaderStencilState => FieldShape::UVec4Array(1),
-        // The draw's first vertex, vertex count, first instance, and a zero word.
+        // A zero word, the index count, the first instance, and the base vertex.
         PushField::CaptureLayout => FieldShape::UVec4Array(1),
         // Four bits of kept channels per color attachment.
         PushField::StorageKeptChannels => FieldShape::U32,
@@ -457,12 +456,12 @@ mod tests {
         }
     }
 
-    /// A vertex function's capture addresses are holes the consumer fills, which must be in the
-    /// push block: the placement order puts them right after the two other addresses, so the vertex
-    /// window holds them whatever else the function reads, and its layout follows the window's
+    /// A vertex function's index address is a hole the consumer fills, which must be in the push
+    /// block: the placement order puts it right after the two other addresses, so the vertex
+    /// window holds it whatever else the function reads, and its layout follows the window's
     /// other fields.
     #[test]
-    fn the_capture_address_is_always_placed_in_the_vertex_window() {
+    fn the_index_address_is_always_placed_in_the_vertex_window() {
         let mut later = BTreeSet::from([
             PushField::AmplificationId,
             PushField::AmplificationLayerOffset,
@@ -479,7 +478,6 @@ mod tests {
         let (start, end) = window(Stage::Vertex);
         for (root, status) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut fields = later.clone();
-            fields.insert(PushField::CaptureAddress);
             fields.insert(PushField::CaptureIndexAddress);
             if root {
                 fields.insert(PushField::RootTableAddress);
@@ -488,25 +486,14 @@ mod tests {
                 fields.insert(PushField::ExecutionStatusAddress);
             }
             let placement = check(Stage::Vertex, &fields);
-            let capture = placement
-                .fields
-                .iter()
-                .find(|f| f.field == PushField::CaptureAddress)
-                .expect("placed");
             let at = start + 8 * (u32::from(root) + u32::from(status));
-            assert_eq!(capture.loc, PushLoc::Push { offset: at }, "{root} {status}");
             let index = placement
                 .fields
                 .iter()
                 .find(|f| f.field == PushField::CaptureIndexAddress)
                 .expect("placed");
-            let after = at + capture.size;
-            assert_eq!(
-                index.loc,
-                PushLoc::Push { offset: after },
-                "{root} {status}"
-            );
-            assert!(after + index.size <= end);
+            assert_eq!(index.loc, PushLoc::Push { offset: at }, "{root} {status}");
+            assert!(at + index.size <= end);
             let layout = placement
                 .fields
                 .iter()

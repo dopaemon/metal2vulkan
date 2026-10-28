@@ -447,9 +447,8 @@ fn fragment_outputs_to_bfloat_targets_write_raw_codes() {
 
 /// A padded attachment (`R10Unorm_X6`, `RG10Unorm_X12`, and their `_sRGB` twins, the store's code
 /// through the twin's table) links under every write mask, the fixture's `float4` fill writing the
-/// raw words its mask keeps: a channel is a raw word, and one the mask leaves out keeps the word a
-/// consumer's load pass left, as Metal's pass leaves it (`bind::unused_bits_module`). Each module
-/// passes L3.
+/// raw words its mask keeps: a channel is a raw word, and one the mask leaves out keeps the word
+/// the pass loaded. Each module passes L3.
 #[test]
 fn padded_targets_write_the_words_their_mask_keeps() {
     let Some(bc) = fixture() else {

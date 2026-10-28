@@ -36,7 +36,7 @@ use std::fmt;
 
 pub use crate::air::container::Hash256;
 use crate::device::Device;
-use crate::pipeline::lower_inputs::{CaptureForm, StorageImageChoice};
+use crate::pipeline::lower_inputs::StorageImageChoice;
 use crate::pipeline::sym::{SlotRef, SnapshotForm};
 use crate::vk;
 
@@ -60,7 +60,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 1909;
+pub const SEMANTICS_VERSION: u32 = 1910;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -93,7 +93,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 476;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 1681;
+pub const RUNTIME_VERSION: u32 = 1682;
 
 /// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
@@ -379,14 +379,6 @@ pub struct VariantKey {
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub cubic_samplers: BTreeMap<SlotRef, u32>,
-    /// The capture form of the vertex function (`LoweringInputs::captured_positions`): besides
-    /// its outputs, each vertex it runs writes Metal's clip position and point size to a record
-    /// at `PushHole::CaptureAddress`, the positions a tile reach kernel bins, for the draws of
-    /// its [`CaptureForm`]. A consumer asks for it itself (no bind shape does), for a draw it runs
-    /// again before its pass, and the plan of a pipeline compiled under it states it; a draw of
-    /// the other form is `BindError::NeedsVariant` with that form.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub captured_positions: Option<CaptureForm>,
     /// The de-indexed form of a pipeline whose vertex function writes the primitive ID's varying
     /// (`LoweringInputs::primitive_id_indices`, `BindShape::primitive_id_indices`): the vertex
     /// function of an indexed draw of this index type runs the draw's indices as `index count`
@@ -547,7 +539,6 @@ impl VariantKey {
             && !self.shader_stencil
             && !self.window_depth_varying
             && self.cubic_samplers.is_empty()
-            && self.captured_positions.is_none()
             && self.primitive_id_indices.is_none()
             && !self.quad_primitive_ids
             && !self.private_list
@@ -564,7 +555,7 @@ impl VariantKey {
     /// the fragment function the colors it writes zero to and those it drops, its depth's clamp
     /// range and whether its draws' tests are read-only, for a tile function the imageblock bytes
     /// its pass keeps, and for the vertex function the
-    /// dropped `Layer` output, the viewport compensation, the window depth and the capture form
+    /// dropped `Layer` output, the viewport compensation and the window depth
     /// (a vertex function's projection is
     /// derived from the vertex descriptor and
     /// [`pulled_vertex_buffers`](VariantKey::pulled_vertex_buffers) when the pipeline compiles,
@@ -685,9 +676,6 @@ impl VariantKey {
         }
         out.window_depth_varying =
             self.window_depth_varying && stage == crate::pipeline::sym::Stage::Vertex;
-        out.captured_positions = self
-            .captured_positions
-            .filter(|_| stage == crate::pipeline::sym::Stage::Vertex);
         out.primitive_id_indices = self
             .primitive_id_indices
             .filter(|_| stage == crate::pipeline::sym::Stage::Vertex);

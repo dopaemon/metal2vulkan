@@ -165,7 +165,7 @@ use super::compressed_decode::BLOCK_DECODES;
 use super::cross_class_reads::CROSS_CLASS;
 use super::depth_denormals::{DEPTH_DENORMALS, SIGNED_DEPTH_TESTS};
 use super::detach_textures::DETACHED_REACHES;
-use super::extended_range_blends::{EXTENDED_RANGE_BITS, STORED_CODES, UNREACHED_TILES};
+use super::extended_range_blends::{EXTENDED_RANGE_BITS, STORED_CODES};
 use super::extended_range_resolve::XR_RESOLVE;
 use super::extended_range_two_planes::HEAP_PLANES;
 use super::first_use::FIRST_SPARSE;
@@ -534,7 +534,6 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &HEAP_PLANES,
         &TWO_PLANE_COPIES,
         &EXTENDED_RANGE_BITS,
-        &UNREACHED_TILES,
         &SNORM_MINIMUM,
         &SHARED_EXPONENT,
         &STORED_CODES,

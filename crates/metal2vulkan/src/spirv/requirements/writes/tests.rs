@@ -261,9 +261,9 @@ fn a_colors_storage_form_and_half_shadow_writes_are_not_the_functions() {
     assert!(writes_memory(&image_write(ResourceKind::Texture)).expect("a texture"));
 }
 
-/// A module that stores as a vertex function's capture record does: a `vec4` at
-/// `address + slot * 32` and an `f32` 16 bytes past it, `slot` an input's value (not a
-/// constant), `address` the push block's member of `address`.
+/// A module that stores a record at a slot the draw computes: a `vec4` at `address + slot * 32`
+/// and an `f32` 16 bytes past it, `slot` an input's value (not a constant), `address` the push
+/// block's member of `address`.
 fn record_store(address: PushField) -> TypedModule {
     let mut b = ModuleBuilder::new();
     let u32_ = int(&mut b, 32);
@@ -302,11 +302,11 @@ fn record_store(address: PushField) -> TypedModule {
     fragment(b, main)
 }
 
-/// A capture record's stores, at the push block's `CaptureAddress` plus an offset that is not a
-/// constant, are the product's; the same stores from another `u64` address member
-/// (`RootTableAddress`, whose trace reaches the push block's load) are the function's.
+/// Stores at the push block's `ExecutionStatusAddress` plus an offset that is not a constant are
+/// the product's; the same stores from another `u64` address member (`RootTableAddress`, whose
+/// trace reaches the push block's load) are the function's.
 #[test]
-fn the_capture_records_are_not_the_functions_writes() {
-    assert!(!writes_memory(&record_store(PushField::CaptureAddress)).expect("capture"));
+fn stores_past_the_status_address_are_not_the_functions_writes() {
+    assert!(!writes_memory(&record_store(PushField::ExecutionStatusAddress)).expect("status"));
     assert!(writes_memory(&record_store(PushField::RootTableAddress)).expect("another address"));
 }

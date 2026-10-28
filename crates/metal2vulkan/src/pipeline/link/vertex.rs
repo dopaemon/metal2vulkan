@@ -53,10 +53,11 @@
 //!    shape binds such a layout at an offset or with a per-bind stride fixed-function input
 //!    cannot fetch. It runs after the items above, so the variant's fixed-function bindings are
 //!    exactly the projection's others, attribute for attribute;
-//! 8. the **indexed capture form** (`CaptureForm::Indexed`) pulls every remaining fixed-function
-//!    attribute: its draw runs without indices, so fixed-function input would fetch at the stream
-//!    position, where the function reads the vertex its index names. The layouts it pulls are not a
-//!    pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
+//! 8. the **de-indexed and private list forms** (`VariantKey::primitive_id_indices`,
+//!    `VariantKey::private_list`) pull every remaining fixed-function attribute in the projection
+//!    their compile takes: their draw runs without indices, so fixed-function input would fetch at
+//!    the stream position, where the function reads the vertex its index names. The layouts they
+//!    pull are not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
 //! A fixed-function entry keeps nothing of the format (`VertexFetch::FixedFunction`): no
 //! instruction of the module names it, so every format the device fetches in fixed function
@@ -276,7 +277,7 @@ fn resolve<'a>(
             moved.insert(r.attr.buffer_index);
         }
     }
-    // The indexed capture form (item 8).
+    // The de-indexed and private list forms (item 8).
     if pull_every {
         for r in out.values_mut() {
             r.fetch = AttributeFetch::Pulled;
@@ -312,9 +313,10 @@ pub fn vertex_fetch_projection(
     vertex_fetch_projection_for(desc, attributes, p, &BTreeSet::new(), false)
 }
 
-/// `vertex_fetch_projection` under a pulled-vertex-buffer variant and capture form: the
-/// attributes of the layouts in `pulled_vertex_buffers` (`VariantKey::pulled_vertex_buffers`)
-/// are pulled (item 7), and every attribute when `pull_every` (the indexed capture form, item 8).
+/// `vertex_fetch_projection` under a pulled-vertex-buffer variant and a form that pulls every
+/// attribute: the attributes of the layouts in `pulled_vertex_buffers`
+/// (`VariantKey::pulled_vertex_buffers`) are pulled (item 7), and every attribute when
+/// `pull_every` (the de-indexed and private list forms, item 8).
 pub fn vertex_fetch_projection_for(
     desc: Option<&VertexDescriptor>,
     attributes: &BTreeMap<u32, IoNumeric>,
@@ -427,21 +429,19 @@ fn rounds_twice_to_half(e: Encoding) -> bool {
 }
 
 /// The vertex input state of vertex stage `vs` for descriptor `desc` under the
-/// pulled-vertex-buffer variant `pulled_vertex_buffers` and, when `pull_every`, the indexed
-/// capture form (see the module docs), with each fixed-function attribute at the location link
-/// assigned its key. Fixed-function bindings are numbered densely in Metal buffer-index order;
+/// pulled-vertex-buffer variant `pulled_vertex_buffers` (see the module docs), with each
+/// fixed-function attribute at the location link assigned its key. Fixed-function bindings are numbered densely in Metal buffer-index order;
 /// `variant_pulled` records the layouts the variant moved.
 pub fn vertex_input_state(
     vs: &StageInterface,
     desc: Option<&VertexDescriptor>,
     pulled_vertex_buffers: &BTreeSet<u32>,
-    pull_every: bool,
     locations: &Locations,
     p: &DeviceProfile,
 ) -> Result<VertexInputState, Error> {
     let used = vs.io.attributes();
     let numeric: BTreeMap<u32, IoNumeric> = used.iter().map(|(a, (n, _))| (*a, *n)).collect();
-    let (resolved, moved) = resolve(desc, &numeric, p, pulled_vertex_buffers, pull_every)?;
+    let (resolved, moved) = resolve(desc, &numeric, p, pulled_vertex_buffers, false)?;
     for (a, (_, fetch)) in &used {
         // The stage was compiled under another projection (a `Compiled` stage source whose
         // `LowerInputs` do not fit this descriptor).

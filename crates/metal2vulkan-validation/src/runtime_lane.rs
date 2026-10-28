@@ -281,10 +281,6 @@ mod cache;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod capabilities;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod capture_costs;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod capture_reach;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod chosen_pointers;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod chroma_pairs;
@@ -821,8 +817,6 @@ mod tile_memory;
 mod tile_normalized;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod tile_path_costs;
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-mod tile_reach_kernel;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod tile_shadows;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

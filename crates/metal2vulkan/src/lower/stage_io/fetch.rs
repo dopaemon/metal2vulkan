@@ -19,8 +19,8 @@
 //! `u32` arithmetic, where `element` is the step's element index:
 //!
 //! - `PerVertex`: `VertexIndex` (it includes the base vertex in Vulkan as `[[vertex_id]]` does in
-//!   Metal); in the indexed capture form (`CaptureForm::Indexed`), whose draw has no indices, the
-//!   vertex the draw's index names ([`Step::CapturedVertex`], `super::CapturedIndex`), as
+//!   Metal); in the de-indexed and private list forms, whose draws have no indices, the vertex
+//!   the draw's index names ([`Step::CapturedVertex`], `super::CapturedIndex`), as
 //!   `[[vertex_id]]` reads it there;
 //! - `PerInstance` with rate 1: `InstanceIndex` (which includes the base instance in both APIs);
 //! - `PerInstance` with rate `n > 1`: `base + (InstanceIndex - base) / n`, the element the
@@ -341,7 +341,7 @@ pub enum Step {
     /// A kernel stage-in step through the index buffer on `axis`: the index at the thread position
     /// clamped to the region's last element, plus the region's origin.
     Indexed { axis: u8, index: IndexRead },
-    /// A per-vertex step in the indexed capture form: the vertex the draw's index names
+    /// A per-vertex step in the de-indexed or private list form: the vertex the draw's index names
     /// (`super::CapturedIndex`), read once at entry.
     CapturedVertex,
 }
@@ -489,7 +489,7 @@ pub(super) fn select(
     narrow_float_nans(cx, encoding, form);
     let s = slot(Stage::Vertex, buffer);
     let draw_parameters = cx.profile.fields().draw_parameters;
-    // The indexed capture form's per-vertex element is the vertex its index names.
+    // The de-indexed and private list forms' per-vertex element is the vertex its index names.
     let captured = super::plan::captured_index_type(cx);
     if let (VertexStepFunction::PerVertex, Some(ty)) = (step_function, captured) {
         super::plan::captured_index(cx, ty)?;

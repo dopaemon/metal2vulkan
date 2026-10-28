@@ -573,15 +573,6 @@ pub enum RuntimeFact {
         multisampled: bool,
         planes: bool,
     },
-    /// The vertex function was compiled in capture form `form` (`VariantKey::captured_positions`,
-    /// `LoweringInputs::captured_positions`): each vertex it runs writes a 32-byte record of its
-    /// clip position, point size and restart flag from `PushField::CaptureAddress`, at the slot
-    /// `PushField::CaptureLayout` gives it, which the binder writes per draw; the indexed form
-    /// reads its vertices' indices from `PushField::CaptureIndexAddress`. Its plans state the
-    /// variant.
-    CapturedPositions {
-        form: crate::pipeline::lower_inputs::CaptureForm,
-    },
     /// The `stage` function samples, gathers, or queries a level of a heap texture of a sampled
     /// float class of one sample, where for a texture a heap holds by its raw texels alone
     /// (`bind::heap_raw_form`) it reads the class's neutral (zero, or the neutral's level) where

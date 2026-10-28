@@ -91,14 +91,12 @@ pub struct BindState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub depth_stencil: metal::state::DepthStencilDescriptor,
     /// The draw's primitive type (`drawPrimitives:`'s or `drawIndexedPrimitives:`'s
-    /// `primitiveType`), which two draws read: one of an indexed capture variant
-    /// (`CaptureForm::Indexed`), as Metal restarts a line or triangle strip at the index type's
-    /// all-ones index and shades no vertex there, and draws every index of a list or of points;
-    /// and one of a pipeline whose vertex function writes the primitive ID
-    /// (`LoweringInputs::primitive_id_varying`), whose `PushField::VerticesPerPrimitive` holds
-    /// the type's vertices per primitive. `None` where the consumer does not say; such a draw is
-    /// `BindError::MissingPrimitiveType`. Only a draw's bytes depend on it, so it is not part of
-    /// the shape.
+    /// `primitiveType`), which a draw of a pipeline whose vertex function writes the primitive ID
+    /// reads (`LoweringInputs::primitive_id_varying`): its `PushField::VerticesPerPrimitive` holds
+    /// the type's vertices per primitive, and an indexed strip, which Metal restarts at the index
+    /// type's all-ones index, does not run de-indexed. `None` where the consumer does not say;
+    /// such a draw is `BindError::MissingPrimitiveType`. Only a draw's bytes depend on it, so it
+    /// is not part of the shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub primitive_type: Option<metal::PrimitiveType>,
     /// The index type of a direct indexed draw of a pipeline whose vertex function writes the

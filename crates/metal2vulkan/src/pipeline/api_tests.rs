@@ -228,7 +228,6 @@ mod serde_round_trips {
                 ),
             )]),
             cubic_samplers: BTreeMap::from([(slot(Stage::Fragment, SlotClass::Sampler, 0), 0x2d0)]),
-            captured_positions: Some(crate::pipeline::CaptureForm::Vertices),
             primitive_id_indices: Some(metal::IndexType::UInt16),
             quad_primitive_ids: true,
             private_list: true,
@@ -435,9 +434,6 @@ mod serde_round_trips {
                 (4, crate::pipeline::RotatedBlendForm::Premultiplied),
                 (6, crate::pipeline::RotatedBlendForm::Unmeasured),
             ]),
-            captured_positions: Some(crate::pipeline::CaptureForm::Indexed(
-                metal::IndexType::UInt16,
-            )),
             extended_shadows: BTreeSet::from([0]),
             cross_class: BTreeMap::from([(
                 slot(Stage::Fragment, SlotClass::Texture, 10),

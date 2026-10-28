@@ -2262,14 +2262,9 @@ fn lower_inputs(
         }
         InputsFrom::Vertex(desc, variant, depth, primitive_id, _) => {
             let attributes = declared_attributes(spec);
-            // The indexed capture form, the primitive ID's de-indexed form and the private list
-            // form pull every attribute, whatever the caller's projection would fetch in fixed
-            // function.
-            let pull_every = variant
-                .captured_positions
-                .is_some_and(|f| f.index_type().is_some())
-                || variant.primitive_id_indices.is_some()
-                || variant.private_list;
+            // The primitive ID's de-indexed form and the private list form pull every attribute,
+            // whatever the caller's projection would fetch in fixed function.
+            let pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
             let projection = crate::pipeline::link::vertex::vertex_fetch_projection_for(
                 desc,
                 &attributes,

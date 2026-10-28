@@ -393,8 +393,6 @@ commands! {
             );
         CmdSetColorWriteMask cmd_set_color_write_mask c"vkCmdSetColorWriteMaskEXT"
             (first: u32, count: u32, masks: *const vk::ColorComponentFlags);
-        CmdSetDepthBias2 cmd_set_depth_bias2 c"vkCmdSetDepthBias2EXT"
-            (info: *const vk::DepthBiasInfoEXT<'_>);
         CmdBindIndexBuffer2 cmd_bind_index_buffer2 c"vkCmdBindIndexBuffer2"
             (
                 buffer: vk::Buffer,

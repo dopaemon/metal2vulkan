@@ -82,7 +82,6 @@ use crate::gpu_time::Calibration;
 use crate::loader_word::LoaderWord;
 use crate::memory;
 use crate::release::{self, Generated, Released};
-use crate::render_state::DepthBiasCommand;
 use crate::sharing::Sharing;
 use crate::tracker::Barrier;
 use ash::vk;
@@ -173,10 +172,6 @@ pub(crate) const PRIMITIVE_RESTART_CALLS: [Call; 1] = [Call::CmdSetPrimitiveRest
 /// The table's entry points a device without the dynamic color write mask never calls, nor
 /// primes: a snapshot draw's masks (`dynamic_state.rs`, `render/snapshot.rs`).
 pub(crate) const COLOR_WRITE_MASK_CALLS: [Call; 1] = [Call::CmdSetColorWriteMask];
-
-/// The table's entry points a device without `VK_EXT_depth_bias_control` never calls, nor
-/// primes: a depth bias in a unit of its own (`render_state.rs`).
-pub(crate) const DEPTH_BIAS_CALLS: [Call; 1] = [Call::CmdSetDepthBias2];
 
 /// The table's entry points a device without `maintenance5` never calls, nor primes: an index
 /// buffer bound with its size (`draw_source.rs`).
@@ -379,7 +374,6 @@ pub(crate) struct Has {
     pub(crate) extended_dynamic_state: bool,
     pub(crate) primitive_restart: bool,
     pub(crate) color_write_masks: bool,
-    pub(crate) depth_bias: bool,
     pub(crate) sized_index_bind: bool,
     pub(crate) ycbcr_conversion: bool,
 }
@@ -391,7 +385,6 @@ pub(crate) struct Has {
 pub(crate) struct PrimedDraws {
     pub(crate) dynamic: Option<ExtendedDynamicState>,
     pub(crate) color_write_masks: Option<ColorWriteMasks>,
-    pub(crate) depth_bias: Option<DepthBiasCommand>,
     pub(crate) sized_index_bind: Option<SizedIndexBind>,
 }
 
@@ -404,7 +397,6 @@ impl PrimedDraws {
                 .dynamic
                 .is_some_and(|dynamic| dynamic.primitive_restart_enable.is_some()),
             color_write_masks: self.color_write_masks.is_some(),
-            depth_bias: self.depth_bias.is_some(),
             sized_index_bind: self.sized_index_bind.is_some(),
             ..has
         }
@@ -491,7 +483,7 @@ pub(super) unsafe fn prime(
 /// has no push command, those of [`CALIBRATION_CALLS`] where it calibrates no timestamps, those
 /// of [`NAMING_CALLS`] where its instance reports no messages, and those of
 /// [`EXTENDED_DYNAMIC_STATE_CALLS`], [`PRIMITIVE_RESTART_CALLS`],
-/// [`COLOR_WRITE_MASK_CALLS`], [`DEPTH_BIAS_CALLS`] and [`SIZED_INDEX_BIND_CALLS`] where it has
+/// [`COLOR_WRITE_MASK_CALLS`] and [`SIZED_INDEX_BIND_CALLS`] where it has
 /// not their commands, and those of [`YCBCR_CONVERSION_CALLS`] where it converts no YCbCr format,
 /// that `calls` (one bit each) does not hold.
 pub(crate) fn missing(calls: u128, has: Has) -> Vec<Call> {
@@ -513,7 +505,6 @@ pub(crate) fn missing(calls: u128, has: Has) -> Vec<Call> {
                 && (has.extended_dynamic_state || !EXTENDED_DYNAMIC_STATE_CALLS.contains(&call))
                 && (has.primitive_restart || !PRIMITIVE_RESTART_CALLS.contains(&call))
                 && (has.color_write_masks || !COLOR_WRITE_MASK_CALLS.contains(&call))
-                && (has.depth_bias || !DEPTH_BIAS_CALLS.contains(&call))
                 && (has.sized_index_bind || !SIZED_INDEX_BIND_CALLS.contains(&call))
                 && (has.ycbcr_conversion || !YCBCR_CONVERSION_CALLS.contains(&call))
         })
@@ -1534,10 +1525,6 @@ impl Primer<'_> {
                 let all = [vk::ColorComponentFlags::RGBA];
                 masks(draws, 0, all.len() as u32, all.as_ptr());
                 self.made(Call::CmdSetColorWriteMask);
-            }
-            if let Some(bias) = drawn.depth_bias {
-                bias(draws, &vk::DepthBiasInfoEXT::default());
-                self.made(Call::CmdSetDepthBias2);
             }
             // A clear of the attachment inside the pass, as a render encoder's clear of a stand-in
             // records it.

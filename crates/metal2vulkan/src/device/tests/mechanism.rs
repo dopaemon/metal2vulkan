@@ -188,9 +188,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             planes: true,
         },
         RuntimeFact::StorageTextureIntegerChannels { slot },
-        RuntimeFact::CapturedPositions {
-            form: crate::pipeline::CaptureForm::Indexed(crate::metal::IndexType::UInt16),
-        },
         RuntimeFact::HeapRawSamples {
             stage: Stage::Fragment,
             sampler: Some(1),
@@ -334,7 +331,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::CubicSampler { .. } => 68,
         RuntimeFact::CubicArgumentSampler { .. } => 69,
         RuntimeFact::ShaderTests { .. } => 70,
-        RuntimeFact::CapturedPositions { .. } => 72,
         RuntimeFact::HeapRawSamples { .. } => 73,
         RuntimeFact::ShaderStencilTest { .. } => 74,
         RuntimeFact::ExtendedRangeInputBlend { .. } => 75,
@@ -349,7 +345,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::ObjectThreadgroupArena { .. } => 85,
         RuntimeFact::WordInputMerge { .. } => 87,
         RuntimeFact::ReplayBindings => 88,
-        RuntimeFact::MergedDraws => 89,
+        RuntimeFact::MergedDraws => 72,
         RuntimeFact::QuadPrimitiveIds => 58,
         RuntimeFact::RotatedWeights => 82,
         RuntimeFact::PrivateList => 86,
@@ -362,7 +358,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..90).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..89).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -445,8 +441,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::MovableStorageWrites { .. }
                 | RuntimeFact::ConstexprSampled { .. }
                 | RuntimeFact::CubicSampler { .. }
-                | RuntimeFact::AnisotropicSampler { .. }
-                | RuntimeFact::CapturedPositions { .. } => Mechanism::Variant,
+                | RuntimeFact::AnisotropicSampler { .. } => Mechanism::Variant,
                 RuntimeFact::ImageViewShape { .. }
                 | RuntimeFact::StorageTextureLevelViews { .. }
                 | RuntimeFact::UlongAtomicView { .. } => Mechanism::BinderView,

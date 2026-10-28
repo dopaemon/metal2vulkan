@@ -402,41 +402,19 @@ pub struct DepthBias {
     /// primitives take a bias at all. It follows the topology only, never the bias values, so one
     /// pipeline serves every bias the encoder sets.
     pub enable: bool,
-    /// `depthBiasConstantFactor`: Metal's `depthBias`, in the unit `unit` names.
+    /// `depthBiasConstantFactor`: Metal's `depthBias`, in the device's unit `r` for the depth
+    /// attachment's format.
     pub constant_factor: f32,
     /// `depthBiasClamp`: Metal's `clamp` (0 does not clamp in either API).
     pub clamp: f32,
     /// `depthBiasSlopeFactor`: Metal's `slopeScale`.
     pub slope_factor: f32,
-    /// The unit `constant_factor` counts, and so the command that records the three factors.
-    pub unit: DepthBiasUnit,
-}
-
-/// The unit a [`DepthBias`]'s constant factor counts (Vulkan's r), which names the command that
-/// records the factors.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum DepthBiasUnit {
-    /// The device's own for the depth attachment's format: `vkCmdSetDepthBias`.
-    Device,
-    /// Depth itself, so the constant factor is the bias: `vkCmdSetDepthBias2EXT` with a
-    /// `VkDepthBiasRepresentationInfoEXT` of `VK_DEPTH_BIAS_REPRESENTATION_FLOAT_EXT` and
-    /// `depthBiasExact` (`VK_EXT_depth_bias_control`'s `floatRepresentation` and
-    /// `depthBiasExact`).
-    Depth,
-    /// 2^-n for a depth aspect of n fixed-point bits: `vkCmdSetDepthBias2EXT` with a
-    /// `VkDepthBiasRepresentationInfoEXT` of
-    /// `VK_DEPTH_BIAS_REPRESENTATION_LEAST_REPRESENTABLE_VALUE_FORMAT_EXT` and `depthBiasExact`
-    /// (`VK_EXT_depth_bias_control`'s `depthBiasExact`).
-    ExactFormatUnit,
 }
 
 /// The Vulkan depth bias of the render encoder's `setDepthBias:slopeScale:clamp:` for a pipeline
-/// of `topology` (`GraphicsState::topology`, or the draw's from [`input_assembly`]), in a pass
-/// whose depth attachment's texture is of `depth_format` (`None` without one). `DEPTH_BIAS` is
-/// dynamic state on every render pipeline: create the pipeline with `enable` and record the three
-/// factors by the command `unit` names (Metal's default is no bias, all three 0).
+/// of `topology` (`GraphicsState::topology`, or the draw's from [`input_assembly`]). `DEPTH_BIAS`
+/// is dynamic state on every render pipeline: create the pipeline with `enable` and record the
+/// three factors with `vkCmdSetDepthBias` (Metal's default is no bias, all three 0).
 ///
 /// Metal biases triangles only, never points or lines; Vulkan biases triangles (a tessellation
 /// pipeline's included) and may bias points and lines, so `enable` is set for triangle and patch
@@ -444,26 +422,22 @@ pub enum DepthBiasUnit {
 /// `depthBiasClamp` (`VUID-vkCmdSetDepthBias-depthBiasClamp-00790`) unless both bias factors are
 /// 0, when no bias exists to clamp and the clamp is dropped.
 ///
-/// A float depth format's constant factor counts Vulkan's r, which is Metal's. A `Depth16Unorm`
-/// depth's is Metal's own rule (measured on an Apple M3 Max and an M4, plain and validated, and on
-/// the M3 Max under macOS 27.0.1 with slopes too): wherever the constant `c` (finite) or the slope
-/// factor is nonzero, the constant biases by `c + 1` units of 1/65535 for `c` of 0 or more and
-/// `c - 1` below, as `float` (so a slope alone brings one unit), which is added to the depth
-/// rounded toward zero, and the sum stored rounded to nearest. Vulkan leaves a unorm
-/// format's unit to the device, up to twice 2^-16, unless `depthBiasExact` pins it: with
-/// `floatRepresentation` too the factor is that bias in depth ([`DepthBiasUnit::Depth`]), and with
-/// `depthBiasExact` alone it is the same bias counted in 2^-16
-/// ([`DepthBiasUnit::ExactFormatUnit`]), a scale by a power of two, so the device adds Metal's
-/// `float` bias either way. The device's own addition rounds the sum, to nearest where measured, so
-/// a biased depth within one `float` ulp above a code's midpoint can store one code above Metal's.
-/// A device without `depthBiasExact` takes Metal's `c` in its own unit ([`DepthBiasUnit::Device`]),
-/// as a Metal device does; elsewhere that unit is the device's.
+/// The constant factor counts the device's own unit `r` on every depth format. A float depth
+/// format's is Metal's (`2^(e - n)` of the primitive's largest exponent). A `Depth16Unorm` depth's
+/// is the device's: Vulkan leaves a fixed-point format's `r` to the implementation, at most
+/// `2 × 2^-16` ("Depth Bias"), where Metal biases by its own rule (measured on an Apple M3 Max and
+/// an M4, plain and validated, and on the M3 Max under macOS 27.0.1 with slopes too): wherever the
+/// constant `c` (finite) or the slope factor is nonzero, by `c + 1` units of 1/65535 for `c` of 0
+/// or more and `c - 1` below, as `float` (so a slope alone brings one unit), added to the depth
+/// rounded toward zero, and the sum stored rounded to nearest. The runtime announces the device's
+/// bias there (`unorm-depth-bias`) where the profile does not take
+/// [`DriverDeviation::MetalDepth16BiasedStores`](crate::error::DriverDeviation::MetalDepth16BiasedStores)
+/// (MoltenVK, which hands Metal its constant).
 pub fn depth_bias(
     topology: vk::PrimitiveTopology,
     depth_bias: f32,
     slope_scale: f32,
     clamp: f32,
-    depth_format: Option<PixelFormat>,
     profile: &DeviceProfile,
 ) -> Result<DepthBias, Error> {
     use vk::PrimitiveTopology as T;
@@ -482,43 +456,17 @@ pub fn depth_bias(
             constant_factor: 0.0,
             clamp: 0.0,
             slope_factor: 0.0,
-            unit: DepthBiasUnit::Device,
         });
     }
     if clamp != 0.0 {
         require(profile, VkFeature::DepthBiasClamp, Feature::DepthBiasClamp)?;
     }
-    let enabled = &profile.fields().enabled.features;
-    // A bias is set (the return above): a constant, a slope or both.
-    let unorm16 = depth_format == Some(PixelFormat::Depth16Unorm)
-        && depth_bias.is_finite()
-        && enabled.contains(&VkFeature::DepthBiasExact);
-    let (constant_factor, unit) = if !unorm16 {
-        (depth_bias, DepthBiasUnit::Device)
-    } else {
-        let units = depth16_units(depth_bias);
-        if enabled.contains(&VkFeature::FloatRepresentation) {
-            ((units / 65535.0) as f32, DepthBiasUnit::Depth)
-        } else {
-            (
-                (units * 65536.0 / 65535.0) as f32,
-                DepthBiasUnit::ExactFormatUnit,
-            )
-        }
-    };
     Ok(DepthBias {
         enable,
-        constant_factor,
+        constant_factor: depth_bias,
         clamp,
         slope_factor: slope_scale,
-        unit,
     })
-}
-
-/// Metal's `c ± 1` units of 1/65535 for a `Depth16Unorm` depth's constant `c` (finite), exact in
-/// `f64`: `c + 1` for `c` of 0 or more, `c - 1` below ([`depth_bias`]).
-fn depth16_units(c: f32) -> f64 {
-    f64::from(c) + if c >= 0.0 { 1.0 } else { -1.0 }
 }
 
 #[cfg(test)]
@@ -702,24 +650,23 @@ mod tests {
                 constant_factor,
                 clamp,
                 slope_factor,
-                unit: DepthBiasUnit::Device,
             })
         };
         assert_eq!(
-            depth_bias(triangles, 1.0, 2.0, 0.0, None, floor.profile()),
+            depth_bias(triangles, 1.0, 2.0, 0.0, floor.profile()),
             bias(true, 1.0, 0.0, 2.0)
         );
         assert_eq!(
-            depth_bias(triangles, 1.0, 2.0, 0.5, None, floor.profile()),
+            depth_bias(triangles, 1.0, 2.0, 0.5, floor.profile()),
             Err(needs(Feature::DepthBiasClamp, VkFeature::DepthBiasClamp))
         );
         assert_eq!(
-            depth_bias(triangles, 1.0, 2.0, -0.5, None, lavapipe.profile()),
+            depth_bias(triangles, 1.0, 2.0, -0.5, lavapipe.profile()),
             bias(true, 1.0, -0.5, 2.0)
         );
         // No bias to clamp: the clamp is dropped on any device.
         assert_eq!(
-            depth_bias(triangles, 0.0, 0.0, 0.5, None, floor.profile()),
+            depth_bias(triangles, 0.0, 0.0, 0.5, floor.profile()),
             bias(true, 0.0, 0.0, 0.0)
         );
         assert_eq!(
@@ -728,7 +675,6 @@ mod tests {
                 1.0,
                 0.0,
                 0.0,
-                None,
                 floor.profile()
             ),
             bias(true, 1.0, 0.0, 0.0)
@@ -737,7 +683,7 @@ mod tests {
         for &ty in PrimitiveType::ALL {
             let (topology, _) = input_assembly(ty);
             let triangle = matches!(ty, PrimitiveType::Triangle | PrimitiveType::TriangleStrip);
-            let mapped = depth_bias(topology, 1.0, 2.0, 0.5, None, lavapipe.profile()).unwrap();
+            let mapped = depth_bias(topology, 1.0, 2.0, 0.5, lavapipe.profile()).unwrap();
             assert_eq!(mapped.enable, triangle, "{ty:?}");
             if !triangle {
                 assert_eq!(
@@ -747,72 +693,39 @@ mod tests {
                         constant_factor: 0.0,
                         clamp: 0.0,
                         slope_factor: 0.0,
-                        unit: DepthBiasUnit::Device,
                     }
                 );
-                assert!(depth_bias(topology, 1.0, 2.0, 0.5, None, floor.profile()).is_ok());
+                assert!(depth_bias(topology, 1.0, 2.0, 0.5, floor.profile()).is_ok());
             }
         }
     }
 
-    /// A `Depth16Unorm` depth's constant bias is Metal's `c ± 1` units of 1/65535 as `float`
-    /// (one unit for a constant of 0 beside a slope): in depth where the device has
-    /// `floatRepresentation` and `depthBiasExact`, in 2^-16 where it has `depthBiasExact` alone,
-    /// and Metal's `c` in the device's own unit elsewhere, as on a float depth format.
+    /// A constant bias is Metal's constant in the device's own unit on every device: a
+    /// `Depth16Unorm` depth takes no unit of Metal's (`c ± 1` units of 1/65535) through
+    /// `depthBiasExact` where the device supports it (lavapipe's and NVIDIA's do), nor one for a
+    /// slope alone.
     #[test]
-    fn a_unorm_depth_bias_is_metals_where_the_device_pins_its_unit() {
+    fn a_unorm_depth_bias_is_metals_constant_in_the_devices_unit() {
         let triangles = vk::PrimitiveTopology::TRIANGLE_LIST;
-        let d16 = Some(PixelFormat::Depth16Unorm);
-        let (lavapipe, nvidia, moltenvk) = (
-            committed("lavapipe"),
-            committed("nvidia-rtx5080-laptop"),
-            committed("moltenvk-m3"),
-        );
-        let mapped = |device: &Device, constant: f32, format| {
-            let bias = depth_bias(triangles, constant, 0.5, 0.0, format, device.profile()).unwrap();
-            assert_eq!(bias.slope_factor, 0.5);
-            (bias.constant_factor, bias.unit)
-        };
-        for (constant, units) in [
-            (3.0f32, 4.0f64),
-            (-3.0, -4.0),
-            (0.5, 1.5),
-            (-1000.0, -1001.0),
-        ] {
-            assert_eq!(
-                mapped(&lavapipe, constant, d16),
-                ((units / 65535.0) as f32, DepthBiasUnit::Depth)
-            );
-            let (scaled, unit) = mapped(&nvidia, constant, d16);
-            assert_eq!(unit, DepthBiasUnit::ExactFormatUnit);
-            // A power of two apart: the device's 2^-16 times the factor is the same `float`.
-            assert_eq!(scaled / 65536.0, (units / 65535.0) as f32);
-            assert_eq!(
-                mapped(&moltenvk, constant, d16),
-                (constant, DepthBiasUnit::Device)
-            );
-            for format in [None, Some(PixelFormat::Depth32Float)] {
+        for stem in ["lavapipe", "nvidia-rtx5080-laptop", "moltenvk-m3"] {
+            let device = committed(stem);
+            for constant in [3.0f32, -3.0, 0.5, -1000.0, 0.0, f32::INFINITY] {
+                let bias = depth_bias(triangles, constant, 0.5, 0.0, device.profile()).unwrap();
                 assert_eq!(
-                    mapped(&lavapipe, constant, format),
-                    (constant, DepthBiasUnit::Device)
+                    (bias.constant_factor, bias.slope_factor),
+                    (constant, 0.5),
+                    "{stem} {constant}"
                 );
             }
+            let none = depth_bias(triangles, 0.0, 0.0, 0.0, device.profile()).unwrap();
+            assert_eq!(none.constant_factor, 0.0, "{stem}");
         }
-        // A slope alone (`mapped`'s 0.5) brings one unit; no bias at all brings none.
-        assert_eq!(
-            mapped(&lavapipe, 0.0, d16),
-            ((1.0f64 / 65535.0) as f32, DepthBiasUnit::Depth)
-        );
-        let none = depth_bias(triangles, 0.0, 0.0, 0.0, d16, lavapipe.profile()).unwrap();
-        assert_eq!(
-            (none.constant_factor, none.unit),
-            (0.0, DepthBiasUnit::Device)
-        );
-        assert_eq!(mapped(&moltenvk, 0.0, d16), (0.0, DepthBiasUnit::Device));
-        assert_eq!(
-            mapped(&lavapipe, f32::INFINITY, d16),
-            (f32::INFINITY, DepthBiasUnit::Device)
-        );
+        // Lavapipe and NVIDIA's devices support `depthBiasExact`, which no bias pins.
+        for (stem, desc) in committed_descriptions() {
+            if stem == "lavapipe" || stem == "nvidia-rtx5080-laptop" {
+                assert!(desc.features.contains(&VkFeature::DepthBiasExact), "{stem}");
+            }
+        }
     }
 
     #[test]

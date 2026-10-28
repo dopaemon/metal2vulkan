@@ -307,24 +307,16 @@ pub(crate) fn among<F: Copy + Ord>(
 ///
 /// `MetalDepth16BiasedStores`, measured by
 /// `runtime_lane::unorm_depth_bias::a_constant_bias_on_a_16_bit_unorm_depth_stores_metals_codes`
-/// (every depth and constant of the probes' draws, each biased by the device: our probe at
-/// d51c2aa8, 2026-10-07):
-/// - RADV, Mesa 26.2.4 on the Radeon 780M, through `VK_EXT_depth_bias_control`'s float
-///   representation with `depthBiasExact`: every code Metal's.
-/// - MoltenVK 1.4.1 on Apple's GPUs, which takes Metal's constant in Metal's own unit (it has no
-///   `VK_EXT_depth_bias_control`): every code Metal's on an M4 mini. On
-///   every Apple GPU by construction: MoltenVK 1.4.1 hands the recorded constant, slope and clamp
-///   unchanged to the render encoder's `setDepthBias:slopeScale:clamp:`
+/// (every depth and constant of the probes' draws, each biased by the device):
+/// - MoltenVK 1.4.1 on Apple's GPUs, which takes Metal's constant in Metal's own unit: every code
+///   Metal's on an M4 mini. On every Apple GPU by construction: MoltenVK 1.4.1 hands the recorded
+///   constant, slope and clamp unchanged to the render encoder's `setDepthBias:slopeScale:clamp:`
 ///   (`MVKCommandEncoderState.mm`) and makes the depth Metal's own `Depth16Unorm`
 ///   (`MVKPixelFormats.mm`), so Metal biases and stores the depth on whichever Apple GPU runs it.
 ///
-/// Measured not to have it, so not listed, each storing the code next to Metal's for a sum near a
-/// code's midpoint: ANV, Mesa 26.2.4 on the Iris Xe (RPL-P), which rounds the sum to nearest, not
-/// toward zero; lavapipe, Mesa 26.0.8 on LLVM 21.1.8, x86_64 (the linux-gate container), which also
-/// scales it by 65535 as a `float` (0 biased by 0.5 stored as 2 where Metal's is 1); NVIDIA's
-/// 615.71.09 on the RTX 5080 Laptop GPU, through `depthBiasExact` in 2^-16, whose conversion of
-/// every depth rounds down near a midpoint (`MetalDepth16Stores` above). ANV on the UHD 770 (RPL-S)
-/// is unmeasured.
+/// Not listed: every other driver. Each biases Metal's constant `c` by its own unit (Vulkan's `r`
+/// of a 16-bit unorm depth, at most twice 2^-16), where Metal biases by `c + 1` units of 1/65535
+/// (`c - 1` below 0), so a constant bias stores another code than Metal's.
 ///
 /// `MetalInterpolation`: MoltenVK 1.4.1 hands each fragment input to Metal with its
 /// interpolation (SPIRV-Cross `adec7acb` writes it as a `[[user(...)]]` input qualified
@@ -600,11 +592,6 @@ pub(crate) const DEVIATIONS: &[Measured<DriverDeviation>] = &[
         (INTEL_VENDOR_ID, INTEL_UHD_770_RPL_S),
     ),
     moltenvk_on_apple(DriverDeviation::MetalDepth16Stores),
-    mesa_on(
-        DriverDeviation::MetalDepth16BiasedStores,
-        DriverId::MESA_RADV,
-        (AMD_VENDOR_ID, AMD_RADEON_780M),
-    ),
     moltenvk_on_apple(DriverDeviation::MetalDepth16BiasedStores),
     moltenvk_on_apple(DriverDeviation::MetalInterpolation),
     moltenvk_on_apple(DriverDeviation::MetalFirstVertexIndices),

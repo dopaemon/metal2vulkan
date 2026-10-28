@@ -1,12 +1,11 @@
-//! A state's draws build **no** descriptor key, and its capture forms build one between them
-//! (`descriptor_keys_built`): the key of the descriptor a compile is keyed by belongs to that
-//! descriptor, and the state holds one per descriptor it compiles as.
+//! A state's draws build **no** descriptor key (`descriptor_keys_built`): the key of the
+//! descriptor a compile is keyed by belongs to that descriptor, and the state holds one per
+//! descriptor it compiles as.
 //!
 //! The creation's half of this is `descriptor_key_once.rs`, which this continues: a creation
 //! builds the key of its descriptor once and the state keeps it. What was left there is the
-//! draw's half -- a variant a draw of another bind shape needs, and a capture form a replay
-//! needs, each compiled under a key built at the draw: the same digest of the same fixed
-//! descriptor, built again for every variant and every form.
+//! draw's half -- a variant a draw of another bind shape needs, compiled under a key built at the
+//! draw: the same digest of the same fixed descriptor, built again for every variant.
 //!
 //! # Which descriptor keys which compile
 //!
@@ -17,9 +16,7 @@
 //! * the descriptor it draws as (`GraphicsState::descriptor_key`), which for a twin of a color
 //!   group holds its group's color attachments alone and clears
 //!   `supportIndirectCommandBuffers` -- fields the key reads, so the twin's two descriptors are
-//!   two keys;
-//! * the descriptor its capture forms compile from: the vertex stage alone, without the fragment
-//!   function or any attachment format.
+//!   two keys.
 //!
 //! Each key stays with its own descriptor. Keying a compile by a descriptor it does not compile
 //! would look its pipeline up among another descriptor's entries in the shader cache, which
@@ -43,9 +40,8 @@ use super::descriptor_key_once::{built, descriptor};
 use crate::pipeline::{BufferForms, GraphicsState, RenderStateKind};
 use crate::{PipelineOptions, RenderPipelineState};
 use metal2vulkan::bind::BindShape;
-use metal2vulkan::cache::VariantKey;
-use metal2vulkan::metal::{IndexType, PixelFormat};
-use metal2vulkan::pipeline::{CaptureForm, ColorAttachmentDescriptor, RenderPipelineDescriptor};
+use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::pipeline::ColorAttachmentDescriptor;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -55,21 +51,6 @@ fn graphics(state: &RenderPipelineState) -> &GraphicsState {
         RenderStateKind::Graphics(state) => state,
         RenderStateKind::Tile(_) => panic!("a tile state of a render descriptor"),
     }
-}
-
-/// `descriptor` as a state's capture forms compile it, as `pipeline::render`'s own
-/// `capture_descriptor` makes it: the vertex stage alone, rasterizing into a pass without
-/// attachments. Written here from the descriptor, so the key the state holds is held to the key
-/// of a descriptor this test built, not to one the product handed it.
-fn captured(descriptor: &RenderPipelineDescriptor) -> RenderPipelineDescriptor {
-    let mut descriptor = descriptor.clone();
-    descriptor.fragment = None;
-    descriptor.color_attachments = Default::default();
-    descriptor.depth_format = None;
-    descriptor.stencil_format = None;
-    descriptor.alpha_to_coverage = false;
-    descriptor.alpha_to_one = false;
-    descriptor
 }
 
 /// The variant a draw of another bind shape needs is compiled under the key the state's creation
@@ -151,55 +132,6 @@ fn a_states_compile_key_is_its_descriptors() {
         compiled,
         *state.descriptor_key(),
         "a state drawn whole holds one key"
-    );
-}
-
-/// Every capture form of every variant of one state compiles from one descriptor, so the forms
-/// build one key between them: the first builds it, each later one takes it. The key is the key
-/// of that descriptor, which is not the state's own.
-#[test]
-fn capture_forms_of_one_state_build_one_descriptor_key() {
-    let scratch = Scratch::new("descriptor-key-capture");
-    let device = device(&scratch.0);
-    let descriptor = descriptor(&device);
-    let state = device
-        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
-        .unwrap();
-    let state = graphics(&state);
-    let shape = BindShape::default();
-    let settled = VariantKey::default();
-    let before = built(&device);
-    // Three forms of the one variant: a replay of a draw of primitives, and of an indexed draw
-    // of each index type (`render/capture.rs`). Each asks for a compile of its own; a form is
-    // `None` while its translation runs, which is what every first ask answers.
-    for form in [
-        CaptureForm::Vertices,
-        CaptureForm::Indexed(IndexType::UInt16),
-        CaptureForm::Indexed(IndexType::UInt32),
-    ] {
-        let _ = state.capture_variant(&settled, form, &shape);
-    }
-    assert_eq!(
-        built(&device)[0] - before[0],
-        1,
-        "descriptor keys three capture forms of one state built"
-    );
-    let capture = captured(&descriptor);
-    let held = *state.capture_key(&capture);
-    assert_eq!(
-        built(&device)[0] - before[0],
-        1,
-        "descriptor keys a read of the held capture key built"
-    );
-    assert_eq!(
-        held,
-        device.compile_device().render_descriptor_key(&capture),
-        "the key the forms were compiled under is the key of the descriptor they compile from"
-    );
-    assert_ne!(
-        held,
-        *state.descriptor_key(),
-        "a capture form's descriptor is not the state's: its key may not be the state's"
     );
 }
 

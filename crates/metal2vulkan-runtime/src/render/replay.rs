@@ -12,9 +12,7 @@
 //! - **Kept** as the compute encoder's log is (`EncoderCore::end_with_replay`): where a command
 //!   named a buffer over host pages, and the pass left no segment for later but its executions of
 //!   indirect command buffers, which the encoding again records at once on the GPU alone, as its
-//!   commit did (no draw whose pipeline was still being made). A pass whose draws' tile
-//!   reach its end captures (`capture.rs`) keeps none: the capture's tally lies in the command
-//!   buffer, where an encoding again would leave the first one's beside its own.
+//!   commit did (no draw whose pipeline was still being made).
 //! - **Per-stage calls** share a variant, with the [`Table`] they set.
 
 use super::RenderLowering;

@@ -62,28 +62,6 @@ pub(super) struct Rerecord {
     held: Held,
 }
 
-impl Rerecord {
-    /// The draw.
-    pub(super) fn draw(&self) -> DrawCall {
-        self.draw
-    }
-
-    /// What the draw assembles.
-    pub(super) fn assembly(&self) -> Assembly {
-        self.assembly
-    }
-
-    /// The encoder's state at the draw.
-    pub(super) fn state(&self) -> &EncoderState {
-        &self.held.state
-    }
-
-    /// The draw's indices, read in place.
-    pub(super) fn index(&self) -> Option<&KeptSource> {
-        self.index.as_ref()
-    }
-}
-
 /// The encoder's state a draw reads, as it stood at the draw.
 struct Held {
     pipeline: Option<RenderPipelineState>,
@@ -151,7 +129,6 @@ impl RenderLowering {
             .is_some_and(|draws| !draws.is_empty());
         if self.replaying
             || self.rerouting
-            || self.capture_addresses().is_some()
             || !current.recorded
             || !kept
             || self.layout.fetch_inputs
@@ -265,27 +242,6 @@ impl RenderLowering {
             residency: self.residency.clone(),
             amplification: self.amplification.clone(),
         }
-    }
-
-    /// The draw just recorded (`call` of `assembly` and `draw`, its indices from `index`) with
-    /// the encoder's state at it, kept for recording again elsewhere (`render/capture.rs`);
-    /// `None` where its indices cannot be kept.
-    pub(super) fn kept_draw(
-        &self,
-        (call, assembly, draw): (&'static str, Assembly, DrawCall),
-        index: Option<&DrawSource<'_>>,
-    ) -> Option<Rerecord> {
-        let index = match index {
-            Some(source) => Some(source.kept()?),
-            None => None,
-        };
-        Some(Rerecord {
-            call,
-            assembly,
-            draw,
-            index,
-            held: self.held(),
-        })
     }
 
     /// Exchange the encoder's state a draw reads with `held`.

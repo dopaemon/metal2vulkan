@@ -12,14 +12,12 @@ use std::sync::Arc;
 
 use crate::bind::{
     self, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram, TessellationScanKernel,
-    TexelWords,
 };
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
 use crate::metal::format::ExtendedRange;
 use crate::metal::{
-    PixelFormat, TessellationFactorStepFunction as Step, TessellationPartitionMode as Partition,
-    Winding,
+    TessellationFactorStepFunction as Step, TessellationPartitionMode as Partition, Winding,
 };
 use crate::pipeline::interface::PatchDomain;
 use crate::spirv::testing::{all_ones_divisions, committed_descriptions};
@@ -47,24 +45,6 @@ const EXTENDED: [ExtendedRange; 13] = [
     ExtendedRange::Rgba16Bfloat,
 ];
 
-/// Every format a render pass's load pass rewrites (`bind::unused_bits_module`): the
-/// extended-range, padded and bfloat formats.
-const UNUSED_BITS: [PixelFormat; 13] = [
-    PixelFormat::BGR10XR,
-    PixelFormat::BGR10XRSRGB,
-    PixelFormat::BGRA10XR,
-    PixelFormat::BGRA10XRSRGB,
-    PixelFormat::RGB10A82PXR10,
-    PixelFormat::RGB10A82PXR10SRGB,
-    PixelFormat::R10UnormX6,
-    PixelFormat::RG10UnormX12,
-    PixelFormat::R10UnormX6SRGB,
-    PixelFormat::RG10UnormX12SRGB,
-    PixelFormat::R16Bfloat,
-    PixelFormat::RG16Bfloat,
-    PixelFormat::RGBA16Bfloat,
-];
-
 fn modules() -> Vec<Build> {
     let mut out: Vec<Build> = Vec::new();
     macro_rules! plain {
@@ -73,8 +53,6 @@ fn modules() -> Vec<Build> {
         };
     }
     plain!(
-        capture_assembly_module,
-        capture_settle_module,
         flat_dispatch_module,
         index_bounds_fill_module,
         index_bounds_plan_module,
@@ -89,7 +67,6 @@ fn modules() -> Vec<Build> {
         rotate_texels_module,
         rows_copy_module,
         shadow_merge_module,
-        tile_reach_module,
         tiled_texels_module,
         two_plane_texels_module,
         visibility_combine_module,
@@ -106,14 +83,6 @@ fn modules() -> Vec<Build> {
             format!("extended_shadow_module({form:?})"),
             Box::new(move |d| Ok(bind::extended_shadow_module(d, form)?.spirv)),
         );
-    }
-    for format in UNUSED_BITS {
-        for words in [TexelWords::Raw, TexelWords::ColorPlane] {
-            push(
-                format!("unused_bits_module({format:?}, {words:?})"),
-                Box::new(move |d| Ok(bind::unused_bits_module(d, format, words)?.spirv)),
-            );
-        }
     }
     for program in RewriteProgram::ALL {
         for phase in RewritePhase::ALL {

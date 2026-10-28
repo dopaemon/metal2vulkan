@@ -1491,16 +1491,9 @@ fn pipeline(
         constant,
         slope,
         clamp,
-        Some(metal2vulkan::metal::PixelFormat::Depth32Float),
         profile,
     )
     .map_err(|error| format!("the product's depth bias: {error}"))?;
-    if bias.unit != metal2vulkan::metal::state::DepthBiasUnit::Device {
-        return Err(format!(
-            "a depth bias in {:?}, not the device's unit",
-            bias.unit
-        ));
-    }
     // The viewport's depth range, near and far, as specialization constants 0 and 1.
     let range_entries = [
         vk::SpecializationMapEntry {

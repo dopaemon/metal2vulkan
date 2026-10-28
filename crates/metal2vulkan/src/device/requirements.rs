@@ -770,9 +770,9 @@ pub enum VkProperty {
     /// The device stores every depth a draw biases on a `Depth16Unorm` attachment as Metal's code
     /// (the driver's measured deviation
     /// [`DriverDeviation::MetalDepth16BiasedStores`](crate::error::DriverDeviation::MetalDepth16BiasedStores)).
-    /// No Vulkan query reports it: Vulkan leaves the biased sum's rounding to the device. No module
-    /// requires it: every biased depth is the device's own, and where the profile lacks it the
-    /// runtime announces `unorm-depth-bias`.
+    /// No Vulkan query reports it: Vulkan leaves the bias's unit and the biased sum's rounding to
+    /// the device. No module requires it: every biased depth is the device's own, and where the
+    /// profile lacks it the runtime announces `unorm-depth-bias`.
     MetalDepth16BiasedStores,
     /// The device interpolates a varying as Metal does, bit for bit (the driver's measured
     /// deviation

@@ -123,8 +123,8 @@ declare { <4 x float>, i8 } @air.sample_texture_2d_grad.v4f32(ptr addrspace(1), 
 "#;
 
 /// Committed profile `stem` without `samplerAnisotropy`: every Vulkan sampler is isotropic there,
-/// so Metal's anisotropic filter is emulated (the emulation's home besides a cube's unmeasured
-/// gradient route), the profile the emulation's shape tests compile under.
+/// so Metal's anisotropic filter is emulated (the emulation's home), the profile the emulation's
+/// shape tests compile under.
 fn p(stem: &str) -> DeviceProfile {
     let mut desc = crate::pipeline::testing::description(stem).expect(stem);
     desc.features.remove(&VkFeature::SamplerAnisotropy);

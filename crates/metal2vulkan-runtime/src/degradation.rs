@@ -315,10 +315,12 @@ degradations! {
         /// A draw biases a `Depth16Unorm` depth by a constant, or by a slope alone, which brings
         /// Metal's constant unit, on a device whose driver is not measured to store Metal's codes
         /// so (`DriverDeviation::MetalDepth16BiasedStores`, `render_state.rs`): the device biases
-        /// and converts the depth.
+        /// by Metal's constant in its own unit and converts the depth.
         UnormDepthBias = "unorm-depth-bias", Precision,
-            "a biased depth can store a code next to Metal's: the device rounds the biased sum \
-             its own way, and without depthBiasExact counts the bias in its own unit";
+            "a biased depth can store another code than Metal's: the device biases by the \
+             constant c in its own unit, up to twice 2^-16, where Metal biases by c + 1 units of \
+             1/65535 (c - 1 below 0, one unit for a slope alone), and rounds the biased sum its \
+             own way";
         /// A draw tests or writes a `Depth16Unorm` depth on a device whose driver is not measured
         /// to convert a depth to Metal's code (`DriverDeviation::MetalDepth16Stores`,
         /// `render_state.rs`), or a pass clears one to a depth that a device rounding to nearest
@@ -1059,7 +1061,7 @@ degradations! {
         /// access (`texture/attached_reads.rs`): a texture reached through a handle or an
         /// argument buffer, a storage binding of a color attachment's texture, the depth or
         /// stencil attachment's texture, a texture buffer or a buffer over its bytes, a texture
-        /// whose copy is not served, or an execution's or a capture's command. Announced where the
+        /// whose copy is not served, or an execution's command. Announced where the
         /// draw records; the payload names its call.
         AttachmentReadInPlace = "attachment-read-in-place", Precision,
             "the access sees the attachment as the device holds it inside its render pass \
@@ -1219,32 +1221,33 @@ degradations! {
              Metal's blit reads from outside the texels: from outside the planes below a width \
              of 4, and those an earlier blit left in a row's padding or past a plane, which \
              Metal keeps";
-        /// A draw in a render pass that loads a color attachment of an extended-range or padded
-        /// 10-bit format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`,
-        /// `RG10Unorm_X12` and their sRGB twins, and `RGB10A2Unorm_sRGB`) and does not discard it
-        /// at the store, where the
-        /// pass's load pass (`render/unused_bits_load.rs`) does not take it (`render.rs`): a
-        /// multisampled attachment, a texture held as a shadow of another image or of a heap's
-        /// bytes, a sparse one, or one whose image the device does not copy both ways (a padded
-        /// format takes no multisample texture). Metal's pass, once it draws, writes each 32 x 32 tile a
-        /// draw reaches back with the bits its codes leave unused made canonical, the texels no
-        /// fragment writes and the channels a write mask leaves out too (on an Apple M4 and an
-        /// Apple M3 Max), where such an attachment keeps the bytes its draws do not write.
-        /// Announced at every draw, an indirect command buffer's executed commands' too, naming
-        /// every such attachment of the pass. Also a GPU blit into, out of or between textures of
-        /// which one is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly
-        /// compressed (`compressed_blit.rs`): Metal's blit moves the texels through the
-        /// compression, which clears the same bits and clamps the same alpha, where the device's
-        /// copy keeps the bytes; once per device.
+        /// A draw in a render pass that loads a color attachment of an extended-range, padded
+        /// 10-bit or bfloat format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`,
+        /// `RG10Unorm_X12` and their sRGB twins, `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat`
+        /// and `RGBA16Bfloat`) and does not discard it at the store (`render/tile_store.rs`).
+        /// Metal's pass, once it draws, writes each 32 x 32 tile a draw reaches back with the bits
+        /// its codes leave unused made canonical, a padded sRGB twin's codes through Metal's table
+        /// and a bfloat code through `half` (a NaN to `0x7fc0`), the texels no fragment writes and
+        /// the channels a write mask leaves out too (on an Apple M4 and an Apple M3 Max), where
+        /// the device's pass keeps the bytes its draws do not write, on every device. Announced at
+        /// every draw, an indirect command buffer's executed commands' too, naming every such
+        /// attachment of the pass. Also a GPU blit into, out of or between textures of which one
+        /// is a `BGRA10_XR` or `BGRA10_XR_sRGB` texture Metal keeps losslessly compressed
+        /// (`compressed_blit.rs`): Metal's blit moves the texels through the compression, which
+        /// clears the same bits and clamps the same alpha, where the device's copy keeps the
+        /// bytes; once per device.
         ExtendedRangeBitsKept = "extended-range-bits-kept", Precision,
-            "the texels the pass's draws do not write keep their bytes; Metal's pass keeps their \
-             codes but rewrites the bits they leave unused in each tile a draw reaches \
-             (BGR10_XR's bits 30 and 31 to ones, BGRA10_XR's low six bits of each field to \
-             zeros, the two-plane color word's top two bits to zeros) and clamps BGRA10_XR's \
-             alpha code to [384, 894]: a texel whose bytes no Metal write left (uploaded bytes, \
-             or an alpha code past 894) keeps bytes Metal's pass would change, and a blit through \
-             a BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; every \
-             such texel reads the same value either way";
+            "the texels the pass's draws do not write keep their bytes; Metal's pass rewrites, in \
+             each tile a draw reaches, the bits their codes leave unused (BGR10_XR's bits 30 and \
+             31 to ones, BGRA10_XR's low six bits of each field, the two-plane color word's top \
+             two bits and a padded word's low six bits to zeros), clamps BGRA10_XR's alpha code \
+             to [384, 894], moves a padded sRGB twin's code through its table and a bfloat code \
+             through half (out of half's range to an infinity or zero, a NaN to 0x7fc0): a texel \
+             whose bytes no Metal write left (uploaded bytes, an alpha code past 894, a bfloat \
+             code off half's grid) keeps bytes Metal's pass would change, and a blit through a \
+             BGRA10_XR texture Metal compresses keeps the bytes Metal's blit rewrites so; an \
+             extended-range texel reads the same value either way, a bfloat code off half's grid \
+             reads its own value where Metal's reads the half it was moved to";
         /// A draw in a render pass that loads a single-sampled color attachment of a signed
         /// normalized format (`R8Snorm`, `RG8Snorm`, `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`,
         /// `RGBA16Snorm`) and does not discard it at the store (`render.rs`). Metal's pass, once
@@ -1427,7 +1430,7 @@ degradations! {
         /// encoder the rebind could not encode again (a compute encoder its unit of command
         /// predication reaches past: one whose unit laid a step before it opened, or one of its
         /// own that the unit's later encoders read, or whose unit holds a loop or leaves work
-        /// out; a render pass a host step records, or whose end captured its draws' tile reach; work
+        /// out; a render pass a host step records; work
         /// recorded on the GPU alone that no longer runs there; a call that answers otherwise than
         /// at its encoding; `replay.rs`). Its reason names where the first such submission found
         /// the use (the encoder, and its own commands or work it left for later) and why no rebind
@@ -1464,24 +1467,6 @@ degradations! {
              that does not name it reads what an earlier such write left in the stand-in's \
              sink, where Metal drops those writes and reads zero; a sampled read, and a size \
              query, are Metal's";
-        /// A render pass that loads a color attachment of an extended-range, padded 10-bit or
-        /// bfloat format (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10`, `R10Unorm_X6`,
-        /// `RG10Unorm_X12` and their sRGB twins, `RGB10A2Unorm_sRGB`, `R16Bfloat`, `RG16Bfloat`
-        /// and `RGBA16Bfloat`), stores it and draws, whose load pass
-        /// (`render/unused_bits_load.rs`) rewrites every 32 x 32 tile of its render area: Metal's
-        /// pass rewrites only the tiles a draw's primitives reach (on
-        /// an Apple M4 and an Apple M3 Max, alike), and every tile only where a color
-        /// attachment of the pass is cleared and stored (announced where none is, or where the
-        /// pass renders more than one layer). Announced at the pass's end, naming its
-        /// attachments the load pass took.
-        UnreachedTilesRewritten = "unreached-tiles-rewritten", Precision,
-            "in tiles no draw reaches the pass rewrites what Metal keeps: the unused bits made \
-             canonical (BGR10_XR's bits 30 and 31 ones, BGRA10_XR's low six bits of each field \
-             and the two-plane color word's top two bits zeros) and BGRA10_XR alpha codes \
-             clamped to [384, 894], so an out-of-range raw alpha reads back changed, a padded \
-             word's low six bits zeroed (an sRGB twin's code moved through Metal's table), a \
-             bfloat code moved through half (out of half's range to an infinity or zero, a NaN \
-             to 0x7fc0); the tiles a draw reaches are Metal's";
         /// A draw in a render pass over a rasterization-rate map of no layers that was made after
         /// the device released a map of one or more layers, or reset from one of layers
         /// (`rate_mapped_pass.rs`). The draw

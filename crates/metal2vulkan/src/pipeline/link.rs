@@ -79,7 +79,6 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, MeshPipelineDescriptor, RenderPipelineDescriptor,
     TessellationDescriptor, VertexDescriptor,
 };
-use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::GraphicsState;
 use crate::pipeline::interface::{PipelineInterface, StageDescriptor, StageInterface};
 use crate::pipeline::layout::{
@@ -411,19 +410,11 @@ pub fn link(
                 (Some(_), _) | (_, Some(_)) => {
                     tessellation::vertex_input_state(vs, r.vertex_descriptor.as_ref())?
                 }
-                // A vertex function compiled in the indexed capture form pulled every attribute:
-                // its fact says so.
                 (None, None) => {
                     let vi = vertex::vertex_input_state(
                         vs,
                         r.vertex_descriptor.as_ref(),
                         &r.pulled_vertex_buffers,
-                        stages.first().is_some_and(|a| {
-                            a.facts.iter().any(|f| {
-                                matches!(f, RuntimeFact::CapturedPositions { form }
-                                    if form.index_type().is_some())
-                            })
-                        }),
                         &table.locations,
                         p,
                     )?;

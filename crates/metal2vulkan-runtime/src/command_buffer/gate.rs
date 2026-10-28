@@ -11,7 +11,7 @@
 //! - **And what fed its work** (`trails.rs`). A thread that made what the command buffer waited
 //!   for, and holds what it made it with past its signal, holds the device without holding the
 //!   command buffer: a pool piece between its making's settle and its give-back (a dispatch's or
-//!   a draw's pipeline, a capture's translation), the reaper with what such a piece gave back to a
+//!   a draw's pipeline), the reaper with what such a piece gave back to a
 //!   released state, the twin-decode thread between a decode's end and its job's drop. Each opens
 //!   a trail before its signal and closes it after its last let-go; the command buffer takes the
 //!   device's trail mark as it completes, and `wait_until_completed` and its timed form, once the

@@ -37,9 +37,9 @@ use metal2vulkan::metal::{
 };
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    BlitOption, Buffer, ClearColor, Degradation, Error, IndirectCommandBufferDescriptor,
-    LoadAction, PipelineOptions, Region, RenderPassDescriptor, ResourceOptions, StoreAction,
-    Texture, TextureDescriptor,
+    BlitOption, Buffer, ClearColor, DebugMessage, Degradation, Error,
+    IndirectCommandBufferDescriptor, LoadAction, PipelineOptions, Region, RenderPassDescriptor,
+    ResourceOptions, StoreAction, Texture, TextureDescriptor,
 };
 use std::collections::BTreeSet;
 
@@ -689,22 +689,17 @@ fn a_blend_of_a_computed_float4_into_extended_range_announces_its_source() {
     assert_eq!(counts(&notices).get(&float_source), None, "{notices:?}");
 }
 
-/// The kind a draw in a pass that loads an extended-range color the load pass does not take
-/// announces.
+/// The kind a draw in a pass that loads an extended-range, padded or bfloat color announces.
 pub(super) const EXTENDED_RANGE_BITS: [Degradation; 1] = [Degradation::ExtendedRangeBitsKept];
 
-/// The kind a pass whose load pass rewrites every tile of its render area, where none of its
-/// color attachments is cleared, announces.
-pub(super) const UNREACHED_TILES: [Degradation; 1] = [Degradation::UnreachedTilesRewritten];
-
 /// A draw into `BGR10_XR` holding the probe's random texels under a write mask of none of its
-/// channels: every texel ends with its codes and its bits 30 and 31 ones, as Metal's pass leaves
-/// each tile a draw reaches (on an Apple M4 and an Apple M3 Max; the full-screen
-/// triangle reaches every tile), through the load pass (`render/unused_bits_load.rs`).
-/// `extended-range-bits-kept` is not announced, and `unreached-tiles-rewritten` is, once (the pass
-/// clears no color). A draw under every channel announces neither bits kind.
+/// channels: every texel keeps its bytes, the device's store (`render/tile_store.rs`), where
+/// Metal's pass leaves each tile a draw reaches with its bits 30 and 31 ones (on an Apple M4 and
+/// an Apple M3 Max; the full-screen triangle reaches every tile); `extended-range-bits-kept` is
+/// announced once. A draw under every channel, whose texels the draw writes, announces it no
+/// more (once per device).
 #[test]
-fn a_draw_under_an_empty_mask_leaves_metals_unused_bits() {
+fn a_draw_under_an_empty_mask_keeps_the_unused_bits_and_says_so() {
     let (messages, _cache, lane) = lane();
     let halves = halves();
     let pf = PixelFormat::BGR10XR;
@@ -716,17 +711,21 @@ fn a_draw_under_an_empty_mask_leaves_metals_unused_bits() {
     let first = made(&lane, &[draw_descriptor(&lane, none)]);
     draw(&lane, &t, &halves, none).expect("no channel");
     let got = lane.read(&t, (0, 0), 4, BlitOption::None);
-    let want: Vec<u8> = plane
+    let canonical = plane
         .chunks(4)
-        .flat_map(|w| (u32::from_le_bytes([w[0], w[1], w[2], w[3]]) | 0xc000_0000).to_le_bytes())
-        .collect();
+        .filter(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) >> 30 != 3)
+        .count();
+    println!("EXTENDED-RANGE-BITS-KEPT {canonical} texels Metal's pass would rewrite");
     assert!(
-        got == want,
-        "the texels differ from Metal's: {}",
+        canonical > 0,
+        "the probe's texels hold no bits Metal rewrites"
+    );
+    assert!(
+        got == plane,
+        "the texels differ from their bytes: {}",
         first_texels(&got, 4)
     );
-    let counts = assert_made_once(&messages, &UNREACHED_TILES, &first);
-    assert!(!counts.contains_key(&EXTENDED_RANGE_BITS[0]), "{counts:?}");
+    assert_made_once(&messages, &EXTENDED_RANGE_BITS, &first);
     let t = filled(&lane, pf, (&plane, &alpha));
     let every = ColorAttachmentDescriptor::new(pf);
     let first = made(&lane, &[draw_descriptor(&lane, every)]);
@@ -736,11 +735,9 @@ fn a_draw_under_an_empty_mask_leaves_metals_unused_bits() {
     quiet(lane, &messages);
 }
 
-/// A pass that loads a 4x multisampled `BGR10_XR` attachment, which the load pass does not take
-/// (no copy reaches a multisampled image's samples, `render/unused_bits_load.rs`), and draws
-/// announces `extended-range-bits-kept` once, naming color 0, and not
-/// `unreached-tiles-rewritten`: the attachment keeps the bits its draws do not write, which
-/// Metal's pass rewrites in each tile a draw reaches.
+/// A pass that loads a 4x multisampled `BGR10_XR` attachment and draws announces
+/// `extended-range-bits-kept` once, naming color 0: the attachment keeps the bits its draws do not
+/// write, which Metal's pass rewrites in each tile a draw reaches.
 #[test]
 fn a_multisampled_extended_range_color_keeps_its_unused_bits_and_says_so() {
     let (messages, _cache, lane) = lane();
@@ -775,8 +772,7 @@ fn a_multisampled_extended_range_color_keeps_its_unused_bits_and_says_so() {
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(pf));
     descriptor.raster_sample_count = 4;
     messages.restore_notices(notices);
-    let counts = assert_made_once(&messages, &EXTENDED_RANGE_BITS, &made(&lane, &[descriptor]));
-    assert!(!counts.contains_key(&UNREACHED_TILES[0]), "{counts:?}");
+    assert_made_once(&messages, &EXTENDED_RANGE_BITS, &made(&lane, &[descriptor]));
     quiet(lane, &messages);
 }
 
@@ -784,16 +780,13 @@ fn a_multisampled_extended_range_color_keeps_its_unused_bits_and_says_so() {
 /// buffers of words of all ones), every one loaded, of a state that writes white to color 0
 /// under a write mask of none of its channels, on a device that asks for the kinds at every
 /// occurrence (`DeviceOptions::announce_each`), with a draw and an indirect command buffer's
-/// execution of a draw: the load pass (`render/unused_bits_load.rs`) takes every color, so
-/// `extended-range-bits-kept` is not announced, and the padded
-/// colors' words are Metal's, every one `0xffc0` (Metal rewrites a padded attachment's words in
-/// a loading pass that draws, the colors its function does not write too). The pass clears no
-/// color, so `unreached-tiles-rewritten` is announced, naming the three. A pass that clears and
-/// stores the padded colors announces none of the kinds: Metal's pass then rewrites every tile. One
-/// that draws nothing announces nothing.
+/// execution of a draw: `extended-range-bits-kept` is announced, naming the three loaded colors,
+/// and the padded colors, which the function does not write, keep their bytes, the device's store
+/// (Metal's pass leaves each word `0xffc0`, its low six bits zeroed). A pass that clears and
+/// stores the padded colors names color 0 alone; one that draws nothing announces nothing.
 #[test]
-fn a_pass_of_extended_range_and_padded_colors_names_unreached_tiles_unless_one_is_cleared() {
-    let kinds = [EXTENDED_RANGE_BITS[0], UNREACHED_TILES[0]];
+fn a_pass_of_extended_range_and_padded_colors_names_each_loaded_color() {
+    let kinds = [EXTENDED_RANGE_BITS[0]];
     let (messages, _cache, lane) =
         lane_with(|options| options.announce_each = kinds.into_iter().collect());
     let (w, h) = (WIDTH as u64, HEIGHT as u64);
@@ -879,36 +872,41 @@ fn a_pass_of_extended_range_and_padded_colors_names_unreached_tiles_unless_one_i
         .unwrap();
         messages.take_notices()
     };
-    let notices = drawn(LoadAction::Load, true);
-    let announced = counts(&notices);
-    assert!(
-        !announced.contains_key(&EXTENDED_RANGE_BITS[0]),
-        "{announced:?}"
-    );
-    assert!(announced.contains_key(&UNREACHED_TILES[0]), "{announced:?}");
-    for message in &notices {
-        let notice = message.degradation.as_ref().unwrap();
-        if notice.degradation == UNREACHED_TILES[0] {
-            for color in ["color 0", "color 1", "color 2"] {
-                assert!(notice.object.contains(color), "{}", message.text);
+    // The colors each announcement names, of the passes' notices.
+    let named = |notices: &[DebugMessage]| -> Vec<bool> {
+        let colors = ["color 0", "color 1", "color 2"];
+        let mut named = vec![false; colors.len()];
+        for message in notices {
+            let notice = message.degradation.as_ref().unwrap();
+            if notice.degradation != EXTENDED_RANGE_BITS[0] {
+                continue;
+            }
+            for (seen, color) in named.iter_mut().zip(colors) {
+                *seen |= notice.object.contains(color);
             }
         }
-    }
+        named
+    };
+    let notices = drawn(LoadAction::Load, true);
+    assert!(
+        counts(&notices).contains_key(&EXTENDED_RANGE_BITS[0]),
+        "{:?}",
+        counts(&notices)
+    );
+    assert_eq!(named(&notices), [true, true, true]);
     for (pf, buffer) in padded.iter().zip(&buffers) {
-        let row = 2 * u64::from(ExtendedRange::of(*pf).unwrap().raw_components()) * w;
         let bytes = read_buffer(buffer, 0, bpr * h).unwrap();
         for (y, line) in bytes.chunks(bpr as usize).enumerate() {
-            let (words, rest) = line.split_at(row as usize);
             assert!(
-                words.chunks(2).all(|word| word == [0xc0, 0xff]),
+                line.iter().all(|&b| b == 0xff),
                 "{pf:?} row {y}: {:02x?}",
-                &words[..8]
+                &line[..8]
             );
-            assert!(rest.iter().all(|&b| b == 0xff), "{pf:?} row {y}'s padding");
         }
     }
-    let announced = counts(&drawn(LoadAction::Clear, true));
-    assert!(announced.is_empty(), "{announced:?}");
+    let notices = drawn(LoadAction::Clear, true);
+    assert!(!notices.is_empty(), "a pass of a loaded BGR10_XR color");
+    assert_eq!(named(&notices), [true, false, false]);
     let announced = counts(&drawn(LoadAction::Load, false));
     assert!(announced.is_empty(), "{announced:?}");
     quiet(lane, &messages);
@@ -982,8 +980,9 @@ fn tile_read(held: [f32; 4]) -> [f32; 4] {
 /// to the source range and alpha to `[0, 1]` (`tile_read`; where the earlier model,
 /// each draw reading the codes the one before stored, differed from Metal at 3, 558 of 4, 096
 /// texels of the probe's own such pass), and the store writes the last `half`'s encode as a
-/// kernel's write (`ExtendedRange::clear_texel`); colors 1 and 2 keep their texels, color 2's color
-/// words' top two bits zeroed as Metal's pass leaves them. The pipeline is made on every device:
+/// kernel's write (`ExtendedRange::clear_texel`); colors 1 and 2 keep their bytes, the device's
+/// store, where Metal's pass zeroes color 2's color words' top two bits (`extended-range-bits-kept`
+/// says so, `render/tile_store.rs`). The pipeline is made on every device:
 /// one that fetches through the interlock writes the storage form and holds color 0's `half` shadow
 /// from the second draw on (`render/extended_shadow.rs`), one with raster-order attachment access
 /// reads an input attachment of the raw texels and writes the raw output, each draw reading the
@@ -1131,13 +1130,9 @@ fn a_fetched_two_plane_attachment_written_unblended_stores_metals_write() {
     let count = (0..COUNT)
         .filter(|&i| got_words[i] != want_words[i] || got_alpha[i] != want_alpha[i])
         .count();
-    // Color 2, loaded and unwritten, keeps its codes and alpha bytes, its color words' top two
-    // bits zeroed as Metal's pass leaves each tile a draw reaches.
-    let canonical: Vec<u8> = other_plane
-        .chunks(4)
-        .flat_map(|w| (u32::from_le_bytes([w[0], w[1], w[2], w[3]]) & 0x3fff_ffff).to_le_bytes())
-        .collect();
-    let kept = lane.read(&other, (0, 0), 4, BlitOption::None) == canonical
+    // Color 2, loaded and unwritten, keeps its bytes, the device's store, where Metal's pass
+    // zeroes its color words' top two bits in each tile a draw reaches.
+    let kept = lane.read(&other, (0, 0), 4, BlitOption::None) == other_plane
         && alpha_of(&other) == other_alpha
         && lane.read(&covered, (0, 0), 4, BlitOption::None) == covered_texels;
     println!(

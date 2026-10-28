@@ -125,9 +125,8 @@ pub(super) fn stores(store: StoreAction) -> bool {
 }
 
 /// The tiles a render pass's draws reach, where Metal loads and stores its attachments, as far as
-/// the host decides them: what a `DontCare` load clears (above), which tiles a rotated texture's
-/// frame turns (`render/shadows.rs`), and which tiles the load pass of an extended-range or padded
-/// attachment rewrites (`render/unused_bits_load.rs`). An execution of an indirect command buffer's
+/// the host decides them: what a `DontCare` load clears (above) and which tiles a rotated
+/// texture's frame turns (`render/shadows.rs`). An execution of an indirect command buffer's
 /// render commands, or a tile dispatch, counts as a draw call that draws (unmeasured).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PassReach {
@@ -142,7 +141,7 @@ pub(super) enum PassReach {
     /// and a pass of more layers are unmeasured: none of them decides it.
     Every,
     /// The tiles the draws' primitives reach, which the host does not know: each use of it
-    /// takes every tile and announces it (until the reach is captured).
+    /// takes every tile and announces it.
     Draws,
 }
 
@@ -502,19 +501,9 @@ pub(super) struct DrawnTiles {
 }
 
 impl DrawnTiles {
-    /// A tile's width and height in pixels.
-    pub(super) fn tile(&self) -> [u32; 2] {
-        self.tile
-    }
-
     /// Whether no tile is reached.
     pub(super) fn is_empty(&self) -> bool {
         self.words.iter().all(|&w| w == 0)
-    }
-
-    /// The reached tiles' count.
-    pub(super) fn count(&self) -> u64 {
-        self.words.iter().map(|w| u64::from(w.count_ones())).sum()
     }
 
     /// Whether tile `(tx, ty)` is reached: none past the grid.

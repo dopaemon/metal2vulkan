@@ -70,7 +70,7 @@
 //! - **Where it runs** (each check else the split, as before): the device enabled
 //!   `attachmentFeedbackLoopLayout`, `extendedDynamicState3ColorWriteMask` and
 //!   `fragmentShaderPixelInterlock` (`dynamic_state::ColorWriteMasks`); the draw follows a barrier
-//!   inside its instance, records no execution's command, capture or reroute, and runs in a pass
+//!   inside its instance, records no execution's command or reroute, and runs in a pass
 //!   with no visibility query active, no input attachment fetch, rasterization-rate map, views or
 //!   more than one sample or layer; every slot of the draw that reads a color attachment's texture
 //!   is a fragment slot its function can read through a snapshot (`StageModule::snapshot_textures`)
@@ -256,9 +256,8 @@ impl RenderLowering {
         &self,
         pipeline: &DrawingState,
         reformats: &[Reformat],
-        capture: bool,
     ) -> Option<Wanted> {
-        if capture || self.replaying || self.rerouting || !(self.current.barriers || self.barrier) {
+        if self.replaying || self.rerouting || !(self.current.barriers || self.barrier) {
             return None;
         }
         let base = pipeline.base();

@@ -95,13 +95,7 @@
 //! [`two_plane_texels_module`]; a blit into such a texture of a heap writes the heap's bytes at
 //! Metal's rows through [`plane_bytes_copy_module`]. A heap texture over host pages keeps its
 //! elements in the heap's bytes in Metal's tiled layout, moved between its image and those bytes
-//! through [`tiled_texels_module`]. A render pass that loads an extended-range, padded 10-bit or
-//! bfloat color attachment and draws first rewrites the bits its codes leave unused through
-//! [`unused_bits_module`] of its format, in the 32 x 32 tiles a mask names, as Metal's tile store
-//! does. The tiles a pass's draws reach, which Metal's tile store writes back, are the mask one
-//! dispatch of [`tile_reach_module`] bins its captured primitives into: [`capture_assembly_module`]
-//! assembles them from a pass's capture draws' records, and [`capture_settle_module`] widens the
-//! mask to every tile where the binning counted a primitive it cannot answer. An ASTC LDR texture
+//! through [`tiled_texels_module`]. An ASTC LDR texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
 //! ([`AstcDecode`], in the texels [`AstcTexels`] names), which [`astc_decode_module`] writes from
 //! the blocks each write left, each decode module of [`BlockDecodeModule`]'s shape; a
@@ -132,7 +126,6 @@ pub(crate) mod acceleration;
 pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
 pub(crate) mod block_decode;
-pub(crate) mod capture_assembly;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
 pub(crate) mod depth_stencil_copy;
@@ -173,10 +166,8 @@ pub(crate) mod status;
 pub(crate) mod table;
 pub(crate) mod tessellation_scan;
 pub(crate) mod tile_map;
-pub(crate) mod tile_reach;
 pub(crate) mod tiled_texels;
 pub(crate) mod two_plane_texels;
-pub(crate) mod unused_bits;
 pub(crate) mod visibility_combine;
 pub(crate) mod visibility_resolve;
 pub(crate) mod ycbcr_convert;
@@ -195,9 +186,6 @@ pub use argument_buffer::{
 };
 pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
 pub use block_decode::BlockDecodeModule;
-pub use capture_assembly::{
-    capture_assembly_module, capture_settle_module, CaptureAssemblyModule, CaptureSettleModule,
-};
 pub use chroma_decode::{chroma_decode_module, ChromaDecode};
 pub use color_resolve::{
     color_resolve_modules, ColorResolveFormat, ColorResolveModules, ResolveChannel, ResolveRule,
@@ -327,10 +315,8 @@ pub use tessellation_scan::{
     tessellation_scan_module, TessellationScanKernel, TessellationScanModule,
 };
 pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
-pub use tile_reach::{tile_reach_module, TileReachModule};
 pub use tiled_texels::{tiled_texels_module, TiledLevelMove, TiledTexelsModule};
 pub use two_plane_texels::{two_plane_texels_module, PlaneLayout, TwoPlaneTexelsModule};
-pub use unused_bits::{unused_bits_module, TexelWords, UnusedBitsModule};
 pub use visibility_combine::{
     visibility_combine_module, ContinuedResult, VisibilityCombine, VisibilityCombineModule,
 };

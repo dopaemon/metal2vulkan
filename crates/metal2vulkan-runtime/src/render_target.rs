@@ -2047,16 +2047,6 @@ pub(super) fn framebuffer_over(
     Ok(made)
 }
 
-/// The framebuffer of `pass`, a pass without attachments (`attachmentless.rs`), over `extent`
-/// and one layer: capture replay's (`render/capture.rs`).
-pub(super) fn attachmentless_framebuffer(
-    device: &Device,
-    pass: &RenderPassObject,
-    extent: [u32; 2],
-) -> Result<FramebufferObject, Error> {
-    made_framebuffer(device, pass, &[], extent, 1)
-}
-
 /// The framebuffer of `pass` with `attachments`, over `extent` and `layers`: each view of one
 /// level and of those layers, or of the views of a multiview pass's one layer, at least `extent`
 /// large.

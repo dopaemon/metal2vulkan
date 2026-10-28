@@ -72,9 +72,9 @@ use metal2vulkan::cache::{Hash256, PipelineKey, SpecializationKey, VariantKey};
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, PixelFormat, PrimitiveTopologyClass, RenderStages};
 use metal2vulkan::pipeline::{
-    CaptureForm, ColorAttachmentDescriptor, CommandWrites, MeshPipelineDescriptor,
-    PipelineInterface, RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey,
-    StageEntries, StageModule, StageSource, TessellationDescriptor,
+    ColorAttachmentDescriptor, CommandWrites, MeshPipelineDescriptor, PipelineInterface,
+    RenderPipeline, RenderPipelineDescriptor, RuntimeFact, SpecKey, StageEntries, StageModule,
+    StageSource, TessellationDescriptor,
 };
 use metal2vulkan::reflection::{LinkedUseAnswers, RenderPipelineReflection};
 use std::any::Any;
@@ -235,16 +235,8 @@ pub(crate) struct Program {
     /// alone (`drawn`), two descriptors the key tells apart, so it holds a key of each: a
     /// compile is keyed by the descriptor it compiles, a question by the descriptor it asks of.
     compiled_key: OnceLock<PipelineKey>,
-    /// The key of the descriptor its capture forms compile from
-    /// ([`GraphicsState::capture_key`]), built when the first form translates: one descriptor,
-    /// `descriptor` without its fragment stage or attachment formats ([`capture_descriptor`]),
-    /// for every form of every variant, so every form after the first builds none.
-    capture_key: OnceLock<PipelineKey>,
     /// Its part of the pipeline creation log, while the log is on (`creation_log.rs`).
     log: Option<StateLog>,
-    /// Its variants' capture forms (`VariantKey::captured_positions`), as capture replay asked for
-    /// them (`GraphicsState::capture_variant`): at most [`CAPTURES`].
-    captures: Mutex<Lru<VariantKey, Capture>>,
     /// What its last [`SETTLED`] settles of other shapes settled, in which buffer forms, the
     /// latest used first (`GraphicsState::settle_shape`).
     settled: Mutex<VecDeque<(BufferForms, Settled)>>,
@@ -253,8 +245,8 @@ pub(crate) struct Program {
     last_pipelines: Mutex<VecDeque<LastPipeline>>,
     /// Its routing into the pass colors it was last set in a pass of (`GraphicsState::routed`).
     routed: Mutex<Option<(PassColors, Result<Arc<Routing>, u32>)>>,
-    /// What its pool pieces hold (`piece_holds.rs`): its draws' makings and its capture forms'
-    /// translations, kept here so a pool thread never holds the device's last reference.
+    /// What its pool pieces hold (`piece_holds.rs`): its draws' makings, kept here so a pool
+    /// thread never holds the device's last reference.
     pieces: Arc<PieceHolds<PieceHeld>>,
     /// Its buffer slots whose bind offset class tells the device's view base alignment apart
     /// (`argument_table::AtBindViews`), of its base's interface.
@@ -284,8 +276,6 @@ pub(crate) enum PieceHeld {
         _variant: Arc<RenderVariant>,
         _pass: Arc<RenderPassObject>,
     },
-    /// A capture form's translation: the state's device, which its sources read.
-    Capture(Device),
 }
 
 /// A pass's color formats, by index: what a state's routing is found for
@@ -321,24 +311,6 @@ const SETTLED: usize = 4;
 /// keys in turn, as they take a few shapes ([`SETTLED`]): a pass's first draw finds its own bind
 /// shape, whose plan's specialization another draw of the pass does not share.
 const LAST_PIPELINES: usize = 4;
-
-/// The most capture forms of its variants a state keeps (`GraphicsState::capture_variant`): a
-/// settled key's and the key its plan asks for, of each form a pass draws.
-const CAPTURES: usize = 8;
-
-/// A capture form of a state's variant: translated on the device's pool, its objects made on the
-/// program's thread once it is, or refused.
-#[derive(Clone)]
-enum Capture {
-    /// Being translated on the pool: its outcome once the translation ends (a refusal as
-    /// `None`).
-    Translating(Arc<OnceLock<Option<Arc<RenderPipeline>>>>),
-    /// Its objects made.
-    Made(Arc<RenderVariant>),
-    /// Refused: by the compile (a device without the capture's stores, among others) or by its
-    /// objects. Never asked again while kept.
-    Refused,
-}
 
 impl std::fmt::Debug for RenderPipelineState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1790,8 +1762,6 @@ impl GraphicsState {
                 texture_accesses: TextureAccessMemo::new(),
                 descriptor_key: key.map_or_else(OnceLock::new, OnceLock::from),
                 compiled_key: OnceLock::new(),
-                capture_key: OnceLock::new(),
-                captures: Mutex::new(Lru::counted(CAPTURES)),
                 settled: Mutex::new(VecDeque::with_capacity(SETTLED)),
                 last_pipelines: Mutex::new(VecDeque::with_capacity(LAST_PIPELINES)),
                 routed: Mutex::new(None),
@@ -1884,19 +1854,6 @@ impl GraphicsState {
                 StateDescriptor::Mesh(descriptor) => mesh_descriptor_key(device, descriptor),
             }
         })
-    }
-
-    /// The key of `capture`, the descriptor the state's capture forms compile from
-    /// ([`capture_descriptor`] of its own), built once and held ([`Program::capture_key`]).
-    ///
-    /// Its own descriptor's key names another descriptor: a capture form compiles without the
-    /// fragment stage and the attachment formats, every field of which the key reads. `capture`
-    /// is fixed for the state's life -- the form a replay asks for is a fact of the variant's
-    /// key, not of the descriptor -- so the forms of every variant are keyed by this one key.
-    pub(crate) fn capture_key(&self, capture: &RenderPipelineDescriptor) -> &PipelineKey {
-        self.0
-            .capture_key
-            .get_or_init(|| render_descriptor_key(&self.0.device, capture))
     }
 
     /// The state a patch draw an indirect command scales runs on (`None` for a state that does
@@ -2236,117 +2193,6 @@ impl GraphicsState {
         (plan.variant == base.key && !self.0.stand_in).then_some((base, plan))
     }
 
-    /// The capture form of the state's variant of `settled`, under `form`, and its plan for
-    /// `shape`, for capture replay (`render/capture.rs`), where it is ready: `None` while it is
-    /// not. It is the vertex stage alone, `settled` with `VariantKey::captured_positions`, of the
-    /// descriptor without its fragment function, color, depth or stencil formats (a pipeline that
-    /// rasterizes into a pass without attachments): every vertex function's position is
-    /// invariant, so the positions it writes are the ones the state's own draws rasterize. The
-    /// first ask hands its translation to the device's pool (bounded, `pool.rs`); the first ask
-    /// after the translation ended makes its objects here, on the program's thread, in the
-    /// program's order (the HITCH rule's, `kept.rs`). A form the compile or its objects refuse
-    /// stays `None` while kept, asked no more; so does one whose plan asks for another variant.
-    pub(crate) fn capture_variant(
-        &self,
-        settled: &VariantKey,
-        form: CaptureForm,
-        shape: &BindShape,
-    ) -> Option<(Arc<RenderVariant>, Arc<BindingPlan>)> {
-        let mut key = settled.clone();
-        key.captured_positions = Some(form);
-        // The settled key holds facts of the fragment stage the capture form compiles without,
-        // so the capture's own plan may ask for its variant under another key, the facts of the
-        // vertex stage alone: that variant's plan asks for itself (as `settle`'s second
-        // variant's does).
-        for _ in 0..2 {
-            let variant = self.capture_form(&key)?;
-            let plan = variant.plan(&self.0.device, shape).ok()?;
-            if plan.variant == variant.key {
-                return Some((variant, plan));
-            }
-            key = plan.variant.clone();
-        }
-        None
-    }
-
-    /// The capture form of `key` ([`capture_variant`](Self::capture_variant)'s), where it is
-    /// ready.
-    fn capture_form(&self, key: &VariantKey) -> Option<Arc<RenderVariant>> {
-        let found = lock(&self.0.captures).get(key).cloned();
-        let entry = match found {
-            Some(Capture::Made(variant)) => return Some(variant),
-            Some(Capture::Refused) => return None,
-            Some(Capture::Translating(outcome)) => match outcome.get() {
-                None => return None,
-                Some(None) => Capture::Refused,
-                Some(Some(pipeline)) => {
-                    let found = CompiledVariant::found(Remembered::Compiled(Arc::clone(pipeline)));
-                    match RenderVariant::of(&self.0.device, key.clone(), found) {
-                        Ok(variant) => Capture::Made(variant),
-                        Err(_) => Capture::Refused,
-                    }
-                }
-            },
-            None => {
-                let StateDescriptor::Vertex(descriptor) = &self.0.descriptor else {
-                    lock(&self.0.captures).insert(key.clone(), Capture::Refused, 1);
-                    return None;
-                };
-                let outcome = Arc::new(OnceLock::new());
-                let translating = Capture::Translating(Arc::clone(&outcome));
-                lock(&self.0.captures).insert(key.clone(), translating, 1);
-                let descriptor = capture_descriptor(descriptor);
-                // Built here, on the program's thread, where its one descriptor is: every later
-                // form's translation takes this key rather than building the same digest again.
-                let descriptor_key = *self.capture_key(&descriptor);
-                let key = key.clone();
-                let keeping = self
-                    .0
-                    .pieces
-                    .keep(PieceHeld::Capture(self.0.device.clone()));
-                self.0.device.shared().pipeline_pool.run(Box::new(move || {
-                    // Where the state let go meanwhile, the piece stops: no one asks again.
-                    let Some((lease, held)) = keeping.start() else {
-                        return;
-                    };
-                    let device = match held {
-                        PieceHeld::Capture(device) => device,
-                        other => return lease.give_back(other, None),
-                    };
-                    let translated = {
-                        let sources = Sources::later(&device);
-                        let entries = device.shared().shader_cache.memo.stage_entries();
-                        RenderVariant::compiled(
-                            &sources,
-                            &descriptor,
-                            &key,
-                            entries,
-                            &descriptor_key,
-                        )
-                        .ok()
-                        .map(|found| match found.remembered {
-                            Remembered::Live(variant) => Arc::clone(&variant.pipeline),
-                            Remembered::Compiled(pipeline) => pipeline,
-                        })
-                    };
-                    // Set once, by its one translation: a later draw may take it, and its command
-                    // buffer complete, while this piece still holds the device, until it gave it
-                    // back. A trail spans that (`trails.rs`).
-                    let trail = device.shared().trails.open();
-                    let _set = outcome.set(translated);
-                    lease.give_back(PieceHeld::Capture(device), Some(trail));
-                }));
-                return None;
-            }
-        };
-        let made = match &entry {
-            Capture::Made(variant) => Some(Arc::clone(variant)),
-            _ => None,
-        };
-        lock(&self.0.captures).insert(key.clone(), entry, 1);
-        made
-    }
-
     /// The variant of `key`: the large-buffer form's compiled at creation, or another compiled
     /// when first needed.
     fn variant(&self, key: &VariantKey) -> Result<Arc<RenderVariant>, Error> {
@@ -2380,22 +2226,6 @@ impl GraphicsState {
         others.insert(key.clone(), Arc::clone(&variant), 1);
         Ok(variant)
     }
-}
-
-/// The descriptor a state's capture forms compile from: `descriptor` without its fragment
-/// function, color, depth or stencil formats, and without alpha-to-coverage or alpha-to-one -- a
-/// pipeline of the vertex stage alone that rasterizes into a pass without attachments
-/// (`GraphicsState::capture_variant`). It is the same descriptor for every form of every variant
-/// of the state, so [`GraphicsState::capture_key`] keys all of them by its one key.
-fn capture_descriptor(descriptor: &RenderPipelineDescriptor) -> RenderPipelineDescriptor {
-    let mut descriptor = descriptor.clone();
-    descriptor.fragment = None;
-    descriptor.color_attachments = Default::default();
-    descriptor.depth_format = None;
-    descriptor.stencil_format = None;
-    descriptor.alpha_to_coverage = false;
-    descriptor.alpha_to_one = false;
-    descriptor
 }
 
 /// The base variant of each color group of the state of `descriptor` whose creation compiled
@@ -2527,8 +2357,7 @@ fn stage_name(source: &StageSource) -> String {
 ///
 /// The functions are what lets a creation name its stages' modules without hashing their words
 /// again ([`stage_words_digest`]). Empty for a pipeline the memo, a binary archive or the disk
-/// cache gave whole, and for a mesh pipeline or a capture form, none of which link from compiled
-/// functions here.
+/// cache gave whole, and for a mesh pipeline, none of which link from compiled functions here.
 struct CompiledVariant {
     remembered: Remembered<RenderPipeline, RenderVariant>,
     functions: Vec<CompiledFunction>,
@@ -2572,7 +2401,7 @@ impl RenderVariant {
     /// built or holds: a creation compiles its base, its large-buffer form and each of its color
     /// groups' bases, all of one descriptor, so it builds that key once and every one of them
     /// looks its pipeline up under it; a state holds the key of each descriptor its later
-    /// compiles are of (`GraphicsState::compiled_key`, `capture_key`), so a draw builds none.
+    /// compiles are of (`GraphicsState::compiled_key`), so a draw builds none.
     fn compiled(
         sources: &Sources<'_>,
         descriptor: &RenderPipelineDescriptor,

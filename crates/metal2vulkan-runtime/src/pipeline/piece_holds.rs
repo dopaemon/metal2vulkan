@@ -2,8 +2,7 @@
 //! holder of the device.
 //!
 //! A draw's making handed to the device's pool (`pool.rs`) needs its variant, its pass and its
-//! making's ticket, and a capture form's translation its device and its descriptor: each holds
-//! the device. Were the piece to hold them, the program could let go of the command buffer, the
+//! making's ticket: each holds the device. Were the piece to hold them, the program could let go of the command buffer, the
 //! state and the device while the piece waits or runs, and the piece's release would then tear
 //! the device down on the pool's thread, perhaps while the process exits: after destructors the
 //! exit hook could not precede freed what that teardown calls into, RADV and ANV ended such

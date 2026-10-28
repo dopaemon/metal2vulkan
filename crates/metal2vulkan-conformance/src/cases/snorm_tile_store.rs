@@ -169,10 +169,6 @@ const PASS_NOTICES: &[Degradation] = &[
     Degradation::SnormMinimumKept,
     // The same for an `RGB9E5Float` word Metal's store normalizes.
     Degradation::SharedExponentKept,
-    // A load pass's rewrite of the tiles no fragment reached, which only an extended-range, padded
-    // 10-bit or bfloat attachment takes (`render/unused_bits_load.rs`); none of this family's
-    // formats takes one.
-    Degradation::UnreachedTilesRewritten,
 ];
 
 /// The bytes of a `SIDE` by `SIDE` target of `texel` bytes a texel whose every channel holds

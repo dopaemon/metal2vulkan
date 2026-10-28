@@ -20,9 +20,8 @@
 //!   back. A pass whose draws do reach tiles, some or (where it clears and stores an attachment)
 //!   every one, changes a color attachment it loads (as the encoder set its load, so no clear
 //!   before the pass reaches it: a clear past the render area clears attachments loaded `Clear`
-//!   alone, `clear_reach.rs`) only inside its draws' scissors (`clear_reach::DrawnArea`), the
-//!   load pass of a format whose tiles Metal stores otherwise rewriting the buffer's bytes before
-//!   it (`render/unused_bits_load.rs`): only those texels are copied back, and, where the pass
+//!   alone, `clear_reach.rs`) only inside its draws' scissors (`clear_reach::DrawnArea`): only
+//!   those texels are copied back, and, where the pass
 //!   takes the texture in no other way, only those are copied in, as nothing the pass reads
 //!   outside them reaches anything but the image (its load is stored back unchanged, and a
 //!   fragment reads the attachment at its own pixel alone). A texture over a buffer with an

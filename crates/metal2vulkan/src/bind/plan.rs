@@ -216,13 +216,9 @@ pub struct GraphicsTemplate {
     /// encoder's stencil state and references as `PushField::ShaderStencilState`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) shader_tests: Option<ShaderTestsTemplate>,
-    /// A pipeline compiled in a capture form (`VariantKey::captured_positions`): its draws write
-    /// `PushField::CaptureLayout`, and an indexed form's run without indices.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) capture: Option<crate::pipeline::CaptureForm>,
     /// A pipeline compiled in the primitive ID's de-indexed form of this index type
     /// (`VariantKey::primitive_id_indices`): its indexed draws write `PushField::CaptureLayout`
-    /// and run without indices, as the indexed capture form's do.
+    /// and run without indices.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) deindexed: Option<crate::metal::IndexType>,
     /// A pipeline compiled in the private list form (`VariantKey::private_list`): its draws are

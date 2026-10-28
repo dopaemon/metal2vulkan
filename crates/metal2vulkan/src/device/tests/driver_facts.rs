@@ -281,7 +281,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
                 D::MetalHalfTexelWrites,
                 D::MetalNormStorageWrites,
                 D::MetalDepth16Stores,
-                D::MetalDepth16BiasedStores,
             ],
             (false, "intel-irisxe-rplp-anv") => vec![
                 D::MetalFloatDenormals,

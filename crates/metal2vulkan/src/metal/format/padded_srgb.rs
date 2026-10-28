@@ -2,8 +2,8 @@
 //! Apple M3 Max under macOS 26.7 (the M3's and the M4's files byte-identical): `R10Unorm_X6_sRGB`'s
 //! decode step of every code and first encode index of every code, and `RG10Unorm_X12_sRGB`'s code
 //! of every linear write code. The shader's `lower::arith::extended_range` declares them once per
-//! module that reads or writes such a texture; the runtime's clear values and load pass read them
-//! through `ExtendedRange::clear_texel` and `ExtendedRange::load_code`.
+//! module that reads or writes such a texture; the runtime's clear values read them through
+//! `ExtendedRange::clear_texel`.
 
 /// The decode step `s` of every code `c` of `R10Unorm_X6_sRGB`: Metal reads `s / 8192` (every
 /// code read).

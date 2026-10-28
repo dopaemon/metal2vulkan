@@ -106,7 +106,7 @@ use super::render_values::{ScissorRect, Viewport};
 use super::Device;
 use ash::vk;
 use metal2vulkan::bind::{CompensatedViewport, RegionLimits};
-use metal2vulkan::device::{DeviceProfile, EnableSet, VkExtension, VkFeature};
+use metal2vulkan::device::{DeviceProfile, VkExtension, VkFeature};
 use metal2vulkan::error::{Capability, Feature, RuntimeDriverDefect, Unsupported};
 use metal2vulkan::metal::{
     CullMode, DepthClipMode, PixelFormat, StencilOperation, TriangleFillMode, Winding,
@@ -786,7 +786,7 @@ impl EncoderState {
         topology: metal2vulkan::vk::PrimitiveTopology,
         profile: &DeviceProfile,
     ) -> Result<Option<DepthBiasEffect>, Error> {
-        let biased = metal2vulkan::metal::state::depth_bias(topology, 0.0, 0.0, 0.0, None, profile)
+        let biased = metal2vulkan::metal::state::depth_bias(topology, 0.0, 0.0, 0.0, profile)
             .map_err(device_error)?
             .enable;
         Ok(biased.then_some(self.depth_bias))
@@ -795,32 +795,6 @@ impl EncoderState {
     /// The first scissor rectangle, which a draw of a pipeline that selects no viewport uses.
     pub(super) fn first_scissor(&self) -> &ScissorRect {
         &self.scissors[0]
-    }
-
-    /// The cull mode.
-    pub(super) fn cull_mode(&self) -> CullMode {
-        self.cull_mode
-    }
-
-    /// The state the tile reach rule bins a draw's primitives under
-    /// (`bind::TileReachModule::state`), for a draw of a pipeline that selects no viewport: the
-    /// first viewport as the rasterizer takes it (in `f32`), the first scissor rectangle, the
-    /// cull mode, the winding and the depth clip mode. `None` under a fill mode other than
-    /// `Fill`, whose triangles draw as lines, and for a rectangle past `u32`.
-    pub(super) fn reach_state(&self) -> Option<[u8; 48]> {
-        if self.fill_mode != TriangleFillMode::Fill {
-            return None;
-        }
-        let v = self.viewports.first()?;
-        let s = self.scissors.first()?;
-        let side = |x: u64| u32::try_from(x).ok();
-        Some(metal2vulkan::bind::TileReachModule::state(
-            [v.origin_x, v.origin_y, v.width, v.height].map(|f| f as f32),
-            [side(s.x)?, side(s.y)?, side(s.width)?, side(s.height)?],
-            self.cull_mode.as_raw(),
-            self.winding.as_raw(),
-            self.clip_mode.as_raw(),
-        ))
     }
 
     /// The powers of two `[sx, sy]` a draw of points widens the Vulkan viewports it uses by,
@@ -1082,15 +1056,12 @@ impl EncoderState {
         Ok([first.znear as f32, first.zfar as f32])
     }
 
-    /// The draw's depth bias for `topology` in a pass whose depth attachment's texture is of
-    /// `depth_format` (`metal::state::depth_bias`): a clamp needs `depthBiasClamp`, and a
-    /// `Depth16Unorm` depth's constant counts Metal's unit where the device pins Vulkan's. A
-    /// saturated bias or an offset biases nothing here: the draw's viewports take it
-    /// ([`EncoderState::draw_viewports`]).
+    /// The draw's depth bias for `topology` (`metal::state::depth_bias`): a clamp needs
+    /// `depthBiasClamp`, and the constant counts the device's unit. A saturated bias or an offset
+    /// biases nothing here: the draw's viewports take it ([`EncoderState::draw_viewports`]).
     pub(super) fn vk_depth_bias(
         &self,
         topology: metal2vulkan::vk::PrimitiveTopology,
-        depth_format: Option<PixelFormat>,
         profile: &DeviceProfile,
     ) -> Result<metal2vulkan::metal::state::DepthBias, Error> {
         let [bias, slope, clamp] = match self.depth_bias {
@@ -1101,7 +1072,7 @@ impl EncoderState {
             } => [constant, slope, clamp],
             DepthBiasEffect::Saturated { .. } | DepthBiasEffect::Offset(_) => [0.0; 3],
         };
-        metal2vulkan::metal::state::depth_bias(topology, bias, slope, clamp, depth_format, profile)
+        metal2vulkan::metal::state::depth_bias(topology, bias, slope, clamp, profile)
             .map_err(device_error)
     }
 
@@ -1874,7 +1845,7 @@ pub(super) fn written_depth_clamp(
         );
     }
     let profile = device.compile_device().profile();
-    let biased = metal2vulkan::metal::state::depth_bias(topology, 0.0, 0.0, 0.0, None, profile)
+    let biased = metal2vulkan::metal::state::depth_bias(topology, 0.0, 0.0, 0.0, profile)
         .map_err(device_error)?
         .enable;
     if biased && !matches!(state.depth_bias, DepthBiasEffect::Factors { .. }) {
@@ -1950,20 +1921,19 @@ fn clamp_range(viewport: &Viewport) -> [f32; 2] {
 }
 
 /// Announce once what a draw of `depth_stencil` stores in a `Depth16Unorm` depth
-/// (`depth_format`) under the Vulkan bias `bias`: the device converts the depth, so a constant
-/// bias, or a slope alone, which brings Metal's constant unit, stores Metal's codes only where the
-/// profile takes `DriverDeviation::MetalDepth16BiasedStores` (`unorm-depth-bias`), and any depth it
-/// tests or writes only where the profile takes `DriverDeviation::MetalDepth16Stores`
-/// (`unorm-depth-rounding`). Metal biases by `c ± 1` units of 1/65535 as `float`
-/// (`metal::state::depth_bias`), adds the bias to the depth rounded toward zero, and stores the sum
-/// rounded to nearest, a tie up (probes).
+/// (`depth_format`) under the Vulkan bias `bias`: the device biases and converts the depth, so a
+/// constant bias, or a slope alone, which brings Metal's constant unit, stores Metal's codes only
+/// where the profile takes `DriverDeviation::MetalDepth16BiasedStores` (`unorm-depth-bias`), and
+/// any depth it tests or writes only where the profile takes `DriverDeviation::MetalDepth16Stores`
+/// (`unorm-depth-rounding`). Metal biases by `c ± 1` units of 1/65535 as `float`, adds the bias to
+/// the depth rounded toward zero, and stores the sum rounded to nearest, a tie up (probes); the
+/// device biases by `c` of its own unit (`metal::state::depth_bias`).
 pub(super) fn announce_unorm_depth(
     device: &Device,
     depth_format: Option<PixelFormat>,
     depth_stencil: &metal2vulkan::metal::state::DepthStencilState,
     bias: &metal2vulkan::metal::state::DepthBias,
 ) {
-    use metal2vulkan::metal::state::DepthBiasUnit;
     if depth_format != Some(PixelFormat::Depth16Unorm) {
         return;
     }
@@ -1991,107 +1961,43 @@ pub(super) fn announce_unorm_depth(
         let object = "a draw biasing a Depth16Unorm depth by a constant, or by a slope that \
                       brings Metal's constant unit"
             .to_owned();
-        let reason = match bias.unit {
-            DepthBiasUnit::Device => "the device lacks VK_EXT_depth_bias_control's \
-                                      depthBiasExact, so the bias counts its own unit, up to \
-                                      twice 2^-16, where Metal's is c + 1 units of 1/65535 for c \
-                                      of 0 or more (a slope alone brings one) and c - 1 below"
-                .to_owned(),
-            _ => "the device adds Metal's bias to the depth and converts the sum in its own \
-                  rounding, where Metal adds it rounding toward zero: a biased depth near a \
-                  code's midpoint can store the code next to Metal's"
-                .to_owned(),
-        };
+        let reason = "the device biases by the constant c in its own unit, up to twice 2^-16 \
+                      (none for a slope alone), and converts the sum in its own rounding, where \
+                      Metal biases by c + 1 units of 1/65535 for c of 0 or more (a slope alone \
+                      brings one) and c - 1 below, adding them rounding toward zero: a biased \
+                      depth can store another code than Metal's"
+            .to_owned();
         (object, reason)
     });
 }
 
-/// `vkCmdSetDepthBias2EXT` (`VK_EXT_depth_bias_control`): records a depth bias whose constant
-/// factor counts the unit a chained `VkDepthBiasRepresentationInfoEXT` names.
-pub(super) type DepthBiasCommand = vk::PFN_vkCmdSetDepthBias2EXT;
-
-/// The device's [`DepthBiasCommand`], where it enabled `VK_EXT_depth_bias_control`.
-///
-/// # Safety
-///
-/// `device` was made from `instance` with `enabled` enabled, and the loader serves
-/// `vkGetDeviceProcAddr` for it (its loader word is in place).
-pub(super) unsafe fn depth_bias_command(
-    instance: &ash::Instance,
-    device: &ash::Device,
-    enabled: &EnableSet,
-) -> Option<DepthBiasCommand> {
-    if !enabled
-        .extensions
-        .contains(&VkExtension::ExtDepthBiasControl)
-    {
-        return None;
-    }
-    // SAFETY: the caller's; a command the device does not have is null.
-    let command = unsafe {
-        instance.get_device_proc_addr(device.handle(), c"vkCmdSetDepthBias2EXT".as_ptr())
-    }?;
-    // SAFETY: the device gave the command of this name.
-    Some(unsafe { std::mem::transmute::<unsafe extern "system" fn(), DepthBiasCommand>(command) })
-}
-
-/// What a depth bias command sets, as the command carries it: the factors' bits and a pinned
-/// unit's representation. Two records set the same state where theirs are equal. It keeps no
-/// command, so what keeps it keeps none of the device's functions.
+/// What a depth bias command sets: the factors' bits. Two records set the same state where
+/// theirs are equal.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct DepthBiasSetting {
     factors: [u32; 3],
-    representation: Option<vk::DepthBiasRepresentationEXT>,
 }
 
-/// How a draw records its depth bias ([`metal2vulkan::metal::state::DepthBias`]).
+/// How a draw records its depth bias ([`metal2vulkan::metal::state::DepthBias`]):
+/// `vkCmdSetDepthBias` of its factors.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct DepthBiasRecord {
     /// Constant factor, clamp, slope factor.
     factors: [f32; 3],
-    /// The command and the representation of a pinned unit (`DepthBiasUnit::Depth` or
-    /// `ExactFormatUnit`); `None`: `vkCmdSetDepthBias`, the device's unit.
-    pinned: Option<(DepthBiasCommand, vk::DepthBiasRepresentationEXT)>,
 }
 
 impl DepthBiasRecord {
-    /// How `bias` records on a device whose depth bias command is `command`: a pinned unit on a
-    /// device without the command is an internal error, since `metal::state::depth_bias` pins
-    /// one only where the device enabled the extension's `depthBiasExact`.
-    pub(super) fn of(
-        bias: &metal2vulkan::metal::state::DepthBias,
-        command: Option<DepthBiasCommand>,
-    ) -> Result<DepthBiasRecord, Error> {
-        use metal2vulkan::metal::state::DepthBiasUnit;
-        let representation = match bias.unit {
-            DepthBiasUnit::Device => None,
-            DepthBiasUnit::Depth => Some(vk::DepthBiasRepresentationEXT::FLOAT),
-            DepthBiasUnit::ExactFormatUnit => {
-                Some(vk::DepthBiasRepresentationEXT::LEAST_REPRESENTABLE_VALUE_FORMAT)
-            }
-            unit => return Err(internal(&format!("a depth bias unit of {unit:?}"))),
-        };
-        let pinned = match (representation, command) {
-            (None, _) => None,
-            (Some(representation), Some(command)) => Some((command, representation)),
-            (Some(_), None) => {
-                return Err(internal(
-                    "a pinned depth bias unit on a device without vkCmdSetDepthBias2EXT",
-                ))
-            }
-        };
-        Ok(DepthBiasRecord {
+    /// How `bias` records.
+    pub(super) fn of(bias: &metal2vulkan::metal::state::DepthBias) -> DepthBiasRecord {
+        DepthBiasRecord {
             factors: [bias.constant_factor, bias.clamp, bias.slope_factor],
-            pinned,
-        })
+        }
     }
 
-    /// What recording it sets: its factors, bit for bit, in its representation, without the
-    /// command (the device's, the same for every record of the device).
+    /// What recording it sets: its factors, bit for bit.
     pub(super) fn setting(&self) -> DepthBiasSetting {
         DepthBiasSetting {
             factors: self.factors.map(f32::to_bits),
-            representation: self.pinned.map(|(_, representation)| representation),
         }
     }
 
@@ -2103,26 +2009,8 @@ impl DepthBiasRecord {
     /// dynamic state.
     pub(super) unsafe fn record(&self, raw: &ash::Device, command_buffer: vk::CommandBuffer) {
         let [constant, clamp, slope] = self.factors;
-        match self.pinned {
-            None => {
-                // SAFETY: the caller's.
-                unsafe { raw.cmd_set_depth_bias(command_buffer, constant, clamp, slope) }
-            }
-            Some((command, representation)) => {
-                let mut exact = vk::DepthBiasRepresentationInfoEXT::default()
-                    .depth_bias_representation(representation)
-                    .depth_bias_exact(true);
-                let info = vk::DepthBiasInfoEXT::default()
-                    .depth_bias_constant_factor(constant)
-                    .depth_bias_clamp(clamp)
-                    .depth_bias_slope_factor(slope)
-                    .push_next(&mut exact);
-                // SAFETY: the caller's; the device enabled the extension the command is of,
-                // and `depthBiasExact` and, for the float representation, `floatRepresentation`,
-                // which `metal::state::depth_bias` pinned the unit for.
-                unsafe { command(command_buffer, &info) }
-            }
-        }
+        // SAFETY: the caller's.
+        unsafe { raw.cmd_set_depth_bias(command_buffer, constant, clamp, slope) }
     }
 }
 
@@ -3303,9 +3191,7 @@ mod tests {
             gap,
             "an offset in clamp mode"
         );
-        let bias = state
-            .vk_depth_bias(T::TRIANGLE_LIST, Some(PixelFormat::Depth16Unorm), profile)
-            .unwrap();
+        let bias = state.vk_depth_bias(T::TRIANGLE_LIST, profile).unwrap();
         assert_eq!(
             [bias.constant_factor, bias.slope_factor, bias.clamp],
             [0.0; 3],

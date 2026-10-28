@@ -764,11 +764,11 @@ pub enum DriverDeviation {
     /// `unorm-depth-rounding` at a draw that tests or writes such a depth.
     MetalDepth16Stores,
     /// The device stores every depth a draw biases on a `Depth16Unorm` attachment as Metal's code,
-    /// the bias recorded as [`depth_bias`](crate::metal::state::depth_bias) records it
-    /// (`VkProperty::MetalDepth16BiasedStores`): Metal biases by `c ± 1` units of 1/65535 as
-    /// `float` (one unit for a slope alone), adds the bias to the depth rounding toward zero, and
-    /// stores the sum rounded to nearest, a tie up. Vulkan leaves the sum's rounding, and without
-    /// `depthBiasExact` the unit, to the device. Every biased depth is the device's own, the
+    /// Metal's constant recorded in the device's unit as [`depth_bias`](crate::metal::state::depth_bias)
+    /// records it (`VkProperty::MetalDepth16BiasedStores`): Metal biases by `c ± 1` units of
+    /// 1/65535 as `float` (one unit for a slope alone), adds the bias to the depth rounding toward
+    /// zero, and stores the sum rounded to nearest, a tie up. Vulkan leaves the unit (at most twice
+    /// 2^-16) and the sum's rounding to the device. Every biased depth is the device's own, the
     /// attachment's fixed-function bias applied; no module reads the deviation. Unmeasured, the
     /// runtime announces `unorm-depth-bias` at a draw that biases such a depth by a constant, or
     /// by a slope alone.
@@ -1443,16 +1443,6 @@ pub enum Feature {
     /// the interlocked storage form, where Metal's measured model does not hold the part it names
     /// ([`ExtendedRangeBlend`]). Every other such blend is Metal's arithmetic, bit for bit.
     ExtendedRangeBlend(ExtendedRangeBlend),
-    /// The tiles a render pass's primitives reach, binned on the device
-    /// ([`tile_reach_module`](crate::bind::tile_reach_module)), on a device without what the
-    /// kernel's exact arithmetic needs: `shaderInt64` ([`Needs::AnyOf`]). Also the capture form
-    /// of a vertex function, whose records hold the positions the kernel bins
-    /// (`LoweringInputs::captured_positions`): on a device without device addresses or
-    /// `vertexPipelineStoresAndAtomics` (naming what it needs), and, not implemented, for a
-    /// post-tessellation vertex function, an attribute a hand-built projection fetches in fixed
-    /// function under the indexed form, an indirect or amplified draw, and an indexed draw whose
-    /// indices run past its buffer or whose index offset is not a multiple of the index size.
-    TileReach,
     /// A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p
     /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
     /// implement yet.
@@ -1947,9 +1937,8 @@ pub enum BindError {
     /// and instantiates the dispatch there. Nothing is dispatched on the plan asked. A draw answers
     /// it when the pipeline planned is not the variant its vertex function's render target slice
     /// asks for at the shape's render target array length (`VariantKey::dropped_vertex_layer`);
-    /// `variant` is then the plan's own. A draw of a capture variant answers it when the draw is of
-    /// the other capture form (`VariantKey::captured_positions`): `variant` is the plan's with the
-    /// draw's form. Boxed: a key holds a set per kind of variant, and the error stays small.
+    /// `variant` is then the plan's own. Boxed: a key holds a set per kind of variant, and the
+    /// error stays small.
     NeedsVariant {
         variant: Box<crate::cache::VariantKey>,
     },
@@ -2018,9 +2007,10 @@ pub enum BindError {
     /// not a mesh render pipeline, or a draw of primitives or patches with one (Metal ends the
     /// process on `drawPrimitives` with a mesh pipeline state).
     InvalidMeshDraw { mesh: bool },
-    /// An indexed draw of an indexed capture variant (`CaptureForm::Indexed`) whose bind state
-    /// names no primitive type (`BindState::primitive_type`): whether the draw restarts at the
-    /// index type's all-ones index, where Metal shades no vertex, depends on it.
+    /// A draw of a pipeline whose vertex function writes the primitive ID
+    /// (`LoweringInputs::primitive_id_varying`) whose bind state names no primitive type
+    /// (`BindState::primitive_type`): its vertices per primitive, and whether an indexed draw
+    /// runs de-indexed (a strip's does not), depend on it.
     MissingPrimitiveType,
 }
 

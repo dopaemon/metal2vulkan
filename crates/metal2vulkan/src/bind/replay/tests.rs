@@ -307,9 +307,7 @@ fn run_preprocess(
             PushHole::ExecutionStatusAddress { offset, .. } => (offset, STATUS),
             PushHole::CommandRecordsAddress { offset, .. } => (offset, RECORDS),
             PushHole::ReplayRegionAddress { .. } => panic!("the preprocess reads no region"),
-            PushHole::CaptureAddress { .. } | PushHole::CaptureIndexAddress { .. } => {
-                panic!("the preprocess captures no vertex")
-            }
+            PushHole::CaptureIndexAddress { .. } => panic!("the preprocess reads no index"),
             PushHole::SnapshotPhase { .. } => panic!("the preprocess draws no snapshot"),
             PushHole::MergedDrawAddress { .. } => panic!("the preprocess draws no merged draw"),
         };

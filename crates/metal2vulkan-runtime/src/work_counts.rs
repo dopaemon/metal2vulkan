@@ -103,14 +103,6 @@ pub(crate) struct Counters {
     color_resolve_passes_made: AtomicU64,
     color_resolve_passes_kept: AtomicU64,
     ahead_nanos: AtomicU64,
-    unused_bits_load_passes: AtomicU64,
-    unused_bits_load_texels: AtomicU64,
-    capture_reach_passes: AtomicU64,
-    capture_reach_primitives: AtomicU64,
-    capture_reach_tiles_found: AtomicU64,
-    capture_reach_tiles_bound: AtomicU64,
-    capture_reach_bound_passes: AtomicU64,
-    capture_reach_narrower_passes: AtomicU64,
     driver_diagnostics_withheld: AtomicU64,
     stand_ins_made: AtomicU64,
     stand_in_bytes: AtomicU64,
@@ -1126,36 +1118,6 @@ impl Counters {
     pub(crate) fn color_resolve_pass_kept(&self) {
         self.color_resolve_passes_kept
             .fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// An encoder recorded the load pass of an extended-range or padded color attachment over a
-    /// region of `texels` texels (`render/unused_bits_load.rs`).
-    pub(crate) fn unused_bits_load_recorded(&self, texels: u64) {
-        self.unused_bits_load_passes.fetch_add(1, Ordering::Relaxed);
-        self.unused_bits_load_texels
-            .fetch_add(texels, Ordering::Relaxed);
-    }
-
-    /// An encoder recorded a pass's capture replay over `primitives` primitives
-    /// (`render/capture.rs`).
-    pub(crate) fn capture_reach_recorded(&self, primitives: u64) {
-        self.capture_reach_passes.fetch_add(1, Ordering::Relaxed);
-        self.capture_reach_primitives
-            .fetch_add(primitives, Ordering::Relaxed);
-    }
-
-    /// A captured pass's command buffer completed: its primitives reach `found` tiles, of the
-    /// `bound` its draws' viewports and scissors reach.
-    pub(crate) fn capture_reach_tallied(&self, found: u64, bound: u64) {
-        self.capture_reach_tiles_found
-            .fetch_add(found, Ordering::Relaxed);
-        self.capture_reach_tiles_bound
-            .fetch_add(bound, Ordering::Relaxed);
-        match found >= bound {
-            true => &self.capture_reach_bound_passes,
-            false => &self.capture_reach_narrower_passes,
-        }
-        .fetch_add(1, Ordering::Relaxed);
     }
 
     /// A driver call reported `withheld` diagnostics its driver facts measure it to report, which
@@ -2830,8 +2792,8 @@ pub struct WorkCounts {
     /// runtime thread held to make what the command buffer's work waited for had not gone yet.
     pub trail_waits_blocked: u64,
     /// Command buffers whose transition to `Completed` or `Error` ran on the queue waiter that
-    /// saw their work complete, with no handler thread woken: those with no completed handler, no
-    /// pass that captured its tiles' reach, and no earlier transition of their queue that runs
+    /// saw their work complete, with no handler thread woken: those with no completed handler and
+    /// no earlier transition of their queue that runs
     /// the program's code or runs on a handler thread then, while the runtime held none of the
     /// program's objects a release drops or runs (`command_buffer/completion.rs`).
     pub completed_where_seen: u64,
@@ -3111,34 +3073,6 @@ pub struct WorkCounts {
     /// Nanoseconds commits spent making ahead for their render passes' host steps, kept
     /// backings included.
     pub ahead_nanos: u64,
-    /// Load passes render encoders recorded: one per extended-range, padded 10-bit or bfloat
-    /// color attachment that a pass which draws loads and stores, whose words a dispatch rewrote in
-    /// the tiles the pass's draws reach before the pass, as Metal's tile store leaves them
-    /// (`render/unused_bits_load.rs`).
-    pub unused_bits_load_passes: u64,
-    /// The texels of those passes' regions (the render area rounded up to 32 texels a side,
-    /// within the texture, of every layer the pass renders).
-    pub unused_bits_load_texels: u64,
-    /// Passes whose draws' tile reach capture replay found before the pass, from the positions
-    /// their own vertex functions compute (`render/capture.rs`): the load pass rewrites the tiles
-    /// those reach, as Metal's pass does.
-    pub capture_reach_passes: u64,
-    /// The primitives those passes' capture draws assembled and binned.
-    pub capture_reach_primitives: u64,
-    /// The tiles those passes' primitives reach, as their masks held them once their command
-    /// buffers completed (every tile of the pass where its capture fell back, a primitive's
-    /// reach not measured): those the load passes rewrote.
-    pub capture_reach_tiles_found: u64,
-    /// The tiles their draws' viewports and scissors reach (`clear_reach::DrawnArea`): those the
-    /// load passes would rewrite without the capture.
-    pub capture_reach_tiles_bound: u64,
-    /// Those passes whose primitives reach every tile their viewports and scissors reach (a
-    /// full-screen draw's, say): the capture changed nothing the load pass rewrote, but for the
-    /// announcement.
-    pub capture_reach_bound_passes: u64,
-    /// Those passes whose primitives reach fewer: the tiles between were kept, as Metal keeps
-    /// them, where the load pass would have rewritten them.
-    pub capture_reach_narrower_passes: u64,
     /// Driver diagnostics withheld from the device's message sink: messages a driver diagnostic
     /// fact (`DriverFact::pipeline_creation_diagnostics`) measures the driver to report inside a
     /// call the runtime made, reported there (`driver_facts.rs`). MoltenVK 1.4.1's warning of a
@@ -3648,8 +3582,8 @@ pub struct WorkCounts {
     /// **Inside an encoder**, orders a blit's untracked uses by key and range).
     pub command_barriers: u64,
     /// Render pass instances a pass replaced or gave up before running them (a draw that needed
-    /// another shape before any draw recorded, a reroute's instance left behind, a capture that
-    /// recorded nothing, a first instance whose draws record inline instead), whose draws
+    /// another shape before any draw recorded, a reroute's instance left behind, a first instance
+    /// whose draws record inline instead), whose draws
     /// recording the runtime gave up: never replayed where deferred (`recorder`), else ended, so
     /// their command pool goes back to the device's spares unreset
     /// (`WorkCounts::spare_command_pools_reset` counts the others). A pass's first instance that
@@ -4850,16 +4784,6 @@ impl Device {
             color_resolve_passes_made: counters.color_resolve_passes_made.load(Ordering::Relaxed),
             color_resolve_passes_kept: counters.color_resolve_passes_kept.load(Ordering::Relaxed),
             ahead_nanos: counters.ahead_nanos.load(Ordering::Relaxed),
-            unused_bits_load_passes: counters.unused_bits_load_passes.load(Ordering::Relaxed),
-            unused_bits_load_texels: counters.unused_bits_load_texels.load(Ordering::Relaxed),
-            capture_reach_passes: counters.capture_reach_passes.load(Ordering::Relaxed),
-            capture_reach_primitives: counters.capture_reach_primitives.load(Ordering::Relaxed),
-            capture_reach_tiles_found: counters.capture_reach_tiles_found.load(Ordering::Relaxed),
-            capture_reach_tiles_bound: counters.capture_reach_tiles_bound.load(Ordering::Relaxed),
-            capture_reach_bound_passes: counters.capture_reach_bound_passes.load(Ordering::Relaxed),
-            capture_reach_narrower_passes: counters
-                .capture_reach_narrower_passes
-                .load(Ordering::Relaxed),
             driver_diagnostics_withheld: counters
                 .driver_diagnostics_withheld
                 .load(Ordering::Relaxed),

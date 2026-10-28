@@ -273,10 +273,6 @@ enum Logged {
         writes: Span,
     },
     SetColorWriteMask(u32, Span),
-    SetDepthBias2 {
-        factors: [f32; 3],
-        representation: Option<(vk::DepthBiasRepresentationEXT, vk::Bool32)>,
-    },
     BindIndexBuffer2(vk::Buffer, vk::DeviceSize, vk::DeviceSize, vk::IndexType),
     DrawMeshTasks(u32, u32, u32),
     DrawMeshTasksIndirect(vk::Buffer, vk::DeviceSize, u32, u32),
@@ -1163,33 +1159,6 @@ impl Log {
         self.op(Logged::SetColorWriteMask(first, masks));
     }
 
-    pub(super) unsafe fn cmd_set_depth_bias2(&mut self, info: *const vk::DepthBiasInfoEXT<'_>) {
-        // SAFETY: the caller's.
-        let info = unsafe { &*info };
-        let representation = match info.p_next.is_null() {
-            true => None,
-            false => {
-                // SAFETY: the caller's: a chained structure starts with its type.
-                let chained =
-                    unsafe { &*info.p_next.cast::<vk::DepthBiasRepresentationInfoEXT<'_>>() };
-                if chained.s_type != vk::StructureType::DEPTH_BIAS_REPRESENTATION_INFO_EXT
-                    || !chained.p_next.is_null()
-                {
-                    unchained("depth bias");
-                }
-                Some((chained.depth_bias_representation, chained.depth_bias_exact))
-            }
-        };
-        self.op(Logged::SetDepthBias2 {
-            factors: [
-                info.depth_bias_constant_factor,
-                info.depth_bias_clamp,
-                info.depth_bias_slope_factor,
-            ],
-            representation,
-        });
-    }
-
     pub(super) unsafe fn cmd_bind_index_buffer2(
         &mut self,
         buffer: vk::Buffer,
@@ -1772,24 +1741,6 @@ impl Log {
                         masks.len,
                         self.masks.get_ptr(masks)
                     ),
-                    Logged::SetDepthBias2 {
-                        factors,
-                        representation,
-                    } => {
-                        let mut chained = representation.map(|(representation, exact)| {
-                            vk::DepthBiasRepresentationInfoEXT::default()
-                                .depth_bias_representation(representation)
-                                .depth_bias_exact(exact != vk::FALSE)
-                        });
-                        let mut info = vk::DepthBiasInfoEXT::default()
-                            .depth_bias_constant_factor(factors[0])
-                            .depth_bias_clamp(factors[1])
-                            .depth_bias_slope_factor(factors[2]);
-                        if let Some(chained) = &mut chained {
-                            info = info.push_next(chained);
-                        }
-                        call!(CmdSetDepthBias2, vk::PFN_vkCmdSetDepthBias2EXT, &info)
-                    }
                     Logged::BindIndexBuffer2(buffer, offset, size, index_type) => call!(
                         CmdBindIndexBuffer2,
                         vk::PFN_vkCmdBindIndexBuffer2KHR,

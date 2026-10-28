@@ -121,8 +121,8 @@ pub struct LoweringInputs {
     /// command's draw's, and its buffers are in the command's vertex slot table. A fragment
     /// function under it reads no buffer and no `[[primitive_id]]`, which a merged draw does not
     /// keep per command: one that does is `Unsupported{GpuEncodedIndirectCommands,
-    /// NotImplemented}`, and so is a vertex function that writes the primitive ID's varying,
-    /// draws amplifications as draws of their own or captures its positions. The vertex function
+    /// NotImplemented}`, and so is a vertex function that writes the primitive ID's varying or
+    /// draws amplifications as draws of their own. The vertex function
     /// states `RuntimeFact::MergedDraws`. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub merged_draws: bool,
@@ -268,8 +268,7 @@ pub struct LoweringInputs {
     /// without indices, so its stream position `p = VertexIndex` is the position the primitive
     /// ID divides, `(VertexIndex - 0) / n`. The vertex reads its raw index at
     /// `PushField::CaptureIndexAddress + p · size` and runs `raw + base vertex` from
-    /// `PushField::CaptureLayout` `[0, index count, base instance, base vertex]`, as the indexed
-    /// capture form does (`CaptureForm::Indexed`, without its records): `[[vertex_id]]`,
+    /// `PushField::CaptureLayout` `[0, index count, base instance, base vertex]`: `[[vertex_id]]`,
     /// `[[base_vertex]]` and every per-vertex attribute, all pulled, read that vertex. Refused
     /// `NotImplemented(PrimitiveId)`: a vertex function that writes device memory, which would run
     /// once per index rather than once per vertex Metal shades, and a hand-built projection
@@ -669,22 +668,6 @@ pub struct LoweringInputs {
     /// function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_blends: BTreeMap<u32, RotatedBlendForm>,
-    /// A vertex function's capture form (`VariantKey::captured_positions`, [`CaptureForm`]): at
-    /// each return it also writes a 32-byte record of the vertex, its `[[position]]` as returned
-    /// (Metal's clip position, before any viewport compensation) at byte 0, its `[[point_size]]`
-    /// (1.0 where it writes none) at byte 16, and a `u32` restart flag at byte 20 (1 where the
-    /// indexed form's index is its type's all-ones value, Metal's strip restart index; 0
-    /// otherwise and in the vertices form), words 6 and 7 left unwritten, at
-    /// `PushField::CaptureAddress + 32 slot`, `slot = p + (InstanceIndex - first instance) ·
-    /// vertex count` in 64 bits from `PushField::CaptureLayout` (`p` is `VertexIndex` less the
-    /// first vertex in the vertices form, `VertexIndex` itself in the indexed form), and states
-    /// `RuntimeFact::CapturedPositions`. A function that writes no position plans no record.
-    /// Under [`CaptureForm::Indexed`] the function also reads its vertex from the draw's
-    /// index buffer (see there). Refused `Feature::TileReach`: a device without device addresses
-    /// or the vertex stage's stores, and a post-tessellation vertex function. Any other function
-    /// compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub captured_positions: Option<CaptureForm>,
     /// The extended-range color attachments, by color index, whose `half` shadow the draw's
     /// render pass instance holds (`VariantKey::extended_shadows`): Metal's tile memory holds
     /// such an attachment as `half` through the pass and rounds it to the codes once at the
@@ -869,44 +852,6 @@ impl ColorGroup {
                 let below = colors.iter().filter(|&&c| c < color).count() as u32;
                 colors.len() as u32 + color - below
             }
-        }
-    }
-}
-
-/// The draws a vertex function's capture form (`LoweringInputs::captured_positions`) runs
-/// under: each writes one record per vertex per instance, `p + (InstanceIndex - first instance) ·
-/// vertex count` from `PushField::CaptureLayout`, for stream position `p` (see each form).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum CaptureForm {
-    /// The draw's own non-indexed draw (`drawPrimitives:`), drawn as it is: the layout is
-    /// `[vertex start, vertex count, base instance, 0]`, and the function sees its vertices as
-    /// the draw does.
-    Vertices,
-    /// An indexed draw (`drawIndexedPrimitives:`) of this index type, drawn without indices as
-    /// `index count` vertices from vertex 0 with the draw's instance count and base instance: the
-    /// layout is `[restarts, index count, base instance, base vertex]`, `restarts` 1 for a line
-    /// or triangle strip. Stream position `p = VertexIndex` reads the draw's raw index at
-    /// `PushField::CaptureIndexAddress + p · size` (the binder's consumer folds the index buffer's
-    /// offset into the address; a `u16` index is read from the aligned word that holds it), and
-    /// the vertex is `raw + base vertex` in wrapping `u32` arithmetic. That vertex is
-    /// `[[vertex_id]]` and every per-vertex attribute's element, and the layout's base vertex is
-    /// `[[base_vertex]]`; the instance builtins are the draw's. Every attribute is pulled
-    /// (fixed-function input would fetch at `p`): an attribute a hand-built projection fetches in
-    /// fixed function is refused `Feature::TileReach`. The record's restart flag is 1 where the
-    /// raw index is the type's all-ones value. Where the draw restarts and the raw index is that
-    /// value, Metal shades no vertex: the function stores its record's restart flag alone and
-    /// returns before its body.
-    Indexed(metal::IndexType),
-}
-
-impl CaptureForm {
-    /// The index type of the indexed form; `None` for the vertices form.
-    pub fn index_type(self) -> Option<metal::IndexType> {
-        match self {
-            CaptureForm::Vertices => None,
-            CaptureForm::Indexed(ty) => Some(ty),
         }
     }
 }

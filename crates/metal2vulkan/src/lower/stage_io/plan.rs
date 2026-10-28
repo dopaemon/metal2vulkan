@@ -19,7 +19,7 @@ use crate::lower::stage_io::{
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::{
-    CaptureForm, FactorLane, RotatedBlendForm, VertexFetch, ViewportCompensation,
+    FactorLane, RotatedBlendForm, VertexFetch, ViewportCompensation,
 };
 use crate::pipeline::stage_io::{
     DepthMode, Interpolation, IoNumeric, IoRole, IoType, IoVariable, Sampling, StageBuiltin,
@@ -480,9 +480,9 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                 .copied();
             let pulled = entry.filter(|f| matches!(f, VertexFetch::Pulled { .. }));
             let f = io_form(cx, ty)?;
-            // The indexed capture form's and the de-indexed form's draws have no indices, so
-            // fixed-function input would fetch at the stream position: their projection pulls
-            // every attribute, and a hand-built one that does not is refused.
+            // The de-indexed and private list forms' draws have no indices, so fixed-function
+            // input would fetch at the stream position: their projection pulls every attribute,
+            // and a hand-built one that does not is refused.
             if pulled.is_none() && captured_index_type(cx).is_some() {
                 return Err(Unsupported::not_implemented(indices_feature(cx)).into());
             }
@@ -720,8 +720,9 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
         {
             return zero_index(cx, b, ty, StageBuiltin::ViewportIndex);
         }
-        // The indexed capture form draws without indices: its vertex is the one its index names,
-        // and its base vertex the layout's, whatever the profile's draw parameters.
+        // The de-indexed and private list forms draw without indices: the vertex is the one its
+        // index names, and its base vertex the layout's (the list's), whatever the profile's draw
+        // parameters.
         (ParamRole::Builtin(Builtin::VertexId), Stage::Vertex)
             if captured_index_type(cx).is_some() =>
         {
@@ -2446,10 +2447,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             sp.words = sp.words.saturating_add(super::WINDOW_DEPTH_WORDS);
         }
     }
-    // The capture form: each vertex's clip position and point size, written to its record.
-    if let (Some(form), Stage::Vertex) = (cx.inputs.captured_positions, cx.stage) {
-        capture(cx, form)?;
-    }
     // The primitive ID a fragment function reads from its varying (an emulated post-tessellation
     // vertex function's is its patch's position, `lower::tessellation::emulated`).
     if cx.inputs.primitive_id_varying && cx.stage == Stage::Vertex {
@@ -2499,83 +2496,14 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Plan a vertex function's capture form `form` (`LoweringInputs::captured_positions`): the
-/// record of its `Position` output and its own `PointSize` output ([`super::Capture`]), the
-/// record's address and layout push fields, the vertex and instance indices, the indexed form's
-/// index read ([`captured_index`], whatever else the function reads: its record's restart flag
-/// and a strip's restart test need it), and
-/// `RuntimeFact::CapturedPositions`, which every function compiled in the form states, so its
-/// plans state the variant. A function that writes no position rasterizes nothing and plans no
-/// record. Refused [`Feature::TileReach`]: a post-tessellation vertex function (its vertices are
-/// the tessellator's, not the draw's), and a device without device addresses or without the
-/// vertex stage's stores, naming what it needs.
-fn capture(cx: &mut SelectCx<'_>, form: CaptureForm) -> Result<(), Error> {
-    if matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) }) {
-        return Err(Unsupported::not_implemented(Feature::TileReach).into());
-    }
-    cx.facts.insert(RuntimeFact::CapturedPositions { form });
-    // The indexed form reads its index whatever else it reads: a strip's restart index runs no
-    // body.
-    if let Some(ty) = form.index_type() {
-        captured_index(cx, ty)?;
-    }
-    let output = |o: &IoObject, b| matches!(o, IoObject::Builtin { builtin, dir: IoDir::Output, .. } if *builtin == b);
-    let sp = &cx.families.stage_io;
-    let Some(position) = sp.objects.iter().position(|o| output(o, B::Position)) else {
-        return Ok(());
-    };
-    // The function's own point size: the default one the vertex stage writes is planned later,
-    // and the record takes 1.0 for it.
-    let point_size = sp
-        .outputs
-        .iter()
-        .map(|o| o.link.object)
-        .find(|&i| sp.objects.get(i).is_some_and(|o| output(o, B::PointSize)));
-    refuse_unaddressed(cx)?;
-    let f = cx.profile.fields();
-    let enabled = &f.enabled.features;
-    if let Some(stores) =
-        crate::lower::access::dynamic::stage_stores(Stage::Vertex).find(|s| !enabled.contains(s))
-    {
-        return Err(Unsupported::needs(Feature::TileReach, Capability::Feature(stores)).into());
-    }
-    cx.push.insert(PushField::CaptureAddress);
-    cx.push.insert(PushField::CaptureLayout);
-    let sp = &mut cx.families.stage_io;
-    let vertex = builtin(
-        sp,
-        B::VertexIndex,
-        IoDir::Input,
-        Shape::U32,
-        StageBuiltin::VertexIndex,
-    );
-    let instance = builtin(
-        sp,
-        B::InstanceIndex,
-        IoDir::Input,
-        Shape::U32,
-        StageBuiltin::InstanceIndex,
-    );
-    sp.capture = Some(super::Capture {
-        position,
-        point_size,
-        vertex,
-        instance,
-    });
-    sp.words = sp.words.saturating_add(super::CAPTURE_WORDS);
-    Ok(())
-}
-
 /// The index type of the draw whose indices a vertex function reads at their address: the
-/// indexed capture form's (`CaptureForm::Indexed`), else the private list form's `u32`
-/// (`LoweringInputs::private_list`), else the primitive ID's de-indexed form's
-/// (`LoweringInputs::primitive_id_indices`, under `primitive_id_varying`); `None` for any other
-/// function.
+/// private list form's `u32` (`LoweringInputs::private_list`), else the primitive ID's de-indexed
+/// form's (`LoweringInputs::primitive_id_indices`, under `primitive_id_varying`); `None` for any
+/// other function.
 pub(super) fn captured_index_type(cx: &SelectCx<'_>) -> Option<crate::metal::IndexType> {
-    match (cx.stage, cx.inputs.captured_positions) {
-        (Stage::Vertex, Some(form)) => form.index_type(),
-        (Stage::Vertex, None) if cx.inputs.private_list => Some(crate::metal::IndexType::UInt32),
-        (Stage::Vertex, None) => cx
+    match cx.stage {
+        Stage::Vertex if cx.inputs.private_list => Some(crate::metal::IndexType::UInt32),
+        Stage::Vertex => cx
             .inputs
             .primitive_id_indices
             .filter(|_| cx.inputs.primitive_id_varying),
@@ -2586,22 +2514,20 @@ pub(super) fn captured_index_type(cx: &SelectCx<'_>) -> Option<crate::metal::Ind
 /// Whether a vertex function runs in the private list form (`LoweringInputs::private_list`): its
 /// list's positions from the draw's first vertex, Metal's base vertex in the word before.
 pub(super) fn listed(cx: &SelectCx<'_>) -> bool {
-    cx.stage == Stage::Vertex && cx.inputs.captured_positions.is_none() && cx.inputs.private_list
+    cx.stage == Stage::Vertex && cx.inputs.private_list
 }
 
-/// The feature a form that reads a draw's indices or records at their addresses serves: tile
-/// reach for the capture form, Metal's private primitive types for the private list form, the
-/// primitive ID for its de-indexed form.
+/// The feature a form that reads a draw's indices at their address serves: Metal's private
+/// primitive types for the private list form, the primitive ID for its de-indexed form.
 fn indices_feature(cx: &SelectCx<'_>) -> Feature {
-    match cx.inputs.captured_positions {
-        Some(_) => Feature::TileReach,
-        None if listed(cx) => Feature::PrivatePrimitives,
-        None => Feature::PrimitiveId,
+    match listed(cx) {
+        true => Feature::PrivatePrimitives,
+        false => Feature::PrimitiveId,
     }
 }
 
-/// Refuse the capture form or the de-indexed form ([`indices_feature`]) on a device without
-/// device addresses, naming what it needs: the records and the indices are reached by address.
+/// Refuse the de-indexed or private list form ([`indices_feature`]) on a device without device
+/// addresses, naming what it needs: the indices are reached by address.
 fn refuse_unaddressed(cx: &SelectCx<'_>) -> Result<(), Error> {
     if cx.profile.fields().buffer_access != crate::device::profile::BufferAccess::Addressed {
         return Err(Unsupported::needs_any_of(
@@ -2613,9 +2539,9 @@ fn refuse_unaddressed(cx: &SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Plan the index read of type `ty` of the indexed capture form, the de-indexed form or the
-/// private list form once ([`super::CapturedIndex`]): its address push field, the capture and
-/// de-indexed forms' layout, the private list form's first vertex (as the primitive ID's,
+/// Plan the index read of type `ty` of the de-indexed form or the private list form once
+/// ([`super::CapturedIndex`]): its address push field, the de-indexed form's layout, the private
+/// list form's first vertex (as the primitive ID's,
 /// [`first_vertex`]) and its fact, and the vertex index builtin. Refused ([`indices_feature`]) on
 /// a device without device addresses.
 pub(super) fn captured_index(
@@ -2651,7 +2577,8 @@ pub(super) fn captured_index(
 }
 
 /// Plan builtin parameter `b` of AIR type `ty`, a scalar integer, of a vertex function in the
-/// indexed capture form of index type `index` (`None` for `[[base_vertex]]`): `[[vertex_id]]` is
+/// de-indexed or private list form of index type `index` (`None` for `[[base_vertex]]`):
+/// `[[vertex_id]]` is
 /// the vertex its index names ([`Source::CapturedVertex`]), `[[base_vertex]]` the layout's base
 /// vertex ([`Source::CapturedBaseVertex`]).
 fn captured_param(
@@ -2690,14 +2617,13 @@ fn captured_param(
 /// (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`): one compiled without
 /// `replay_bindings`, or under an input that reads the draw's own vertex or instance indices or
 /// draws it more than once (the primitive ID's varying or de-indexed form, the private list form,
-/// the capture form, amplifications drawn apart, tessellation).
+/// amplifications drawn apart, tessellation).
 fn merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let i = cx.inputs;
     if !i.replay_bindings
         || i.primitive_id_varying
         || i.primitive_id_indices.is_some()
         || i.private_list
-        || i.captured_positions.is_some()
         || i.amplification_draws.is_some()
         || i.tessellation.is_some()
     {
@@ -2880,8 +2806,9 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
         }
     };
     Ok(match &o.role {
-        // Decorated `Invariant` whether or not Metal's position is `[[invariant]]`: a draw's
-        // captured positions (the tile reach's capture variant) are then its drawn ones.
+        // Decorated `Invariant` whether or not Metal's position is `[[invariant]]`: a draw run
+        // through more than one variant of its pipeline (each color group's) rasterizes the same
+        // positions in each.
         OutputRole::Position { .. } if vertex => {
             let f = io_form(cx, ty)?;
             float_lanes(f, 4)?;
@@ -3192,10 +3119,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // where Metal shades each vertex the indices name as its GPU shades it: a function that
     // writes memory would write once per index. The private list form runs it once per list
     // position, as Metal runs its private types.
-    let deindexed = cx.stage == Stage::Vertex
-        && cx.inputs.captured_positions.is_none()
-        && captured_index_type(cx).is_some()
-        && !listed(cx);
+    let deindexed = cx.stage == Stage::Vertex && captured_index_type(cx).is_some() && !listed(cx);
     if deindexed && writes {
         return Err(Unsupported::not_implemented(Feature::PrimitiveId).into());
     }
