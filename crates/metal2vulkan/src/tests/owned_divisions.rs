@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::bind::{
-    self, BlockDecode, CompressedBlit, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram,
+    self, CompressedBlit, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram,
     TessellationScanKernel, TexelWords,
 };
 use crate::device::{Device, DevicePolicy};
@@ -101,12 +101,6 @@ fn modules() -> Vec<Build> {
         |name: String, build: Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>| {
             out.push((name, build));
         };
-    for decode in BlockDecode::ALL {
-        push(
-            format!("block_decode_module({decode:?})"),
-            Box::new(move |d| Ok(bind::block_decode_module(d, decode)?.spirv)),
-        );
-    }
     for rule in [
         CompressedBlit::ExtendedRangeFields,
         CompressedBlit::PackedFloatNan,

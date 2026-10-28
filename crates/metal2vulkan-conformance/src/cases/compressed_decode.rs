@@ -24,14 +24,13 @@
 //! starts its first block with an endpoint of -128, which reads -1: the one hand-placed byte the
 //! lane uses, kept.
 //!
-//! A device whose driver is not measured to decode a format as Metal does reads it through the
-//! texture's decoded twin and announces `decoded-block-twin` once, which the case allows by naming
-//! that code. It does **not** allow `compressed-texel-decode`: the lane asserts no BC1 to BC5
-//! texture announces it, so a run that does is a divergence this case reports rather than excuses.
-//! That still holds for **this** family's rows -- neither an RTX 5080 Laptop nor llvmpipe
-//! announced it for any of the ten -- but it is a claim about a texture these cases read, not
-//! about BC4 and BC5 everywhere: a **view** of a BC4 or BC5 carrier announces it on both of those
-//! drivers, and `super::compressed_views` declares it for exactly those four rows.
+//! **The device's decode is the answer.** A BC texture keeps no decoded twin: every device samples
+//! its own BC image through its own decode, and one whose driver is not measured to decode a
+//! format as Metal does announces `compressed-texel-decode`, one of the device's native answers the
+//! suite declares for every case ([`crate::replay::NATIVE_NOTES`]). Like every native note it
+//! loosens no value, so where such a device's texels differ from Metal's the site is a
+//! `known-gaps.tsv` row of that venue naming the note and whether its stated bound covers the
+//! difference. On MoltenVK, whose driver has both facts, every texel compares exactly.
 //!
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -277,24 +276,17 @@ impl Case for CompressedDecode {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A driver not measured to decode this format as Metal does reads it through the texture's
-        // decoded twin, which the runtime announces once per device. The texels themselves still
-        // compare exactly: the only site loosened is the set of notices, which Metal holds empty,
-        // and the allowance fails the case if the notice did not fire. `compressed-texel-decode`
-        // is deliberately absent — the lane asserts no BC1 to BC5 texture announces it, so a run
-        // that does is a divergence to report rather than one to excuse.
-        // A texel's `float` value is the device's conversion of the twin's 8-bit codes, not
+        // A driver not measured to decode this format as Metal does reads the device's decode of
+        // the texture's own BC image, announced `compressed-texel-decode`, a native note the
+        // suite declares for every case: it loosens no texel, and a texel it moves is a
+        // `known-gaps.tsv` row of the venue.
+        // A texel's `float` value is the device's conversion of its decoded codes, not
         // Metal's exact one, which the runtime announces as `device-texel-conversion`, whose
         // note bounds it at one `f32` ulp for 8- and 16-bit codes, so the bound here is the
         // note's number and not a measurement of this chip: a run that exceeds one ulp is the
         // note's claim failing, which is what this allowance exists to catch. On a device whose
         // sampler is Metal's the notice does not fire, the justification does not hold, and every
         // texel is compared exactly.
-        // A CPU copy that fills such a texture (`replaceRegion`) is decoded on the CPU into that
-        // twin and copied in, announced as `cpu-block-decode`: the host-copy arm of the very
-        // mechanism the line above names, measured on lavapipe for every format of this family. It
-        // is a declaration and not a tolerance -- every texel the case reads still compares
-        // exactly with Metal.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -306,11 +298,7 @@ impl Case for CompressedDecode {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        let mut all = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::DecodedBlockTwin.code()),
-            crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
-        ];
+        let mut all = vec![crate::replay::shared_memory_notice()];
         for round in 0..ROUNDS {
             all.push(Allowance::new(
                 format!("case/round/{round}/texels"),

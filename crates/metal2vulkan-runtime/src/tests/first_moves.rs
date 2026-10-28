@@ -7,7 +7,7 @@ use std::sync::{Arc, Weak};
 
 /// A host call's copy staged into an image makes a later CPU copy of its texels wait for the
 /// submission that makes it; a decode alone staged (`TexelCopy::decode_only`: of what a copy on
-/// the host or the staging queue wrote into a BC image, into its decoded twin) does not, as it
+/// the host or the staging queue wrote into a carrier, into its decoded twin) does not, as it
 /// writes the twin alone (`FirstMoves::texels_wait`).
 #[test]
 fn a_staged_decode_alone_leaves_the_texels_to_cpu_copies() {

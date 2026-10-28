@@ -104,11 +104,10 @@
 //! mask to every tile where the binning counted a primitive it cannot answer. A GPU blit that reads
 //! or writes a texture Metal keeps losslessly compressed writes the texels Metal's compression
 //! leaves of the formats whose bytes it changes ([`CompressedBlit`]), which
-//! [`compressed_blit_module`] of the rule rewrites after the copy. A BC1 to BC5 texture a device
-//! decodes otherwise than Metal is read through a twin of its texels as Metal decodes them
-//! ([`BlockDecode`]), which [`block_decode_module`] writes from the blocks each write left; an
-//! ASTC LDR texture on a device without its block through a twin of Metal's decode of its blocks
-//! ([`AstcDecode`], in the texels [`AstcTexels`] names), which [`astc_decode_module`] writes; a
+//! [`compressed_blit_module`] of the rule rewrites after the copy. An ASTC LDR texture on a
+//! device without its block is read through a twin of Metal's decode of its blocks
+//! ([`AstcDecode`], in the texels [`AstcTexels`] names), which [`astc_decode_module`] writes from
+//! the blocks each write left, each decode module of [`BlockDecodeModule`]'s shape; a
 //! PVRTC texture on a device without its format through a twin of its texels' codes
 //! ([`PvrtcDecode`]), which [`pvrtc_decode_module`] writes; an ETC2 or EAC texture on a device
 //! without the formats through a twin of its codes or an 11-bit format's values ([`EtcDecode`], in
@@ -198,7 +197,7 @@ pub use argument_buffer::{
     ArgumentType, ARGUMENT_HANDLE_BYTES,
 };
 pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
-pub use block_decode::{block_decode_module, BlockDecode, BlockDecodeModule};
+pub use block_decode::BlockDecodeModule;
 pub use capture_assembly::{
     capture_assembly_module, capture_settle_module, CaptureAssemblyModule, CaptureSettleModule,
 };

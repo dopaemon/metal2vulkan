@@ -25,11 +25,11 @@
 //!   detach takes, so it never reaches a `VkImage` that went; while the image presents a
 //!   stand-in, or a host call's copy into it still waits for a batch (made while it presented
 //!   one), the call takes the submission's path.
-//! - **With a decoded twin** (`decoded_twin.rs`; a BC1 to BC5 texture on NVIDIA's drivers) too:
-//!   `get_bytes` copies its BC image's blocks, which hold its texels, and `replace_region` copies
-//!   the blocks into it, then decodes them on the CPU and copies the texels into the twin on the
-//!   staging queue at once (`Image::decode_written`): the twin is made to take the staging queue's
-//!   copies where its BC image does.
+//! - **With a decoded twin** (`decoded_twin.rs`; a carried texture) too: `get_bytes` copies its
+//!   carrier's blocks, which hold its texels, and `replace_region` copies the blocks into it, then
+//!   queues their decode on the CPU, which copies the texels into the twin on the staging queue
+//!   (`Image::decode_written`): the twin is made to take the staging queue's copies where its
+//!   carrier does.
 
 use super::{image_aspects, transfer_barrier, Image, ImagePlan, Staging};
 use crate::device::{lock, Device};

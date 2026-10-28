@@ -1,5 +1,6 @@
 //! How BC1 to BC5 texels decode (the consumer's x86 guests' BC textures) on the device the cfg
-//! selects, under the validation layer, against Metal's decode ([`metal_texel`]).
+//! selects, under the validation layer: the device's own decode of the texture's own BC image,
+//! held against Metal's decode ([`metal_texel`]) where the driver is measured to make Metal's.
 //!
 //! Metal's decode, fitted bit for bit on an Apple M4 (macOS 27.0.1; the format
 //! scout's reads of random blocks of every BC format, which MoltenVK's equal): each endpoint
@@ -15,20 +16,22 @@
 //! Per format, [`ROUNDS`] 16 x 16 textures of random blocks are read whole by the format scout's
 //! `scout_read_f` (a signed format's first block with an endpoint of -128, whose interpolated
 //! texels the model clamps to -1 after the sum, an inference this lane's Metal venues check).
-//! Every texel reads as Metal's (where the device does not sample through Metal's own texture
-//! unit, within its conversion of the codes, announced `device-texel-conversion`: one `f32` unit
-//! in the last place, [`reads_as`]): on a device whose driver has a format's fact ([`Kind::fact`]:
-//! BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`, BC4 and BC5
-//! `DriverFact::ChannelBlockDecodeIsMetals`) through its own decode, elsewhere through the
-//! texture's decoded twin, announced `decoded-block-twin` once ([`BLOCK_DECODES`]);
-//! `compressed-texel-decode` is announced by no BC1 to BC5 texture of the lane. A BC6H or BC7
-//! texture, which keeps no twin, announces it where the driver lacks the format's fact
-//! ([`bc6h_and_bc7_announce_where_their_decode_is_unmeasured`]). The twins lane
-//! ([`decoded_twins_follow_every_write`]) reads Metal's texels after every kind of write: a blit
-//! into a level, a CPU copy of a region inside an array's slice, a copy into a cube's face, an sRGB
-//! view, and a heap's textures, fresh and over the bytes a released one left. A texture in a heap
-//! over the caller's host pages keeps no twin, and the heap rebinds with it
-//! ([`a_host_heap_s_bc_textures_keep_no_twin_and_rebind`]).
+//! A BC texture keeps no decoded twin on any device: its reads are the device's decode of its own
+//! image, and no write into it makes a decode pass or a CPU decode
+//! ([`bc1_to_bc5_texels_read_the_device_s_decode`]). On a device whose driver has a format's fact
+//! ([`Kind::fact`]: BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`, BC4 and BC5
+//! `DriverFact::ChannelBlockDecodeIsMetals`) every texel reads as Metal's (where the device does
+//! not sample through Metal's own texture unit, within its conversion of the codes, announced
+//! `device-texel-conversion`: one `f32` unit in the last place); elsewhere the texture announces
+//! `compressed-texel-decode` once ([`BLOCK_DECODES`]), and every texel reads within the largest
+//! difference that note states for its format ([`noted_bound`]). A BC6H or BC7 texture announces
+//! it where the driver lacks the format's fact
+//! ([`bc6h_and_bc7_announce_where_their_decode_is_unmeasured`]). After every kind of write (a
+//! blit into a level, a CPU copy of a region inside an array's slice, a copy into a cube's face, an
+//! sRGB view, and a heap's textures, fresh and over the bytes a released one left) a texture
+//! reads what a texture holding the same blocks reads ([`bc_texels_follow_every_write`]). A
+//! texture in a heap over the caller's host pages reads the pages' blocks, and the heap rebinds
+//! with it ([`a_host_heap_s_bc_textures_rebind`]).
 //!
 //! The ordering lane ([`bc_uploads_are_ordered_before_reads`]) reads BC1, BC3 and BC7 blocks
 //! right after they move into a texture, unwaited ([`Order`]), against the same blocks uploaded
@@ -37,10 +40,9 @@
 //! format, made right after one of its shape held random blocks and was released, against zero
 //! blocks read the same way (the zeros, through the decode).
 //!
-//! The lane of writes behind work in flight ([`writes_behind_work_in_flight_read_as_metal_s`])
+//! The lane of writes behind work in flight ([`writes_behind_work_in_flight_read_the_new_blocks`])
 //! writes a texture with `replaceRegion` while a command buffer that reads it waits behind the busy
-//! kernel or a shared event, and reads Metal's decode of the new blocks; [`cpu_block_decode_costs`]
-//! (ignored, release) times the CPU decode that takes.
+//! kernel or a shared event, and reads the device's decode of the new blocks.
 
 use super::degrade_notices::{counts, on_device};
 use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
@@ -62,16 +64,9 @@ use metal2vulkan_runtime::{
 use std::sync::Arc;
 use std::time::Instant;
 
-/// The kinds a BC1 to BC5 texture announces on a driver not measured to decode it as Metal does:
-/// without a decoded twin, and with one.
-pub(super) const BLOCK_DECODES: [Degradation; 2] = [
-    Degradation::CompressedTexelDecode,
-    Degradation::DecodedBlockTwin,
-];
-
-/// The kind a write behind work in flight into a texture with a decoded twin announces, once:
-/// the region decoded on the CPU ([`writes_behind_work_in_flight_read_as_metal_s`]).
-pub(super) const BEHIND_WRITES: [Degradation; 1] = [Degradation::CpuBlockDecode];
+/// The kind a BC1 to BC5 texture announces on a driver not measured to decode it as Metal does:
+/// its reads are the device's decode of its blocks.
+pub(super) const BLOCK_DECODES: [Degradation; 1] = [Degradation::CompressedTexelDecode];
 
 /// The textures read per format.
 const ROUNDS: u64 = 4;
@@ -348,11 +343,58 @@ fn read_whole(device: &Device, state: &ComputePipelineState, texture: &Texture) 
     read_buffer(&out, 0, 16 * 16 * 16).unwrap()
 }
 
-/// Every BC1 to BC5 texel reads as Metal's: through the device's decode where its driver has the
-/// format's fact, else through the texture's decoded twin, a device lacking either fact
-/// announcing `decoded-block-twin` once and `compressed-texel-decode` never (the module docs).
+/// The most a channel `c` (0 red to 3 alpha) of a texel of `kind` reads off Metal's value on a
+/// driver without the kind's fact: the largest difference `compressed-texel-decode` states for
+/// the family (NVIDIA's, ANV's, lavapipe's and RADV's), copied here so a run past it fails rather
+/// than being re-fitted. An sRGB form's color channel is bound in codes (`srgb`): its value is
+/// the step of a code at most that many codes from Metal's.
+fn noted_bound(kind: Kind, c: usize) -> f32 {
+    match kind {
+        Kind::Bc3 if c == 3 => 6.0 / 255.0,
+        Kind::Bc1 | Kind::Bc2 | Kind::Bc3 => 3.0 / 255.0,
+        Kind::Channels { signed: true, .. } => 0.064,
+        Kind::Channels { signed: false, .. } => 7.3 / 255.0,
+    }
+}
+
+/// Whether channel `c` of a texel of `kind` the device read as `got` lies within the note's bound
+/// ([`noted_bound`]) of Metal's `want`, whose code was `code` where it is an sRGB color channel
+/// (`srgb`): the step through Metal's table of a code at most the bound's codes from it (the
+/// device's decode of the unorm view's code, decoded through the table), else the value within
+/// the bound, one `f32` ulp beside.
+fn within_note(kind: Kind, c: usize, srgb: Option<u32>, got: f32, want: f32) -> bool {
+    let bound = noted_bound(kind, c);
+    match srgb {
+        Some(code) => {
+            let codes = (bound * 255.0).round() as u32;
+            (code.saturating_sub(codes)..=(code + codes).min(255))
+                .any(|near| converted_holds(got, ratio(super::srgb_step(near) as i32, 4095), false))
+        }
+        None => (got - want).abs() <= bound + f32::EPSILON,
+    }
+}
+
+/// Metal's 8-bit code of the color channel `c` (0 to 2) of texel `(x, y)` of a 16 x 16 texture of
+/// a BC1 to BC3 `kind` whose blocks are `blocks`, before an sRGB form's table.
+fn metal_code(kind: Kind, blocks: &[u8], x: usize, y: usize, c: usize) -> u32 {
+    let size = kind.block_bytes();
+    let b = (y / 4) * 4 + x / 4;
+    let block = &blocks[b * size..(b + 1) * size];
+    let j = (y % 4) * 4 + x % 4;
+    let (codes, _) = match kind {
+        Kind::Bc1 => color(block, j, false),
+        _ => color(&block[8..], j, true),
+    };
+    codes[c]
+}
+
+/// Every BC1 to BC5 texel reads the device's decode of the texture's own image: Metal's texel
+/// where its driver has the format's fact, else within the bound `compressed-texel-decode` states
+/// ([`within_note`]), a device lacking either fact announcing it once. No texture takes a decode
+/// pass or a CPU decode (a BC texture keeps no decoded twin). `BCDECODE` prints each format's
+/// differences from Metal's.
 #[test]
-fn bc1_to_bc5_texels_read_as_metal_s() {
+fn bc1_to_bc5_texels_read_the_device_s_decode() {
     on_device(|device, messages| {
         let name = device.name().to_owned();
         let facts = &device.properties().driver_facts;
@@ -361,8 +403,10 @@ fn bc1_to_bc5_texels_read_as_metal_s() {
             .any(|(_, kind, _)| !facts.contains(&kind.fact()));
         let state = reader(device);
         let exact = metal_sampler(device);
+        let before = device.work_counts();
         let mut wrong = Vec::new();
         for (f, (pf, kind, srgb)) in FORMATS.into_iter().enumerate() {
+            let measured = facts.contains(&kind.fact());
             let (mut differ, mut most) = (0, 0.0f32);
             for round in 0..ROUNDS {
                 let mut rng = Rng(0x5eed_bc00 + 0x100 * f as u64 + round);
@@ -373,30 +417,43 @@ fn bc1_to_bc5_texels_read_as_metal_s() {
                 }
                 let texels = read_texels(device, &state, pf, &blocks);
                 for (t, got) in texels.iter().enumerate() {
-                    let want = metal_texel(kind, srgb, &blocks, t % 16, t / 16);
+                    let (x, y) = (t % 16, t / 16);
+                    let want = metal_texel(kind, srgb, &blocks, x, y);
                     for c in 0..4 {
-                        if !converted_holds(got[c], want[c], exact) {
-                            differ += 1;
-                            most = most.max((got[c] - want[c]).abs());
-                            if wrong.len() < 24 {
-                                wrong.push(format!(
-                                    "{pf:?} round {round} texel {t} channel {c}: {} against \
-                                     Metal's {}",
-                                    got[c], want[c]
-                                ));
-                            }
+                        if converted_holds(got[c], want[c], exact) {
+                            continue;
+                        }
+                        differ += 1;
+                        most = most.max((got[c] - want[c]).abs());
+                        let code = (srgb && c < 3).then(|| metal_code(kind, &blocks, x, y, c));
+                        let holds = !measured && within_note(kind, c, code, got[c], want[c]);
+                        if !holds && wrong.len() < 24 {
+                            wrong.push(format!(
+                                "{pf:?} round {round} texel {t} channel {c}: {} against \
+                                 Metal's {} (measured {measured})",
+                                got[c], want[c]
+                            ));
                         }
                     }
                 }
             }
             eprintln!(
                 "BCDECODE {name} {pf:?}: {differ} of {} channels off Metal's, the largest by \
-                 {most} ({:.3}/255)",
+                 {most} ({:.3}/255), fact {measured}",
                 ROUNDS * 16 * 16 * 4,
                 most * 255.0
             );
         }
         assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
+        let after = device.work_counts();
+        assert_eq!(
+            (
+                after.block_decode_passes - before.block_decode_passes,
+                after.cpu_block_decodes - before.cpu_block_decodes
+            ),
+            (0, 0),
+            "on {name}: a BC texture's decode passes and CPU decodes"
+        );
         let counts = counts(&messages.take_notices());
         let announced = |kind| counts.get(&kind).copied().unwrap_or(0);
         assert_eq!(
@@ -404,20 +461,19 @@ fn bc1_to_bc5_texels_read_as_metal_s() {
             usize::from(!exact),
             "the device's conversion of the codes, on {name}"
         );
-        assert_eq!(announced(BLOCK_DECODES[0]), 0, "on {name}");
         assert_eq!(
-            announced(BLOCK_DECODES[1]),
+            announced(BLOCK_DECODES[0]),
             usize::from(announces),
             "on {name}"
         );
     });
 }
 
-/// A BC6H and a BC7 texture, which keep no decoded twin, announce `compressed-texel-decode`
-/// once exactly where the device's driver lacks either format's fact
-/// (`DriverFact::Bc6hBlockDecodeIsMetals`, `DriverFact::Bc7BlockDecodeIsMetals`, taken on a
-/// measured identity alone), and `decoded-block-twin` never. The decode itself is not re-measured
-/// here: the lane holds no model of BC6H's or BC7's (the facts' rows name the measurements).
+/// A BC6H and a BC7 texture announce `compressed-texel-decode` once exactly where the device's
+/// driver lacks either format's fact (`DriverFact::Bc6hBlockDecodeIsMetals`,
+/// `DriverFact::Bc7BlockDecodeIsMetals`, taken on a measured identity alone). The decode itself is
+/// not re-measured here: the lane holds no model of BC6H's or BC7's (the facts' rows name the
+/// measurements).
 #[test]
 fn bc6h_and_bc7_announce_where_their_decode_is_unmeasured() {
     on_device(|device, messages| {
@@ -457,7 +513,6 @@ fn bc6h_and_bc7_announce_where_their_decode_is_unmeasured() {
                 .collect::<Vec<_>>(),
             announced(Degradation::CompressedTexelDecode)
         );
-        assert_eq!(announced(Degradation::DecodedBlockTwin), 0, "on {name}");
         assert_eq!(
             announced(Degradation::CompressedTexelDecode),
             usize::from(lacks),
@@ -737,39 +792,22 @@ fn texels_of(device: &Device, state: &ComputePipelineState, texture: &Texture) -
         .collect()
 }
 
-/// Whether `got` reads as Metal's decoded texel `want` on `device`: each channel bit for bit where
-/// it samples through Metal's own texture unit, else within the device's conversion of the codes
-/// (`converted_holds`, `PrecisionNote::DeviceTexelConversion`).
-fn reads_as(device: &Device, got: &[f32; 4], want: &[f32; 4]) -> bool {
-    let exact = metal_sampler(device);
-    (0..4).all(|c| converted_holds(got[c], want[c], exact))
-}
-
-/// The texels of `got` (16 x 16) on `device` that do not read as Metal's decode of `blocks` (four
-/// across) of `kind`, `srgb` its color sRGB ([`reads_as`]).
-fn differing(device: &Device, got: &[[f32; 4]], kind: Kind, srgb: bool, blocks: &[u8]) -> usize {
+/// The texels of `got` (16 x 16) that are not the device's decode `reference` of the same blocks
+/// at their place, bit for bit.
+fn differing(got: &[[f32; 4]], reference: &[[f32; 4]]) -> usize {
     got.iter()
-        .enumerate()
-        .filter(|(t, texel)| {
-            !reads_as(
-                device,
-                texel,
-                &metal_texel(kind, srgb, blocks, t % 16, t / 16),
-            )
-        })
+        .zip(reference)
+        .filter(|(texel, want)| texel.map(f32::to_bits) != want.map(f32::to_bits))
         .count()
 }
 
-/// How many of `got`'s texels (16 x 16) on `device` read as neither Metal's decode of the blocks
-/// `old` nor of `new` at their place ([`reads_as`]), as a read racing a write that lands while it
-/// runs may read either.
-fn neither(device: &Device, got: &[[f32; 4]], kind: Kind, old: &[u8], new: &[u8]) -> usize {
+/// How many of `got`'s texels (16 x 16) are neither the device's decode `old` nor `new` at their
+/// place, as a read racing a write that lands while it runs may read either.
+fn neither(got: &[[f32; 4]], old: &[[f32; 4]], new: &[[f32; 4]]) -> usize {
+    let bits = |texel: &[f32; 4]| texel.map(f32::to_bits);
     got.iter()
-        .enumerate()
-        .filter(|(t, texel)| {
-            let metal = |blocks: &[u8]| metal_texel(kind, false, blocks, t % 16, t / 16);
-            !reads_as(device, texel, &metal(old)) && !reads_as(device, texel, &metal(new))
-        })
+        .zip(old.iter().zip(new))
+        .filter(|(texel, (old, new))| bits(texel) != bits(old) && bits(texel) != bits(new))
         .count()
 }
 
@@ -828,25 +866,25 @@ fn blocks_of(texture: &Texture, size: usize) -> Vec<u8> {
     blocks
 }
 
-/// After every kind of write into a BC1 to BC5 texture its reads are Metal's decode of the blocks
-/// it holds (the module docs): a blit into a level of a mipmapped `Private` texture, read through
-/// a view of the level; a CPU copy of a region inside a slice of a `Shared` array, read through a
-/// view of the slice; a copy into a cube's face, read through a view of the face; a BC1 to BC3
-/// texture through its sRGB view; and a placement heap's texture, fresh, written, and placed again
-/// over the bytes a released one left (its blocks read back on the CPU).
+/// After every kind of write into a BC1 to BC5 texture its reads are the device's decode of the
+/// blocks it holds, what a texture of its format holding them reads ([`read_texels`]; the module
+/// docs): a blit into a level of a mipmapped `Private` texture, read through a view of the level;
+/// a CPU copy of a region inside a slice of a `Shared` array, read through a view of the slice; a
+/// copy into a cube's face, read through a view of the face; a BC1 to BC3 texture through its sRGB
+/// view; and a placement heap's texture, fresh, written, and placed again over the bytes a
+/// released one left (its blocks read back on the CPU).
 #[test]
-fn decoded_twins_follow_every_write() {
+fn bc_texels_follow_every_write() {
     on_device(|device, messages| {
         let name = device.name().to_owned();
         let state = reader(device);
         let mut wrong = Vec::new();
-        let mut check =
-            |what: String, got: Vec<[f32; 4]>, kind: Kind, srgb: bool, blocks: &[u8]| {
-                let n = differing(device, &got, kind, srgb, blocks);
-                if n > 0 {
-                    wrong.push(format!("{what}: {n} of 256 texels off Metal's"));
-                }
-            };
+        let mut check = |what: String, got: Vec<[f32; 4]>, pf: PixelFormat, blocks: &[u8]| {
+            let n = differing(&got, &read_texels(device, &state, pf, blocks));
+            if n > 0 {
+                wrong.push(format!("{what}: {n} of 256 texels off the device's decode"));
+            }
+        };
         let usage = TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
         let made = |mut descriptor: TextureDescriptor, options: ResourceOptions| {
             descriptor.usage = usage;
@@ -873,7 +911,7 @@ fn decoded_twins_follow_every_write() {
             blit_in(device, &mipped, &blocks, (1, 0));
             let level = view(&mipped, 1..2, 0..1);
             let got = texels_of(device, &state, &level);
-            check(format!("{pf:?} level 1"), got, kind, false, &blocks);
+            check(format!("{pf:?} level 1"), got, pf, &blocks);
 
             // A CPU copy of the 8 x 8 texels inside a slice of a `Shared` array.
             let mut descriptor = TextureDescriptor::texture_2d(pf, 16, 16, false);
@@ -894,7 +932,7 @@ fn decoded_twins_follow_every_write() {
             }
             let slice = view(&array, 0..1, 2..3);
             let got = texels_of(device, &state, &slice);
-            check(format!("{pf:?} array slice 2"), got, kind, false, &held);
+            check(format!("{pf:?} array slice 2"), got, pf, &held);
 
             // A copy from a 2D texture into a cube's fourth face.
             let flat = made(
@@ -914,13 +952,13 @@ fn decoded_twins_follow_every_write() {
             });
             let face = view(&cube, 0..1, 3..4);
             let got = texels_of(device, &state, &face);
-            check(format!("{pf:?} cube face 3"), got, kind, false, &blocks);
+            check(format!("{pf:?} cube face 3"), got, pf, &blocks);
 
             // The sRGB view of a BC1 to BC3 texture.
             if let Some(srgb_pf) = srgb_form(pf) {
                 let srgb_view = flat.new_texture_view(srgb_pf).unwrap();
                 let got = texels_of(device, &state, &srgb_view);
-                check(format!("{srgb_pf:?} view"), got, kind, true, &blocks);
+                check(format!("{srgb_pf:?} view"), got, srgb_pf, &blocks);
             }
 
             // A placement heap's texture: fresh, written, and placed again over the bytes the
@@ -937,40 +975,38 @@ fn decoded_twins_follow_every_write() {
             check(
                 format!("{pf:?} heap fresh"),
                 got,
-                kind,
-                false,
+                pf,
                 &blocks_of(&first, size),
             );
             first.replace_region(whole, 0, 0, &blocks, row, 0).unwrap();
             let got = texels_of(device, &state, &first);
-            check(format!("{pf:?} heap written"), got, kind, false, &blocks);
+            check(format!("{pf:?} heap written"), got, pf, &blocks);
             drop(first);
             let again = heap.new_texture_at_offset(&descriptor, 0).unwrap();
             let got = texels_of(device, &state, &again);
             check(
                 format!("{pf:?} heap again"),
                 got,
-                kind,
-                false,
+                pf,
                 &blocks_of(&again, size),
             );
         }
-        eprintln!("BCTWINS {name}: {} cases wrong", wrong.len());
+        eprintln!("BCWRITES {name}: {} cases wrong", wrong.len());
         assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
         drop(messages.take_notices());
     });
 }
 
 /// A BC1 to BC5 texture placed in a heap over the caller's host pages
-/// (`Device::new_heap_with_bytes_no_copy`) keeps no decoded twin: its texels are the caller's
-/// bytes, which change without the runtime's writes. It reads the device's decode of what the pages
-/// hold, announces `compressed-texel-decode` where the device lacks a format's fact and
-/// `decoded-block-twin` never, and the heap rebinds (`rebind_bytes_no_copy`) with every such
-/// texture placed in it, as the consumer's replace (other pages, here random bytes) and detach
-/// (fresh pages of zeros) rebind it; after the detach each reads zero blocks as Metal decodes them.
-/// `HOSTHEAP` prints how many textures read the replaced pages' bytes.
+/// (`Device::new_heap_with_bytes_no_copy`), whose texels are the caller's bytes, which change
+/// without the runtime's writes, reads the device's decode of what the pages hold, announces
+/// `compressed-texel-decode` where the device lacks a format's fact, and the heap rebinds
+/// (`rebind_bytes_no_copy`) with every such texture placed in it, as the consumer's replace (other
+/// pages, here random bytes) and detach (fresh pages of zeros) rebind it; after the detach each
+/// reads zero blocks as the device decodes them. `HOSTHEAP` prints how many textures read the
+/// replaced pages' bytes.
 #[test]
-fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
+fn a_host_heap_s_bc_textures_rebind() {
     on_device(|device, messages| {
         let name = device.name().to_owned();
         let facts = &device.properties().driver_facts;
@@ -1008,12 +1044,16 @@ fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
         }
         assert!(offset <= HEAP as u64, "on {name}: {offset} bytes placed");
         let state = reader(device);
-        // Sixteen zero blocks of the widest, four across.
-        let zeros = [0; 16 * 16];
+        // The device's decode of sixteen zero blocks of each format, four across.
+        let zeros: Vec<Vec<[f32; 4]>> = (placed.iter())
+            .map(|(_, pf, kind, _)| {
+                read_texels(device, &state, *pf, &vec![0; 16 * kind.block_bytes()])
+            })
+            .collect();
         let zero_reads = |stage: &str, wrong: &mut Vec<String>| {
-            for (texture, pf, kind, srgb) in &placed {
+            for ((texture, pf, _, _), zeros) in placed.iter().zip(&zeros) {
                 let got = texels_of(device, &state, texture);
-                let n = differing(device, &got, *kind, *srgb, &zeros);
+                let n = differing(&got, zeros);
                 if n != 0 {
                     wrong.push(format!(
                         "{pf:?} {stage}: {n} texels off zero blocks' decode"
@@ -1028,16 +1068,9 @@ fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
         other.write(0, &Rng(0x5eed_4057).bytes(HEAP));
         rebind_heap(&heap, other, &seen[1])
             .unwrap_or_else(|error| panic!("on {name}: the replace: {error:?}"));
-        let followed = placed
-            .iter()
-            .filter(|(texture, _, kind, srgb)| {
-                differing(
-                    device,
-                    &texels_of(device, &state, texture),
-                    *kind,
-                    *srgb,
-                    &zeros,
-                ) != 0
+        let followed = (placed.iter().zip(&zeros))
+            .filter(|((texture, ..), zeros)| {
+                differing(&texels_of(device, &state, texture), zeros) != 0
             })
             .count();
         // The consumer's detach: fresh pages, zeros.
@@ -1053,7 +1086,6 @@ fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
         assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
         let counts = counts(&messages.take_notices());
         let announced = |kind| counts.get(&kind).copied().unwrap_or(0);
-        assert_eq!(announced(Degradation::DecodedBlockTwin), 0, "on {name}");
         assert_eq!(
             announced(Degradation::CompressedTexelDecode),
             usize::from(lacks),
@@ -1062,100 +1094,9 @@ fn a_host_heap_s_bc_textures_keep_no_twin_and_rebind() {
     });
 }
 
-/// The side of the textures [`decoded_twin_costs`] measures.
-const COST_SIDE: u64 = 4096;
-
-/// The blits [`decoded_twin_costs`] times per texture (the first one's first moves included).
-const COST_ROUNDS: u64 = 9;
-
-/// The median GPU time, in milliseconds, of [`COST_ROUNDS`] blits of `blocks` from a buffer into the
-/// whole level 0 of `texture`, each in a command buffer of its own, waited for.
-fn blit_ms(device: &Device, texture: &Texture, blocks: &[u8], row: u64, side: u64) -> f64 {
-    let source = buffer_with(device, blocks).unwrap();
-    let queue = device.new_command_queue().unwrap();
-    let mut times: Vec<f64> = (0..COST_ROUNDS)
-        .map(|_| {
-            let command_buffer = queue.command_buffer().unwrap();
-            let mut encoder = command_buffer.blit_command_encoder().unwrap();
-            let at = Origin::new(0, 0, 0);
-            let size = Size::new(side, side, 1);
-            encoder
-                .copy_from_buffer_to_texture(
-                    &source,
-                    0,
-                    row,
-                    0,
-                    size,
-                    texture,
-                    0,
-                    0,
-                    at,
-                    BlitOption::None,
-                )
-                .unwrap();
-            encoder.end_encoding().unwrap();
-            command_buffer.commit().unwrap();
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-            let start = command_buffer.gpu_start_time().unwrap();
-            (command_buffer.gpu_end_time().unwrap() - start) * 1e3
-        })
-        .collect();
-    times.sort_by(f64::total_cmp);
-    times[times.len() / 2]
-}
-
-/// The cost of a decoded twin, measured on the device: per BC1 to BC5 decode, a `Private` texture
-/// of [`COST_SIDE`] texels square on a device of its own, the `decoded-block-twin` notice (its
-/// twin's and blocks' bytes and placed memory), and the median GPU time of a blit of random blocks
-/// into its whole level, against a blit of the same bytes into an `RG32Uint` or `RGBA32Uint`
-/// texture of a quarter the side (no twin): `TWINCOST` lines.
-#[test]
-#[ignore = "a measurement of GPU time: the twin cost runs take it"]
-fn decoded_twin_costs() {
-    for (f, (pf, kind, srgb)) in FORMATS.into_iter().enumerate() {
-        if srgb {
-            continue;
-        }
-        on_device(|device, messages| {
-            let size = kind.block_bytes();
-            let side = COST_SIDE / 4;
-            let blocks = Rng(0x5eed_c057 + f as u64).bytes((side * side) as usize * size);
-            let row = side * size as u64;
-            let mut descriptor = TextureDescriptor::texture_2d(pf, COST_SIDE, COST_SIDE, false);
-            descriptor.usage = TextureUsage::SHADER_READ;
-            descriptor.resource_options = ResourceOptions::private();
-            let twinned = device.new_texture(&descriptor).unwrap();
-            for message in messages.take_notices() {
-                let Some(notice) = message.degradation.as_ref() else {
-                    continue;
-                };
-                eprintln!("TWINCOST {} {pf:?} notice {notice:?}", device.name());
-            }
-            let plain_pf = match size {
-                8 => PixelFormat::RG32Uint,
-                _ => PixelFormat::RGBA32Uint,
-            };
-            let mut descriptor = TextureDescriptor::texture_2d(plain_pf, side, side, false);
-            descriptor.usage = TextureUsage::SHADER_READ;
-            descriptor.resource_options = ResourceOptions::private();
-            let plain = device.new_texture(&descriptor).unwrap();
-            let with_twin = blit_ms(device, &twinned, &blocks, row, COST_SIDE);
-            let without = blit_ms(device, &plain, &blocks, row, side);
-            eprintln!(
-                "TWINCOST {} {pf:?} {COST_SIDE}x{COST_SIDE}: blit with the decode {with_twin:.3} ms, \
-                 the same bytes into {plain_pf:?} {without:.3} ms, the decode pass about {:.3} ms",
-                device.name(),
-                with_twin - without
-            );
-            drop(messages.take_notices());
-        });
-    }
-}
-
 /// What holds a command buffer that reads a texture until after a CPU write into it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Behind {
+pub(super) enum Behind {
     /// Committed after the busy kernel on its queue (`first_use`), submitted before the write
     /// and run after the kernel ends.
     Busy,
@@ -1176,7 +1117,7 @@ fn shared_texture(device: &Device, pf: PixelFormat, blocks: &[u8], size: usize) 
 
 /// A command buffer on `queue` that reads `texture` (16 x 16) into `out` with `state`
 /// ([`reader`]) after waiting for `hold` to reach 1 where given, committed.
-fn read_after(
+pub(super) fn read_after(
     queue: &CommandQueue,
     state: &ComputePipelineState,
     texture: &Texture,
@@ -1200,22 +1141,18 @@ fn read_after(
 }
 
 /// `replaceRegion` of a BC1 to BC5 texture while a command buffer that reads it is committed and
-/// not yet run: one held by a shared event signalled after the write reads the new blocks as
-/// Metal decodes them, as Metal's command buffer reads its CPU write. One held behind the busy
-/// kernel, submitted before the write, reads each texel as Metal decodes the old or the new blocks,
-/// since the call no longer waits for the twin's decode (a race Metal's contract leaves to the
-/// program); a command buffer committed after it reads the new ones. Where the device keeps the
-/// format's decoded twin and the write goes on the host or the staging queue, the write takes the
-/// CPU's decode (`WorkCounts::cpu_block_decodes`, counted once the later command buffer ran;
-/// announced `cpu-block-decode` once, [`BEHIND_WRITES`]). `BCBEHIND` prints each case's route. A
-/// case behind the kernel whose command buffer ran before the write is void: lavapipe runs a
-/// submission inside `vkQueueSubmit`, so the runtime submits the reader only once the kernel ended,
-/// and Metal's reader that ran before the write reads the old blocks.
+/// not yet run: one held by a shared event signalled after the write reads the device's decode of
+/// the new blocks, as Metal's command buffer reads its CPU write. One held behind the busy kernel,
+/// submitted before the write, reads each texel as the device decodes the old or the new blocks
+/// (a race Metal's contract leaves to the program); a command buffer committed after it reads the
+/// new ones. No write takes a CPU decode (a BC texture keeps no decoded twin). `BCBEHIND` prints
+/// each case's route. A case behind the kernel whose command buffer ran before the write is void:
+/// lavapipe runs a submission inside `vkQueueSubmit`, so the runtime submits the reader only once
+/// the kernel ended, and Metal's reader that ran before the write reads the old blocks.
 #[test]
-fn writes_behind_work_in_flight_read_as_metal_s() {
+fn writes_behind_work_in_flight_read_the_new_blocks() {
     on_device(|device, messages| {
         let name = device.name().to_owned();
-        let facts = device.properties().driver_facts.clone();
         let state = reader(device);
         let queue = device.new_command_queue().unwrap();
         let busy = Busy::new(device, &queue);
@@ -1226,10 +1163,13 @@ fn writes_behind_work_in_flight_read_as_metal_s() {
                 continue;
             }
             let size = kind.block_bytes();
-            let twinned = !facts.contains(&kind.fact());
             let mut rng = Rng(0x5eed_f100 + 0x100 * f as u64);
             for behind in [Behind::Busy, Behind::Event] {
                 let (old, new) = (rng.bytes(16 * size), rng.bytes(16 * size));
+                let (old_texels, new_texels) = (
+                    read_texels(device, &state, pf, &old),
+                    read_texels(device, &state, pf, &new),
+                );
                 let texture = shared_texture(device, pf, &old, size);
                 let out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
                 let hold = device.new_shared_event().unwrap();
@@ -1280,7 +1220,6 @@ fn writes_behind_work_in_flight_read_as_metal_s() {
                         .collect()
                 };
                 let got = texels(&out);
-                // A command buffer committed after the write waits for its decode.
                 let later_out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
                 let later = read_after(&queue, &state, &texture, &later_out, None);
                 later.wait_until_completed_for(WAIT).unwrap();
@@ -1300,8 +1239,11 @@ fn writes_behind_work_in_flight_read_as_metal_s() {
                 };
                 eprintln!(
                     "BCBEHIND {name} {pf:?} {behind:?}: committed in {queued:?}, copied {route}, \
-                     twin {twinned}, {cpu} CPU decodes, the call {took:?}{void}"
+                     the call {took:?}{void}"
                 );
+                if cpu != 0 {
+                    wrong.push(format!("{pf:?} {behind:?}: {cpu} CPU decodes"));
+                }
                 match (ran, behind) {
                     (true, Behind::Event) => {
                         wrong.push(format!("{pf:?} {behind:?}: read before the event"));
@@ -1311,216 +1253,28 @@ fn writes_behind_work_in_flight_read_as_metal_s() {
                     (false, _) => held += 1,
                 }
                 let n = match behind {
-                    Behind::Event => differing(device, &got, kind, false, &new),
-                    Behind::Busy => neither(device, &got, kind, &old, &new),
+                    Behind::Event => differing(&got, &new_texels),
+                    Behind::Busy => neither(&got, &old_texels, &new_texels),
                 };
                 if n > 0 {
-                    let stale = differing(device, &got, kind, false, &old);
+                    let stale = differing(&got, &old_texels);
                     wrong.push(format!(
-                        "{pf:?} {behind:?}: {n} of 256 texels off Metal's decode of the new \
+                        "{pf:?} {behind:?}: {n} of 256 texels off the device's decode of the new \
                          blocks ({} of the old)",
                         256 - stale
                     ));
                 }
-                let n = differing(device, &texels(&later_out), kind, false, &new);
+                let n = differing(&texels(&later_out), &new_texels);
                 if n > 0 {
                     wrong.push(format!(
-                        "{pf:?} {behind:?}: the later reader: {n} of 256 texels off Metal's \
+                        "{pf:?} {behind:?}: the later reader: {n} of 256 texels off the device's \
                          decode of the new blocks"
-                    ));
-                }
-                let decodes = twinned && behind == Behind::Busy && (hosted || staged);
-                if decodes && cpu != 1 {
-                    wrong.push(format!("{pf:?} {behind:?}: {cpu} CPU decodes, not 1"));
-                }
-                if !twinned && cpu != 0 {
-                    wrong.push(format!(
-                        "{pf:?} {behind:?}: {cpu} CPU decodes without a twin"
                     ));
                 }
             }
         }
         eprintln!("BCBEHIND {name}: {} cases wrong, {held} held", wrong.len());
         assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
-        let counts = counts(&messages.take_notices());
-        let announced = |kind| counts.get(&kind).copied().unwrap_or(0);
-        let decoded = device.work_counts().cpu_block_decodes > 0;
-        assert_eq!(
-            announced(BEHIND_WRITES[0]),
-            usize::from(decoded),
-            "on {name}"
-        );
-    });
-}
-
-/// The textures' side [`cpu_block_decode_costs`] writes.
-const DECODE_SIDE: u64 = 2048;
-
-/// A `Shared` BC1 to BC5 texture whose decoded twin takes CPU copies (its blocks' copies go on
-/// the host or the staging queue) is never written by GPU work: its making starts the twin on
-/// the CPU and makes no decode pass, and a `replace_region` while nothing is in flight decodes
-/// on the CPU too (one `WorkCounts::cpu_block_decodes` by the time a command buffer that reads
-/// it completed, the read waits for it; no `block_decode_passes`), so no GPU decode of older blocks
-/// can be in flight to land after a later write's CPU decode (master `7d426aff` on lavapipe under
-/// the lane's load: `writes_behind_work_in_flight_read_as_metal_s` read a whole texture's old
-/// texels). A command buffer then reads Metal's decode of the written blocks. A format the device
-/// decodes as Metal does, or whose twin takes no CPU copies, prints its route alone (`BCROUTE`).
-#[test]
-fn host_written_twins_take_no_gpu_decode() {
-    on_device(|device, messages| {
-        let name = device.name().to_owned();
-        let facts = device.properties().driver_facts.clone();
-        let state = reader(device);
-        let queue = device.new_command_queue().unwrap();
-        let mut checked = 0;
-        for (f, (pf, kind, srgb)) in FORMATS.into_iter().enumerate() {
-            if srgb {
-                continue;
-            }
-            let size = kind.block_bytes();
-            let twinned = !facts.contains(&kind.fact());
-            let blocks = Rng(0x5eed_f200 + 0x100 * f as u64).bytes(16 * size);
-            let made = device.work_counts();
-            let mut descriptor = TextureDescriptor::texture_2d(pf, 16, 16, false);
-            descriptor.usage = TextureUsage::SHADER_READ;
-            descriptor.resource_options = ResourceOptions::shared();
-            let texture = device.new_texture(&descriptor).unwrap();
-            let before = device.work_counts();
-            let whole = Region::new_2d(0, 0, 16, 16);
-            (texture.replace_region(whole, 0, 0, &blocks, 4 * size as u64, 0)).unwrap();
-            let after = device.work_counts();
-            let routed = after.host_texel_copies > before.host_texel_copies
-                || after.staging_submissions > before.staging_submissions;
-            let out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
-            let reads = read_after(&queue, &state, &texture, &out, None);
-            reads.wait_until_completed_for(WAIT).unwrap();
-            assert_eq!(reads.error(), None, "{pf:?} on {name}");
-            let read = device.work_counts();
-            eprintln!("BCROUTE {name} {pf:?}: twin {twinned}, CPU copies {routed}");
-            let got: Vec<[f32; 4]> = read_buffer(&out, 0, 16 * 16 * 16)
-                .unwrap()
-                .as_chunks::<16>()
-                .0
-                .iter()
-                .map(|t| {
-                    std::array::from_fn(|c| {
-                        f32::from_le_bytes(t[4 * c..4 * c + 4].try_into().unwrap())
-                    })
-                })
-                .collect();
-            let off = differing(device, &got, kind, false, &blocks);
-            assert_eq!(
-                off, 0,
-                "{pf:?} on {name}: {off} of 256 texels off Metal's decode"
-            );
-            if !(twinned && routed) {
-                continue;
-            }
-            checked += 1;
-            assert_eq!(
-                (read.block_decode_passes - made.block_decode_passes),
-                0,
-                "{pf:?} on {name}: a GPU decode pass for a twin that takes CPU copies"
-            );
-            assert_eq!(
-                read.cpu_block_decodes - before.cpu_block_decodes,
-                1,
-                "{pf:?} on {name}: the write's CPU decodes"
-            );
-        }
-        eprintln!("BCROUTE {name}: {checked} formats' twins take CPU copies");
-        drop(messages.take_notices());
-    });
-}
-
-/// The cost of a CPU decode behind work in flight, measured on the device: per BC1 to BC5 decode, a
-/// `Shared` texture of [`DECODE_SIDE`] texels square, the median wall time of its making, of
-/// `replaceRegion` of its whole level while nothing reads it, of the first command buffer that
-/// reads it then (from its commit to its completion: it waits at its submission for the decodes
-/// queued) and of the next, and of `replaceRegion` behind the busy kernel, a command buffer that
-/// reads it submitted (which waits for no decode): `CPUDECODE` lines; and the making of the
-/// device's first such texture, which may make the device's decode scratch.
-#[test]
-#[ignore = "a measurement of wall time: the CPU decode runs take it in release"]
-fn cpu_block_decode_costs() {
-    on_device(|device, messages| {
-        let name = device.name().to_owned();
-        let state = reader(device);
-        let queue = device.new_command_queue().unwrap();
-        let busy = Busy::new(device, &queue);
-        let median = |mut times: Vec<f64>| {
-            times.sort_by(f64::total_cmp);
-            times[times.len() / 2]
-        };
-        let mut first = None;
-        for (f, (pf, kind, srgb)) in FORMATS.into_iter().enumerate() {
-            if srgb {
-                continue;
-            }
-            let size = kind.block_bytes();
-            let side = DECODE_SIDE / 4;
-            let blocks = Rng(0x5eed_dec0 + f as u64).bytes((side * side) as usize * size);
-            let row = side * size as u64;
-            let whole = Region::new_2d(0, 0, DECODE_SIDE, DECODE_SIDE);
-            let mut descriptor = TextureDescriptor::texture_2d(pf, DECODE_SIDE, DECODE_SIDE, false);
-            descriptor.usage = TextureUsage::SHADER_READ;
-            descriptor.resource_options = ResourceOptions::shared();
-            let mut made = Vec::new();
-            let mut idle = Vec::new();
-            let mut first_read = Vec::new();
-            let mut next_read = Vec::new();
-            let mut behind = Vec::new();
-            let before = device.work_counts();
-            for _ in 0..5 {
-                let at = Instant::now();
-                let texture = device.new_texture(&descriptor).unwrap();
-                made.push(at.elapsed().as_secs_f64() * 1e3);
-                first = first.or(made.last().copied());
-                let at = Instant::now();
-                (texture.replace_region(whole, 0, 0, &blocks, row, 0)).unwrap();
-                idle.push(at.elapsed().as_secs_f64() * 1e3);
-                // The first read of the texture waits for its decodes; the next reads them done.
-                let out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
-                let at = Instant::now();
-                let reads = read_after(&queue, &state, &texture, &out, None);
-                reads.wait_until_completed_for(WAIT).unwrap();
-                first_read.push(at.elapsed().as_secs_f64() * 1e3);
-                let at = Instant::now();
-                let reads = read_after(&queue, &state, &texture, &out, None);
-                reads.wait_until_completed_for(WAIT).unwrap();
-                next_read.push(at.elapsed().as_secs_f64() * 1e3);
-                let (spun, words) = busy.commit(device, &queue);
-                let reads = read_after(&queue, &state, &texture, &out, None);
-                scheduled(&reads);
-                let at = Instant::now();
-                (texture.replace_region(whole, 0, 0, &blocks, row, 0)).unwrap();
-                let took = at.elapsed().as_secs_f64() * 1e3;
-                // A round whose reader ran before the write measured no CPU decode.
-                if read_mark(&words) != ENDED {
-                    behind.push(took);
-                }
-                release(&words);
-                reads.wait_until_completed_for(WAIT).unwrap();
-                spun.wait_until_completed_for(WAIT).unwrap();
-            }
-            if behind.is_empty() {
-                eprintln!("CPUDECODE {name} {pf:?}: every reader ran before the write");
-                continue;
-            }
-            let cpu = device.work_counts().cpu_block_decodes - before.cpu_block_decodes;
-            let held = behind.len();
-            let (made, idle, behind) = (median(made), median(idle), median(behind));
-            let (first_read, next_read) = (median(first_read), median(next_read));
-            eprintln!(
-                "CPUDECODE {name} {pf:?} {DECODE_SIDE}x{DECODE_SIDE}: made {made:.3} ms, \
-                 replace_region {idle:.3} ms idle, first read {first_read:.3} ms (the next \
-                 {next_read:.3} ms), replace_region {behind:.3} ms behind a command buffer in \
-                 flight ({cpu} CPU decodes in 5 rounds, {held} held)"
-            );
-        }
-        if let Some(first) = first {
-            eprintln!("CPUDECODE {name}: the first texture made in {first:.3} ms");
-        }
         drop(messages.take_notices());
     });
 }

@@ -103,9 +103,9 @@
 //! heap textures whose layout in Metal's heaps the runtime does not model in `heap_metal_sizes`
 //! ([`UNMODELLED_SIZES`]) and those whose images take more of a heap than Metal's answer there
 //! ([`PAST_METAL_SIZES`]), BC1 to BC5 textures on a driver not measured to decode them as Metal
-//! does in `compressed_decode` ([`BLOCK_DECODES`]) and writes into their decoded twins behind
-//! work in flight there ([`BEHIND_WRITES`]), ASTC textures on a device without their format in
-//! `astc_textures` ([`ASTC_TWINS`]; PVRTC ones take the first in `pvrtc_textures`), passes rendering a linear image apart in
+//! does in `compressed_decode` ([`BLOCK_DECODES`]), ASTC textures on a device without their format
+//! in `astc_textures` ([`ASTC_TWINS`]; PVRTC ones take the first in `pvrtc_textures`) and CPU
+//! writes into their decoded twins there ([`CPU_DECODES`]), passes rendering a linear image apart in
 //! `linear_attachments` ([`LINEAR_COPIES`]) and those rendering one through copies as they clear
 //! it and no command of them may read it, there too ([`CHOSEN_COPIES`]), passes rendering a texture
 //! over a buffer they do not store through the image its texture keeps in `kept_buffer_bytes`
@@ -147,7 +147,7 @@
 
 use super::absent_reads::ABSENT_READS;
 use super::amplified_draws::AMPLIFICATION;
-use super::astc_textures::{decodes_astc, ASTC_TWINS};
+use super::astc_textures::{decodes_astc, ASTC_TWINS, CPU_DECODES};
 use super::attachment_reads::IN_PLACE;
 use super::barycentric_weights::SYNTHESIZED_GEOMETRY;
 use super::binary_archives::ARCHIVES;
@@ -161,7 +161,7 @@ use super::color_groups::PER_COLOR_COUNTS;
 use super::color_reformat::KEPT_COLORS;
 use super::color_writes::COLOR_WRITES;
 use super::command_queues::SHARED_PRESENT_QUEUES;
-use super::compressed_decode::{BEHIND_WRITES, BLOCK_DECODES};
+use super::compressed_decode::BLOCK_DECODES;
 use super::cross_class_reads::CROSS_CLASS;
 use super::depth_denormals::{DEPTH_DENORMALS, SIGNED_DEPTH_TESTS};
 use super::detach_textures::DETACHED_REACHES;
@@ -553,8 +553,8 @@ fn every_kind_has_a_site_a_lane_test_takes() {
         &CROSS_CLASS,
         &NIL_OFFSETS,
         &BLOCK_DECODES,
-        &BEHIND_WRITES,
         &ASTC_TWINS,
+        &CPU_DECODES,
         &SHARED_PRESENT_QUEUES,
         &PAST_METAL_SIZES,
         &LINEAR_COPIES,
@@ -2101,27 +2101,20 @@ pub(super) fn twins_carried(device: &Device, pf: PixelFormat) -> [bool; 2] {
     ]
 }
 
-/// Whether `device` gives a single-sample texture of `pf` a decoded twin (`decoded-block-twin`): a
-/// BC1 to BC5 format whose decode its driver is not measured to make as Metal's (BC1 to BC3
-/// `DriverFact::ColorBlockDecodeIsMetals`, BC4 and BC5 `DriverFact::ChannelBlockDecodeIsMetals`).
-/// Every venue's twin formats take sampling, linear filtering and copies, which the twin needs.
-pub(super) fn twins_blocks(device: &Device, pf: PixelFormat) -> bool {
-    use metal2vulkan::bind::BlockDecode as B;
-    let fact = match B::of(pf) {
-        Some(B::Bc1 | B::Bc2 | B::Bc3) => DriverFact::ColorBlockDecodeIsMetals,
-        Some(_) => DriverFact::ChannelBlockDecodeIsMetals,
-        None => return false,
-    };
-    !device.properties().driver_facts.contains(&fact)
-}
-
-/// Whether `device` announces `compressed-texel-decode` for a texture of `pf` it makes in memory
-/// of its own: a BC6H or BC7 texture, which takes no decoded twin, on a driver not measured to
-/// decode it as Metal does (`DriverFact::Bc6hBlockDecodeIsMetals`, `Bc7BlockDecodeIsMetals`). A BC1
-/// to BC5 texture takes a twin instead ([`twins_blocks`]).
+/// Whether `device` announces `compressed-texel-decode` for a texture of `pf`: a BC texture, which
+/// the device samples through its own decode, on a driver not measured to decode it as Metal does
+/// (BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`, BC4 and BC5
+/// `DriverFact::ChannelBlockDecodeIsMetals`, `DriverFact::Bc6hBlockDecodeIsMetals`,
+/// `Bc7BlockDecodeIsMetals`).
 pub(super) fn decodes_blocks_its_way(device: &Device, pf: PixelFormat) -> bool {
     use PixelFormat as P;
     let fact = match pf {
+        P::BC1RGBA | P::BC1RGBASRGB | P::BC2RGBA | P::BC2RGBASRGB | P::BC3RGBA | P::BC3RGBASRGB => {
+            DriverFact::ColorBlockDecodeIsMetals
+        }
+        P::BC4RUnorm | P::BC4RSnorm | P::BC5RGUnorm | P::BC5RGSnorm => {
+            DriverFact::ChannelBlockDecodeIsMetals
+        }
         P::BC6HRGBFloat | P::BC6HRGBUfloat => DriverFact::Bc6hBlockDecodeIsMetals,
         P::BC7RGBAUnorm | P::BC7RGBAUnormSRGB => DriverFact::Bc7BlockDecodeIsMetals,
         _ => return false,

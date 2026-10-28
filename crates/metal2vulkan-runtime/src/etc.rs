@@ -16,7 +16,7 @@
 //!   included), and the CPU's copies, move its blocks through the carrier, so `getBytes` and a
 //!   blit out of it hand back the blocks written. Its sampled views, of its linear and sRGB forms
 //!   alike (the same codes), present its decoded twin (`texture/decoded_twin.rs`): Metal's decode
-//!   of the blocks, decoded after each write as a BC texture's twin is, on the GPU
+//!   of the blocks, decoded after each write as an ASTC texture's twin is, on the GPU
 //!   (`bind::etc_decode_module`), or a host write's on the CPU. An 8-bit format's twin holds its
 //!   codes, exact (an sRGB form's slots read them raw and decode them through Metal's table,
 //!   `metal::texel_format::srgb_raw`); an 11-bit format's holds 16-bit normalized codes

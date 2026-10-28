@@ -703,7 +703,7 @@ impl TexelCopy {
         self
     }
 
-    /// `pass` alone, the decode into a decoded twin of what is in its BC image already: a heap's
+    /// `pass` alone, the decode into a decoded twin of what is in its carrier already: a heap's
     /// bytes. (no longer a host call's copy's, which the CPU decodes.)
     pub(crate) fn decode_only(pass: DecodePass) -> TexelCopy {
         TexelCopy::new(vk::Buffer::null(), 0, Vec::new(), Box::new(())).decoding(pass)

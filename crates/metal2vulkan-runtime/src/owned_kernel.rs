@@ -186,9 +186,8 @@ pub(super) enum OwnedModule {
     /// record's region, its unit's counter, Metal's word, its loop's flag and the overflow word.
     PredicationStep,
     /// The GPU decode of one decoded twin's blocks (`TwinDecode::module`:
-    /// `bind::block_decode_module`, `bind::astc_decode_module`): a BC1 to BC5 texture's or an
-    /// ASTC carrier's written region decoded as Metal decodes it into its decoded twin
-    /// (`texture/decoded_twin.rs`).
+    /// `bind::astc_decode_module` and the other carriers' modules): a carrier's written region
+    /// decoded as Metal decodes it into its decoded twin (`texture/decoded_twin.rs`).
     TwinDecode(TwinDecode),
     /// `bind::tessellation_scan_module` of one pipeline's tessellation state: an emulated patch
     /// draw's records and chunk draws (`render/tessellation_scan.rs`). One per state a pipeline

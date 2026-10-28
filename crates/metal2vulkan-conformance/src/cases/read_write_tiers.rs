@@ -445,16 +445,12 @@ impl Case for ReadWriteDescriptors {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The tables name block-compressed formats, which a device with no Vulkan format for one
-        // makes through a decoded twin, carried beside the blocks or decoded per block, and the
-        // runtime says so. Both are performance notices at the notices site alone: every answer of
-        // the tables is still compared. Measured firing on llvmpipe (LLVM 21.1.8).
-        [
-            metal2vulkan_runtime::Degradation::CarriedDecodedTwin,
-            metal2vulkan_runtime::Degradation::DecodedBlockTwin,
-        ]
-        .iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
+        // makes through a decoded twin carried beside the blocks, and the runtime says so: a
+        // performance notice at the notices site alone, every answer of the tables still
+        // compared. Measured firing on llvmpipe (LLVM 21.1.8).
+        vec![crate::replay::notice_allowance(
+            metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
+        )]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

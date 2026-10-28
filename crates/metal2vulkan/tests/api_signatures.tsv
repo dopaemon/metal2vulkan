@@ -61,7 +61,6 @@ assoc-const	metal2vulkan-runtime::StoreActionOptions::NONE	pub const NONE: Store
 assoc-const	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
 assoc-const	metal2vulkan::bind::ArgumentSamplersShape::MIN_ENTRIES	pub const MIN_ENTRIES: u64
 assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
-assoc-const	metal2vulkan::bind::BlockDecode::ALL	pub const ALL: [BlockDecode; 7]
 assoc-const	metal2vulkan::bind::BlockDecodeModule::BLOCKS_BINDING	pub const BLOCKS_BINDING: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SET	pub const SET: u32
@@ -556,7 +555,6 @@ assoc-const-value	metal2vulkan-runtime::StoreActionOptions::NONE	StoreActionOpti
 assoc-const-value	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
 assoc-const-value	metal2vulkan::bind::ArgumentSamplersShape::MIN_ENTRIES	16
 assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
-assoc-const-value	metal2vulkan::bind::BlockDecode::ALL	[BlockDecode::Bc1, BlockDecode::Bc2, BlockDecode::Bc3, BlockDecode::Bc4Unorm, BlockDecode::Bc4Snorm, BlockDecode::Bc5Unorm, BlockDecode::Bc5Snorm]
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::BLOCKS_BINDING	1
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SET	0
@@ -1354,7 +1352,6 @@ enum	metal2vulkan::bind::AccessClass	#[cfg_attr(feature = "serde", derive(serde:
 enum	metal2vulkan::bind::ArgumentLayoutError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ArgumentLayoutError
 enum	metal2vulkan::bind::ArgumentType	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ArgumentType
 enum	metal2vulkan::bind::AstcTexels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AstcTexels
-enum	metal2vulkan::bind::BlockDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BlockDecode
 enum	metal2vulkan::bind::BoundBuffer	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundBuffer
 enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundTexture
 enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
@@ -4538,7 +4535,6 @@ fn	metal2vulkan-runtime::process_exiting	pub fn process_exiting() -> bool
 fn	metal2vulkan-runtime::sampler_border_color	pub fn sampler_border_color(raw: u64) -> SamplerBorderColor
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Device, decode: AstcDecode, texels: AstcTexels) -> Result<BlockDecodeModule, Error>
-fn	metal2vulkan::bind::block_decode_module	pub fn block_decode_module(device: &Device, decode: BlockDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::capture_assembly_module	pub fn capture_assembly_module(device: &Device) -> Result<CaptureAssemblyModule, Error>
 fn	metal2vulkan::bind::capture_settle_module	pub fn capture_settle_module(device: &Device) -> Result<CaptureSettleModule, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
@@ -4933,7 +4929,6 @@ macro-member	metal2vulkan-runtime::Degradation::CoverageReadsRoundedAlpha	Covera
 macro-member	metal2vulkan-runtime::Degradation::CpuBlockDecode	CpuBlockDecode = "cpu-block-decode", Performance,
 macro-member	metal2vulkan-runtime::Degradation::CrossClassTextureNeutral	CrossClassTextureNeutral = "cross-class-texture-neutral", Precision,
 macro-member	metal2vulkan-runtime::Degradation::CubeGradientFootprint	CubeGradientFootprint = "cube-gradient-footprint";
-macro-member	metal2vulkan-runtime::Degradation::DecodedBlockTwin	DecodedBlockTwin = "decoded-block-twin", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DecodedTexelPrecision	DecodedTexelPrecision = "decoded-texel-precision", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DepthBiasPastOne	DepthBiasPastOne = "depth-bias-past-one", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DepthDenormals	DepthDenormals = "depth-denormals", Precision,
@@ -8298,14 +8293,6 @@ method	metal2vulkan::bind::BindingPlan::instantiate_replay	pub fn instantiate_re
 method	metal2vulkan::bind::BindingPlan::relisted_sampler_tables	pub fn relisted_sampler_tables(&self, device: &crate::device::Device, samplers: &[crate::bind::ArgumentSampler], placement: HeapPlacement) -> Result<Option<Vec<crate::bind::instantiate::DescriptorBytes>>, BindError>
 method	metal2vulkan::bind::BindingPlan::sampler_tables	pub fn sampler_tables(&self) -> Vec<(u32, u32)>
 method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>
-method	metal2vulkan::bind::BlockDecode::block_bytes	pub fn block_bytes(self) -> u32
-method	metal2vulkan::bind::BlockDecode::decode	pub fn decode(self, blocks: &[u8], size: [u32; 3]) -> Vec<u8>
-method	metal2vulkan::bind::BlockDecode::decode_into	pub fn decode_into(self, blocks: &[u8], [width, height, depth]: [u32; 3], texels: &mut [u8])
-method	metal2vulkan::bind::BlockDecode::of	pub fn of(pf: PixelFormat) -> Option<BlockDecode>
-method	metal2vulkan::bind::BlockDecode::texel	pub fn texel(self, block: &[u8], j: usize) -> [u32; 2]
-method	metal2vulkan::bind::BlockDecode::texel_bytes	pub fn texel_bytes(self) -> u32
-method	metal2vulkan::bind::BlockDecode::texel_format	pub fn texel_format(self) -> Format
-method	metal2vulkan::bind::BlockDecode::texel_pixel_format	pub fn texel_pixel_format(self) -> PixelFormat
 method	metal2vulkan::bind::BlockDecodeModule::shape	pub fn shape([width, height, depth]: [u32; 3]) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::BoundAccelerationStructure::new	pub fn new(instance_count: u32) -> BoundAccelerationStructure
 method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, view_base_alignment: u32) -> BufferShape
@@ -11954,13 +11941,6 @@ variant	metal2vulkan::bind::ArgumentType::Texture	Texture
 variant	metal2vulkan::bind::ArgumentType::VisibleFunctionTable	VisibleFunctionTable
 variant	metal2vulkan::bind::AstcTexels::Float	Float
 variant	metal2vulkan::bind::AstcTexels::Unorm8	Unorm8
-variant	metal2vulkan::bind::BlockDecode::Bc1	Bc1
-variant	metal2vulkan::bind::BlockDecode::Bc2	Bc2
-variant	metal2vulkan::bind::BlockDecode::Bc3	Bc3
-variant	metal2vulkan::bind::BlockDecode::Bc4Snorm	Bc4Snorm
-variant	metal2vulkan::bind::BlockDecode::Bc4Unorm	Bc4Unorm
-variant	metal2vulkan::bind::BlockDecode::Bc5Snorm	Bc5Snorm
-variant	metal2vulkan::bind::BlockDecode::Bc5Unorm	Bc5Unorm
 variant	metal2vulkan::bind::BoundBuffer::Buffer	Buffer { length: u64, offset: u64, gpu_address: u64, device_address: Option<u64>, attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::BoundBuffer::Bytes	Bytes { len: u32,  attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::BoundTexture::Buffer	Buffer { pixel_format: metal::PixelFormat, offset: u64, length: u64, bytes_per_row: u64, resource_id: Option<u64>,  swizzle: metal::TextureSwizzleChannels }

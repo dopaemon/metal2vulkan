@@ -1915,61 +1915,11 @@ fn padded_formats_are_held_raw_from_every_creator() {
     }
 }
 
-/// A decoded twin's plan holds its texels' own format, so its copies move texels (not the BC
-/// image's blocks, `copy_units`); a twin routed as its BC image's CPU copies go copies both
-/// ways, as the staging queue's images do; and its start, its zero blocks' decode, is BC1's
-/// opaque black and every other decode's zero.
-#[test]
-fn decoded_twins_are_planned_in_their_texels_format() {
-    use super::super::texture::copy_units;
-    use super::super::texture::decoded_twin::{twin_plan, TwinDecode};
-    use metal2vulkan::bind::BlockDecode;
-    let both = ImageUsageFlags::TRANSFER_SRC | ImageUsageFlags::TRANSFER_DST;
-    let mut planned = 0;
-    for (name, desc, device) in committed() {
-        let facts = facts(&desc, &device);
-        for &pf in PixelFormat::ALL {
-            let Some(decode) = BlockDecode::of(pf) else {
-                continue;
-            };
-            let texel = decode.texel_pixel_format();
-            assert_eq!(direct_format(texel), Some(decode.texel_format()), "{pf:?}");
-            let zero = decode.decode(&vec![0; decode.block_bytes() as usize], [1, 1, 1]);
-            let start = match decode == BlockDecode::Bc1 {
-                true => vec![0, 0, 0, 255],
-                false => vec![0; decode.texel_bytes() as usize],
-            };
-            assert_eq!(zero, start, "{pf:?}");
-            let l = layout(TextureType::Type2DArray, pf, 1, 3);
-            let Ok(plan) = plan_image(&l, TextureUsage::SHADER_READ, false, &facts) else {
-                continue;
-            };
-            planned += 1;
-            for routed in [false, true] {
-                let twin = twin_plan(&plan, &l, TwinDecode::Block(decode), routed);
-                let what = format!("{name}: {pf:?}, routed {routed}");
-                assert_eq!(
-                    (twin.pixel_format, twin.format),
-                    (texel, decode.texel_format())
-                );
-                let unit = (ImageAspectFlags::COLOR, decode.texel_bytes(), [1, 1]);
-                assert_eq!(copy_units(twin.format, twin.pixel_format), [unit], "{what}");
-                assert!(twin.usage.contains(ImageUsageFlags::SAMPLED), "{what}");
-                assert!(twin.usage.contains(ImageUsageFlags::TRANSFER_DST), "{what}");
-                assert_eq!(twin.usage.contains(both), routed, "{what}");
-                let shape = |p: &ImagePlan| (p.image_type, p.extent, p.levels, p.layers, p.samples);
-                assert_eq!(shape(&twin), shape(&plan), "{what}");
-            }
-        }
-    }
-    assert!(planned > 0);
-}
-
 /// A decode pass's bands of a region cover each of its texels once, and each band's blocks and
 /// texels take at most the budget together, so a pass in the device's decode scratch
 /// (`PassScratch::Device`, of the budget and an alignment) holds any band; only a single block
-/// row of one image past the budget is a band alone. Regions of BC decodes, of ASTC ones
-/// (blocks of 12 x 10 and 4 x 4, texels of 4 bytes), PVRTC ones, ETC2 and EAC ones
+/// row of one image past the budget is a band alone. Regions of ASTC decodes (blocks of 12 x 10
+/// and 4 x 4, texels of 4 bytes), PVRTC ones, ETC2 and EAC ones
 /// (texels of 2, 8 and 4 bytes) and 4:2:2 ones (pairs of 2 x 1), square and narrow, of sides off a
 /// multiple of the block, of layers and of depth slices, under the band budget and two small ones
 /// that make them band.
@@ -1977,7 +1927,7 @@ fn decoded_twins_are_planned_in_their_texels_format() {
 fn decode_bands_cover_each_texel_once_within_the_budget() {
     use super::super::texture::decoded_twin::{bands, TwinDecode, BAND_BYTES};
     use metal2vulkan::bind::{
-        AstcDecode, AstcTexels, BlockDecode, ChromaDecode, EtcDecode, EtcTexels, PvrtcDecode,
+        AstcDecode, AstcTexels, ChromaDecode, EtcDecode, EtcTexels, PvrtcDecode,
     };
     let shapes: [([u32; 3], u32); 7] = [
         ([2048, 2048, 1], 1),
@@ -1990,9 +1940,6 @@ fn decode_bands_cover_each_texel_once_within_the_budget() {
     ];
     let astc = |pf| AstcDecode::of(pf).expect("an ASTC decode");
     let decodes = [
-        TwinDecode::Block(BlockDecode::Bc1),
-        TwinDecode::Block(BlockDecode::Bc3),
-        TwinDecode::Block(BlockDecode::Bc5Unorm),
         TwinDecode::Astc(astc(PixelFormat::ASTC12x10LDR), AstcTexels::Unorm8),
         TwinDecode::Astc(astc(PixelFormat::ASTC4x4SRGB), AstcTexels::Unorm8),
         TwinDecode::Pvrtc(PvrtcDecode::of(PixelFormat::PVRTCRGBA2BPP).expect("a PVRTC decode")),

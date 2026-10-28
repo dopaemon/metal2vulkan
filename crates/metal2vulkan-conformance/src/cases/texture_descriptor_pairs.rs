@@ -586,17 +586,13 @@ impl Case for DescriptorPairs {
         )];
         if self.name == USAGE {
             // The usage table names compressed formats, which a device with no Vulkan format for
-            // one reads through a decoded twin -- carried beside the blocks, or decoded per block.
-            // Measured firing for this row alone, on both venues. An ASTC LDR or EAC 11-bit
-            // format's twin holds the codes nearest Metal's values (`decoded-texel-precision`),
-            // measured firing for this row on llvmpipe (LLVM 21.1.8). All three sit at the
-            // notices site alone.
+            // one reads through a decoded twin carried beside the blocks. Measured firing for this
+            // row alone, on both venues. An ASTC LDR or EAC 11-bit format's twin holds the codes
+            // nearest Metal's values (`decoded-texel-precision`), measured firing for this row on
+            // llvmpipe (LLVM 21.1.8). Both sit at the notices site alone.
             named.extend([
                 crate::replay::notice_allowance(
                     metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
-                ),
-                crate::replay::notice_allowance(
-                    metal2vulkan_runtime::Degradation::DecodedBlockTwin.code(),
                 ),
                 crate::replay::notice_allowance(
                     metal2vulkan_runtime::Degradation::DecodedTexelPrecision.code(),

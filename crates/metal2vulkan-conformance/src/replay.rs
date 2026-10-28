@@ -381,7 +381,8 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 ///   the device's own depth conversion and depth test (`unorm-depth-rounding`, `depth-denormals`,
 ///   `signed-depth-test`);
 /// - **texel, vertex and colour conversions**: `device-texel-conversion`,
-///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
+///   `half-texel-conversion`, `srgb-texel-decode`, the device's decode of a BC texture's blocks
+///   (`compressed-texel-decode`), the device's fixed-function conversion of a
 ///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
 /// - **sampling and filtering**: `device-sampling`, `device-sample-level`, the device's filter of a
 ///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
@@ -426,6 +427,7 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::DeviceTexelConversion,
         D::HalfTexelConversion,
         D::SrgbTexelDecode,
+        D::CompressedTexelDecode,
         D::DeviceVertexConversion,
         D::DeviceColorConversion,
         D::DeviceSampling,

@@ -660,8 +660,6 @@ surface! {
         fn compressed_blit_module;
         enum CompressedBlit N;
         struct CompressedBlitModule N;
-        fn block_decode_module;
-        enum BlockDecode N;
         struct BlockDecodeModule N;
         fn astc_decode_module;
         struct AstcDecode N;

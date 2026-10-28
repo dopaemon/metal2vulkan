@@ -17,6 +17,8 @@ mod argument_table;
 mod attachmentless;
 mod attributes;
 mod batches;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod bc_own_image;
 mod binary;
 mod binary_archive;
 mod binding_view;

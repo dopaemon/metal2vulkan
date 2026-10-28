@@ -31,9 +31,7 @@
 
 use super::degrade_notices::UNPACKED_FILL;
 use super::degrade_notices::{assert_made_once, forced, loses_depth_denormals, on_device};
-use super::degrade_notices::{
-    decodes_blocks_its_way, shared_in_system_memory, twins_blocks, twins_carried,
-};
+use super::degrade_notices::{decodes_blocks_its_way, shared_in_system_memory, twins_carried};
 use super::extended_range_two_planes::{get, put};
 use super::texture_blits::depth_images;
 use super::{buffer_with, read_buffer};
@@ -647,8 +645,9 @@ fn texture_fills_write_metal_s_bytes() {
             let first_unpacked = unpacked_here && !unpacked_announced;
             unpacked_announced |= first_unpacked;
             let kinds: &[Degradation] = if first_unpacked { &UNPACKED_FILL } else { &[] };
-            // A BC texture's decoded twin; the uploads into a 32-bit float depth image, what such
-            // a depth may store and where it may clamp; the `Shared` buffers.
+            // A carried texture's decoded twin, a BC texture's device decode; the uploads into a
+            // 32-bit float depth image, what such a depth may store and where it may clamp; the
+            // `Shared` buffers.
             let pf = format(raw);
             let mipmapped = CASES.iter().any(|name| case(raw, name, false).levels > 1);
             let depth_image = matches!(
@@ -656,7 +655,6 @@ fn texture_fills_write_metal_s_bytes() {
                 PixelFormat::Depth32Float | PixelFormat::Depth32FloatStencil8
             );
             let first = forced(&[
-                (Degradation::DecodedBlockTwin, twins_blocks(device, pf)),
                 (
                     Degradation::CarriedDecodedTwin,
                     twins_carried(device, pf)[0],

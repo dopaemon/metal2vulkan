@@ -1017,18 +1017,21 @@ pub enum DriverFact {
     /// 8 bits; BC2's alpha its 4-bit code times 17. NVIDIA's 615.71.09 (the RTX 3090 and the RTX
     /// 5080 Laptop GPU) answers channels up to 3/255 off (BC3's alpha 6/255), ANV up to 1/255,
     /// lavapipe 3/255. On a driver without it a texture of such a format announces
-    /// `compressed-texel-decode` where the runtime makes it.
+    /// `compressed-texel-decode` where the runtime makes it, and its reads, samples and gathers
+    /// are the device's decode of its own BC image: the runtime keeps no decoded twin of a BC
+    /// texture.
     ColorBlockDecodeIsMetals,
     /// The driver decodes each texel of a BC4 or BC5 texture (`BC4_RUnorm` to `BC5_RGSnorm`) to
     /// Metal's value. Metal's (an Apple M4): the index's weight of 64 as for
     /// BC3's alpha, the sum `(64 - w) a + w b` unrounded, `sum / 16320` (signed `sum / 8128`,
     /// an endpoint of -128 summed as it is and the value clamped to -1 after), the six-value
     /// constants 0 and 1 (signed -1 and 1), each correctly rounded to `float`. NVIDIA's 615.71.09
-    /// answers up to 7.3/255 off (signed 0.064), ANV 1.3/255 (signed 0.013), lavapipe 2.3/255
-    /// (signed 0.021), and RADV (Mesa 26.2.4, the Radeon 780M) clamps an endpoint of -128 to -127
+    /// answers up to 7.3/255 off (signed 0.064), ANV 1.3/255 (signed 0.013), lavapipe 2.4/255
+    /// (signed 0.022), and RADV (Mesa 26.2.4, the Radeon 780M) clamps an endpoint of -128 to -127
     /// before the sum (signed up to 1.7/255 off) and rounds some unsigned values a `float` ulp
     /// off. On a driver without it a texture of such a format announces
-    /// `compressed-texel-decode` where the runtime makes it.
+    /// `compressed-texel-decode` where the runtime makes it, its texels the device's decode of its
+    /// own BC image.
     ChannelBlockDecodeIsMetals,
     /// A depth image a pass rendered at custom sample positions (made with
     /// `VK_IMAGE_CREATE_SAMPLE_LOCATIONS_COMPATIBLE_DEPTH_BIT_EXT`, held in `GENERAL`) answers a
@@ -1872,7 +1875,7 @@ const DYNAMIC_RESTART_WARNING: DriverDiagnostic = DriverDiagnostic {
 ///   (`restart`, `made_at_creation`: its warning withheld at each such pipeline's creation and
 ///   nowhere else), `DontCareStoreIsMetals` (`dont_care_stores`, `kept_buffer_bytes`),
 ///   `ColorBlockDecodeIsMetals` and `ChannelBlockDecodeIsMetals`
-///   (`compressed_decode::bc1_to_bc5_texels_read_as_metal_s`) and `TileStoreIsMetals`
+///   (`compressed_decode::bc1_to_bc5_texels_read_the_device_s_decode`) and `TileStoreIsMetals`
 ///   (`snorm_tile_store`).
 /// - `BlendlessColorAttachmentsWarn`, new at 1.4.2 (the fact's docs): where the release was
 ///   unmeasured, the warning of each color attachment of a format the device cannot blend

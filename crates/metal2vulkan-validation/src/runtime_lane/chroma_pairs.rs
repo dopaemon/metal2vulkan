@@ -514,7 +514,8 @@ fn metal_texels(pf: PixelFormat, bytes: &[u8]) -> Vec<[f32; 4]> {
 /// rows, whose red and blue change beside the region too, then after a blit of the whole texture
 /// and of 6 x 1 texels; a `Private` texture's after a copy from the `Shared` one. Each read is a
 /// command buffer after the write. The CPU copies' decodes are a GPU pass or the CPU's, the
-/// blits' GPU passes; the twin announces `carried-decoded-twin` once.
+/// blits' GPU passes; the twin announces `carried-decoded-twin` once, and `cpu-block-decode` once
+/// where a CPU copy decoded on the CPU.
 #[test]
 fn four_two_two_texels_read_as_metal_s() {
     on_device(|device, messages| {
@@ -628,6 +629,11 @@ fn four_two_two_texels_read_as_metal_s() {
             announced(Degradation::DeviceTexelConversion),
             usize::from(!exact),
             "the device's conversion of the codes, on {name}"
+        );
+        assert_eq!(
+            announced(Degradation::CpuBlockDecode),
+            usize::from(device.work_counts().cpu_block_decodes > 0),
+            "the CPU copies' decodes on the CPU, on {name}"
         );
     });
 }

@@ -841,29 +841,21 @@ pub fn out_tight(
     });
 }
 
-/// The notices a venue announces where it does not hold a BC format in its own compressed form, and
-/// which a case may therefore name as justifying its notices site.
+/// The notices a BC case may name as justifying its notices site: the `Shared` buffer each row
+/// reads its answer back through, which a device without unified memory announces.
 ///
-/// Measured per case, each run **alone** so the once-per-device attribution is right: on lavapipe
-/// BC1 to BC5 announce `cpu-block-decode` and `decoded-block-twin` (the blocks live in a carrier and
-/// its reads go through a decoded twin), BC7 announces `compressed-texel-decode`, and BC6H announces
-/// nothing because lavapipe holds it natively. On MoltenVK none of them fires. Every block still
-/// compares exactly on both: the only site these loosen is the set of notices, which Metal holds
-/// empty, and an allowance fails the case if the notice it names did not fire.
-///
-/// `compressed-texel-decode` is named for **BC6H and BC7 only**.
-/// [`crate::cases::compressed_decode`] deliberately refuses to allow it for BC1 to BC5, because its
-/// lane asserts no texture of those formats announces it, and a run that does is a divergence to
-/// report rather than one to excuse. That assertion does not cover BC6H or BC7, and lavapipe does
-/// announce it for BC7, so naming it there keeps the check alive where it exists and tells the truth
-/// where it does not.
+/// A BC texture keeps no decoded twin on any venue: the device holds every BC format in its own
+/// compressed form and decodes it itself, and where its driver is not measured to decode a format
+/// as Metal does the runtime announces `compressed-texel-decode`, one of the device's native
+/// answers the suite declares for every case ([`crate::replay::NATIVE_NOTES`]). Every block still
+/// compares exactly: the only site these loosen is the set of notices, which Metal holds empty.
 ///
 /// What is **not** here: `staged-texture-copy`. Our `replaceRegion:` into a compressed texture does
 /// go through a staging buffer, and the notice fires on **no** venue of this suite for these cases
 /// (verified over four legs: MoltenVK and lavapipe, exact and default policy). A tolerance naming a
 /// mechanism no venue announces is a claim nothing stands behind, so it is gone, as the `formats`
 /// stream's `shadowed-texture` went.
-pub fn carrier_allowances(format: u32) -> Vec<Allowance> {
+pub fn block_allowances() -> Vec<Allowance> {
     // Every row reads its answer back through a `Shared` buffer, so on a device without
     // unified memory the runtime announces `shared-in-system-memory`
     // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -875,20 +867,9 @@ pub fn carrier_allowances(format: u32) -> Vec<Allowance> {
     // field and nothing else (replay-nvidia.log). On MoltenVK, where
     // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
     // recording of this suite declares it.
-    let mut codes = vec![
+    vec![crate::replay::notice_allowance(
         Degradation::SharedInSystemMemory.code(),
-        Degradation::CpuBlockDecode.code(),
-        Degradation::DecodedBlockTwin.code(),
-    ];
-    // BC6H (150, 151) and BC7 (152, 153); the BC1 to BC5 numbers below them are the family
-    // `compressed_decode`'s own assertion covers.
-    if format >= 150 {
-        codes.push(Degradation::CompressedTexelDecode.code());
-    }
-    codes
-        .into_iter()
-        .map(crate::replay::notice_allowance)
-        .collect()
+    )]
 }
 
 /// The case for one format.
@@ -934,7 +915,7 @@ impl Case for CompressedMoves {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        carrier_allowances(self.format().format)
+        block_allowances()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

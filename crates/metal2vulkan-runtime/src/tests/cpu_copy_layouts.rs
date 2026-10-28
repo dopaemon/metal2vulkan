@@ -127,21 +127,6 @@ fn paths(device: &Device, run: impl FnOnce()) -> [u64; 3] {
     ]
 }
 
-/// Wait until the device's decode thread finished every CPU decode into a decoded twin queued so
-/// far (`Scheduler::decodes_pending`): it copies a decode's texels into the twin on its own
-/// thread, each copy counted as a host copy (`WorkCounts::host_texel_copies`), so a count taken
-/// around a call while a decode runs holds its copies too.
-fn decodes_settled(device: &Device) {
-    let start = std::time::Instant::now();
-    while device.shared().scheduler.decodes_pending() {
-        assert!(
-            start.elapsed() < WAIT,
-            "a decoded twin's CPU decode never finished"
-        );
-        std::thread::sleep(std::time::Duration::from_micros(100));
-    }
-}
-
 /// Each layout of each region reads its rows where the layout puts them, and nothing else.
 #[test]
 fn get_bytes_reads_each_layout_its_rows_alone() {
@@ -301,11 +286,6 @@ fn two_plane_cpu_copies_wait_for_no_submission_where_a_textures_do() {
 /// The levels here are small and few, so the staged copies stay under the bound past which a
 /// `replaceRegion` makes a submission of its own (`first_move.rs`, `STAGED_BYTES` and
 /// `STAGED_COPIES`).
-///
-/// On a device whose driver is not measured to decode the format's blocks as Metal does, the
-/// texture keeps a decoded twin, and each write's decode is copied into it on the device's decode
-/// thread (`texture/twin_decode.rs`), counted as host copies too: each read is counted once every
-/// decode queued before it finished ([`decodes_settled`]), so its count is its own copies alone.
 #[test]
 fn block_cpu_copies_stage_their_writes_and_read_where_the_device_copies_on_the_host() {
     let scratch = Scratch::new("block-cpu-copies");
@@ -331,7 +311,6 @@ fn block_cpu_copies_stage_their_writes_and_read_where_the_device_copies_on_the_h
         let put = paths(&device, || {
             (texture.replace_region(region, level, 0, &bytes, row, 0)).unwrap()
         });
-        decodes_settled(&device);
         let mut back = vec![UNTOUCHED; bytes.len()];
         let get = paths(&device, || {
             (texture.get_bytes(&mut back, row, 0, region, level, 0)).unwrap()

@@ -207,9 +207,9 @@ unsafe fn write(
 
 impl Image {
     /// Whether its CPU copies run on the host: it was made with host-transfer usage, moved and
-    /// zeroed on the host (the module docs). With a decoded twin too: a read copies the BC image's
+    /// zeroed on the host (the module docs). With a decoded twin too: a read copies the carrier's
     /// blocks, and a write's decode into the twin is made on the CPU and copied into the twin on
-    /// the host at once (`Image::decode_written`).
+    /// the host (`Image::decode_written`).
     pub(super) fn takes_host_copies(&self) -> bool {
         self.host_copies && self.device.shared().host_copies.is_some()
     }

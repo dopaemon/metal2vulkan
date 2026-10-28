@@ -2272,27 +2272,23 @@ bound.
   where Metal's sees the nil buffer's offset as its address; neither holds a buffer, so only the
   address's value differs.
 - `metal2vulkan-degrade-compressed-texel-decode` (precision). `CompressedTexelDecode`: A texture of
-  a BC1 to BC5 format (`BC1_RGBA` to `BC5_RGSnorm`, the sRGB forms too) made on a device whose
-  driver is not measured to decode their texels as Metal does (BC1 to BC3
-  `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK 1.4.1 on Apple's GPUs and 1.4.2 on the M3 Max,
-  RADV from Mesa 26.2.4 on the 780M; BC4 and BC5 `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK
-  1.4.1 on Apple's GPUs and 1.4.2 on the M3 Max).
+  a BC format (`BC1_RGBA` to `BC7_RGBAUnorm_sRGB`) made on a device whose driver is not measured to
+  decode its texels as Metal does (BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK on
+  Apple's GPUs, RADV on the 780M; BC4 and BC5 `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK on
+  Apple's GPUs; BC6H `DriverFact::Bc6hBlockDecodeIsMetals` and BC7
+  `DriverFact::Bc7BlockDecodeIsMetals`: MoltenVK on Apple's GPUs, NVIDIA's on the RTX 3090 and RTX
+  5080 Laptop GPU, RADV on the 780M, ANV on the Iris Xe of Raptor Lake-P, and lavapipe's BC6H). The
+  texture's image is its own BC image, which the device samples through its own decode: no BC
+  texture keeps a decoded twin. The bounds are the largest differences from Metal's texels measured
+  on random blocks of every format; a driver not named is unmeasured, and validation derives no
+  tolerance from them.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
-  form's code through Metal's table), where Metal interpolates with 6-bit weights: NVIDIA's
-  (615.71.09, the RTX 3090 and RTX 5080 Laptop GPU) answers a BC1 to BC3 channel up to 3/255 off
-  Metal's (BC3's alpha 6/255), BC4 and BC5 up to 7.3/255 (signed 0.064); ANV's up to 1.3/255 (signed
-  0.013), lavapipe's 2.3/255 (signed 0.021), RADV's (Mesa 26.2.4, the Radeon 780M) a BC4 or BC5
-  signed texel with an endpoint of -128 up to 1.7/255; its blocks' bytes, copies and sizes are
-  Metal's.
-- `metal2vulkan-degrade-decoded-block-twin` (performance). `DecodedBlockTwin`: A texture of a BC1 to
-  BC5 format made on a device whose driver is not measured to decode its texels as Metal does
-  (`compressed-texel-decode`'s facts), whose image is its own for good: it keeps a decoded twin,
-  Metal's texels, which its samples read, and announces no `compressed-texel-decode`. Cost: a second
-  image of its decoded texels beside its blocks, 4 to 8 times their bytes (R8G8B8A8_UNORM for BC1 to
-  BC3, R32_SFLOAT and R32G32_SFLOAT for BC4 and BC5), and a decode after each write into it: a pass
-  on the GPU for a blit, a copy from a texture or a CPU copy through a submission; on the CPU, on
-  the device's decode thread, where its CPU copies go on the host or the staging queue, and then
-  once as it is made, the first command buffer that may read it waiting for that at its submission.
+  form's code through Metal's table), where Metal interpolates with 6-bit weights: a BC1 to BC3
+  channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop GPU; BC3's
+  alpha 6/255) and lavapipe, 1/255 on ANV; a BC4 or BC5 channel up to 7.3/255 (signed 0.064) on
+  NVIDIA, 1.3/255 (signed 0.013) on ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV (Mesa
+  26.2.4, the Radeon 780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7 channel a
+  `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's.
 - `metal2vulkan-degrade-cpu-block-decode` (performance). `CpuBlockDecode`: A CPU copy into a texture
   with a decoded twin (`replace_region`) whose CPU copies go on the host or the staging queue: its
   region is decoded on the CPU, on the device's decode thread, and copied into the twin; the first
@@ -2314,8 +2310,7 @@ bound.
   (`decoded-texel-precision`); a PVRTC texture's, and an 8-bit ETC2 or EAC texture's, 8-bit codes,
   exact (its sRGB form's slots decode them through Metal's table, and one twin serves the views of
   the linear and sRGB forms); an ASTC sRGB texture's, its own 8-bit codes, read the same way.
-  It is decoded after each write into it as a BC
-  texture's twin is (`decoded-block-twin`; a PVRTC texture's whole levels, since each texel's
+  It is decoded after each write into it (a PVRTC texture's whole levels, since each texel's
   colors come from the blocks around it). An ASTC texture's first view in its other colour
   space (its sRGB form as LDR, or the other way) gives it a second twin of that form's decode, kept
   in step by GPU passes its command buffers' submissions record. Also a texture of a 4:2:2 format

@@ -6,9 +6,9 @@
 //! facts, and `generate_mipmaps` with each format's way printed.
 
 use super::degrade_notices::signs_depth_tests;
+use super::degrade_notices::twins_carried;
 use super::degrade_notices::{assert_made_once, assert_once, forced, loses_depth_denormals};
 use super::degrade_notices::{decodes_blocks_its_way, shared_in_system_memory};
-use super::degrade_notices::{twins_blocks, twins_carried};
 use super::{layer_reported_nothing_at_all, validated_device, Messages, ScratchCache};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::bind::MipmapFilterChain;
@@ -1455,9 +1455,8 @@ fn mipmaps_of_every_format_run_or_are_refused_typed() {
                     outcome.push("no texture");
                     continue;
                 };
-                // A BC texture's decoded twin, and a BC6H or BC7 texture's device decode.
+                // A carried texture's decoded twin, and a BC texture's device decode.
                 first.extend(forced(&[
-                    (Degradation::DecodedBlockTwin, twins_blocks(&device, pf)),
                     (
                         Degradation::CarriedDecodedTwin,
                         twins_carried(&device, pf)[0],

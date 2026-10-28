@@ -3813,7 +3813,7 @@ pub struct WorkCounts {
     /// finished it (`texture/twin_decode.rs`).
     pub cpu_block_decodes: u64,
     /// GPU decode passes made into decoded twins (`texture/decoded_twin.rs`, `Image::decode_pass`):
-    /// a blit's or a copy's into a BC texture, a heap texture's start, a write through
+    /// a blit's or a copy's into a carried texture, a heap texture's start, a write through
     /// submissions. None for a twin that takes CPU copies, whose texels only the CPU decodes.
     pub block_decode_passes: u64,
     /// ASTC textures' second decoded twins made (`texture/decoded_twin.rs`): one at a texture's

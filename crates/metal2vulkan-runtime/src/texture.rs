@@ -549,9 +549,8 @@ struct Image {
     /// The objects of exact color resolves into the image that its passes made, kept for its next
     /// pass of the same views (`color_resolve.rs`).
     resolves: KeptResolves,
-    /// The image's decoded twin (`texture/decoded_twin.rs`): a BC1 to BC5 image's texels as
-    /// Metal decodes them, which its sampled views present, on a device whose driver is not
-    /// measured to decode them so; an ASTC or PVRTC carrier's.
+    /// The image's decoded twin (`texture/decoded_twin.rs`): a carrier's texels (an ASTC, PVRTC,
+    /// ETC2, EAC or 4:2:2 texture's) as Metal decodes them, which its sampled views present.
     decoded: Option<Box<Decoded>>,
     /// An ASTC carrier's second decoded twin (`texture/decoded_twin.rs`): its blocks' decode in
     /// the texture's other colour space (its LDR form's for an sRGB texture, its sRGB form's for
@@ -1785,6 +1784,7 @@ impl Device {
         let (texture_type, pixel_format) = (shape.texture_type, shape.pixel_format);
         let [width, height, depth] = layout.extent;
         let record = ViewRecord::of_descriptor(&layout, descriptor);
+        self.degrade_block_decode(&layout);
         let allow = descriptor.allow_gpu_optimized_contents;
         // Its tile map where its type has one: every function reads its residency there.
         let tile_map = TileMapBuffer::new(self, &shape, plan.layers, tile, first)?;
@@ -3449,20 +3449,11 @@ impl Device {
 impl Device {
     /// Announce `compressed-texel-decode` for a texture of `layout` in a BC format made on a
     /// device whose driver is not measured to decode its texels as Metal does (the format's
-    /// [`block_decode_fact`]).
+    /// [`block_decode_fact`]): its image is its own BC image, whose reads, samples and gathers
+    /// answer the device's decode (`texture/decoded_twin.rs` keeps twins of carried textures
+    /// alone). A view of the texture in another BC format has the same fact.
     pub(super) fn degrade_block_decode(&self, layout: &TextureLayout) {
-        self.degrade_device_decode(layout.pixel_format, layout.texture_type, layout.extent);
-    }
-
-    /// [`degrade_block_decode`](Self::degrade_block_decode) of a texture or view of
-    /// `pixel_format`, `texture_type` and `extent` (a view of another decode than its texture's
-    /// decoded twin's too).
-    pub(super) fn degrade_device_decode(
-        &self,
-        pixel_format: PixelFormat,
-        texture_type: TextureType,
-        [width, height, depth]: [u32; 3],
-    ) {
+        let pixel_format = layout.pixel_format;
         let Some(fact) = block_decode_fact(pixel_format) else {
             return;
         };
@@ -3470,12 +3461,15 @@ impl Device {
             return;
         }
         self.degrade(Degradation::CompressedTexelDecode, || {
-            let object =
-                format!("a {pixel_format:?} {texture_type:?} texture of {width}x{height}x{depth}");
+            let [width, height, depth] = layout.extent;
+            let object = format!(
+                "a {pixel_format:?} {:?} texture of {width}x{height}x{depth}",
+                layout.texture_type
+            );
             let why = format!(
                 "the device's driver is not measured to decode the format's texels as Metal \
-                 does (DriverFact::{fact:?}): Vulkan leaves the decode's arithmetic to the \
-                 implementation"
+                 does (DriverFact::{fact:?}): its reads, samples and gathers answer the device's \
+                 own decode of its blocks, whose arithmetic Vulkan leaves to the implementation"
             );
             (object, why)
         });
@@ -3621,11 +3615,12 @@ impl Heap {
 
 /// The driver fact under which a texture of `pf` reads its texels as Metal's, where `pf` is a
 /// BC format, whose decode Vulkan leaves to the implementation: BC1 to BC3 (the sRGB forms too)
-/// `ColorBlockDecodeIsMetals`, BC4 and BC5 `ChannelBlockDecodeIsMetals`. NVIDIA's decodes both
-/// otherwise, RADV's the second. BC6H `Bc6hBlockDecodeIsMetals` and BC7 (its sRGB form through its
-/// unorm view and Metal's table, `metal::texel_format::srgb_raw`) `Bc7BlockDecodeIsMetals`,
-/// measured as the others, where every driver was taken to decode them as Metal does (lavapipe's
-/// BC7 lies a `float` ulp off). Every other format is `None`.
+/// `ColorBlockDecodeIsMetals`, BC4 and BC5 `ChannelBlockDecodeIsMetals` (NVIDIA's, ANV's and
+/// lavapipe's decode both otherwise, RADV's the second), BC6H `Bc6hBlockDecodeIsMetals` and BC7
+/// (its sRGB form through its unorm view and Metal's table, `metal::texel_format::srgb_raw`)
+/// `Bc7BlockDecodeIsMetals` (lavapipe's lies a `float` ulp off). A texture of the format without
+/// the fact announces `compressed-texel-decode` ([`Device::degrade_block_decode`]). Every other
+/// format is `None`.
 pub(super) fn block_decode_fact(pf: PixelFormat) -> Option<DriverFact> {
     use PixelFormat as P;
     match pf {
@@ -5237,8 +5232,6 @@ impl Texture {
         } else {
             self.reinterpreted(call, &record)?
         };
-        // A view of a texture with a decoded twin that does not present it reads the blocks.
-        self.degrade_view_decode(&storage, &record);
         let parent = Some(self.clone());
         let id_use = IdUse::Program(placement);
         Ok(Texture::made(

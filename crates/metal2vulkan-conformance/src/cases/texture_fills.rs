@@ -731,8 +731,9 @@ impl Case for TextureFills {
             ));
         }
         // What this work announces on a device that needs it, which is the lane's own list: a
-        // fill of a color packed where fills ignore the color, a block-compressed texture's twin
-        // and its precision, a two-plane texture shadowed in a heap's bytes and a
+        // fill of a color packed where fills ignore the color, a carried texture's twin and its
+        // precision (a BC texture's device decode is one of the suite's native notes), a
+        // two-plane texture shadowed in a heap's bytes and a
         // mipmapped one whose later levels lie apart from the shadow, a float depth's denormals
         // and the combined format's clamp, and shared storage in system memory. Metal announces
         // none of them, so the notices site differs on such a device, and the difference is
@@ -744,10 +745,8 @@ impl Case for TextureFills {
             D::ShadowedTexture,
             D::HeapTwoPlaneLayout,
             D::RestrictedDepthUpload,
-            D::DecodedBlockTwin,
             D::CarriedDecodedTwin,
             D::DecodedTexelPrecision,
-            D::CompressedTexelDecode,
             D::DepthDenormals,
             D::SharedInSystemMemory,
         ] {

@@ -1050,7 +1050,7 @@ fn a_declared_notice_does_not_excuse_an_undeclared_one() {
     let declared = Degradation::CarriedDecodedTwin;
     // Neither is one of the device's native answers, which the suite declares for every case
     // ([`crate::replay::NATIVE_NOTES`]).
-    let undeclared = [Degradation::DecodedBlockTwin, Degradation::ShaderResolve];
+    let undeclared = [Degradation::CpuBlockDecode, Degradation::ShaderResolve];
     let bytes = words(&[1, 2]);
     let case = WordsCase {
         allowances: vec![crate::replay::notice_allowance(declared.code())],

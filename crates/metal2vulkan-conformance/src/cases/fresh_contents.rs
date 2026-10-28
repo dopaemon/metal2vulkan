@@ -35,9 +35,8 @@
 //!
 //! **Not one byte of this family is loosened.** Every row's bytes are Metal's own on MoltenVK, on
 //! lavapipe and on an RTX 5080 Laptop, so the only field that may differ is the set of degrade
-//! notices our side announced. Four rows name a notice of their own: lavapipe keeps a decoded twin
-//! of a `BC1_RGBA` image (`decoded-block-twin`) and cannot hold Metal's denormal depths
-//! (`depth-denormals`). Each is named on the row that announced it, not on the family.
+//! notices our side announced. One row names a notice of its own: lavapipe cannot hold Metal's
+//! denormal depths (`depth-denormals`), named on the row that announced it, not on the family.
 //!
 //! Every row names one more, and it belongs to the venue rather than to any row: the declaration
 //! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
@@ -883,14 +882,6 @@ const fn degraded(
     }
 }
 
-/// What a device without block-compressed images announces for a `BC1_RGBA` texture: it keeps a
-/// decoded twin of the image and writes it after each write into the texture.
-///
-/// Measured, not guessed: lavapipe announces exactly this for all three of the `BC1_RGBA` rows,
-/// and MoltenVK announces nothing for them, which is why the kind is named per row rather than for
-/// the family.
-const BLOCK_TWIN: &[Degradation] = &[Degradation::DecodedBlockTwin];
-
 /// What a device whose depth format cannot hold Metal's denormal depths announces for a
 /// `Depth32Float` target: lavapipe announces it for the depth row, MoltenVK announces nothing.
 const DEPTH_DENORMALS: &[Degradation] = &[Degradation::DepthDenormals];
@@ -976,24 +967,9 @@ const TEXTURES: &[Row] = &[
         RGBA16FLOAT,
         Storage::Private,
     ),
-    degraded(
-        "fresh-texture-bc1-rgba-shared",
-        BC1_RGBA,
-        Storage::Shared,
-        BLOCK_TWIN,
-    ),
-    degraded(
-        "fresh-texture-bc1-rgba-managed",
-        BC1_RGBA,
-        Storage::Managed,
-        BLOCK_TWIN,
-    ),
-    degraded(
-        "fresh-texture-bc1-rgba-private",
-        BC1_RGBA,
-        Storage::Private,
-        BLOCK_TWIN,
-    ),
+    row("fresh-texture-bc1-rgba-shared", BC1_RGBA, Storage::Shared),
+    row("fresh-texture-bc1-rgba-managed", BC1_RGBA, Storage::Managed),
+    row("fresh-texture-bc1-rgba-private", BC1_RGBA, Storage::Private),
     row(
         "fresh-texture-plain-rgba8unorm-private",
         RGBA8_PLAIN,
@@ -2085,7 +2061,7 @@ mod tests {
     /// field that may differ is the set of notices our side announced.
     ///
     /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
-    /// row's; **only** the four rows a venue announced something of their own for name a second
+    /// row's; **only** the one row a venue announced something of its own for names a second
     /// kind, and each names the kind that venue announced. A row whose notices were a guess would
     /// show here as a row loosening a site nothing needed.
     #[test]
@@ -2111,15 +2087,7 @@ mod tests {
             .filter(|row| !row.notices.is_empty())
             .map(|row| row.case)
             .collect();
-        assert_eq!(
-            named,
-            vec![
-                "fresh-texture-bc1-rgba-shared",
-                "fresh-texture-bc1-rgba-managed",
-                "fresh-texture-bc1-rgba-private",
-                "fresh-texture-depth32float-private",
-            ]
-        );
+        assert_eq!(named, vec!["fresh-texture-depth32float-private"]);
         for row in TEXTURES {
             assert_eq!(
                 FreshTexture { row }.allowances().len(),

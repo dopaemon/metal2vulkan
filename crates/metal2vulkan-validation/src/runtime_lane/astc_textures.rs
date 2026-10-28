@@ -24,9 +24,13 @@
 //! decoded twin, kept in step with CPU copies and blits, a blit encoded before the view included
 //! ([`astc_views_in_the_other_colour_space_read_as_metal_s`]); a heap's texture and a view of
 //! another decode are refused, and creation with `ShaderWrite` and `RenderTarget` usage is not
-//! ([`astc_textures_the_runtime_does_not_hold_are_refused`]).
+//! ([`astc_textures_the_runtime_does_not_hold_are_refused`]). A `Shared` texture's CPU writes
+//! decode on the CPU, alone and behind work in flight, never through a GPU pass
+//! ([`astc_cpu_writes_decode_on_the_cpu`], announced `cpu-block-decode`: [`CPU_DECODES`]).
 
+use super::compressed_decode::{read_after, Behind};
 use super::degrade_notices::{counts, on_device};
+use super::first_use::{read_mark, release, scheduled, Busy, ENDED};
 use super::{buffer_with, read_buffer, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::bind::{AstcDecode, AstcTexels};
@@ -47,6 +51,10 @@ pub(super) const ASTC_TWINS: [Degradation; 2] = [
     Degradation::CarriedDecodedTwin,
     Degradation::DecodedTexelPrecision,
 ];
+
+/// The kind a CPU copy into a texture whose decoded twin takes CPU copies announces, once: its
+/// region decoded on the CPU, on the device's decode thread ([`astc_cpu_writes_decode_on_the_cpu`]).
+pub(super) const CPU_DECODES: [Degradation; 1] = [Degradation::CpuBlockDecode];
 
 /// Every ASTC LDR format, linear and sRGB.
 const FORMATS: [PixelFormat; 28] = [
@@ -405,6 +413,195 @@ fn reads_as(decode: AstcDecode, got: f32, want: f32) -> bool {
         true => got.to_bits() == want.to_bits(),
         false => (got - want).abs() <= UNORM8_BOUND,
     }
+}
+
+/// Note in `wrong` that `what`'s texels `got` are off Metal's decode of every one of `blocks`.
+fn check(
+    wrong: &mut Vec<String>,
+    what: String,
+    decode: AstcDecode,
+    got: &[[f32; 4]],
+    blocks: &[&[u8]],
+) {
+    let off = off_metal(decode, got, blocks);
+    if off > 0 {
+        wrong.push(format!("{what}: {off} texels off Metal's"));
+    }
+}
+
+/// The texels of `got` (`SIDE` x `SIDE`) that read as Metal's texel at their place of none of
+/// `blocks` ([`reads_as`]), each a level of `decode`'s blocks.
+fn off_metal(decode: AstcDecode, got: &[[f32; 4]], blocks: &[&[u8]]) -> usize {
+    let wants: Vec<_> = blocks.iter().map(|b| metal_texels(decode, b)).collect();
+    (got.iter().enumerate())
+        .filter(|(t, texel)| {
+            !wants
+                .iter()
+                .any(|want| (0..4).all(|c| reads_as(decode, texel[c], want[*t][c])))
+        })
+        .count()
+}
+
+/// A `Shared` ASTC texture's decoded twin on a device without its block, whose copies go on the
+/// host or the staging queue, is never written by GPU work: its making starts the twin on the CPU
+/// and a `replace_region` while nothing is in flight decodes on the CPU (one
+/// `WorkCounts::cpu_block_decodes` by the time a command buffer that reads it completed, no
+/// `block_decode_passes`), so no GPU decode of older blocks can land after a later write's CPU
+/// decode (master `7d426aff`). A `replace_region` while a command buffer that reads the texture is
+/// committed and not yet run: one held by a shared event signalled after the write reads Metal's
+/// texels of the new blocks; one held behind the busy kernel, submitted before the write, reads
+/// each texel as Metal decodes the old or the new blocks (the call waits for no decode, a race
+/// Metal's contract leaves to the program); a command buffer committed after it reads the new
+/// ones. Each case's two writes are exactly two CPU decodes where its copies go on the host or
+/// the staging queue, and none elsewhere, counted from before the texture's making. The device announces `cpu-block-decode` once where any write decoded on the CPU
+/// ([`CPU_DECODES`]). `ASTCBEHIND` prints each case's route; a case behind the kernel whose reader
+/// ran before the write is void (lavapipe runs a submission inside `vkQueueSubmit`).
+#[test]
+fn astc_cpu_writes_decode_on_the_cpu() {
+    on_device(|device, messages| {
+        let name = device.name().to_owned();
+        let state = reader(device);
+        let queue = device.new_command_queue().unwrap();
+        let busy = Busy::new(device, &queue);
+        let mut wrong = Vec::new();
+        let (mut routed_formats, mut held) = (0, 0);
+        let whole = Region::new_2d(0, 0, SIDE.into(), SIDE.into());
+        let texels = |out: &Buffer| texels_of(&read_buffer(out, 0, 16 * 16 * 16).unwrap());
+        for (f, pf) in [PixelFormat::ASTC4x4LDR, PixelFormat::ASTC6x5SRGB]
+            .into_iter()
+            .enumerate()
+        {
+            if decodes_astc(device, pf) {
+                eprintln!("ASTCBEHIND {name} {pf:?}: the device's own block, no twin");
+                continue;
+            }
+            let decode = AstcDecode::of(pf).unwrap();
+            let (row, count) = (row_bytes(decode), block_count(decode));
+            let seed = 0xa57c_b000 + 0x100 * f as u64;
+            // Made and written while nothing is in flight.
+            let made = device.work_counts();
+            let target = texture(device, pf, TextureUsage::SHADER_READ);
+            let before = device.work_counts();
+            let blocks = seeded_blocks(seed, count);
+            target.replace_region(whole, 0, 0, &blocks, row, 0).unwrap();
+            let after = device.work_counts();
+            let routed = after.host_texel_copies > before.host_texel_copies
+                || after.staging_submissions > before.staging_submissions;
+            let out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
+            let reads = read_after(&queue, &state, &target, &out, None);
+            reads.wait_until_completed_for(WAIT).unwrap();
+            assert_eq!(reads.error(), None, "{pf:?} on {name}");
+            let read = device.work_counts();
+            let got = texels(&out);
+            check(
+                &mut wrong,
+                format!("{pf:?} written"),
+                decode,
+                &got,
+                &[&blocks],
+            );
+            if routed {
+                routed_formats += 1;
+                let passes = read.block_decode_passes - made.block_decode_passes;
+                let cpu = read.cpu_block_decodes - before.cpu_block_decodes;
+                if (passes, cpu) != (0, 1) {
+                    wrong.push(format!(
+                        "{pf:?}: {passes} GPU decode passes and {cpu} CPU decodes, not 0 and 1"
+                    ));
+                }
+            }
+            for behind in [Behind::Busy, Behind::Event] {
+                let (old, new) = (
+                    seeded_blocks(seed + 1, count),
+                    seeded_blocks(seed + 2, count),
+                );
+                // Counted from before the making: every earlier case's decodes landed before
+                // its later reader completed, and both writes' decodes here land before this
+                // case's later reader runs (the decode thread takes its jobs in order, and counts
+                // each before it lets the batches that wait for it go).
+                let made = device.work_counts();
+                let target = texture(device, pf, TextureUsage::SHADER_READ);
+                target.replace_region(whole, 0, 0, &old, row, 0).unwrap();
+                let out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
+                let hold = device.new_shared_event().unwrap();
+                let (spin, command_buffer) = match behind {
+                    Behind::Busy => {
+                        let spin = busy.commit(device, &queue);
+                        let reads = read_after(&queue, &state, &target, &out, None);
+                        scheduled(&reads);
+                        (Some(spin), reads)
+                    }
+                    Behind::Event => {
+                        let reads = read_after(&queue, &state, &target, &out, Some(&hold));
+                        (None, reads)
+                    }
+                };
+                target.replace_region(whole, 0, 0, &new, row, 0).unwrap();
+                let ran = spin
+                    .as_ref()
+                    .is_some_and(|(_, words)| read_mark(words) == ENDED)
+                    || command_buffer.status() == CommandBufferStatus::Completed;
+                match &spin {
+                    Some((_, words)) => release(words),
+                    None => hold.set_signaled_value(1),
+                }
+                command_buffer.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(command_buffer.error(), None, "{pf:?} {behind:?}");
+                if let Some((spun, _)) = &spin {
+                    spun.wait_until_completed_for(WAIT).unwrap();
+                }
+                let later_out = buffer_with(device, &[0; 16 * 16 * 16]).unwrap();
+                let later = read_after(&queue, &state, &target, &later_out, None);
+                later.wait_until_completed_for(WAIT).unwrap();
+                assert_eq!(later.error(), None, "{pf:?} {behind:?}: the later reader");
+                let cpu = device.work_counts().cpu_block_decodes - made.cpu_block_decodes;
+                let writes = if routed { 2 } else { 0 };
+                eprintln!(
+                    "ASTCBEHIND {name} {pf:?} {behind:?}: routed {routed}, {cpu} CPU decodes{}",
+                    if ran {
+                        ", void: the reader ran first"
+                    } else {
+                        ""
+                    }
+                );
+                if cpu != writes {
+                    wrong.push(format!(
+                        "{pf:?} {behind:?}: {cpu} CPU decodes of its two writes, not {writes}"
+                    ));
+                }
+                match (ran, behind) {
+                    (true, Behind::Event) => {
+                        wrong.push(format!("{pf:?} {behind:?}: read before the event"));
+                        continue;
+                    }
+                    (true, Behind::Busy) => continue,
+                    (false, _) => held += 1,
+                }
+                let got = texels(&out);
+                let what = format!("{pf:?} {behind:?}");
+                match behind {
+                    Behind::Event => check(&mut wrong, what, decode, &got, &[&new]),
+                    Behind::Busy => check(&mut wrong, what, decode, &got, &[&old, &new]),
+                }
+                let later = texels(&later_out);
+                let what = format!("{pf:?} {behind:?} later");
+                check(&mut wrong, what, decode, &later, &[&new]);
+            }
+        }
+        eprintln!(
+            "ASTCBEHIND {name}: {} cases wrong, {held} held, {routed_formats} formats' twins take \
+             CPU copies",
+            wrong.len()
+        );
+        assert!(wrong.is_empty(), "on {name}:\n{}", wrong.join("\n"));
+        let counts = counts(&messages.take_notices());
+        let decoded = device.work_counts().cpu_block_decodes > 0;
+        assert_eq!(
+            counts.get(&CPU_DECODES[0]).copied().unwrap_or(0),
+            usize::from(decoded),
+            "on {name}"
+        );
+    });
 }
 
 /// The other colour space's form of an ASTC LDR format: its sRGB form's LDR one, and the other

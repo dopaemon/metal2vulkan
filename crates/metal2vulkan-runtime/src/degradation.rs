@@ -49,8 +49,8 @@
 //!   texture handles reaches, once the command is encoded (`pvrtc.rs`, from `compute.rs` and
 //!   `render/arguments.rs`); native device maths that rounds a tiny product before its flush where
 //!   the device is made (`device/float_tininess.rs`); a sampler state whose anisotropy the device
-//!   filters otherwise than Metal where the device makes it (`sampler.rs`); a BC1 to BC5 texture
-//!   whose texels the device decodes otherwise than Metal where the device makes it (`texture.rs`,
+//!   filters otherwise than Metal where the device makes it (`sampler.rs`); a BC texture whose
+//!   texels the device decodes otherwise than Metal where the device makes it (`texture.rs`,
 //!   `texture/shared.rs`, `texture/heap.rs`).
 
 use super::attachment_stand_in::{Cause, StandIn};
@@ -1633,36 +1633,27 @@ degradations! {
             "the function sees no buffer, a null address, where Metal's sees the nil buffer's \
              offset as its address; neither holds a buffer, so only the address's value \
              differs";
-        /// A texture of a BC1 to BC5 format (`BC1_RGBA` to `BC5_RGSnorm`, the sRGB forms too)
-        /// made on a device whose driver is not measured to decode their texels as Metal does
-        /// (BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK 1.4.1 on Apple's GPUs
-        /// and 1.4.2 on the M3 Max, RADV from Mesa 26.2.4 on the 780M; BC4 and BC5
-        /// `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK 1.4.1 on Apple's GPUs and 1.4.2 on
-        /// the M3 Max). Only a texture without a decoded twin
-        /// (`decoded-block-twin`): one over the caller's host pages or laid out apart from a heap's
-        /// bytes, a memoryless or sparse texture, one over a surface or the caller's image, one
-        /// whose twin's format the device cannot sample, filter and copy into.
+        /// A texture of a BC format (`BC1_RGBA` to `BC7_RGBAUnorm_sRGB`) made on a device whose
+        /// driver is not measured to decode its texels as Metal does (BC1 to BC3
+        /// `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK on Apple's GPUs, RADV on the 780M;
+        /// BC4 and BC5 `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK on Apple's GPUs; BC6H
+        /// `DriverFact::Bc6hBlockDecodeIsMetals` and BC7 `DriverFact::Bc7BlockDecodeIsMetals`:
+        /// MoltenVK on Apple's GPUs, NVIDIA's on the RTX 3090 and RTX 5080 Laptop GPU, RADV on the
+        /// 780M, ANV on the Iris Xe of Raptor Lake-P, and lavapipe's BC6H). Its image is its own
+        /// BC image, which the
+        /// device samples through its own decode: a BC texture keeps no decoded twin
+        /// (`texture/decoded_twin.rs` keeps twins of carried textures alone). The bounds are the
+        /// largest differences from Metal's texels measured on random blocks of every format; a
+        /// driver not named is unmeasured, and validation derives no tolerance from them.
         CompressedTexelDecode = "compressed-texel-decode", Precision,
             "a read, sample or gather of its texels answers the device's decode of its blocks \
              (an sRGB form's code through Metal's table), where Metal interpolates with 6-bit \
-             weights: NVIDIA's (615.71.09, the RTX 3090 and RTX 5080 Laptop GPU) answers a BC1 \
-             to BC3 channel up to 3/255 off Metal's (BC3's alpha 6/255), BC4 and BC5 up to \
-             7.3/255 (signed 0.064); ANV's up to 1.3/255 (signed 0.013), lavapipe's 2.3/255 \
-             (signed 0.021), RADV's (Mesa 26.2.4, the Radeon 780M) a BC4 or BC5 signed texel \
-             with an endpoint of -128 up to 1.7/255; its blocks' bytes, copies and sizes are \
-             Metal's";
-        /// A texture of a BC1 to BC5 format made on a device whose driver is not measured to
-        /// decode its texels as Metal does (`compressed-texel-decode`'s facts), whose image is its
-        /// own for good: it keeps a decoded twin, Metal's texels, which its samples read
-        /// (`texture/decoded_twin.rs`), and announces no `compressed-texel-decode`.
-        DecodedBlockTwin = "decoded-block-twin", Performance,
-            "a second image of its decoded texels beside its blocks, 4 to 8 times their bytes \
-             (R8G8B8A8_UNORM for BC1 to BC3, R32_SFLOAT and R32G32_SFLOAT for BC4 and BC5), \
-             and a decode after each write into it: a pass on the GPU for a blit, a copy from a \
-             texture or a CPU copy through a submission; on the CPU, on the device's decode \
-             thread, where its CPU copies go on the host or the staging queue, and then once as \
-             it is made, the first command buffer that may read it waiting for that at its \
-             submission";
+             weights: a BC1 to BC3 channel up to 3/255 off Metal's on NVIDIA (615.71.09, the RTX \
+             3090 and RTX 5080 Laptop GPU; BC3's alpha 6/255) and lavapipe, 1/255 on ANV; a BC4 \
+             or BC5 channel up to 7.3/255 (signed 0.064) on NVIDIA, 1.3/255 (signed 0.013) on \
+             ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV (Mesa 26.2.4, the Radeon \
+             780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7 channel a \
+             `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's";
         /// A CPU copy into a texture with a decoded twin (`replace_region`) whose CPU copies go
         /// on the host or the staging queue: its region is decoded on the CPU, on the device's
         /// decode thread, and copied into the twin; the first command buffer that may read the
@@ -1685,7 +1676,7 @@ degradations! {
         /// twin, Metal's decode of the blocks (an ASTC error block's magenta included) in codes:
         /// an ASTC LDR texture's and an EAC 11-bit one's each nearest Metal's value
         /// (`decoded-texel-precision`), a PVRTC texture's, an ASTC sRGB one's and an 8-bit ETC2 or
-        /// EAC one's 8-bit codes, exact, decoded after each write into it as a BC texture's twin is (`decoded-block-twin`; a PVRTC
+        /// EAC one's 8-bit codes, exact, decoded after each write into it (a PVRTC
         /// texture's whole levels). An ASTC texture's first view in its other colour space gives
         /// it a second twin of that form's decode. Also a texture of a 4:2:2 format (`GBGR422`,
         /// `BGRG422`) on every device, whose Vulkan formats reconstruct chroma by the

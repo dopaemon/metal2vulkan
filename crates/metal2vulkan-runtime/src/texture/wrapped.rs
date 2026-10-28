@@ -642,6 +642,7 @@ impl Device {
             staging_copies: false,
             objects: ObjectsToken::default(),
         };
+        self.degrade_block_decode(&layout);
         let record = ViewRecord::of_descriptor(&layout, descriptor);
         let storage = Storage::Image(Arc::new(image));
         let id_use = IdUse::Program(descriptor.placement);
