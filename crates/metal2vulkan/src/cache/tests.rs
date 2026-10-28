@@ -809,11 +809,11 @@ fn the_version_377_member_round_trips() {
 
 /// The members format versions 153, 154, 155, 157 and 161 joined from every side encode and
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
-/// `CombinedSampler::cube_gradient`, `RuntimeFact::InterlockedFramebufferFetch` and
+/// `CombinedSampler`, `RuntimeFact::InterlockedFramebufferFetch` and
 /// `GraphicsState::storage_attachments`, `SpecKey::TexelFormat`, `RuntimeFact::TexelFormat` and
 /// `SrgbTexture`, `VkProperty::MetalSampler`, and `PrecisionNote::HalfTexelConversion`,
 /// `HalfSampleFilter`, `SrgbTexelDecode`, and `FloatSampleFilter`,
-/// `HandleClass::Sampler { compare, integer, cube_gradient }` and
+/// `HandleClass::Sampler { compare, integer }` and
 /// `SyntheticBinding::SamplerTable`, and `RuntimeFact::UlongAtomicView`, each beside the others
 /// rather than only on its own side's fixtures.
 #[test]
@@ -832,7 +832,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         class: SlotClass::Texture,
         index: 3,
     };
-    let sampler = CombinedSampler::new(SamplerRef::Slot(1), false, false).with_cube_gradient(true);
+    let sampler = CombinedSampler::new(SamplerRef::Slot(1), true, false);
     let kind = ResourceKind::CombinedTextureSampler(sampler);
     assert_eq!(decode::<ResourceKind>(&encode(&kind)), Ok(kind));
     let notes = [
@@ -892,8 +892,8 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         ],
         flags: vk::DescriptorSetLayoutCreateFlags::empty(),
     });
-    // An argument buffer's sampler array of a comparison use of an integer texel sampling a cube
-    // with explicit gradients, and the stage's sampler table.
+    // An argument buffer's sampler array of a comparison use of an integer texel, and the stage's
+    // sampler table.
     let argument_samplers = vec![
         DescriptorBinding {
             binding: 2,
@@ -903,7 +903,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
             source: BindingSource::Heap(HandleClass::Sampler {
                 compare: true,
                 integer: true,
-                cube_gradient: true,
             }),
             immutable_sampler: None,
             flags: vk::DescriptorBindingFlags::PARTIALLY_BOUND,
@@ -989,7 +988,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
     assert!(matches!(
         bindings.map(|b| &b[0].source),
         Some(BindingSource::CombinedTextureSampler { sampler, .. })
-            if sampler.cube_gradient
+            if sampler.compare
     ));
     assert_eq!(
         bindings.map(|b| &b[1].source),
@@ -999,8 +998,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         bindings.map(|b| &b[2].source),
         Some(BindingSource::Heap(HandleClass::Sampler {
             compare: true,
-            integer: true,
-            cube_gradient: true
+            integer: true
         }))
     ));
     assert!(matches!(
@@ -1496,9 +1494,8 @@ fn combined_and_separate_texture_symbols_round_trip() {
         SamplerRef::Slot(3),
         SamplerRef::Constexpr([u64::MAX >> 1, 7]),
     ] {
-        for rank in 0..8u32 {
-            let c = CombinedSampler::new(sampler, rank & 4 != 0, rank & 2 != 0)
-                .with_cube_gradient(rank & 1 != 0);
+        for rank in 0..4u32 {
+            let c = CombinedSampler::new(sampler, rank & 2 != 0, rank & 1 != 0);
             for texture in [0, 127, (1 << 28) - 1] {
                 let combined = ResourceSlot {
                     stage: Stage::Fragment,

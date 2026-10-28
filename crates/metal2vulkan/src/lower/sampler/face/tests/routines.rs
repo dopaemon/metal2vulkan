@@ -7,7 +7,7 @@ use super::kernel_on;
 use crate::device::profile::DriverWorkaround;
 use crate::device::DevicePolicy;
 use crate::lower::sampler::bicubic::routines;
-use crate::lower::texture::half::{self, HalfFamilies};
+use crate::lower::texture::half;
 use crate::pipeline::testing::profile;
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::serialize::serialize_for;
@@ -34,7 +34,7 @@ fn controls(words: &[u32]) -> Vec<u32> {
 #[test]
 fn the_sampling_routines_are_declared_dont_inline_where_every_call_is_inlined() {
     let mut b = ModuleBuilder::new();
-    half::define(&mut b, HalfFamilies::Every).expect("half texel");
+    half::define(&mut b).expect("half texel");
     routines::define_plane(&mut b).expect("plane");
     routines::define_line(&mut b).expect("line");
     routines::define_quad(&mut b).expect("quad");

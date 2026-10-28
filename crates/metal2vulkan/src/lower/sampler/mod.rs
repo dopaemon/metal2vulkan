@@ -226,37 +226,30 @@ impl FamilyStrategy for SamplerStrategy {
 }
 
 /// One combined image-sampler binding of the function, before its texture's numeric type is
-/// final: the texture slot index, the sampler, whether it samples with comparison, and whether it
-/// samples a cube with explicit gradients in the `Length` form through a sampler that may be
-/// anisotropic, on a device whose cube-gradient route is not measured ([`Lod::CubeGrad`], whose
-/// sampler is made isotropic for it: `metal::sampler::SamplerUse::cube_gradient`).
+/// final: the texture slot index, the sampler, and whether it samples with comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BindingKey {
     pub texture: u32,
     pub sampler: SamplerRef,
     pub compare: bool,
-    pub cube_gradient: bool,
 }
 
 /// One separate heap sampler use: heap group `group` sampled through `sampler`, with comparison or
-/// without, with explicit cube gradients or without. Its binding is final once the group's numeric
-/// type is ([`finish`]).
+/// without. Its binding is final once the group's numeric type is ([`finish`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HeapKey {
     pub group: u32,
     pub sampler: SamplerRef,
     pub compare: bool,
-    pub cube_gradient: bool,
 }
 
 /// One use of an argument buffer's sampler: heap group `group` sampled through a heap sampler
-/// handle, with comparison or without, a cube with explicit gradients or not. Its sampler array is
-/// final once the group's numeric type is ([`finish`]).
+/// handle, with comparison or without. Its sampler array is final once the group's numeric type
+/// is ([`finish`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HeapSamplerKey {
     pub group: u32,
     pub compare: bool,
-    pub cube_gradient: bool,
 }
 
 /// An upper estimate of the SPIR-V words of an argument-buffer sampler's cubic test past its
@@ -357,8 +350,7 @@ pub enum Lod {
 pub enum CubeFootprint {
     /// Metal's isotropic footprint, through an isotropic constexpr sampler: the Metal length of
     /// each gradient's two tangent components, on one tangent, for Vulkan's cube derivative rule
-    /// (`CubeGradientRoute::Vulkan`); through any sampler on a route not measured, whose sampler
-    /// is made isotropic for it where it may be anisotropic (`BindingKey::cube_gradient`).
+    /// (`CubeGradientRoute::Vulkan`).
     Length,
     /// Metal's anisotropic face gradients through an anisotropic constexpr sampler: each gradient
     /// without its normal component, mirrored on the faces Metal mirrors, for Vulkan's rule.
@@ -585,10 +577,6 @@ pub struct Sampling {
     /// A gather or nearest sample whose plane coordinate is snapped onto the texels Metal reads
     /// ([`position`]).
     pub snap: Option<position::Snap>,
-    /// The plane axes whose coordinate the sample flushes a subnormal of to the zero of its sign
-    /// before anything reads it, as Metal's texture unit reads it, a bit per axis
-    /// ([`position::subnormal_flush`]).
-    pub flush_subnormals: u8,
     /// It reads a cube by a direction, whose ties between major axes the device is handed broken
     /// as Metal breaks them ([`face`]).
     pub cube: bool,
@@ -713,10 +701,9 @@ pub enum Unmapped {
     /// others are the device's: an access whose residency the function does not read, a
     /// filtered sample, or an access whose texels the device's footprint decides.
     Constants,
-    /// As [`Unmapped::Constants`], after each texel the access reads reads zero where its residency
+    /// As [`Unmapped::Constants`], after the texel the access reads reads zero where its residency
     /// says it is unmapped, Metal's unmapped value (zero memory, its missing channels the
-    /// constants): a pixel fetch, or a nearest sample or gather of Metal's footprint, whose texels
-    /// and residency the function names.
+    /// constants): a pixel fetch, whose texel and residency the function names.
     Named,
 }
 
@@ -918,8 +905,7 @@ impl Sampling {
     /// filter, an sRGB texel's raw decode, a cube gradient's footprint, an argument buffer's pixel
     /// sampler's flagged fetch, a snapped coordinate and the positions of an observed footprint,
     /// the lanes Metal reads as constants, a cube direction's broken ties, a runtime pixel
-    /// sampler's texel centre, a raw heap sample's decode, and a border axis's flush of a subnormal
-    /// coordinate.
+    /// sampler's texel centre, and a raw heap sample's decode.
     pub fn words(&self) -> u32 {
         // A swizzled slot's sampling: its swizzle, and a gather's of each component.
         match (self.swizzle, &self.op) {
@@ -1028,11 +1014,7 @@ impl Sampling {
                 .snap
                 .as_ref()
                 .filter(|_| offset.is_some())
-                .map_or(0, position::Snap::offset_words)
-            + match self.flush_subnormals {
-                0 => 0,
-                _ => position::FLUSH_WORDS,
-            };
+                .map_or(0, position::Snap::offset_words);
         let footprint = self
             .footprint
             .map_or(0, |fp| u32::from(fp.axes) * position::POSITION_WORDS);
@@ -1341,8 +1323,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .shape
             .ok_or_else(|| invariant("a sampled texture slot without a shape"))?;
         let texel = crate::lower::texture::image_class(cx.inputs, s);
-        let sampler = CombinedSampler::new(key.sampler, key.compare, texel != TexelClass::Float)
-            .with_cube_gradient(key.cube_gradient);
+        let sampler = CombinedSampler::new(key.sampler, key.compare, texel != TexelClass::Float);
         if let SamplerRef::Constexpr(words) = key.sampler {
             constexpr_desc(words, sampler.sampler_use(), cx.profile)?;
         }
@@ -1393,8 +1374,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .filter(|h| h.decl.is_some())
             .ok_or_else(|| invariant("a heap sampler of an undeclared heap group"))?;
         let texel = h.texel.unwrap_or(TexelClass::Float);
-        let sampler = CombinedSampler::new(key.sampler, key.compare, texel != TexelClass::Float)
-            .with_cube_gradient(key.cube_gradient);
+        let sampler = CombinedSampler::new(key.sampler, key.compare, texel != TexelClass::Float);
         // A runtime heap sampler is the sampler bound at its slot, which the binder writes for
         // this use.
         if let SamplerRef::Constexpr(words) = key.sampler {
@@ -1447,8 +1427,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         let texel = h.texel.unwrap_or(TexelClass::Float);
         heap_sampler_decls.insert(
             *key,
-            SamplerUse::new(key.compare, texel != TexelClass::Float)
-                .with_cube_gradient(key.cube_gradient),
+            SamplerUse::new(key.compare, texel != TexelClass::Float),
         );
     }
     // The bound format's treatment under the bicubic filter.

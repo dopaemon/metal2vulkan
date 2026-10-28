@@ -17,11 +17,8 @@
 //!   with ties away, by an addition and a mask.
 //! - [`f32_to_half_from_even`]: toward zero saturating or ties away, derived from an exact
 //!   rounding to nearest even.
-//! - [`ones_ratio_to_half`]: `m / (2^b - 1)` correctly rounded to `half` by one multiplication,
-//!   for the 16-bit normalized grids.
 //! - [`grid_step`] and [`grid_value`]: a normalized texel's step on its format's grid, and a
-//!   signed step's value `n / D` exactly, shared by the bicubic sums and the conversion of a texel
-//!   to a `half` result.
+//!   signed step's value `n / D` exactly, shared by the bicubic sums and the tile reads.
 //!
 //! Metal's texture reads and samples decode a raw sRGB code through its twelve-bit table, as
 //! `air.unpack` does: the step `k` of [`srgb`](crate::lower::arith::srgb), then `k / 4095`
@@ -472,59 +469,6 @@ pub fn ratio_to_half(fb: &mut FunctionBuilder<'_>, u: Form, k: Value, d: Value) 
     fb.convert(ConvOp::Bitcast, bits, ft)
 }
 
-/// `m / (2^b - 1)` correctly rounded to `half` (nearest even), held as its `f32`, for `u32` lanes
-/// (form `u`) with `0 <= m <= 2^b - 1` and `13 <= b <= 16` (`b` a run-time value of the same
-/// lanes), by one multiplication and no division: `m = 0` is `+0`.
-///
-/// `m / (2^b - 1) = T / 2^(2b) · 1 / (1 - 2^(-2b))` for `T = m · (2^b + 1) < 2^(2b)`, so the
-/// quotient is `(T + ε) / 2^(2b)` with `0 < ε < 1` where `m > 0`. Rounded at bit `s` of `T`
-/// (`s = max(msb(T) - 10, 2b - 24)`: eleven significant bits, or the half denormal grid `2^-24`),
-/// the discarded part `T mod 2^s + ε` is never a tie and passes half of `2^s` exactly when bit
-/// `s - 1` of `T` is set; and `ε` never carries `T + ε` past a power of two, so `msb(T)` places the
-/// significand. The result is `keep · 2^(s - 2b)` for `keep = (T >> s) + bit s - 1`, at most
-/// `2^11`: its `f32` (exact) with `s - 2b` added to the exponent. On these grids an `f32`
-/// quotient rounded to `half` rounds twice: the correctly rounded one differs at `65455 / 65535`
-/// ([`ratio_to_half`]'s note), and the product by the reciprocal `1 / D` rounded to `f32` also at
-/// `65327 / 65535`, `32727 / 32767` and others.
-pub fn ones_ratio_to_half(
-    fb: &mut FunctionBuilder<'_>,
-    u: Form,
-    m: Value,
-    b: Value,
-) -> BResult<Value> {
-    let c = |fb: &mut FunctionBuilder<'_>, v: u64| splat(fb, u, v);
-    let (z, one) = (c(fb, 0)?, c(fb, 1)?);
-    let pow = bin(fb, BinOp::ShiftLeftLogical, one, b)?;
-    let times = bin(fb, BinOp::IAdd, pow, one)?;
-    let t = bin(fb, BinOp::IMul, m, times)?;
-    let two_b = bin(fb, BinOp::ShiftLeftLogical, b, one)?;
-    let k24 = c(fb, 24)?;
-    let least = bin(fb, BinOp::ISub, two_b, k24)?;
-    // `msb(T) - 10`, kept from wrapping where `T = 0` (selected away below).
-    let k1024 = c(fb, 1024)?;
-    let some = fb.glsl(GlslOp::UMax, &[t, k1024])?;
-    let msb = fb.glsl(GlslOp::FindUMsb, &[some])?;
-    let k10 = c(fb, 10)?;
-    let s = bin(fb, BinOp::ISub, msb, k10)?;
-    let s = fb.glsl(GlslOp::UMax, &[s, least])?;
-    let kept = bin(fb, BinOp::ShiftRightLogical, t, s)?;
-    let s1 = bin(fb, BinOp::ISub, s, one)?;
-    let round = bin(fb, BinOp::ShiftRightLogical, t, s1)?;
-    let round = bin(fb, BinOp::BitwiseAnd, round, one)?;
-    let kept = bin(fb, BinOp::IAdd, kept, round)?;
-    let ft = ty(fb, floats(u))?;
-    let ut = ty(fb, u)?;
-    let kf = fb.convert(ConvOp::ConvertUToF, kept, ft)?;
-    let bits = fb.convert(ConvOp::Bitcast, kf, ut)?;
-    let scale = bin(fb, BinOp::ISub, s, two_b)?;
-    let k23 = c(fb, 23)?;
-    let scale = bin(fb, BinOp::ShiftLeftLogical, scale, k23)?;
-    let bits = bin(fb, BinOp::IAdd, bits, scale)?;
-    let zero = bin(fb, BinOp::IEqual, t, z)?;
-    let bits = fb.select(zero, z, bits)?;
-    fb.convert(ConvOp::Bitcast, bits, ft)
-}
-
 /// The step of normalized texel value `x` (`f32` lanes of form `f`) on the grid of `±D` (`d` and
 /// `neg_d`, `f32` lanes of the same form): `RoundEven(x · D)`, the product taken without
 /// contraction and clamped into `[-D, D]` first, as `i32` bits in `u32` lanes. Vulkan converts a
@@ -541,46 +485,12 @@ pub fn grid_step(
     d: Value,
     neg_d: Value,
 ) -> BResult<Value> {
-    let y = grid_round(fb, x, d, neg_d)?;
+    let y = fb.binary_no_contraction(BinOp::FMul, x, d)?;
+    let y = fb.glsl(GlslOp::NClamp, &[y, neg_d, d])?;
+    let y = fb.glsl(GlslOp::RoundEven, &[y])?;
     let it = ty(fb, words(f))?;
     fb.convert(ConvOp::ConvertFToS, y, it)
 }
-
-/// [`grid_step`]'s step before its conversion to an integer: `RoundEven` of the product clamped
-/// into `[-D, D]`, an integral `f32` in `x`'s lanes whose zero may be `-0`.
-pub fn grid_round(
-    fb: &mut FunctionBuilder<'_>,
-    x: Value,
-    d: Value,
-    neg_d: Value,
-) -> BResult<Value> {
-    let y = fb.binary_no_contraction(BinOp::FMul, x, d)?;
-    let y = fb.glsl(GlslOp::NClamp, &[y, neg_d, d])?;
-    fb.glsl(GlslOp::RoundEven, &[y])
-}
-
-/// The factor `c = 2^-b · (1 + 2^-17)` of the grid `D = 2^b - 1` (`b` 15 or 16, the 16-bit
-/// normalized grids) whose product by a step `m` (`0 <= m <= D`) rounds to `half` as `m / D` does:
-/// either `f32` neighbour of the exact product `m · c`, rounded to `half` to nearest even, is
-/// `m / D` correctly rounded to `half`. So [`ones_ratio_to_half`]'s value is one product rounded
-/// by the device's conversion to `half`, for any `f32` rounding of the product.
-///
-/// Why: `m / D = m · 2^-b · (1 + 2^-b + 2^-2b + ...)` lies above the dyadic `m · 2^-b` (for `m >
-/// 0`), by too little to reach the next point where the rounding to `half` changes, and so does
-/// `m · c` for every `c` strictly between `2^-b` and `1 / D`; but in `f32` the product may round
-/// onto such a point. Checked exhaustively on every step (`the_ones_ratio_factor_rounds_every_step`,
-/// both neighbours of each exact product), the factors that hold are exactly those strictly between
-/// `2^-b` and the reciprocal `RN(1 / D)`: `2^-b · (1 + k · 2^-23)` for `k` in `1..=127` (`b = 16`)
-/// and `1..=255` (`b = 15`). At `k = 0` the product is the dyadic step itself, whose tie to even
-/// is wrong where `m / D` lies above a midpoint (`2049 / 65535`); the reciprocal itself (`k = 128`,
-/// `256`) rounds twice at `65455` and `65519` (`32759` on `32767`). The factor takes `k = 64`, inside
-/// both ranges.
-pub fn ones_ratio_factor(b: u32) -> f32 {
-    f32::from_bits(((127 - b) << 23) | ONES_RATIO_FACTOR_ULPS)
-}
-
-/// The `k` of [`ones_ratio_factor`]: its `f32` units above `2^-b`.
-pub const ONES_RATIO_FACTOR_ULPS: u32 = 64;
 
 /// The value `n / D` of signed grid step `n` (`i32` bits in `u32` lanes of form `u`, within
 /// `[-D, D]`; `d` the grid `D` in `u32` lanes, `1 <= D < 2^16`): `+0` for zero, else the

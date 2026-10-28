@@ -82,13 +82,6 @@
 //! whose tests (`texture::OffsetBase`) the rule reads; a heap element's access reads none, and
 //! records `PrecisionNote::ViewBaseTexelOffset` (the residue there).
 //!
-//! **A subnormal coordinate** ([`subnormal_flush`]). Apple's texture unit reads a subnormal
-//! normalized coordinate as the zero of its sign before the address mode decides (measured on an
-//! Apple M3 Max), so a border axis reads texel 0 just outside the level where a device that keeps
-//! the subnormal reads the border. The border axes of a constexpr sampler flush it before anything
-//! reads it (`emit::plane_coord`), so the emulations and the device's own sampler alike are handed
-//! Metal's coordinate; every other address mode reads the same texel either way.
-//!
 //! **The snapped coordinate** ([`snapped`]). A pixel sampler's coordinate, scaled for the
 //! device, reads whichever texels the device's own arithmetic gives near a texel edge. Where
 //! Metal's texels follow from the coordinate as given, a snapped axis instead hands the device a
@@ -246,124 +239,6 @@ pub(super) fn address(m: AddressMode) -> TapAddress {
         AddressMode::MirroredRepeat => TapAddress::Mirror,
         AddressMode::ClampToZero | AddressMode::ClampToBorder => TapAddress::Border,
     }
-}
-
-/// The census words of the subnormal flush ([`subnormal_flush`]): the bitcast, the magnitude, the
-/// comparison with each axis's threshold, the sign, the select, and the bitcast back, with their
-/// constant vectors.
-pub const FLUSH_WORDS: u32 = 56;
-
-/// The plane axes of a sample of `op` on a texture of `shape` through the static sampler `stat`
-/// (`None`: an argument buffer's) whose coordinate the module flushes a subnormal of to the zero
-/// of its sign before the sample, as a bit per axis ([`emit_flush`]).
-///
-/// **Metal flushes a subnormal texture coordinate.** Apple's texture unit reads a subnormal
-/// normalized coordinate as the zero of its sign before the address mode decides, so a clamping
-/// axis that reads the border outside the level reads texel 0 there, where a device that keeps
-/// the subnormal reads the border. Measured on an Apple M3 Max (macOS 27.0.1) through a
-/// 13x11 `R32Float` texture and constexpr clamp-to-zero samplers: at `-1.1754942e-38`
-/// (bits `0x007f_ffff`, the largest subnormal magnitude) and at `-1e-40`, `-1e-42` and
-/// `-1e-44` the nearest sample reads texel 0 and the linear one averages it with the border,
-/// while at `f32::MIN_POSITIVE` negated (bits `0x0080_0000`) and at every larger magnitude down
-/// to `-1.2e-38`, `-1e-30` and `-1e-37` both read the border: the boundary is `f32`'s own
-/// subnormal edge, one unit in the last place wide, and not a quantization of the coordinate
-/// (two ladders of 40 rungs each walking up to a clamp-to-zero edge from outside it, from
-/// `2^-1` down to `2^-40` of a texel, read the border on every rung, which no fixed-point
-/// quantum of any width would).
-///
-/// The flush is emitted where the measurement reaches: a constexpr sampler with normalized
-/// coordinates, of a single-sampled 1D, 2D, or 3D texture or array, on each axis the sampler
-/// addresses through the border (`clamp_to_zero`, and `clamp_to_border_color`, which the
-/// lowering does not distinguish: the border test is the only address decision a subnormal can
-/// flip, and the two modes differ only in the border colour). A repeating, mirrored or
-/// edge-clamping axis reads texel 0 at a subnormal coordinate with the flush or without it, so
-/// none is emitted for one. A cube's coordinate is a direction, a pixel sampler's is in texels,
-/// and a runtime or argument buffer's sampler's addressing is not known when the function
-/// compiles: none is measured, and none takes the flush.
-pub(super) fn subnormal_flush(
-    stat: Option<(SamplerRef, Coordinates)>,
-    shape: ImageShape,
-) -> Result<u8, Error> {
-    let Some((SamplerRef::Constexpr(words), Coordinates::Normalized)) = stat else {
-        return Ok(0);
-    };
-    let plane = match (shape.dim, shape.ms) {
-        (ImageDim::D1, false) => 1,
-        (ImageDim::D2, false) => 2,
-        (ImageDim::D3, false) => 3,
-        _ => return Ok(0),
-    };
-    let state = super::state_of(words)?;
-    let modes = [state.address_s, state.address_t, state.address_r];
-    let mut axes = 0u8;
-    for (axis, mode) in modes.into_iter().take(plane).enumerate() {
-        if address(mode) == TapAddress::Border {
-            axes |= 1 << axis;
-        }
-    }
-    Ok(axes)
-}
-
-/// `coord` (`lanes` floats) with the subnormal lanes of `axes` ([`subnormal_flush`]) replaced by
-/// the zero of their sign, as Metal's texture unit reads them.
-///
-/// The test and the replacement are integer, so a device that flushes subnormals in its own float
-/// arithmetic and one that keeps them emit the same answer: a lane whose magnitude bits lie below
-/// `f32::MIN_POSITIVE`'s (`0x0080_0000`) becomes its sign bit alone, and every other lane is kept.
-/// An axis outside `axes` takes the threshold 0, which no magnitude is below, so it is kept
-/// whatever it holds (a zero included, which the replacement would leave unchanged anyway).
-pub(super) fn emit_flush(
-    fb: &mut FunctionBuilder<'_>,
-    coord: SValue,
-    lanes: u8,
-    axes: u8,
-) -> BResult<SValue> {
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let float = fb.module().ty(SType::Float { width: 32 })?;
-    let vector = |fb: &mut FunctionBuilder<'_>, ty, n: u8| match n {
-        1 => Ok(ty),
-        n => fb.module().ty(SType::Vector { elem: ty, len: n }),
-    };
-    let uvec = vector(fb, u32_, lanes)?;
-    let fvec = vector(fb, float, lanes)?;
-    let splat = |fb: &mut FunctionBuilder<'_>, bits: Vec<u32>| -> BResult<SValue> {
-        let mut parts = Vec::new();
-        for b in &bits {
-            let c = fb.module().constant(Constant::Scalar {
-                ty: u32_,
-                bits: ConstBits(u64::from(*b)),
-            })?;
-            parts.push(c);
-        }
-        let c = match parts.as_slice() {
-            [one] => *one,
-            many => fb.module().constant(Constant::Composite {
-                ty: uvec,
-                parts: many.to_vec().into(),
-            })?,
-        };
-        fb.module().const_value(c)
-    };
-    let magnitudes = splat(fb, vec![0x7fff_ffff; usize::from(lanes)])?;
-    let signs = splat(fb, vec![0x8000_0000; usize::from(lanes)])?;
-    let thresholds = splat(
-        fb,
-        (0..lanes)
-            .map(|axis| match axes & (1 << axis) {
-                0 => 0,
-                _ => 0x0080_0000,
-            })
-            .collect(),
-    )?;
-    let bits = fb.convert(ConvOp::Bitcast, coord, uvec)?;
-    let magnitude = fb.binary(BinOp::BitwiseAnd, bits, magnitudes)?;
-    let small = fb.binary(BinOp::ULessThan, magnitude, thresholds)?;
-    let sign = fb.binary(BinOp::BitwiseAnd, bits, signs)?;
-    let flushed = fb.select(small, sign, bits)?;
-    fb.convert(ConvOp::Bitcast, flushed, fvec)
 }
 
 /// The snap of `op` on a texture of `shape` through the static sampler `stat` (`None`: an

@@ -1,7 +1,7 @@
 //! Emission of the sampling strategies.
 
 use crate::lower::emit::EmitCx;
-use crate::lower::texture::half::{HalfForm, TexelOrigin};
+use crate::lower::texture::half::TexelOrigin;
 use crate::lower::texture::{
     half_class, heap_element, held_texel, live_or_zero, resident_access, sparse_spec, tile_map,
     tiled_word, with_word, ImageRef,
@@ -939,20 +939,17 @@ pub(super) fn sampled_value(
     }
     // Metal's footprint: the device's plain sample or gather, and the word of exactly the texels
     // Metal counts, through the slot's sparse arm or tile map.
-    let exact = match (arm, s.footprint) {
-        (Some((spec, binding)), Some(fp)) => {
-            let probe = match tiled {
-                Some(map) => super::footprint::Probe::Tiled(map),
-                None => super::footprint::Probe::Sparse,
-            };
-            Some((spec, binding, fp, probe))
+    let exact = match (arm, s.footprint, tiled) {
+        (Some((spec, binding)), Some(fp), Some(map)) => Some((spec, binding, fp, map)),
+        (Some(_), Some(_), None) => {
+            return Err(cx.fail("Metal's footprint on a slot without a tile map"))
         }
         _ => None,
     };
     let arm = if exact.is_some() { None } else { arm };
     if let SampleOp::PixelFetch { offset } = &s.op {
         let (x, word) = pixel_fetch(cx, fb, s, si, image, offset.as_ref(), arm)?;
-        let x = unmapped_value(cx, fb, s, x, word.map(Named::Word))?;
+        let x = unmapped_value(cx, fb, s, x, word)?;
         let x = live_or_zero(fb, live, x)?;
         return texel_value(cx, fb, s, image, (x, TexelOrigin::Image), word);
     }
@@ -1163,54 +1160,30 @@ pub(super) fn sampled_value(
             return Err(cx.fail("a fetching sample or level query past its own path"))
         }
     };
-    let (word, named) = match exact {
-        Some((spec, binding, fp, probe)) => {
+    let word = match exact {
+        Some((spec, binding, fp, map)) => {
             let site = super::footprint::Site {
                 binding,
                 coord: plane,
                 lanes: s.lanes,
                 layer,
             };
-            let counted = super::footprint::word(cx, fb, fp, spec, probe, site)?;
-            // The texels a nearest sample or a gather of Metal's footprint names.
-            let named = match fp.kind {
-                super::footprint::Kind::Nearest => Some(Named::Word(counted.word)),
-                super::footprint::Kind::Gather => {
-                    let mut taps = [counted.word; 4];
-                    for (tap, k) in taps.iter_mut().zip(super::footprint::GATHER_TEXELS) {
-                        let Some(&r) = counted.resident.get(k) else {
-                            return Err(cx.fail("a gather's footprint without its four texels"));
-                        };
-                        *tap = r;
-                    }
-                    Some(Named::Taps(taps))
-                }
-                super::footprint::Kind::Linear => None,
-            };
-            (Some(counted.word), named)
+            Some(super::footprint::word(cx, fb, fp, spec, map, site)?)
         }
-        None => (word, None),
+        None => word,
     };
-    // Metal's value of texels in a sparse image's block that holds no mapped tile.
-    let texel = unmapped_value(cx, fb, s, texel, named)?;
     let texel = live_or_zero(fb, live, texel)?;
     texel_value(cx, fb, s, image, (texel, TexelOrigin::Image), word)
 }
 
-/// The plane coordinate of `s`, read from the AIR operand with a subnormal lane of a border axis
-/// flushed to the zero of its sign, as Metal's texture unit reads it
-/// (`position::subnormal_flush`). Every path that reads the coordinate of a sampling takes it
-/// here, so the emulations and the device's own sampler alike are handed Metal's coordinate.
+/// The plane coordinate of `s`, read from the AIR operand as given: the device's sampler, and an
+/// emulation's arithmetic, read a subnormal coordinate as the device does.
 pub(super) fn plane_coord(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     s: &Sampling,
 ) -> BResult<SValue> {
-    let coord = cx.operand(fb, s.coord)?;
-    match s.flush_subnormals {
-        0 => Ok(coord),
-        axes => super::position::emit_flush(fb, coord, s.lanes, axes),
-    }
+    cx.operand(fb, s.coord)
 }
 
 /// The plane coordinate of `s` and its explicit gradients, read from the AIR operands: a cube's
@@ -2041,52 +2014,30 @@ fn pixel_fetch(
     Ok((x, word))
 }
 
-/// The texels an access names whose residency it reads.
-#[derive(Clone, Copy)]
-enum Named {
-    /// Its one texel, unmapped where its status word (a `u32`) is not 0.
-    Word(SValue),
-    /// A gather's four taps, in its lanes' order, each resident where its `bool` holds.
-    Taps([SValue; 4]),
-}
-
-/// `x`, the device's four-lane value of access `s`, with zero for each texel `named` says is
-/// unmapped under [`Unmapped::Named`]: Metal reads zero memory there, where a block of a sparse
-/// image that holds no mapped tile reads the device's value. The lanes the format lacks take their
-/// constants after the held texel's conversion ([`held_constants`]).
+/// `x`, the device's four-lane value of pixel fetch `s`, zero where its status word `word` (a
+/// `u32`) says its texel is unmapped under [`Unmapped::Named`]: Metal reads zero memory there,
+/// where a block of a sparse image that holds no mapped tile reads the device's value. The lanes
+/// the format lacks take their constants after the held texel's conversion ([`held_constants`]).
 fn unmapped_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     s: &Sampling,
     x: SValue,
-    named: Option<Named>,
+    word: Option<SValue>,
 ) -> BResult<SValue> {
     if s.unmapped != Unmapped::Named {
         return Ok(x);
     }
-    match named {
-        Some(Named::Word(word)) => {
-            let zero = fb.u32_const(0)?;
-            let zero = fb.module().const_value(zero)?;
-            let kept = fb.binary(BinOp::IEqual, word, zero)?;
-            let ty = fb.value_ty(x)?;
-            let null = fb.module().constant(Constant::Null { ty })?;
-            let null = fb.module().const_value(null)?;
-            fb.select(kept, x, null)
-        }
-        Some(Named::Taps(taps)) => {
-            let (ty, elem) = four_lanes(cx, fb, x)?;
-            let null = fb.module().constant(Constant::Null { ty: elem })?;
-            let null = fb.module().const_value(null)?;
-            let mut lanes = Vec::with_capacity(4);
-            for (lane, resident) in (0u32..).zip(taps) {
-                let v = fb.composite_extract(x, &[lane])?;
-                lanes.push(fb.select(resident, v, null)?);
-            }
-            fb.composite_construct(ty, &lanes)
-        }
-        None => Err(cx.fail("an access that names its texels without their residency")),
-    }
+    let Some(word) = word else {
+        return Err(cx.fail("an access that names its texel without its residency"));
+    };
+    let zero = fb.u32_const(0)?;
+    let zero = fb.module().const_value(zero)?;
+    let kept = fb.binary(BinOp::IEqual, word, zero)?;
+    let ty = fb.value_ty(x)?;
+    let null = fb.module().constant(Constant::Null { ty })?;
+    let null = fb.module().const_value(null)?;
+    fb.select(kept, x, null)
 }
 
 /// `held`, the held texel of access `s`, with the lanes Metal reads as constants set to them
@@ -2111,19 +2062,6 @@ pub(super) fn held_constants(
         _ => None,
     };
     crate::lower::texture::constant_lanes(cx, fb, key.texture, held, gathered)
-}
-
-/// The four-lane vector type of `x` and its element type.
-fn four_lanes(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    x: SValue,
-) -> BResult<(TypeId, TypeId)> {
-    let ty = fb.value_ty(x)?;
-    match fb.module().types().get(ty)? {
-        SType::Vector { elem, len: 4 } => Ok((ty, *elem)),
-        _ => Err(cx.fail("a texel that is not four lanes")),
-    }
 }
 
 /// The sampling result of image texel `texel`: the held texel ([`held_value`]) with the lanes
@@ -2186,12 +2124,8 @@ pub(super) fn held_value(
     };
     Ok(match half {
         Some(h) => {
-            let access = match s.op {
-                SampleOp::Gather { .. } => HalfForm::Read,
-                _ => HalfForm::Sample,
-            };
             let lanes = sample_lanes(cx, fb, s)?;
-            h.convert(fb, texel, (access, lanes), origin)?
+            h.convert(fb, texel, lanes, origin)?
         }
         None => held_texel(fb, image.texel, form, texel)?,
     })

@@ -1628,11 +1628,10 @@ fn image_descriptor(
                     slot,
                     compare,
                     integer,
-                    cube_gradient,
                     opaque_black,
                 } => sampler(
                     *slot,
-                    SamplerUse::new(*compare, *integer).with_cube_gradient(*cube_gradient),
+                    SamplerUse::new(*compare, *integer),
                     *opaque_black,
                     format,
                 )?,
@@ -1648,11 +1647,10 @@ fn image_descriptor(
             slot,
             compare,
             integer,
-            cube_gradient,
             opaque_black,
         } => vk::DescriptorImageInfo::default().sampler(sampler(
             *slot,
-            SamplerUse::new(*compare, *integer).with_cube_gradient(*cube_gradient),
+            SamplerUse::new(*compare, *integer),
             *opaque_black,
             None,
         )?),
@@ -1778,13 +1776,12 @@ fn image_descriptor(
             index,
             compare,
             integer,
-            cube_gradient,
         } => match tables.argument_samplers.get(*index as usize) {
             Some(state) => {
                 let desc = metal2vulkan::bind::sampler_desc(
                     device.compile_device(),
                     state.descriptor(),
-                    SamplerUse::new(*compare, *integer).with_cube_gradient(*cube_gradient),
+                    SamplerUse::new(*compare, *integer),
                     OpaqueBlackBorder::Stated,
                     None,
                 )

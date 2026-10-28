@@ -314,17 +314,18 @@ const BELOW_ZERO: [(usize, u32); 3] = [(289, 0x8000_0001), (291, 0x8000_0002), (
 /// keeps the subnormal would read the border, 0, through both.
 const METAL_BELOW_ZERO: [f32; 2] = [80.0, 40.0];
 
-/// Both constexpr clamp-to-zero samplers read Metal's value one, two and three units in the last
-/// place below `+0.0`: the module flushes a subnormal coordinate on a border axis as Metal's
-/// texture unit reads it (`lower::sampler::position::subnormal_flush`), so the device's own border
-/// test is handed Metal's coordinate.
+/// Both constexpr clamp-to-zero samplers one, two and three units in the last place below `+0.0`
+/// read what the device's sampler reads there: the module hands the coordinate as given. Through
+/// Metal's own texture unit (MoltenVK) that is Metal's value, which flushes the subnormal; a
+/// device of its own (`device-sampling` announced) reads it as it does, Metal's value or the
+/// border.
 #[test]
-fn clamp_to_zero_samples_just_below_zero_read_metal_s_texels() {
+fn clamp_to_zero_samples_just_below_zero_read_the_devices_texels() {
     let us = lanes();
     for &(lane, bits) in &BELOW_ZERO {
         assert_eq!(us[lane].to_bits(), bits, "lane {lane}");
     }
-    super::degrade_notices::on_device(|device, _| {
+    super::degrade_notices::on_device(|device, messages| {
         let float = texture(device, PixelFormat::R32Float, (WIDTH, HEIGHT), |x, y| {
             ((x + 16 * y) as f32).to_le_bytes()
         });
@@ -344,6 +345,14 @@ fn clamp_to_zero_samples_just_below_zero_read_metal_s_texels() {
                     ));
                 }
             }
+        }
+        if own_sampler(device, messages) {
+            println!(
+                "BELOW-ZERO {}: the device's own sampler, {} lanes differ from Metal",
+                device.name(),
+                wrong.len()
+            );
+            return;
         }
         assert!(wrong.is_empty(), "{}: {wrong:#?}", device.name());
     });

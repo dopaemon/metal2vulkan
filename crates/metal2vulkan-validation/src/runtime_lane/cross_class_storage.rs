@@ -22,8 +22,9 @@
 //!   lane extended by the format's signedness) saturated to its channel's range, through a slot
 //!   of the format's own class as through one of another class.
 //! - [`integer_writes_into_float_formats_store_the_bits_as_floats`]: an `int` or `uint` write to
-//!   a float format stores what a `float` write of those bits stores, rounded to nearest even
-//!   onto a half-float channel; a `short` or `ushort` write what a `half` write of those bits
+//!   a float format stores what a `float` write of those bits stores, the device's conversion
+//!   onto a half-float channel, announced as `device-color-conversion` (Metal rounds it to
+//!   nearest even); a `short` or `ushort` write what a `half` write of those bits
 //!   stores; a NaN channel's bits the device's (counted apart), where the device announced
 //!   `native-half-conversion`, `native-nan-encoding` or `device-nan-encoding` (the pipeline it
 //!   specialized to the bound format records the write's note, which the stage compiled without
@@ -33,7 +34,7 @@
 
 use super::degrade_notices::on_device;
 use super::driver_deviations::{half_nan, stage_notes};
-use super::extended_range_targets::{half_bits, half_value};
+use super::extended_range_targets::half_value;
 use super::{buffer_with, read_buffer, Messages};
 use crate::air_library::AirLibrary;
 use metal2vulkan::metal::format::sampled_type;
@@ -765,12 +766,11 @@ fn integer_writes_store_metals_saturated_words() {
 }
 
 /// Each `int` or `uint` write to a float format of [`FORMATS`] stores what a `float` write of
-/// the lanes' bits stores (rounded to nearest even, a finite value past the range to infinity,
-/// onto a half-float channel: what a `half` write of that rounding stores), and each `short` or
+/// the lanes' bits stores, the device's conversion onto a half-float channel (where Metal rounds
+/// to nearest even, so the stage records `device-color-conversion`), and each `short` or
 /// `ushort` write what a `half` write of the same bits stores, through an `access::write` 2D slot
-/// and a texture buffer; a NaN as Metal stores it: an `int` or `uint` NaN's bits
-/// in a half-float channel `0x7e00`, a 16-bit lane's NaN in a 32-bit float channel `0x7fc00000`.
-/// None announces the neutral.
+/// and a texture buffer; a 16-bit lane's NaN in a 32-bit float channel as Metal stores it,
+/// `0x7fc00000`. None announces the neutral.
 #[test]
 fn integer_writes_into_float_formats_store_the_bits_as_floats() {
     on_device(|device, messages| {
@@ -778,6 +778,8 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
         let mut pipelines: BTreeMap<(Kind, Ty), ComputePipelineState> = BTreeMap::new();
         let (mut checked, mut differ, mut skipped) = (0usize, 0usize, 0usize);
         let mut nans = 0usize;
+        // A 32-bit lane written into a half-float format, which the device's conversion rounds.
+        let mut rounded = false;
         let _ = messages.take_notices();
         for &(format, bytes, _) in &FORMATS {
             if sampled_type(format) != Some(SampledType::Float) {
@@ -786,11 +788,11 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
             let halves = matches!(format, P::R16Float | P::RGBA16Float);
             for kind in [Kind::Write, Kind::BufWrite] {
                 for ty in [Ty::Int, Ty::Uint, Ty::Short, Ty::Ushort] {
-                    // The native write giving Metal's answer, and its lanes.
-                    // Metal's NaNs: an `int` or `uint` NaN's bits into a half-float
-                    // channel `0x7e00`, a 16-bit lane's NaN into a 32-bit float channel
-                    // `0x7fc00000` (the rule for a `half` write), so those take the `float` write
-                    // of the widened value, which stores its bits.
+                    // The native write giving the answer, and its lanes: an `int` or `uint`
+                    // write's the `float` write of its bits, the device's conversion; a 16-bit
+                    // lane's NaN into a 32-bit float channel Metal's `0x7fc00000` (the rule for a
+                    // `half` write), so those take the `float` write of the widened value, which
+                    // stores its bits.
                     let wide = matches!(format, P::R32Float | P::RGBA32Float);
                     let (native, lanes): (Ty, Box<dyn Fn(u64, usize) -> u32>) =
                         match (ty.narrow(), halves) {
@@ -805,18 +807,9 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
                                 }),
                             ),
                             (true, _) => (Ty::Half, Box::new(move |t, c| lane(ty, t, c))),
-                            (false, true) => (
-                                Ty::Half,
-                                Box::new(move |t, c| {
-                                    let f = f32::from_bits(lane(ty, t, c));
-                                    match f.is_nan() {
-                                        true => 0x7e00,
-                                        false => u32::from(half_bits(f)),
-                                    }
-                                }),
-                            ),
-                            (false, false) => (Ty::Float, Box::new(move |t, c| lane(ty, t, c))),
+                            (false, _) => (Ty::Float, Box::new(move |t, c| lane(ty, t, c))),
                         };
+                    rounded |= halves && !ty.narrow();
                     let n = kind.threads();
                     let mut run = |t: Ty, src: &[u8]| -> Option<Vec<u8>> {
                         let (texture, backing) = made(device, (format, bytes), kind, None)?;
@@ -883,6 +876,11 @@ fn integer_writes_into_float_formats_store_the_bits_as_floats() {
         assert!(
             !announced.contains(&Degradation::CrossClassTextureNeutral),
             "an exact write bound the neutral"
+        );
+        assert!(
+            !rounded || announced.contains(&Degradation::DeviceColorConversion),
+            "a 32-bit lane rounded onto a half-float channel without device-color-conversion, \
+             announced {announced:?}"
         );
         let nan_kinds = NAN_NOTES.map(Degradation::from_precision_note);
         assert!(

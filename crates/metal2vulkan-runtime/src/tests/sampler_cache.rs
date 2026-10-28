@@ -32,16 +32,14 @@ use std::sync::Arc;
 /// finds every one of them (`sampler::KEPT`, which is private).
 const KEPT: usize = 128;
 
-/// Every way a function can sample through one sampler state: a depth comparison, an integer
-/// texture and a cube's explicit gradients, the eight facts Metal keeps out of the descriptor and
-/// the heap's sampler classes name (`pipeline::sym::HandleClass::Sampler`).
+/// Every way a function can sample through one sampler state: a depth comparison and an integer
+/// texture, the four uses of the facts Metal keeps out of the descriptor that the heap's sampler
+/// classes name (`pipeline::sym::HandleClass::Sampler`).
 fn uses() -> Vec<SamplerUse> {
     let mut out = Vec::new();
     for compare in [false, true] {
         for integer in [false, true] {
-            for cube in [false, true] {
-                out.push(SamplerUse::new(compare, integer).with_cube_gradient(cube));
-            }
+            out.push(SamplerUse::new(compare, integer));
         }
     }
     out
@@ -106,11 +104,11 @@ fn devices() -> Vec<(String, Device)> {
         .collect()
 }
 
-/// A state bound without a bind's LOD clamps has one Vulkan sampler per use a function samples it
-/// through, eight at the most and four for Metal's default descriptor (whose nearest filters and
-/// unmipmapped levels leave a comparison and an integer texture the only facts that change it), on
-/// every committed profile: well inside what the state keeps, so the cache answers every bind of
-/// such a state after the first of each use.
+/// A state bound without a bind's LOD clamps has a Vulkan sampler per use a function samples it
+/// through and per form of its opaque-black border, eight at the most and four for Metal's default
+/// descriptor (whose nearest filters and unmipmapped levels leave a comparison and an integer
+/// texture the only facts that change it), on every committed profile: well inside what the state
+/// keeps, so the cache answers every bind of such a state after the first of each use.
 #[test]
 fn a_state_has_at_most_eight_descriptions_without_a_binds_lod_clamps() {
     for (stem, device) in devices() {
@@ -126,7 +124,7 @@ fn a_state_has_at_most_eight_descriptions_without_a_binds_lod_clamps() {
 }
 
 /// A state a texture-streaming workload binds with the lower LOD clamp of each resident mip level
-/// has one Vulkan sampler per level per use: 128 over the sixteen levels of the largest mip chain
+/// has eight Vulkan samplers per level: 128 over the sixteen levels of the largest mip chain
 /// Metal's level grid reaches, on every committed profile. That is what the cache is sized at, so
 /// such a workload finds every one of them.
 #[test]
@@ -136,18 +134,18 @@ fn a_streaming_state_has_a_hundred_and_twenty_eight() {
         assert_eq!(
             streaming.len(),
             128,
-            "{stem}: sixteen clamp levels, eight uses"
+            "{stem}: sixteen clamp levels, eight descriptions each"
         );
         assert_eq!(streaming.len(), KEPT, "{stem}: what the state keeps");
     }
 }
 
-/// A bind's LOD clamps are taken on Metal's grid of a sixty-fourth of a level, so clamps off the
-/// integer levels are distinct descriptions and a workload can ask one state for more than it
-/// keeps: a thousand lower clamps across one level are sixty-four of them. The cache is bounded
-/// whatever a workload asks, which is why its lookup may not be a walk.
+/// A bind's LOD clamps are handed to the device as given, so clamps off the integer levels are
+/// distinct descriptions and a workload can ask one state for more than it keeps: a thousand lower
+/// clamps across one level are a thousand of them. The cache is bounded whatever a workload asks,
+/// which is why its lookup may not be a walk.
 #[test]
-fn a_binds_clamps_are_taken_on_metals_level_grid() {
+fn a_binds_clamps_are_handed_to_the_device_as_given() {
     let mut d = SamplerDescriptor::new();
     d.min_filter = F::Linear;
     d.mag_filter = F::Linear;
@@ -168,7 +166,7 @@ fn a_binds_clamps_are_taken_on_metals_level_grid() {
             .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
             seen.insert(desc);
         }
-        assert_eq!(seen.len(), 64, "{stem}: a level holds sixty-four clamps");
+        assert_eq!(seen.len(), 1000, "{stem}: every clamp its own description");
     }
 }
 

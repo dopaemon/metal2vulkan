@@ -89,9 +89,13 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
         .profile
         .takes_driver_deviation(DriverDeviation::MetalColorWrites);
     let storage = crate::lower::fragment::writes_through_storage(cx, color);
-    // A storage write the shader blends into a 16-bit float attachment stores the blend's `half`
-    // in every channel, which the device converts exactly, but for a NaN: no conversion of an
-    // output variable's bears on it, and its NaN is the storage image's store's ([`storage_nan`]).
+    // A storage write the shader blends into a 16-bit float attachment stores the blend's result:
+    // a `half` output's `half` in every channel, which the device converts exactly, and a `float`
+    // output's `float`, which the storage image's store rounds to `half` as Metal's blended write
+    // does where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires
+    // its property), else as the device rounds it (`PrecisionNote::DeviceColorConversion`). No
+    // conversion of an output variable's bears on it, and its NaN is the storage image's store's
+    // ([`storage_nan`]).
     // One the shader blends into an 8-bit unorm attachment stores the code Metal's unorm rule
     // gives the blend's result, which the shader rounds itself (`fetch::unorm8_blended`).
     let shader_blended = crate::lower::fragment::blends_in_storage(cx, color);
@@ -104,6 +108,18 @@ pub(crate) fn plan(cx: &mut SelectCx<'_>, color: u32, f: Form) {
     for (slot, rule) in lanes.iter_mut().zip(rules).take(usize::from(f.lanes)) {
         let Some(rule) = rule else { continue };
         nans |= !shader_blended && color_writes::half_float(rule) && !nan_kept(cx, rule, f);
+        if sixteen_blended && f.float_fmt() == Some(FloatFmt::F32) {
+            match cx
+                .profile
+                .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
+            {
+                true => {
+                    relied.insert(VkProperty::MetalHalfStorageWrites);
+                }
+                false => device = true,
+            }
+            continue;
+        }
         if metal && rule == color_writes::HALF {
             continue;
         }

@@ -2738,7 +2738,11 @@ bound.
   color lane, `1/4080` alpha).
 - `metal2vulkan-degrade-sparse-residency` (precision). `PrecisionNote::SparseResidency`: A stage
   samples or gathers a texture whose residency it observes (`sparse_color::resident()`) through the
-  slot's sparse form, which the module has where the profile enables `shaderResourceResidency`.
+  slot's sparse form, which the module has where the profile enables `shaderResourceResidency`:
+  the word is the device's `OpImageSparse*` residency, whose footprint may count a texel of zero
+  weight Metal does not, and an unmapped texel's lanes the device's non-resident value. Where the
+  device has no residency of its own, the slot's tile map answers Metal's footprint rule exactly,
+  unrecorded.
 - `metal2vulkan-degrade-device-nan-encoding` (precision). `PrecisionNote::DeviceNanEncoding`: A
   `float` NaN result's bit pattern follows the device: Metal answers the canonical `0x7fc00000` for
   the NaN results of its float arithmetic and functions, and Vulkan states no encoding, so a device
@@ -2752,18 +2756,21 @@ bound.
   off MoltenVK the sample takes the device's logarithm of Metal's footprint and, if anisotropic,
   the device's taps, so a level or blend near a boundary can differ from Metal's. Where the shader
   takes Metal's level and taps itself (`PrecisionNote::AnisotropicFilter`) this note is not
-  recorded. On a MoltenVK release or
-  GPU whose cube-gradient route is not measured, such an out-of-reach anisotropic sample is
-  filtered isotropically, at Metal's major axis. Through MoltenVK's vertex and fragment stages
+  recorded. On a MoltenVK release or GPU whose cube-gradient route is not measured the sample
+  takes Vulkan's rule's form, the device's reading of it. Through MoltenVK's vertex and fragment stages
   under macOS 27, an isotropic sample is Metal's, but an anisotropic sample on a cube's `+Y` or
   `-Y` face loses the gradients' `z` component to SPIRV-Cross's `spvGradientCube`, so its ellipse
   lies on the face's diagonal (docs/FAST-PATHS.md's known gaps). A kernel's samples through
   MoltenVK are Metal's own, with no note.
 - `metal2vulkan-degrade-half-texel-conversion` (precision). `PrecisionNote::HalfTexelConversion`:
-  The module reads, gathers, or samples a texture with a `half` result. On MoltenVK, also
-  announced at a draw that binds a two-plane YCbCr texture on
-  the grid `8192` at a slot sampled through a runtime sampler: a sample of one texel rounds to
-  nearest even, one `half` ulp from Metal's ties-away rounding at a tie.
+  The module reads, gathers, or samples a texture with a `half` result, the device's `float` texel
+  rounded to nearest even on every device: within one `half` ulp of Metal's, but a 32-bit float
+  texel's sample past `±65504`, the infinity where Metal saturates. On MoltenVK, whose `float`
+  texel is Metal's, announced at a draw or dispatch that binds a texture of a class whose Metal
+  `half` differs from it (a 32-bit float texel's sample, a 16-bit normalized texel, a format not
+  measured) and a two-plane YCbCr texture on the grid `8192` at a slot sampled through a runtime
+  sampler (a sample of one texel rounds to nearest even, one `half` ulp from Metal's ties-away
+  rounding at a tie); a heap element or a depth texture wherever it is accessed.
 - `metal2vulkan-degrade-half-sample-filter` (precision). `PrecisionNote::HalfSampleFilter`: The
   module samples a texture with a `half` result through a filter (linear minification or
   magnification, or a runtime sampler) that Metal's own sampler (MoltenVK) answers otherwise than
@@ -2805,7 +2812,13 @@ bound.
   floats). Near a tie between two codes the device may store the other one. Also a `float` texel a
   function writes to a storage texture that may hold a normalized or half-float format, or
   `ARGB8Unorm`, on a device not measured to store Metal's codes (or a 1-bit alpha, on one measured
-  to store every other normalized channel's). Also a render pass's clear of a normalized, sRGB,
+  to store every other normalized channel's); an integer texel written into a storage texture of
+  the float class that may hold a half-float or small-float format, which Metal rounds to nearest
+  even and the device's store as it rounds a `float` (toward zero on every measured driver, one
+  unit in the last place, a finite value past 65504 stored as 65504); and a fragment function's
+  `float` blend into a 16-bit float attachment through the pixel interlock on a device not
+  measured to round a `half` store as Metal does.
+  Also a render pass's clear of a normalized, sRGB,
   packed 16-bit, half or small-float color attachment to a color whose conversion is in question
   (a normalized channel within 1/1024 of a midpoint between two codes, an sRGB channel inside its
   range, a value the format does not hold exactly): the device converts the clear color, where
@@ -2919,8 +2932,7 @@ bound.
   module samples a texture through an anisotropic sampler with Metal's anisotropic filter emulated
   by the device's samples at explicit levels (`lower::sampler::anisotropic`), on a device without
   `samplerAnisotropy`, every Vulkan sampler being isotropic there, each tap the device's isotropic
-  filter, and for a cube's explicit gradients through MoltenVK where its cube-gradient route is not
-  measured: a sample without comparison of a 2D texture or 2D array at the fragment's implicit
+  filter: a sample without comparison of a 2D texture or 2D array at the fragment's implicit
   level or with explicit gradients, or of a cube or cube array with explicit gradients, through a
   constexpr sampler of `maxAnisotropy` above 1, or through a runtime sampler slot whose word states
   anisotropy (under that word alone). A device with the feature samples with its own anisotropic
@@ -2969,8 +2981,12 @@ bound.
   (every factor, operation, write mask and blend color it builds), which Metal reads the output
   into clamped, folding none of it.
 - `metal2vulkan-degrade-device-sampling` (precision). `PrecisionNote::DeviceSampling`: Native device
-  sampling: the module hands a sample, gather or comparison to the device's own sampler on a device
-  whose sampler is not Metal's (the module requires `VkProperty::DeviceSampling`). That includes a
+  sampling: the module hands a sample, gather, comparison or level query to the device's own
+  sampler on a device whose sampler is not Metal's (the module requires
+  `VkProperty::DeviceSampling`), its level clamp the descriptor's as given (Metal holds it on a
+  `1/64` grid, and its nearest mip filter reads the lower level at a clamp halfway between two,
+  where the device may read the upper) and a subnormal coordinate the device's to read (Metal reads it as a zero before
+  addressing). That includes a
   linear sample of a two-plane YCbCr texture, whose texels hold Metal's reads exactly: the device's
   filter of them lands within 1.183 codes (1/255) of Metal's sum on the format's grid, so a draw
   binding such a texture makes no pipeline of its own.

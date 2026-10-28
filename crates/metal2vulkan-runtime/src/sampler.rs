@@ -151,15 +151,15 @@ impl SamplerKey {
 /// two, and the device's live samplers are held to its limit on every creation ([`SamplerCount`]).
 ///
 /// A state's distinct Vulkan samplers are its descriptor's, one per fact Metal keeps out of the
-/// descriptor: how a function samples through it (`SamplerUse`, eight in all: a depth comparison,
-/// an integer texture and a cube's explicit gradients), the opaque-black border a view needs, and
-/// the LOD clamps a bind replaces the descriptor's with. Without a bind's clamps a state has at
-/// most **8** descriptions on every committed device profile, and over the sixteen mip levels a
-/// texture-streaming workload clamps to it has **128** (`tests/sampler_cache.rs`, which enumerates
+/// descriptor: how a function samples through it (`SamplerUse`, four in all: a depth comparison
+/// and an integer texture), the opaque-black border a view needs, and the LOD clamps a bind
+/// replaces the descriptor's with. Without a bind's clamps a state has at most **8** descriptions
+/// on every committed device profile, and over the sixteen mip levels a texture-streaming
+/// workload clamps to it has **128** (`tests/sampler_cache.rs`, which enumerates
 /// them through `bind::sampler_desc` over every profile in `validation/profiles`). A bind's clamps
-/// are taken on Metal's grid of a sixty-fourth of a level, so a workload clamping off the integer
-/// levels can ask one state for more than this; it then forgets and makes Vulkan samplers, which
-/// is why the lookup is a map and not a walk of what the state keeps ([`KeptSamplers`]).
+/// are handed to the device as given, so a workload clamping off the integer levels can ask one
+/// state for more than this; it then forgets and makes Vulkan samplers, which is why the lookup is
+/// a map and not a walk of what the state keeps ([`KeptSamplers`]).
 const KEPT: usize = 128;
 
 /// The device's live Vulkan samplers, at most `maxSamplerAllocationCount`: every sampler the

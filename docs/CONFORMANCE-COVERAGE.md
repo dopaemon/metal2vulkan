@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1122 |
 | distinct SDK items the Metal leg reaches, of any status | 800 |
 | of those, reached only where this cannot name the family | 2 |
-| ledger rows (a case whose gap is recorded) | 931 |
+| ledger rows (a case whose gap is recorded) | 936 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -3133,4 +3133,9 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `compressed-blits-rgb9e5f` | Metal's blit through the lossless compression it keeps this `RGB9E5Float` texture in lowers each texel's shared exponent to the least that holds its value, and … |
 | `compressed-blits-rgb9e5f` | Metal's blit through the lossless compression it keeps this `RGB9E5Float` texture in lowers each texel's shared exponent to the least that holds its value, and … |
 | `compressed-blits-rgb9e5f` | Metal's blit through the lossless compression it keeps this `RGB9E5Float` texture in lowers each texel's shared exponent to the least that holds its value, and … |
+| `sampler-mip-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
+| `sampler-mip-filter-pairs-nearest` | Under a nearest mip filter and `lodMinClamp` 1.5 Metal reads level 1 (`ceil(clamp + 0.5) - 1`, the case's table); the device's own sampler takes the descriptor'… |
 

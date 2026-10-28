@@ -627,9 +627,8 @@ pub enum WriteSource {
         window: Window,
     },
     /// A `VkSampler` for the sampler bound at `slot`, made for this use: `compare` enables depth
-    /// comparison, `integer` selects integer border colors, and `cube_gradient` makes it isotropic
-    /// for a cube's explicit gradients in Metal's isotropic footprint
-    /// (`metal::sampler::SamplerUse`, `bind::sampler_desc`). The plan checks what the shape states
+    /// comparison and `integer` selects integer border colors (`metal::sampler::SamplerUse`,
+    /// `bind::sampler_desc`). The plan checks what the shape states
     /// (reduction); the rest of the descriptor is per bind. `opaque_black` says how an opaque-black
     /// border is made to read Metal's texel through every texture the sampler meets
     /// (`metal::sampler::OpaqueBlackBorder`).
@@ -637,7 +636,6 @@ pub enum WriteSource {
         slot: SlotRef,
         compare: bool,
         integer: bool,
-        cube_gradient: bool,
         opaque_black: OpaqueBlackBorder,
     },
     /// The stage's argument table; instantiation fills the bytes.
@@ -722,7 +720,7 @@ pub enum WriteSource {
     TileMap { slot: SlotRef },
     /// Element `index + 1` of a set-1 sampler array: a `VkSampler` for
     /// `BindState::argument_samplers[index]`, made for this use as `Sampler` is
-    /// (`bind::sampler_desc` with `compare`, `integer` and `cube_gradient`), or the neutral sampler
+    /// (`bind::sampler_desc` with `compare` and `integer`), or the neutral sampler
     /// (`NeutralResource::Sampler { compare }`) where the state lists fewer samplers: no handle
     /// names that element then. The plan writes every element of its shape's capacity class
     /// (`ArgumentSamplersShape::entries`), so the list may grow or shrink within the class
@@ -731,7 +729,6 @@ pub enum WriteSource {
         index: u32,
         compare: bool,
         integer: bool,
-        cube_gradient: bool,
     },
     /// The shadow of the render pass's stencil attachment that a fragment function's
     /// shader-side stencil tests and writes (`GraphicsState::shadow_stencil`): the consumer's
@@ -844,7 +841,6 @@ pub enum SamplerSource {
         slot: SlotRef,
         compare: bool,
         integer: bool,
-        cube_gradient: bool,
         opaque_black: OpaqueBlackBorder,
     },
     /// The layout's immutable (constexpr) sampler: the write carries only the image.

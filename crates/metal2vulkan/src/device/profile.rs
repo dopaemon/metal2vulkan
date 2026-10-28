@@ -517,8 +517,8 @@ pub struct ProfileFields {
 /// How a driver hands a cube sample's explicit gradients to the GPU
 /// ([`ProfileFields::cube_gradients`]), per pipeline kind, each decided by the driver's measured
 /// deviations (`DriverDeviation::GraphicsCubeGradientTangents` and
-/// `DriverDeviation::CubeGradientRoute`);
-/// without them, Vulkan's rule, but [`CubeGradientRoute::Unmeasured`] on a MoltenVK `driver_id`.
+/// `DriverDeviation::CubeGradientRoute`); without them, Vulkan's rule, the device's own reading,
+/// on every driver.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CubeGradients {
@@ -538,7 +538,9 @@ pub enum CubeGradientRoute {
     /// function hands an isotropic sample Metal's length of the two tangent components on one
     /// tangent, and an anisotropic one Metal's face gradients without their normal component
     /// (`lower::sampler::CubeFootprint::Length` and `Face`); the level and the anisotropic filter
-    /// are the device's (`PrecisionNote::CubeGradientFootprint`).
+    /// are the device's (`PrecisionNote::CubeGradientFootprint`). Also the route of a driver no
+    /// measurement covers (a MoltenVK release or GPU without the deviations), whose reading of
+    /// the form is its own.
     Vulkan,
     /// SPIRV-Cross's `spvGradientCube` (its `agx_manual_cube_grad_fixup`) projects each onto the
     /// face as Vulkan's rule does and swizzles the two values, then hands them to Metal's
@@ -551,16 +553,6 @@ pub enum CubeGradientRoute {
     /// They reach Metal's `gradientcube` as given, which the GPU reads by Metal's own rule, so
     /// the function hands Metal's own (`lower::sampler::CubeFootprint::Metal`).
     Metal,
-    /// The driver hands them to Metal by a route its description does not state: a MoltenVK
-    /// `driver_id` at a release no measurement covers, or a document of one that states no
-    /// route. The function takes Metal's footprint itself where its emulation reaches the sample
-    /// (`lower::sampler::anisotropic`): Metal's level, and an anisotropic sampler's taps, each an
-    /// explicit level of Metal's own sampler, which no route alters
-    /// (`PrecisionNote::AnisotropicFilter` for the taps). Elsewhere it hands the isotropic form's
-    /// length, on one tangent, which every route above reads alike (but a `y` face's through
-    /// [`CubeGradientRoute::AppleProjected`]'s fixup), through an isotropic sampler
-    /// (`metal::sampler::SamplerUse::cube_gradient`, `PrecisionNote::CubeGradientFootprint`).
-    Unmeasured,
 }
 
 impl CubeGradients {

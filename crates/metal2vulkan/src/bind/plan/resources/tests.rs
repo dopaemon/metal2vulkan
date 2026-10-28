@@ -537,7 +537,6 @@ fn runtime_sampler_values_are_checked_at_plan_time() {
                                 slot,
                                 compare,
                                 integer: false,
-                                cube_gradient: false,
                                 opaque_black: crate::metal::sampler::OpaqueBlackBorder::Stated,
                             }),
                             "{stem} {name} compare={compare}"
@@ -859,143 +858,6 @@ fn bicubic_texels_follow_the_bound_format() {
         Err(BindError::Unsupported(Unsupported::not_implemented(
             Feature::SamplerBicubicFilter
         )))
-    );
-}
-
-/// A combined binding with the cube-gradient bit (a cube's explicit gradients in Metal's isotropic
-/// footprint, which a function takes through a runtime sampler where the device's cube-gradient
-/// route is not measured) takes an anisotropic runtime sampler on every committed profile, without
-/// `samplerAnisotropy` too: its Vulkan sampler is isotropic (no anisotropy handed), and Metal's
-/// anisotropic filter is the function's emulation, whose taps read explicit levels, under the
-/// variant naming the slot (`anisotropic_variant`) wherever the function states
-/// `RuntimeFact::AnisotropicSampler` for it. An isotropic sampler is accepted for it, and the same
-/// anisotropic sampler for a binding without the bit (every other cube-gradient binding, whose
-/// footprint the sampler's word chooses) gets the ordinary verdict (`samplerAnisotropy`).
-#[test]
-fn an_explicit_cube_gradient_binding_takes_an_anisotropic_sampler_isotropically() {
-    use crate::bind::state::SamplerDescriptor;
-    use crate::metal::sampler::{vk_sampler, SamplerUse};
-    let texture = SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Texture,
-        index: 0,
-    };
-    let sampler_slot = SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Sampler,
-        index: 2,
-    };
-    let isotropic = SamplerDescriptor::new();
-    let mut anisotropic = isotropic;
-    anisotropic.max_anisotropy = 4;
-    let (mut isotropic_taken, mut compiled) = (0, 0);
-    for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
-        let t = slot_iface(TextureType::Cube, SampledType::Float);
-        let slots = BTreeMap::from([
-            (texture, SlotInterface::Texture(t)),
-            (
-                sampler_slot,
-                SlotInterface::Sampler(SamplerSlot {
-                    compare: false,
-                    coordinate_sensitive: false,
-                }),
-            ),
-        ]);
-        for (name, desc) in [("isotropic", isotropic), ("anisotropic", anisotropic)] {
-            for cube_gradient in [false, true] {
-                let mut stage = StageShape::default();
-                stage.textures.insert(
-                    texture.index,
-                    TextureShape::Texture {
-                        address_modes: crate::metal::sampler::AddressModeMap::IDENTITY,
-                        offset_base_axes: 0,
-                        ycbcr_in_place: false,
-                        texture_type: TextureType::Cube,
-                        pixel_format: PixelFormat::RGBA8Unorm,
-                        sample_count: 1,
-                        usage: crate::metal::TextureUsage::SHADER_READ,
-                        mipmap_level_count: 1,
-                        sparse: false,
-                        swizzle: crate::metal::TextureSwizzleChannels::DEFAULT,
-                    },
-                );
-                stage
-                    .samplers
-                    .insert(sampler_slot.index, BoundSampler::new(desc).shape());
-                let shape = BTreeMap::from([(Stage::Kernel, stage.clone())]);
-                let mut planner = ResourcePlanner {
-                    profile: &p,
-                    shape: &shape,
-                    slots: &slots,
-                    dependencies: &[],
-                    stage_flags: |_| vk::PipelineStageFlags2::COMPUTE_SHADER,
-                    variant: VariantKey::new(),
-                    diagnostics: Vec::new(),
-                    uses: Vec::new(),
-                    template: Default::default(),
-                    alpha_red_texels: Default::default(),
-                };
-                let sampler =
-                    CombinedSampler::new(SamplerRef::Slot(sampler_slot.index), false, false)
-                        .with_cube_gradient(cube_gradient);
-                let planned = planner.combined(texture, sampler, None);
-                let verdict = vk_sampler(
-                    &desc,
-                    SamplerUse::new(false, false).with_cube_gradient(cube_gradient),
-                    &p,
-                );
-                if name == "anisotropic" && cube_gradient {
-                    let made = verdict.unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-                    assert_eq!(made.max_anisotropy, None, "{stem}: {made:?}");
-                    // The write carries the use, so the binder's `VkSampler` (`sampler_desc`)
-                    // is the isotropic one too.
-                    let Ok(WriteSource::CombinedImageSampler {
-                        sampler:
-                            SamplerSource::Slot {
-                                compare,
-                                integer,
-                                cube_gradient: true,
-                                ..
-                            },
-                        ..
-                    }) = planned
-                    else {
-                        panic!("{stem}: {planned:?}");
-                    };
-                    let use_ = SamplerUse::new(compare, integer).with_cube_gradient(true);
-                    assert_eq!(vk_sampler(&desc, use_, &p), Ok(made), "{stem}");
-                    let mut bind = crate::bind::state::BindShape::default();
-                    bind.stages.insert(Stage::Kernel, stage);
-                    let stated = [crate::pipeline::RuntimeDependency::new(
-                        crate::pipeline::facts::RuntimeFact::AnisotropicSampler {
-                            slot: sampler_slot,
-                        },
-                        crate::pipeline::facts::Mechanism::Variant,
-                    )];
-                    assert_eq!(
-                        crate::bind::plan::slots::anisotropic_variant(&stated, &bind),
-                        BTreeSet::from([sampler_slot]),
-                        "{stem}"
-                    );
-                    isotropic_taken += 1;
-                } else {
-                    match verdict {
-                        Ok(_) => {
-                            assert!(
-                                matches!(planned, Ok(WriteSource::CombinedImageSampler { .. })),
-                                "{stem} {name} {cube_gradient}: {planned:?}"
-                            );
-                            compiled += 1;
-                        }
-                        Err(e) => assert_eq!(planned, Err(bind_error(e)), "{stem} {name}"),
-                    }
-                }
-            }
-        }
-    }
-    assert!(
-        isotropic_taken > 0 && compiled > 0,
-        "{isotropic_taken} taken isotropically, {compiled} accepted"
     );
 }
 
@@ -1348,7 +1210,6 @@ fn a_separate_pair_takes_the_combined_pairs_checks() {
                         slot: sampler_slot,
                         compare: false,
                         integer: false,
-                        cube_gradient: false,
                         opaque_black: crate::metal::sampler::OpaqueBlackBorder::Stated,
                     },
                     None => WriteSource::Neutral(NeutralResource::Sampler { compare: false }),

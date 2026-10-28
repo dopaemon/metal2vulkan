@@ -412,15 +412,13 @@ fn an_anisotropic_constexpr_sampler_takes_metals_cube_gradient_footprint() {
 }
 
 /// An unmeasured route: `moltenvk-m3` without its measured compute cube-gradient route (as a
-/// MoltenVK release no measurement covers) takes Metal's footprint in the shader, where the
-/// refusal was: `unk_cube_grad_lod`'s isotropic sampler Metal's level and one tap (each texture's
-/// routine queries the level count; no loop, no note), the same kernel through an anisotropic
-/// constexpr sampler Metal's level and taps (a loop of taps per routine, `AnisotropicFilter`),
-/// neither with
-/// `CubeGradientFootprint`. The measured description hands Metal's own gradients: no level query,
+/// MoltenVK release no measurement covers) takes Vulkan's rule, the device's own reading of the
+/// form handed to it: `unk_cube_grad_lod` through its isotropic sampler and through an anisotropic
+/// constexpr one queries no level count, loops over no taps and records `CubeGradientFootprint`,
+/// not `AnisotropicFilter`. The measured description hands Metal's own gradients: no level query,
 /// no note.
 #[test]
-fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
+fn an_unmeasured_cube_gradient_route_takes_the_devices_reading() {
     use crate::device::profile::CubeGradients;
     use crate::error::DriverDeviation;
     let path = engine_dir().join("unk_cube_grad_lod.ll");
@@ -457,7 +455,7 @@ fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
         unmeasured.fields().cube_gradients,
         CubeGradients {
             graphics: CubeGradientRoute::AppleProjected,
-            compute: CubeGradientRoute::Unmeasured,
+            compute: CubeGradientRoute::Vulkan,
         }
     );
     for (bc, taps) in [(&iso, false), (&aniso, true)] {
@@ -465,24 +463,15 @@ fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
         let u = artifact(bc, "unk_cube_grad_lod", "unmeasured", &unmeasured).expect(what);
         let samples = uses(&u, "sampler.sample_cube_grad") as usize;
         assert!(samples > 0, "{what}");
-        assert_eq!(
-            count(&u, OP_IMAGE_QUERY_LEVELS),
-            CUBE_GRAD_TEXTURES,
-            "{what}"
-        );
-        assert_eq!(
-            count(&u, OP_LOOP_MERGE),
-            if taps { CUBE_GRAD_TEXTURES } else { 0 },
-            "{what}"
-        );
-        assert_eq!(
-            u.precision.contains(&PrecisionNote::AnisotropicFilter),
-            taps,
+        assert_eq!(count(&u, OP_IMAGE_QUERY_LEVELS), 0, "{what}");
+        assert_eq!(count(&u, OP_LOOP_MERGE), 0, "{what}");
+        assert!(
+            !u.precision.contains(&PrecisionNote::AnisotropicFilter),
             "{what}: {:?}",
             u.precision
         );
         assert!(
-            !u.precision.contains(&PrecisionNote::CubeGradientFootprint),
+            u.precision.contains(&PrecisionNote::CubeGradientFootprint),
             "{what}: {:?}",
             u.precision
         );
@@ -502,8 +491,8 @@ fn an_unmeasured_cube_gradient_route_takes_metals_footprint_in_the_shader() {
 /// On the Apple M3 Max's identity (`moltenvk-m3`'s capture) a fragment function's explicit cube
 /// gradients through an anisotropic constexpr sampler take SPIRV-Cross's fixup in its projected
 /// form (`AppleProjected`), exact on an `x` or `z` face and a near-equivalent on a `y` face, with
-/// `CubeGradientFootprint`. Without the route's measurement the same fragment takes Metal's level
-/// and taps in the shader, with `AnisotropicFilter` and without `CubeGradientFootprint`, while the
+/// `CubeGradientFootprint`. Without the route's measurement the same fragment takes Vulkan's rule,
+/// the device's reading, with `CubeGradientFootprint` and without `AnisotropicFilter`, while the
 /// kernel route stays Metal's and the kernel of the same samples compiles. The cover vertex
 /// function compiles on each.
 #[test]
@@ -542,7 +531,7 @@ fn the_graphics_cube_route_is_the_measured_projected_form() {
         .clone();
     assert_eq!(
         unmeasured.fields().cube_gradients.graphics,
-        CubeGradientRoute::Unmeasured
+        CubeGradientRoute::Vulkan
     );
     let a = artifact(&fragment, "rtl_cube_grad_fragment", "moltenvk-m3", &m3_27).expect("m3");
     assert!(
@@ -558,12 +547,12 @@ fn the_graphics_cube_route_is_the_measured_projected_form() {
     )
     .expect("an unmeasured graphics route");
     assert!(
-        a.precision.contains(&PrecisionNote::AnisotropicFilter),
+        !a.precision.contains(&PrecisionNote::AnisotropicFilter),
         "{:?}",
         a.precision
     );
     assert!(
-        !a.precision.contains(&PrecisionNote::CubeGradientFootprint),
+        a.precision.contains(&PrecisionNote::CubeGradientFootprint),
         "{:?}",
         a.precision
     );
@@ -605,17 +594,14 @@ declare { <4 x float>, i8 } @air.sample_texture_cube_grad.v4f32(ptr addrspace(1)
 /// word on every profile whose route is measured and not Metal's: the slot's `SamplerState`
 /// specialization reads `SamplerWord::ANISOTROPIC`, the module computes the isotropic form
 /// (Metal's length per gradient, two `FMax` each; macOS 26.7's fixup a `Length` instead) beside
-/// the anisotropic one, records `CubeGradientFootprint`, and its combined binding carries no
-/// cube-gradient bit, so the plan takes an anisotropic sampler there. On a driver that hands a
-/// compute pipeline's cube gradients to Metal's `gradientcube`, the kernel hands Metal's own: no
-/// word read, no note. On `moltenvk-m3` without its measured route (unmeasured) the kernel keeps
-/// the isotropic form without reading the word (a variant naming the slot takes Metal's taps),
-/// and its binding carries the bit, which makes an anisotropic sampler isotropic where it is
-/// bound.
+/// the anisotropic one and records `CubeGradientFootprint`, so the plan takes an anisotropic
+/// sampler there. On a driver that hands a compute pipeline's cube gradients to Metal's
+/// `gradientcube`, the kernel hands Metal's own: no word read, no note. `moltenvk-m3` without its
+/// measured route (unmeasured) takes Vulkan's rule, by the word too.
 #[test]
 fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
     use crate::metal::sampler::SamplerWord;
-    use crate::pipeline::sym::{ResourceKind, SpecKey};
+    use crate::pipeline::sym::SpecKey;
     let Some(bc) = assemble_text("runtime_cube_grad", RUNTIME_CUBE_GRAD) else {
         return;
     };
@@ -644,41 +630,24 @@ fn a_runtime_samplers_cube_gradients_take_their_footprint_by_its_word() {
             _ => None,
         });
         let reads = fields.is_some_and(|f| f & SamplerWord::ANISOTROPIC != 0);
-        let bits: Vec<bool> = a
-            .interface
-            .descriptors
-            .iter()
-            .filter_map(|d| match d.slot.kind {
-                ResourceKind::CombinedTextureSampler(c) => Some(c.cube_gradient),
-                _ => None,
-            })
-            .collect();
         let noted = a.precision.contains(&PrecisionNote::CubeGradientFootprint);
         let lengths = glsl(&a, GLSL_FMAX) >= 4 || glsl(&a, GLSL_LENGTH) >= 2;
         match route {
             CubeGradientRoute::Metal => {
                 assert!(!reads, "{stem}: {fields:?}");
                 assert!(!noted, "{stem}");
-                assert_eq!(bits, vec![false], "{stem}");
                 handed += 1;
-            }
-            CubeGradientRoute::Unmeasured => {
-                assert!(!reads, "{stem}: {fields:?}");
-                assert!(glsl(&a, GLSL_FMAX) >= 4, "{stem}");
-                assert!(noted, "{stem}");
-                assert_eq!(bits, vec![true], "{stem}");
             }
             CubeGradientRoute::Vulkan => {
                 assert!(reads, "{stem}: {fields:?}");
                 assert!(lengths, "{stem}");
                 assert!(noted, "{stem}");
-                assert_eq!(bits, vec![false], "{stem}");
                 by_word += 1;
             }
             CubeGradientRoute::AppleProjected => panic!("{stem}: a kernel's route {route:?}"),
         }
     }
-    assert!(by_word >= 4, "{by_word}");
+    assert!(by_word >= 5, "{by_word}");
     assert!(handed > 0, "no profile hands Metal's gradients");
 }
 

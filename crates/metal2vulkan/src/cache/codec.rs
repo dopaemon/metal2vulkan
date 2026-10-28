@@ -811,7 +811,7 @@ codec_struct! {
 codec_struct! {
     SlotRef { stage, class, index }
     ImageHandleClass { dim, arrayed, multisampled, sampled_type, depth_compare, access, format }
-    CombinedSampler { sampler, compare, integer, cube_gradient }
+    CombinedSampler { sampler, compare, integer }
     ResourceSlot { stage, kind, index }
 }
 
@@ -825,7 +825,7 @@ codec_enum! {
     SampledType { Float, Sint, Uint, Uint64 }
     ImageAccess { Sampled, Storage }
     StorageFormatClass { NotStorage, Unknown, Format(f0) }
-    HandleClass { Image(f0), Sampler { compare, integer, cube_gradient }, FunctionTable }
+    HandleClass { Image(f0), Sampler { compare, integer }, FunctionTable }
     SyntheticBinding {
         ArgumentTable, ExecutionStatus, RootTable, HandleTable, ConstantBlob, TessellationFactors, Imageblock,
         SamplerTable,

@@ -1082,6 +1082,112 @@ fn integer_writes_saturate_to_the_bound_formats_channels() {
     assert_eq!(checked, (11 * 2 + 5) * 2);
 }
 
+/// An `int` or `uint` write into a texture of the float class in a half-float or small-float
+/// format stores the `float` of each lane's bits as written: the device's store converts it, as
+/// it converts every `float` write, where Metal's integer store rounds to nearest even, so the
+/// module records `PrecisionNote::DeviceColorConversion` (and requires no
+/// `VkProperty::MetalHalfStorageWrites`, whose rounding is Metal's `float` write's). A 32-bit
+/// float format's needs no conversion, and records nothing. On the interpreter the image holds the
+/// written `f32` itself.
+#[test]
+fn integer_writes_into_narrow_floats_take_the_devices_conversion() {
+    use crate::device::requirements::VkProperty;
+    use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
+    use crate::vk::Format as F;
+    let cases = [
+        (Ty::Uint, F::R16G16B16A16_SFLOAT, true),
+        (Ty::Int, F::R16G16B16A16_SFLOAT, true),
+        (Ty::Uint, F::B10G11R11_UFLOAT_PACK32, true),
+        (Ty::Int, F::R32G32B32A32_SFLOAT, false),
+    ];
+    let mut checked = 0;
+    for stem in ["lavapipe", "moltenvk-m3"] {
+        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        for (ty, format, narrow) in cases {
+            let what = format!("write {ty:?} over {format:?} on {stem}");
+            let Some(bc) = assemble(&what, &write_kernel(ty)) else {
+                return;
+            };
+            let mut inputs = LowerInputs::new();
+            inputs.cross_class.insert(TEXTURE, SampledType::Float);
+            inputs.storage_images.insert(
+                TEXTURE,
+                StorageImageChoice::new(format, StorageImageClass::Identity),
+            );
+            validate(&bc, &inputs, &p, &what);
+            let consts = FunctionConstantValues::defaults();
+            let a = compile_bitcode(
+                &bc,
+                EntryRef::Name("k"),
+                &consts,
+                &p,
+                &inputs,
+                &mut meter(),
+                SPIRV_WORDS,
+            )
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::DeviceColorConversion),
+                narrow,
+                "{what}: {:?}",
+                a.precision
+            );
+            assert!(
+                !a.requirements
+                    .properties
+                    .contains(&VkProperty::MetalHalfStorageWrites),
+                "{what}"
+            );
+            let (plan, m) =
+                typed_module_with(&bc, "k", &p, &inputs).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+            let lane = |n: u32, c: usize| WORDS[(n as usize * 4 + c) * 7 % WORDS.len()];
+            let src: Vec<u8> = (0..SIDE * SIDE)
+                .flat_map(|n| (0..4).flat_map(move |c| lane(n, c).to_le_bytes()))
+                .collect();
+            let mut spec = BTreeMap::new();
+            for axis in [Axis::X, Axis::Y, Axis::Z] {
+                spec.insert(SpecKey::LocalSize(axis), 1);
+            }
+            spec.insert(SpecKey::FlatLocalSize, 1);
+            let res = Resources {
+                buffers: vec![Buffer {
+                    slot: Some(ResourceSlot {
+                        stage: Stage::Kernel,
+                        kind: ResourceKind::Buffer,
+                        index: 0,
+                    }),
+                    address: None,
+                    bytes: src,
+                }],
+                push,
+                spec,
+            };
+            let img = Image::new(resource(&m), [SIDE, SIDE, 1], 1, 1, 1);
+            let cfg = Config {
+                workgroups: [SIDE, SIDE, 1],
+                ..Config::default()
+            };
+            let (_, images) = run_with_images(&m, &cfg, res, vec![img])
+                .unwrap_or_else(|e| panic!("{what}: interpreter: {e:?}"));
+            let img = images.into_iter().next().expect("image");
+            for n in 0..SIDE * SIDE {
+                let at = img.index(0, 0, 0, [n % SIDE, n / SIDE, 0]).expect("texel");
+                for c in 0..4 {
+                    assert_eq!(
+                        img.texels[at][c],
+                        lane(n, c),
+                        "{what}: texel {n} lane {c} stored {:#x}",
+                        img.texels[at][c]
+                    );
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 8);
+}
+
 /// A kernel's state for [`write_kernel`]: texture slot 0 bound in `pf` (shader write), buffer 0.
 fn write_state(pf: PixelFormat) -> BindState {
     let mut s = state(pf);

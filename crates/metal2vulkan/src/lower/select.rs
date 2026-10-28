@@ -1748,13 +1748,11 @@ fn finish(
     })
 }
 
-/// The constant a [`NoteTest`] reads: a texture slot's `TexelFormat` class or a sampler slot's
-/// `SamplerState` word, by the function's slot index, or a texture slot's `UnmeasuredTexels`
-/// boolean, or the class of the format bound at a texture slot, which no constant carries
-/// (`SpecKey::BoundTexelFormat`).
+/// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word, by the function's slot
+/// index, or a texture slot's `UnmeasuredTexels` boolean, or the class of the format bound at a
+/// texture slot, which no constant carries (`SpecKey::BoundTexelFormat`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NoteOn {
-    Texel(u32),
     Sampler(u32),
     Unmeasured(u32),
     Bound(u32),
@@ -1824,11 +1822,6 @@ pub(crate) fn any_of(tests: impl IntoIterator<Item = NoteTest>) -> Vec<NoteClaus
 /// which the runtime takes from the bound texture.
 fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
     let key = match t.on {
-        NoteOn::Texel(index) => {
-            let s = families.texture.slots.get(&index)?;
-            s.declares_texel_format()
-                .then_some(SpecKey::TexelFormat(s.slot))?
-        }
         NoteOn::Unmeasured(index) => {
             let s = families.texture.slots.get(&index)?;
             s.unmeasured.then_some(SpecKey::UnmeasuredTexels(s.slot))?

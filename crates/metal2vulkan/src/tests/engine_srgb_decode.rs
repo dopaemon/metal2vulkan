@@ -1151,13 +1151,12 @@ fn an_astc_srgb_slot_samples_the_devices_decode() {
 }
 
 /// A `half` sample the device decodes and filters (a linear one with a linear mip filter)
-/// converts the device's `f32` texel by the bound format's class, the conversion's `OTHER` arm
-/// for an 8-bit sRGB format. On MoltenVK, whose decode and filter are Metal's own texture unit's,
-/// that `f32` is Metal's `float` value, whose rounding to `half` is Metal's
-/// (`metals_srgb_float_steps_round_to_their_half_steps`): the pipeline takes no
-/// `PrecisionNote::HalfTexelConversion` under the format and requires `VkProperty::MetalSampler`,
-/// and the note holds under a format of no measured family. On lavapipe, whose decode and
-/// conversion are the device's, the note holds under every format.
+/// rounds the device's `f32` texel to nearest even. On MoltenVK, whose decode and filter are
+/// Metal's own texture unit's, that `f32` is Metal's `float` value, whose rounding to `half` is
+/// Metal's (`metals_srgb_float_steps_round_to_their_half_steps`): the pipeline requires
+/// `VkProperty::MetalSampler`, no clause of `PrecisionNote::HalfTexelConversion` holds of an 8-bit
+/// sRGB format bound there, and the note holds under a format of no measured family. On
+/// lavapipe, whose decode and conversion are the device's, the note holds under every format.
 #[test]
 fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
     use crate::device::requirements::VkProperty;
@@ -1186,12 +1185,21 @@ fn metals_own_srgb_decode_converts_to_half_as_metal_does() {
         for pf in [PixelFormat::RGBA8UnormSRGB, PixelFormat::BGRA8UnormSRGB] {
             let plan = p.plan(&dev, &state(Some(pf)).shape()).expect("plan");
             assert!(plan.variant.srgb_textures.is_empty(), "{stem} {pf:?}");
+            // On MoltenVK the note's clauses test the bound format, which the runtime reads at
+            // the dispatch: none holds of an 8-bit sRGB format.
             let notes = p.stage.precision_notes_under(&plan.specialization);
-            assert_eq!(
-                notes.contains(&PrecisionNote::HalfTexelConversion),
-                !metal,
-                "{stem} {pf:?}: {notes:?}"
-            );
+            let bound = p
+                .stage
+                .bound_format_clauses(PrecisionNote::HalfTexelConversion, &|_| {
+                    Some(bound_texel_format(pf))
+                });
+            match metal {
+                true => assert!(bound.is_empty(), "{stem} {pf:?}: {bound:?}"),
+                false => assert!(
+                    notes.contains(&PrecisionNote::HalfTexelConversion),
+                    "{stem} {pf:?}: {notes:?}"
+                ),
+            }
         }
         if !metal {
             assert!(

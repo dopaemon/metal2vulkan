@@ -546,11 +546,11 @@ pub enum Needs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DriverDeviation {
     /// How the driver hands a kernel's cube sample's explicit gradients to the GPU
-    /// (`ProfileFields::cube_gradients`'s compute route, `CubeGradientRoute::Unmeasured`): as
-    /// given, to Metal's own reading. Unmeasured, the function emulates Metal's footprint where
-    /// its emulation reaches the sample, and elsewhere hands the form every route reads alike
-    /// through an isotropic sampler. A vertex or fragment function's route is
-    /// [`DriverDeviation::GraphicsCubeGradientTangents`].
+    /// (`ProfileFields::cube_gradients`'s compute route, `CubeGradientRoute::Metal`): as given, to
+    /// Metal's own reading. Unmeasured, the route is Vulkan's rule (`CubeGradientRoute::Vulkan`):
+    /// the function hands Metal's footprint in the form that rule reads, and the device's reading
+    /// of it is recorded as `PrecisionNote::CubeGradientFootprint`. A vertex or fragment
+    /// function's route is [`DriverDeviation::GraphicsCubeGradientTangents`].
     CubeGradientRoute,
     /// The device runs each 32 consecutive invocations of a compute workgroup in lockstep, as
     /// an Apple GPU runs a Metal simdgroup (`VkProperty::SimdgroupLockstep`). Unmeasured, a kernel
@@ -568,10 +568,13 @@ pub enum DriverDeviation {
     MetalCanonicalNans,
     /// The device samples, filters and converts texels through Metal's own sampler
     /// (`VkProperty::MetalSampler`), an 8-bit sRGB texel's decode included. Unmeasured, every
-    /// sample, gather and comparison is the device's own sampler's all the same
+    /// sample, gather, comparison and level query is the device's own sampler's all the same
     /// (`VkProperty::DeviceSampling`), recorded as `PrecisionNote::DeviceSampling`, and every
     /// read, sample, gather and input-attachment read of an sRGB texel the device's own decode,
-    /// recorded as `PrecisionNote::SrgbTexelDecode`.
+    /// recorded as `PrecisionNote::SrgbTexelDecode`. A `half` result is the device's `float`
+    /// texel rounded to nearest even either way; where the profile takes it the module records
+    /// `PrecisionNote::HalfTexelConversion` only for a class whose Metal `half` is not that
+    /// `float` rounded so.
     MetalSampler,
     /// How the driver hands a vertex or fragment function's cube sample's explicit gradients to
     /// the GPU under macOS 27 (the graphics route, `CubeGradientRoute::AppleProjected`): through
@@ -683,8 +686,12 @@ pub enum DriverDeviation {
     /// stores a kernel's write (`VkProperty::MetalHalfStorageWrites`): rounded toward zero, a
     /// finite value past 65504 stored as 65504, an infinity as itself. The shader writes the
     /// value as computed either way (`StorageImageClass::Identity`), its NaN as
-    /// [`MetalHalfStorageNans`] states. Where the profile takes it the module requires the
-    /// property; unmeasured, such a write records `PrecisionNote::DeviceColorConversion`.
+    /// [`MetalHalfStorageNans`] states: a fragment function's `float` blend into a 16-bit float
+    /// attachment in the storage form among them, which Metal's blended write rounds so too.
+    /// Where the profile takes it the module requires the property; unmeasured, such a write
+    /// records `PrecisionNote::DeviceColorConversion`. An integer texel written into a half-float
+    /// image (its bits as the `float`), which Metal's integer store rounds to nearest even, is the
+    /// store's to convert either way, and records the note.
     ///
     /// [`MetalHalfStorageNans`]: DriverDeviation::MetalHalfStorageNans
     MetalHalfStorageWrites,

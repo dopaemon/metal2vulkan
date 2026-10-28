@@ -548,12 +548,10 @@ impl<'a> PlanResources<'a> {
                         slot,
                         compare,
                         integer,
-                        cube_gradient,
                         opaque_black,
                     } => {
                         let desc = bound_sampler(guest, *slot)?;
-                        let use_ =
-                            SamplerUse::new(*compare, *integer).with_cube_gradient(*cube_gradient);
+                        let use_ = SamplerUse::new(*compare, *integer);
                         self.slot_sampler(
                             context,
                             device,
@@ -581,11 +579,10 @@ impl<'a> PlanResources<'a> {
                 slot,
                 compare,
                 integer,
-                cube_gradient,
                 opaque_black,
             } => {
                 let desc = bound_sampler(guest, *slot)?;
-                let use_ = SamplerUse::new(*compare, *integer).with_cube_gradient(*cube_gradient);
+                let use_ = SamplerUse::new(*compare, *integer);
                 let sampler =
                     self.slot_sampler(context, device, desc, (use_, *opaque_black), None)?;
                 Info::Image(vk::DescriptorImageInfo::default().sampler(sampler))
@@ -596,9 +593,8 @@ impl<'a> PlanResources<'a> {
                 index,
                 compare,
                 integer,
-                cube_gradient,
             } => {
-                let use_ = SamplerUse::new(*compare, *integer).with_cube_gradient(*cube_gradient);
+                let use_ = SamplerUse::new(*compare, *integer);
                 let sampler = match guest.argument_samplers.get(*index as usize) {
                     Some(listed) => self.slot_sampler(
                         context,

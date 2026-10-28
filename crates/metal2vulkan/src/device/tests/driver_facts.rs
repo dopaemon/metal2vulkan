@@ -328,18 +328,16 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
         assert_eq!(taken(&p), m4_measured, "{version}");
         assert!(!centered(&p), "{version}");
     }
-    // Another vendor's GPU: none, the cube routes unmeasured.
+    // Another vendor's GPU: none, the cube routes unmeasured and so Vulkan's rule.
+    let vulkan = CubeGradients {
+        graphics: CubeGradientRoute::Vulkan,
+        compute: CubeGradientRoute::Vulkan,
+    };
     let mut intel = m3.clone();
     intel.vendor_id = 0x8086;
     let p = profile_of(intel);
     assert_eq!(taken(&p), Vec::new());
-    assert_eq!(
-        p.fields().cube_gradients,
-        CubeGradients {
-            graphics: CubeGradientRoute::Unmeasured,
-            compute: CubeGradientRoute::Unmeasured,
-        }
-    );
+    assert_eq!(p.fields().cube_gradients, vulkan);
     assert!(!centered(&p));
     // Another driver on Apple's vendor: that driver's rows of every GPU (lavapipe's), with
     // Vulkan's rule and a centered offset.
@@ -354,10 +352,6 @@ fn the_profile_takes_the_deviations_its_driver_is_measured_with() {
             D::MetalFloatStorageNans,
         ]
     );
-    let vulkan = CubeGradients {
-        graphics: CubeGradientRoute::Vulkan,
-        compute: CubeGradientRoute::Vulkan,
-    };
     assert_eq!(p.fields().cube_gradients, vulkan);
     assert!(centered(&p));
     // NVIDIA's color-NaN stores and `float` denormals: per GPU (the 3090 and the 5080 Laptop

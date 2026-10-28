@@ -707,14 +707,14 @@ fn unmeasured_moltenvk() -> DeviceProfile {
 }
 
 /// A cube's explicit gradients through a constexpr sampler of `maxAnisotropy` 8 under a linear
-/// mip filter take Metal's footprint in the shader on every device without `samplerAnisotropy`,
-/// and on MoltenVK where its kernel cube-gradient route is not measured: Metal's level and taps
-/// (no gradient sample, the level count queried, tap 0 and the loop's tap of two explicit levels
-/// each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not). Through an isotropic
-/// sampler the unmeasured route alone takes Metal's level and its one tap (two explicit levels, no
-/// loop, neither note), where the refusal was; a device without the feature keeps its own gradient
-/// sample there, at the footprint the cube's form hands it. On a measured route (`moltenvk-m3`, whose kernels hand Metal's own gradients) the
-/// device's gradient sample stays, unrecorded.
+/// mip filter take Metal's footprint in the shader on every device without `samplerAnisotropy`:
+/// Metal's level and taps (no gradient sample, the level count queried, tap 0 and the loop's tap
+/// of two explicit levels each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not).
+/// Through an isotropic sampler a device without the feature keeps its own gradient sample, at the
+/// footprint the cube's form hands it. On a measured route (`moltenvk-m3`, whose kernels hand
+/// Metal's own gradients) the device's gradient sample stays, unrecorded; on MoltenVK where its
+/// kernel route is not measured it stays too, Vulkan's rule's form, recorded as
+/// `CubeGradientFootprint`.
 #[test]
 fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
     const GRAD: u32 = 0x4;
@@ -727,8 +727,11 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
             return;
         };
         let explicit = 2 * if taps { WRITTEN_TAPS as usize } else { 1 };
-        let mut shader = vec![("unmeasured MoltenVK", unmeasured_moltenvk())];
-        let mut device = vec![("moltenvk-m3", full("moltenvk-m3"))];
+        let mut shader = Vec::new();
+        let mut device = vec![
+            ("moltenvk-m3", full("moltenvk-m3")),
+            ("unmeasured MoltenVK", unmeasured_moltenvk()),
+        ];
         for stem in ["lavapipe", "amd-rdna3-radv", "intel-irisxe-anv"] {
             match taps {
                 true => shader.push((stem, p(stem))),
@@ -765,13 +768,20 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
                 "{what}: {:?}",
                 a.precision
             );
-            // Metal's own sampler on a measured route takes Metal's own gradients.
-            if stem == "moltenvk-m3" {
-                assert!(
+            // Metal's own sampler on a measured route takes Metal's own gradients; on an
+            // unmeasured one, Vulkan's rule's form, the device's reading.
+            match stem {
+                "moltenvk-m3" => assert!(
                     !a.precision.contains(&PrecisionNote::CubeGradientFootprint),
                     "{what}: {:?}",
                     a.precision
-                );
+                ),
+                "unmeasured MoltenVK" => assert!(
+                    a.precision.contains(&PrecisionNote::CubeGradientFootprint),
+                    "{what}: {:?}",
+                    a.precision
+                ),
+                _ => {}
             }
         }
     }

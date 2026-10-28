@@ -545,14 +545,12 @@ fn short_texels_sign_extend_and_half_reads_round() {
     assert!(ran > 0);
 }
 
-/// A `half` read on a profile with Metal's own sampler (`VkProperty::MetalSampler`) converts its
-/// texel by the bound format's class, the slot's `TexelFormat` specialization: a 32-bit float
-/// texel to nearest even, half denormals kept; a 16-bit normalized texel's code value `c / 65535`
-/// correctly rounded, where rounding the `f32` value would round twice (`65455` and `65519`); a
-/// format whose conversion is not measured (the default) takes every other `half` texel's exact
-/// rounding, which keeps a half denormal. On any other profile the read is the device's conversion
-/// of its `f32` texel, to nearest even here, with no class. Both record
-/// `PrecisionNote::HalfTexelConversion`. On a profile without `shaderFloat16` the rounding is the
+/// A `half` read rounds its `f32` texel to nearest even, half denormals kept, on every profile: on
+/// one with Metal's own sampler (`VkProperty::MetalSampler`) whatever the bound format's class,
+/// the slot's `TexelFormat` specialization, a 16-bit normalized texel's `f32` value of `65455 /
+/// 65535` and `65519 / 65535` too, which rounds twice there (one `half` unit in the last place
+/// above Metal's correctly rounded `c / 65535`, noted under the bound format); on any other
+/// profile with no class. Both record `PrecisionNote::HalfTexelConversion`. On a profile without `shaderFloat16` the rounding is the
 /// device's quantize alone (`PrecisionNote::NativeHalfQuantize`), whose result below the smallest
 /// normal half the interpreter gives as the zero of its sign.
 #[test]
@@ -583,7 +581,7 @@ fn half_reads_convert_by_the_bound_format() {
         (
             Some(texel_format(PixelFormat::RGBA16Unorm).0),
             [unorm16(65455), unorm16(65519), unorm16(1), unorm16(65535)],
-            [0x3BFD, 0x3BFF, 0x0100, 0x3C00],
+            [0x3BFE, 0x3C00, 0x0100, 0x3C00],
         ),
     ];
     let mut ran = 0;

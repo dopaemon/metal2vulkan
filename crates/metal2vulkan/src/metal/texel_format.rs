@@ -167,15 +167,6 @@ impl TexelFormat {
     /// every treatment converts alike.
     pub const OTHER: TexelFormat = TexelFormat(0);
 
-    /// The 8-bit unsigned normalized grid, `16 · 255`.
-    pub const GRID8: u32 = 16 * 255;
-    /// The 8-bit signed normalized grid, `16 · 127`.
-    pub const GRID8S: u32 = 16 * 127;
-    /// The 16-bit unsigned normalized grid, `65535`.
-    pub const GRID16: u32 = 65535;
-    /// The 16-bit signed normalized grid, `32767`.
-    pub const GRID16S: u32 = 32767;
-
     /// Bits `CORNER` to `CORNER + 3`: the [`CubeCorner`] of a format outside the measured
     /// families whose cube gather's tap past both edges of a face is measured (module docs), else
     /// 0. No other access reads them: such a format's class is otherwise [`OTHER`](Self::OTHER)'s.
@@ -222,13 +213,11 @@ impl TexelFormat {
 
     /// Whether, on a device that samples through Metal's own texture unit, every access's `half`
     /// result of the class is the device's `float` texel rounded to nearest even
-    /// (`SpecKey::PlainHalfTexels`): the class has no 32-bit float channels
-    /// ([`BicubicTexels::LINEAR`], whose samples round toward zero), no 16-bit normalized grid
-    /// ([`BicubicTexels::WIDE16`]) and no YCbCr field on the grid `8192`
-    /// ([`TexelFormat::YCBCR_8192`], ties away): the arms of the routine's Metal-sampler body
-    /// other than its rounding to nearest even (`lower::texture::half`).
+    /// (`SpecKey::PlainHalfTexels`): the class has no YCbCr field on the grid `8192`
+    /// ([`TexelFormat::YCBCR_8192`], ties away), the routine's one arm other than its rounding to
+    /// nearest even (`lower::texture::half`).
     pub fn plain_on_metal_sampler(self) -> bool {
-        self.0 & (BicubicTexels::LINEAR | BicubicTexels::WIDE16 | TexelFormat::YCBCR_8192) == 0
+        self.0 & TexelFormat::YCBCR_8192 == 0
     }
 
     /// The families whose texels decode to no NaN: normalized channels, signed or not

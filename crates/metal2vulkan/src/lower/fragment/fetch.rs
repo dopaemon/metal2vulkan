@@ -188,8 +188,11 @@
 //! factor of the second source, take the generic blend, below), and stores the
 //! result (`extended_range::Blend::half_float`, [`half_blended`]). Metal's compiler appends the
 //! blend to the function, in the output's type: a `half` output blends in `half` arithmetic, a
-//! `float` one in `float`, its result converted to `half` as Metal's write of a `float` converts it
-//! (toward zero; to nearest even under `TextureWriteRoundingMode::NearestEven`). An output of fewer
+//! `float` one in `float`, its result converted to `half` by the storage image's store, as Metal's
+//! write of a `float` converts it (toward zero) where the profile takes
+//! `DriverDeviation::MetalHalfStorageWrites` and as the device does elsewhere
+//! (`PrecisionNote::DeviceColorConversion`), and to nearest even in the shader under
+//! `TextureWriteRoundingMode::NearestEven`, which no measured store gives. An output of fewer
 //! than four lanes (Metal takes none with fewer than the format's channels, so it writes `R16Float`
 //! or `RG16Float`, which have no alpha) blends as four whose missing lanes play no part, but where
 //! the color channels' factors read the source alpha (`SourceAlpha`, `OneMinusSourceAlpha`): that
@@ -220,8 +223,9 @@
 //! function records `PrecisionNote::HalfOutputFastMathBlend` (`HalfOutputPrecision` for a module
 //! that names no math mode): measured within 2 `half` units in the last place at the operands'
 //! magnitude, 16 at the output's under cancellation (below one at the function's own largest term).
-//! The texel stores a `half` in every channel, so no conversion of the device's bears on it, but
-//! for a NaN: the blend gives every NaN as `0x7fc00000` (Metal stores each as `0x7e00`), which the
+//! A `half` output's blend stores a `half` in every channel, so no conversion of the device's
+//! bears on it, and a `float` one's only by the store's rounding above; for a NaN, the blend gives
+//! every NaN as `0x7fc00000` (Metal stores each as `0x7e00`), which the
 //! storage image's store converts, Metal's where the profile takes
 //! `DriverDeviation::MetalFloatStorageNans` and the device's elsewhere, noted
 //! `PrecisionNote::DeviceNanEncoding` (`stage_io::color_write`; ANV stores `0xfe00`). An
@@ -2775,9 +2779,11 @@ type Write = (SValue, SValue, SValue, ImageOperands);
 /// invocation's pixel (and sample), inside the interlock, as [`merge`] reads it, and Metal's
 /// arithmetic of the output over it in the output's type
 /// (`extended_range::blend::blend_half_float`; the blend color from `PushField::HalfBlendColor`
-/// where the blend reads it), a `float` result converted to `half` as Metal's blended write
-/// converts it: toward zero, the largest finite `half` past it, or to nearest even under
-/// `TextureWriteRoundingMode::NearestEven` (`color_writes::HALF`, `HALF_NEAREST`; for the former).
+/// where the blend reads it), a `float` result converted to `half` by the storage image's store,
+/// the device's conversion (Metal's blended write's, toward zero, the largest finite `half` past
+/// it, where the profile takes `DriverDeviation::MetalHalfStorageWrites`), or rounded to nearest
+/// even under `TextureWriteRoundingMode::NearestEven` (`color_writes::HALF_NEAREST`), which no
+/// measured device's store gives.
 /// An output of fewer than four lanes blends as four whose missing lanes are zero, alpha among
 /// them, and the result keeps the output's lanes. The channels a write
 /// mask keeps are [`merge`]'s to take back from the texel.
@@ -2821,19 +2827,18 @@ fn half_blended(
     let s = four_lanes(fb, form, part)?;
     let v = extended_range::blend::blend_half_float(fb, &b, arith, (s, d), constant)?;
     let v = output_lanes(fb, form, v)?;
-    if arith == extended_range::blend::BlendArith::Half {
+    if arith == extended_range::blend::BlendArith::Half || !sc.nearest_even {
         // Every NaN as `0x7fc00000`, which the storage image's store converts (a NaN the
-        // device's arithmetic gave keeps its own sign and payload there; a `float` result's is
-        // rounded to it below): Metal stores every NaN of the blend as `0x7e00`.
+        // device's arithmetic gave keeps its own sign and payload there; a `float` result's
+        // rounded to nearest even is rounded to it below): Metal stores every NaN of the blend as
+        // `0x7e00`. A `float` result is the device's store's to convert, as Metal's blended write
+        // converts it toward zero where the profile takes `MetalHalfStorageWrites`.
         let f32_form = form.with(Held::Float(FloatFmt::F32));
         let nan = fb.unary(UnOp::IsNan, v)?;
         let quiet = ops::splat(fb, f32_form, 0x7FC0_0000)?;
         return fb.select(nan, quiet, v);
     }
-    let rule = match sc.nearest_even {
-        true => crate::pipeline::color_writes::HALF_NEAREST,
-        false => crate::pipeline::color_writes::HALF,
-    };
+    let rule = crate::pipeline::color_writes::HALF_NEAREST;
     crate::lower::arith::color_write::small_float(fb, form, v, rule)
 }
 

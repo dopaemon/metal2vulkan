@@ -1825,17 +1825,13 @@ fn select_one(
                     }
                     SamplerArg::Static(SamplerRef::Slot(_), _) | SamplerArg::Heap(_) => None,
                 };
-                // A route the device's description does not state takes the isotropic form, whose
-                // length every known route reads alike (but a `y` face's through macOS 27's
-                // fixup), through every sampler: Metal's footprint emulated replaces it where the
-                // emulation reaches the sample (`anisotropic::select`), and elsewhere an
-                // anisotropic sampler is made isotropic for it (`cube_gradient`).
+                // A route the device's description does not state is Vulkan's rule: the device's
+                // own reading of the form handed to it (`PrecisionNote::CubeGradientFootprint`).
                 let route = cx.profile.fields().cube_gradients.route(cx.stage);
                 let form = match (route, anisotropic) {
                     (CubeGradientRoute::Metal, _) => CubeFootprint::Metal,
                     (CubeGradientRoute::AppleProjected, _) => CubeFootprint::Projected,
-                    (CubeGradientRoute::Vulkan, Some(false))
-                    | (CubeGradientRoute::Unmeasured, _) => CubeFootprint::Length,
+                    (CubeGradientRoute::Vulkan, Some(false)) => CubeFootprint::Length,
                     (CubeGradientRoute::Vulkan, Some(true)) => CubeFootprint::Face,
                     (CubeGradientRoute::Vulkan, None) => CubeFootprint::Word,
                 };
@@ -2027,9 +2023,20 @@ fn select_one(
     let observed = !matches!(op, SampleOp::Lod { .. } | SampleOp::QueryLevel { .. })
         && crate::lower::texture::residency(cx, at, image)?;
     let fetches = matches!(op, SampleOp::Bicubic(_));
-    // Metal's footprint where its measured rule decides it: a constexpr sampler's.
+    let sparse_images = cx
+        .profile
+        .fields()
+        .enabled
+        .features
+        .contains(&VkFeature::ShaderResourceResidency);
+    // Metal's footprint where its measured rule decides it, a constexpr sampler's, on a device
+    // without residency code of its own (no `shaderResourceResidency`), where the slot's tile map
+    // answers the residency. A device with it answers a sample's or gather's residency itself,
+    // its `OpImageSparse*` word (`PrecisionNote::SparseResidency`).
     let footprint = match (observed, image, sampler) {
-        (true, ImageRef::Slot(_), SamplerArg::Static(SamplerRef::Constexpr(words), _)) => {
+        (true, ImageRef::Slot(_), SamplerArg::Static(SamplerRef::Constexpr(words), _))
+            if !sparse_images =>
+        {
             let state = super::constexpr::state_of(words)?;
             super::footprint::of(&state, &op, shape, integer)
         }
@@ -2043,26 +2050,18 @@ fn select_one(
     // sample's, gather's, or pixel fetch's texels in a block of it that holds no mapped tile read
     // the device's non-resident value under either arm (zero only under
     // `residencyNonResidentStrict`, and RADV's zero alpha where Metal reads a missing alpha as 1),
-    // and on the sparse arm a footprint Metal's rule does not decide is the device's. There every
-    // access of a slot's color texture sets the lanes Metal reads as constants (a channel the
-    // format lacks, through the swizzle), whether the function reads its residency or not, and one
-    // whose residency it reads zeroes each texel it names (a pixel fetch, a nearest sample's or a
-    // gather's of Metal's footprint) where its residency says it is unmapped, Metal's value; a
-    // filtered sample's lanes that are no constants, and the word and value of an access whose
-    // footprint the device's filter decides, stay the device's. A bicubic sample's fetches, and a
-    // level query, take neither. Elsewhere the texture's image holds Metal's unmapped value and its
-    // tile map answers exactly the texels Metal counts.
-    let sparse_images = cx
-        .profile
-        .fields()
-        .enabled
-        .features
-        .contains(&VkFeature::ShaderResourceResidency);
+    // and a sample's or gather's footprint and word on the sparse arm are the device's. There
+    // every access of a slot's color texture sets the lanes Metal reads as constants (a channel the
+    // format lacks, through the swizzle), whether the function reads its residency or not, and a
+    // pixel fetch whose residency it reads zeroes its texel where its residency says it is
+    // unmapped, Metal's value; a sample's or gather's lanes that are no constants, and its word,
+    // stay the device's. A bicubic sample's fetches, and a level query, take neither. Elsewhere the
+    // texture's image holds Metal's unmapped value and its tile map answers exactly the texels
+    // Metal counts.
     let texel_op = !matches!(op, SampleOp::Lod { .. } | SampleOp::QueryLevel { .. });
     let unmapped = match image {
         ImageRef::Slot(index) if sparse_images && texel_op && !fetches && !shape.depth => {
-            let named_texels = matches!(op, SampleOp::PixelFetch { .. })
-                || footprint.is_some_and(|f| f.kind != super::footprint::Kind::Linear);
+            let named_texels = matches!(op, SampleOp::PixelFetch { .. });
             if let Some(s) = cx.families.texture.slots.get_mut(&index) {
                 s.constant_lanes = true;
                 let slot = s.slot;
@@ -2087,10 +2086,14 @@ fn select_one(
         }
     }
     let residency = observed && !fetches;
-    // Every sample and gather goes to the device's sampler: Metal's own on MoltenVK
-    // (`VkProperty::MetalSampler`), whose decode, filters, and comparisons are Metal's, and the
-    // device's own elsewhere (`VkProperty::DeviceSampling`), whose answers the module records.
-    if matches!(op, SampleOp::Sample { .. } | SampleOp::Gather { .. }) {
+    // Every sample, gather and level query goes to the device's sampler: Metal's own on MoltenVK
+    // (`VkProperty::MetalSampler`), whose decode, filters, levels and comparisons are Metal's, and
+    // the device's own elsewhere (`VkProperty::DeviceSampling`), whose answers the module records
+    // (a level query's level clamped by the device into the sampler's clamp, the descriptor's).
+    if matches!(
+        op,
+        SampleOp::Sample { .. } | SampleOp::Gather { .. } | SampleOp::Lod { .. }
+    ) {
         cx.families.sampler.device_sampling = true;
     }
     // An 8-bit sRGB texture the device reads through its own sRGB view, but under the slot's twin
@@ -2131,10 +2134,6 @@ fn select_one(
     // A pixel sampler's gather (or a runtime sampler's, behind its word) and a linear pixel
     // sample's footprint cell, snapped onto Metal's texels.
     let snap = super::position::plan(cx, &op, stat, (shape, integer))?;
-    // Metal's texture unit reads a subnormal normalized coordinate as the zero of its sign before
-    // the address mode decides: the border axes of a constexpr sampler flush it, so the sample
-    // reads the texel Metal reads there (`position::subnormal_flush`).
-    let flush_subnormals = super::position::subnormal_flush(stat, shape)?;
     if let SamplerArg::Static(SamplerRef::Slot(n), _) = sampler {
         if let Some(s) = cx.families.sampler.slots.get_mut(&n) {
             match snap.as_ref().map(|p| p.kind) {
@@ -2163,16 +2162,13 @@ fn select_one(
     // slot's specialization then reads.
     let one_texel = one_texel(&op, sampler, shape.dim == ImageDim::Cube)?;
     // On a device that samples through Metal's own texture unit, the `half` routine reads an
-    // access's lanes only for a YCbCr field's one texel (`half::HalfFamilies::MetalSampler`): no
-    // sampler word decides them. A slot's texture of a YCbCr format on the grid `8192`
-    // (`TexelFormat::YCBCR_8192`) then rounds a sample of its one texel to nearest even, where
-    // Metal rounds it with ties away, noted where it is bound.
+    // access's lanes only for a YCbCr field's one texel (`texture::half`): no sampler word decides
+    // them. A slot's texture of a YCbCr format on the grid `8192` (`TexelFormat::YCBCR_8192`) then
+    // rounds a sample of its one texel to nearest even, where Metal rounds it with ties away,
+    // noted where it is bound.
     let one_texel = match one_texel {
         crate::lower::texture::OneTexel::Word(_)
-            if half
-                && !raw
-                && crate::lower::texture::half_families(cx)
-                    == crate::lower::texture::half::HalfFamilies::MetalSampler =>
+            if half && !raw && !crate::lower::texture::device_texels(cx) =>
         {
             if let ImageRef::Slot(index) = image {
                 use crate::metal::texel_format::TexelFormat;
@@ -2196,9 +2192,9 @@ fn select_one(
         if image.heap() && !shape.depth && !device {
             cx.families.texture.heap_half = true;
             cx.families.access.heap_class = true;
-            cx.families.texture.half_families = crate::lower::texture::half_families(cx);
         }
-        crate::lower::texture::half_texels(cx, image, shape, one_texel, device, m)?
+        let sample = !matches!(op, SampleOp::Gather { .. });
+        crate::lower::texture::half_texels(cx, image, shape, sample, device, m)?
     }
     // A `float` texel that may be one texel's is the device's conversion of its codes: not an sRGB
     // raw texel's (decoded exactly), a bicubic sample's, or an LOD query's; nor a depth
@@ -2229,35 +2225,12 @@ fn select_one(
             }
         }
     }
-    // A binding sampling a cube with explicit gradients in the `Length` form through a sampler
-    // that may be anisotropic (a runtime or argument buffer's, or an anisotropic constexpr one, on
-    // a device whose route is not measured) makes it isotropic: the device filters the major axis
-    // the form hands it, Metal's isotropic footprint, where the emulation does not answer the
-    // sample, and the emulation's taps read explicit levels. An isotropic constexpr sampler's
-    // binding is the plain one, a sampler's elsewhere its state's or word's, and Metal's own
-    // gradients are Metal's footprint through any sampler.
-    let cube_gradient = match &op {
-        SampleOp::Sample {
-            lod: Lod::CubeGrad(_, _, form),
-            ..
-        } => {
-            *form == CubeFootprint::Length
-                && match sampler {
-                    SamplerArg::Static(SamplerRef::Constexpr(words), _) => {
-                        super::state_of(words)?.max_anisotropy > 1
-                    }
-                    SamplerArg::Static(SamplerRef::Slot(_), _) | SamplerArg::Heap(_) => true,
-                }
-        }
-        _ => false,
-    };
     let source = match (image, sampler) {
         (ImageRef::Slot(texture), SamplerArg::Static(sampler, _)) => {
             let key = BindingKey {
                 texture,
                 sampler,
                 compare,
-                cube_gradient,
             };
             cx.families.sampler.combined.insert(key);
             Source::Combined(key)
@@ -2267,20 +2240,13 @@ fn select_one(
                 group,
                 sampler,
                 compare,
-                cube_gradient,
             };
             cx.families.sampler.heap.insert(key);
             Source::Heap { handle, key }
         }
-        // An argument buffer's sampler is read from the sampler array of its use, whose class
-        // carries the cube-gradient bit, so the plan makes an anisotropic listed state isotropic
-        // for a cube's explicit gradients in the isotropic form there alone.
+        // An argument buffer's sampler is read from the sampler array of its use.
         (ImageRef::Heap { group, handle }, SamplerArg::Heap(sampler)) => {
-            let key = HeapSamplerKey {
-                group,
-                compare,
-                cube_gradient,
-            };
+            let key = HeapSamplerKey { group, compare };
             cx.families.sampler.heap_samplers.insert(key);
             cubic_reach(cx);
             Source::HeapSampler {
@@ -2334,15 +2300,13 @@ fn select_one(
         _ => false,
     };
     // Metal's anisotropic filter emulated by the device's samples at explicit levels, where it
-    // reaches the sample; the device's anisotropic filter, recorded, where it does not. An
-    // isotropic cube's level too, where no exact path of its own answers it.
-    let answered = snap.is_some() || centred;
+    // reaches the sample; the device's anisotropic filter, recorded, where it does not.
     let anisotropic = super::anisotropic::select(
         cx,
         &op,
         (stat.map(|(r, _)| r), image, shape),
-        (integer, observed, cross.is_some(), swizzle, answered),
-        SamplerUse::new(compare, integer).with_cube_gradient(cube_gradient),
+        (integer, observed, cross.is_some(), swizzle),
+        SamplerUse::new(compare, integer),
         m,
     )?;
     // A cube's explicit gradients handed to the device in a form other than Metal's own: the
@@ -2388,7 +2352,6 @@ fn select_one(
         residency,
         footprint,
         snap,
-        flush_subnormals,
         cube,
         centred,
         centre_word,

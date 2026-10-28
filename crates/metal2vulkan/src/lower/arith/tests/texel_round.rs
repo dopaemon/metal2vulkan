@@ -198,94 +198,10 @@ fn f32_to_half_from_even_is_exact_on_every_tie() {
     }
 }
 
-/// `ones_ratio_to_half` is `m / (2^b - 1)` correctly rounded to `half` for every `m` of every
-/// `b` it takes, 13 to 16: the 16-bit normalized grids `65535` and `32767` among them, with the
-/// quotients that round twice through `f32`.
-#[test]
-fn ones_ratio_to_half_is_exact_on_every_step() {
-    let u = vec(int(32), 4);
-    for b in 13..=16u64 {
-        let d = (1u64 << b) - 1;
-        let cases: Vec<Case> = (0..=d)
-            .collect::<Vec<_>>()
-            .chunks(4)
-            .map(|m| {
-                let mut lanes = m.to_vec();
-                lanes.resize(4, d);
-                vec![lanes, vec![b; 4]]
-            })
-            .collect();
-        check(
-            &format!("m / {d} to half"),
-            &[u, u],
-            vec(float(32), 4),
-            &|fb, a| texel_round::ones_ratio_to_half(fb, u, a[0], a[1]),
-            &cases,
-            &|c| {
-                Some(
-                    c[0].iter()
-                        .map(|m| {
-                            let h = f64_to_f16(*m as f64 / d as f64);
-                            u64::from((f16_to_f64(h) as f32).to_bits())
-                        })
-                        .collect(),
-                )
-            },
-            false,
-        );
-    }
-}
-
-/// `ones_ratio_factor`'s product of every step `m` of the 16-bit normalized grids rounds to `half`
-/// as `m / D` does, from either `f32` neighbour of the exact product; and the factors `2^-b · (1 +
-/// k · 2^-23)` that do so are exactly those its note states, strictly between `2^-b` (`k = 0`)
-/// and the reciprocal `RN(1 / D)` (`k = 128` on `65535`, `256` on `32767`). Exact: the product of
-/// a step below `2^16` and a 24-bit factor has at most 40 bits, and the `half` of an `f32` and of
-/// `f64`'s correctly rounded quotient are single roundings (the module note).
-#[test]
-fn the_ones_ratio_factor_rounds_every_step() {
-    for (b, last) in [(16u32, 127u32), (15, 255)] {
-        let d = (1u32 << b) - 1;
-        let want: Vec<u16> = (0..=d)
-            .map(|m| f64_to_f16(f64::from(m) / f64::from(d)))
-            .collect();
-        let holds = |k: u32| {
-            let c = f64::from(f32::from_bits(((127 - b) << 23) | k));
-            (0..=d).all(|m| {
-                let exact = f64::from(m) * c;
-                let near = exact as f32;
-                let other = match f64::from(near).partial_cmp(&exact) {
-                    Some(std::cmp::Ordering::Greater) => f32::from_bits(near.to_bits() - 1),
-                    Some(std::cmp::Ordering::Less) => f32::from_bits(near.to_bits() + 1),
-                    _ => near,
-                };
-                [near, other]
-                    .iter()
-                    .all(|v| f64_to_f16(f64::from(*v)) == want[m as usize])
-            })
-        };
-        let reciprocal = (1.0 / d as f32).to_bits();
-        assert_eq!(reciprocal, ((127 - b) << 23) | (last + 1), "RN(1 / {d})");
-        assert!(!holds(0), "2^-{b} itself");
-        assert!(!holds(last + 1), "RN(1 / {d}) itself");
-        let failing: Vec<u32> = (1..=last).filter(|k| !holds(*k)).collect();
-        assert!(
-            failing.is_empty(),
-            "1 / {d}: factors {failing:?} below RN(1 / D)"
-        );
-        let k = texel_round::ONES_RATIO_FACTOR_ULPS;
-        assert!((1..=last).contains(&k), "the factor's {k} ulps on {d}");
-        assert_eq!(
-            texel_round::ones_ratio_factor(b).to_bits(),
-            ((127 - b) << 23) | k
-        );
-    }
-}
-
 /// The normalized grids the bicubic filter's exact sums land on: `16 · 255`, `16 · 127`, `65535`,
-/// `32767`, and the sRGB step scale 4095. The grids: a texture's `half` conversion's, the sRGB
-/// table's, and the normalized formats' fields' that a tile function's `half` member reads, down to
-/// a 2-bit alpha's 3 and 1, where `3 · 2^24 / d` reaches `2^24`.
+/// `32767`, and the sRGB step scale 4095. The grids: the bicubic sums', the sRGB table's, and the
+/// normalized formats' fields' that a tile function's `half` member reads, down to a 2-bit alpha's
+/// 3 and 1, where `3 · 2^24 / d` reaches `2^24`.
 const GRIDS: [u32; 10] = [4080, 2032, 65535, 32767, 4095, 1023, 255, 127, 3, 1];
 
 fn ratio_cases(d: u32) -> Vec<Case> {

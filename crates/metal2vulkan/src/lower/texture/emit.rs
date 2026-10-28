@@ -16,7 +16,7 @@ use crate::spirv::ir::{
     MemAccess, MemoryOrder, Scope, Semantics, TexelMemory, Type as SType, UnOp,
 };
 
-use super::half::{HalfForm, TexelLanes, TexelOrigin};
+use super::half::{TexelLanes, TexelOrigin};
 use super::slice::Slice;
 use super::{
     Coord, ImageDecl, ImageRef, QueryKind, QueryOp, Read, TexelClass, TexelConv, TexelForm,
@@ -924,7 +924,7 @@ fn from_image(
     let x = match half {
         Some(h) => {
             let lanes = TexelLanes::Texel.value(fb)?;
-            h.convert(fb, x, (HalfForm::Read, lanes), TexelOrigin::Image)?
+            h.convert(fb, x, lanes, TexelOrigin::Image)?
         }
         None => x,
     };
@@ -1180,16 +1180,16 @@ enum ClassOf {
 }
 
 impl HalfClass {
-    /// The held `half` texel of image texel `x` (a `vec4` of `f32`) under access form `form`,
-    /// its lanes `lanes` (`half::TexelLanes::code`). An image instruction's texel (`origin`) of a
-    /// slot that declares `PlainHalfTexels` converts by the plain arm where the specialization
-    /// holds and by the routine where it does not, one selection construct on it, so
-    /// specialization keeps one of them (`half` module docs).
+    /// The held `half` texel of image texel `x` (a `vec4` of `f32`) of lanes `lanes`
+    /// (`half::TexelLanes::code`). An image instruction's texel (`origin`) of a slot that declares
+    /// `PlainHalfTexels` converts by the plain arm where the specialization holds and by the
+    /// routine where it does not, one selection construct on it, so specialization keeps one of
+    /// them (`half` module docs).
     pub(crate) fn convert(
         self,
         fb: &mut FunctionBuilder<'_>,
         x: SValue,
-        (form, lanes): (HalfForm, SValue),
+        lanes: SValue,
         origin: TexelOrigin,
     ) -> BResult<SValue> {
         let class = match self.class {
@@ -1201,7 +1201,7 @@ impl HalfClass {
         let routine = self.routine;
         let plain = match (origin, self.plain) {
             (TexelOrigin::Image, Some(plain)) => plain,
-            _ => return super::half::convert(fb, routine, x, class, (form, lanes)),
+            _ => return super::half::convert(fb, routine, x, class, lanes),
         };
         let half = Form {
             held: Held::Float(FloatFmt::Half),
@@ -1212,7 +1212,7 @@ impl HalfClass {
             Ok(ArmEnd::FallThrough(vec![v]))
         });
         let other: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            let v = super::half::convert(fb, routine, x, class, (form, lanes))?;
+            let v = super::half::convert(fb, routine, x, class, lanes)?;
             Ok(ArmEnd::FallThrough(vec![v]))
         });
         let Merged(merged) = fb.if_(&mut (), plain, then, Some(other))?;
@@ -1351,19 +1351,17 @@ pub(crate) fn reinterpret(
 ///   bits, extended by the format's signedness), which the write then saturates to each
 ///   channel's range as every Metal integer write does ([`saturated`]);
 /// - into a float format, a 32-bit lane's bits as a `float`, a 16-bit lane's as a `half`, which
-///   the float class then writes as a `float` or `half` texel, but rounded to nearest even onto
-///   a half-float channel (a finite value past 65504 to the infinity) and onto a small-float
-///   channel (`RG11B10Float`, held at its largest finite value), where Metal's integer store
-///   rounds so and a `float` one toward zero.
+///   the float class then writes as a `float` or `half` texel, the device's store converting a
+///   `float` onto a half-float or small-float channel (`RG11B10Float`) as it converts every
+///   `float` write, where Metal's integer store rounds to nearest even
+///   (`PrecisionNote::DeviceColorConversion`, `texture::half_storage_facts`).
 pub(crate) fn cross_write(
     fb: &mut FunctionBuilder<'_>,
     c: super::CrossWrite,
     native: TexelForm,
     v: SValue,
 ) -> BResult<SValue> {
-    use crate::lower::arith::color_write;
-    use crate::lower::arith::legal::{FloatFmt, Form, Held};
-    use crate::vk::{Format as F, NumericFormat as N};
+    use crate::vk::NumericFormat as N;
     let n = native.lanes;
     let malformed =
         || crate::spirv::error::BuildError::Type(crate::spirv::error::TypeRule::FunctionSignature);
@@ -1415,17 +1413,7 @@ pub(crate) fn cross_write(
                 TexelConv::I16 { .. } => narrow::from_bits(fb, half.half(), v)?,
                 _ => return Err(malformed()),
             };
-            let f = Form {
-                held: Held::Float(FloatFmt::F32),
-                lanes: n,
-            };
-            match c.format {
-                F::R16_SFLOAT | F::R16G16_SFLOAT | F::R16G16B16A16_SFLOAT => {
-                    color_write::small_float(fb, f, x, crate::pipeline::color_writes::HALF_NEAREST)
-                }
-                F::B10G11R11_UFLOAT_PACK32 => small_floats_nearest(fb, f, x),
-                _ => Ok(x),
-            }
+            Ok(x)
         }
         // A 16-bit lane's bits as the `half` the float class writes.
         TexelConv::F16 => match c.declared {
@@ -1543,48 +1531,6 @@ fn int_lanes(fb: &mut FunctionBuilder<'_>, elem: TypeId, lanes: &[u32]) -> BResu
         parts: parts.into(),
     })?;
     fb.module().const_value(c)
-}
-
-/// `x` (`f32` lanes of form `f`) rounded to nearest even onto `RG11B10Float`'s channels, as
-/// Metal's integer store rounds them: red and green to six fraction bits, blue to five, unsigned (a
-/// negative value to 0), a finite value that rounds past the largest finite one held there (65024,
-/// 64512), an infinity kept and a NaN quieted, whose store the device converts.
-fn small_floats_nearest(
-    fb: &mut FunctionBuilder<'_>,
-    f: crate::lower::arith::legal::Form,
-    x: SValue,
-) -> BResult<SValue> {
-    use crate::lower::arith::color_write;
-    use crate::pipeline::lower_inputs::ChannelWrite;
-    let n = f.lanes;
-    let u = u32_ty(fb)?;
-    let uvec = vec(fb, u, n)?;
-    let bits = fb.convert(ConvOp::Bitcast, x, uvec)?;
-    let abs = u32s(fb, n, 0x7FFF_FFFF)?;
-    let mag = fb.binary(BinOp::BitwiseAnd, bits, abs)?;
-    let inf = u32s(fb, n, 0x7F80_0000)?;
-    let finite = fb.binary(BinOp::ULessThan, mag, inf)?;
-    let rounded = |fb: &mut FunctionBuilder<'_>, mantissa: u8, largest: f32| {
-        let rule = ChannelWrite::FloatNearestEven {
-            mantissa,
-            signed: false,
-        };
-        let r = color_write::small_float(fb, f, x, rule)?;
-        let rb = fb.convert(ConvOp::Bitcast, r, uvec)?;
-        let past = fb.binary(BinOp::IEqual, rb, inf)?;
-        let held = fb.binary(BinOp::LogicalAnd, past, finite)?;
-        let top = f32s(fb, n, largest)?;
-        fb.select(held, top, r)
-    };
-    let wide = rounded(fb, 6, 65024.0)?;
-    if n <= 2 {
-        return Ok(wide);
-    }
-    let narrow = rounded(fb, 5, 64512.0)?;
-    match n {
-        3 => fb.vector_shuffle(wide, narrow, &[0, 1, 5]),
-        _ => fb.vector_shuffle(wide, narrow, &[0, 1, 6, 3]),
-    }
 }
 
 /// The image texel (a `vec4` of the image's sampled type) of held AIR texel `v`; an 8-bit sRGB

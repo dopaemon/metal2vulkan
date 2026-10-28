@@ -241,7 +241,6 @@ pub enum HandleClass {
     Sampler {
         compare: bool,
         integer: bool,
-        cube_gradient: bool,
     },
     /// The visible-function tables an argument buffer can name: a read-only storage buffer of
     /// one table's words (`pipeline::table`) per element.
@@ -254,21 +253,15 @@ impl HandleClass {
         HandleClass::Sampler {
             compare: use_.compare,
             integer: use_.integer_texture,
-            cube_gradient: use_.cube_gradient,
         }
     }
 
     /// The sampler use of a sampler class, `None` for an image class.
     pub fn sampler_use(self) -> Option<crate::metal::sampler::SamplerUse> {
         match self {
-            HandleClass::Sampler {
-                compare,
-                integer,
-                cube_gradient,
-            } => Some(
-                crate::metal::sampler::SamplerUse::new(compare, integer)
-                    .with_cube_gradient(cube_gradient),
-            ),
+            HandleClass::Sampler { compare, integer } => {
+                Some(crate::metal::sampler::SamplerUse::new(compare, integer))
+            }
             HandleClass::Image(_) | HandleClass::FunctionTable => None,
         }
     }
@@ -491,68 +484,45 @@ pub struct CombinedSampler {
     pub compare: bool,
     /// The texture's sampled type is an integer type.
     pub integer: bool,
-    /// The shader samples a cube with explicit gradients through this binding in the isotropic
-    /// form a route its device's description does not state takes, through a sampler that may be
-    /// anisotropic (a runtime one, or an anisotropic constexpr one): the sampler is made isotropic
-    /// for it (`metal::sampler::SamplerUse::cube_gradient`). Elsewhere a sampler's footprint
-    /// follows its anisotropy.
-    pub cube_gradient: bool,
 }
 
 impl CombinedSampler {
-    /// Sampler `sampler` used with `compare` on a texture that is `integer` or not, without
-    /// explicit cube gradients.
+    /// Sampler `sampler` used with `compare` on a texture that is `integer` or not.
     pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler {
         CombinedSampler {
             sampler,
             compare,
             integer,
-            cube_gradient: false,
-        }
-    }
-
-    /// This use, sampling a cube with explicit gradients or not.
-    pub fn with_cube_gradient(self, cube_gradient: bool) -> CombinedSampler {
-        CombinedSampler {
-            cube_gradient,
-            ..self
         }
     }
 
     /// The use as a heap sampler symbol's index, or a separate sampler's: bit 0 comparison, bit 1
-    /// an integer texel, bit 2 explicit cube gradients.
+    /// an integer texel.
     pub fn heap_index(&self) -> u32 {
-        u32::from(self.compare)
-            | (u32::from(self.integer) << 1)
-            | (u32::from(self.cube_gradient) << 2)
+        u32::from(self.compare) | (u32::from(self.integer) << 1)
     }
 
     /// Sampler `sampler` with the use a heap or separate sampler symbol's index `index` states
     /// ([`CombinedSampler::heap_index`]).
     pub fn from_heap_index(sampler: SamplerRef, index: u32) -> CombinedSampler {
         CombinedSampler::new(sampler, index & 1 != 0, index & 2 != 0)
-            .with_cube_gradient(index & 4 != 0)
     }
 
-    /// The use's rank in a separate texture symbol's index: comparison, then an integer texel, then
-    /// explicit cube gradients, from the most significant bit down, so the ranks order as the
-    /// uses' fields do in `CombinedSampler`'s derived order.
+    /// The use's rank in a separate texture symbol's index: comparison, then an integer texel,
+    /// from the most significant bit down, so the ranks order as the uses' fields do in
+    /// `CombinedSampler`'s derived order.
     fn use_rank(&self) -> u32 {
-        (u32::from(self.compare) << 2)
-            | (u32::from(self.integer) << 1)
-            | u32::from(self.cube_gradient)
+        (u32::from(self.compare) << 1) | u32::from(self.integer)
     }
 
     /// Sampler `sampler` with the use of rank `rank` ([`CombinedSampler::use_rank`]).
     fn from_use_rank(sampler: SamplerRef, rank: u32) -> CombinedSampler {
-        CombinedSampler::new(sampler, rank & 4 != 0, rank & 2 != 0)
-            .with_cube_gradient(rank & 1 != 0)
+        CombinedSampler::new(sampler, rank & 2 != 0, rank & 1 != 0)
     }
 
     /// The use the binder (and link, for a constexpr sampler) builds the `VkSampler` for.
     pub fn sampler_use(&self) -> crate::metal::sampler::SamplerUse {
         crate::metal::sampler::SamplerUse::new(self.compare, self.integer)
-            .with_cube_gradient(self.cube_gradient)
     }
 }
 
@@ -784,9 +754,8 @@ pub enum SpecKey {
     UnmeasuredTexels(SlotRef),
     /// Boolean: on a device that samples through Metal's own texture unit, the texture bound to
     /// the slot converts every texel an image instruction hands back to a `half` result as that
-    /// `float` texel rounded to nearest even (default true): its class has no 32-bit float
-    /// channels (whose samples round toward zero), no 16-bit normalized grid and no YCbCr field on
-    /// the grid `8192` (`metal::texel_format::TexelFormat::plain_on_metal_sampler`). A slot bound
+    /// `float` texel rounded to nearest even (default true): its class has no YCbCr field on the
+    /// grid `8192` (`metal::texel_format::TexelFormat::plain_on_metal_sampler`). A slot bound
     /// to nothing takes true: its zero texel converts alike under every class. Where it holds, such
     /// an access converts the instruction's own texel by the device's conversion, which Metal's
     /// compiler may fold into the image instruction (`lower::texture::half`), and specialization
@@ -1156,13 +1125,9 @@ mod tests {
         for words in [[0, 0], [u64::MAX >> 1, 7]] {
             for compare in [false, true] {
                 for integer in [false, true] {
-                    for cube_gradient in [false, true] {
-                        let c =
-                            CombinedSampler::new(SamplerRef::Constexpr(words), compare, integer)
-                                .with_cube_gradient(cube_gradient);
-                        let s = ResourceSlot::heap_sampler(Stage::Fragment, c);
-                        assert_eq!(s.heap_sampler_use(), Some(c));
-                    }
+                    let c = CombinedSampler::new(SamplerRef::Constexpr(words), compare, integer);
+                    let s = ResourceSlot::heap_sampler(Stage::Fragment, c);
+                    assert_eq!(s.heap_sampler_use(), Some(c));
                 }
             }
         }
@@ -1191,35 +1156,31 @@ mod tests {
         ] {
             for compare in [false, true] {
                 for integer in [false, true] {
-                    for cube_gradient in [false, true] {
-                        let c = CombinedSampler::new(sampler, compare, integer)
-                            .with_cube_gradient(cube_gradient);
-                        assert_eq!(
-                            ResourceSlot::separate_sampler(Stage::Fragment, c)
-                                .separate_sampler_use(),
-                            Some(c)
-                        );
-                        for texture in [0, 1, 127, (1 << 28) - 1] {
-                            let s = ResourceSlot::separate_texture(Stage::Fragment, texture, c)
-                                .expect("a slot the index holds");
-                            assert_eq!(s.separate_texture_of(), Some((texture, c)));
-                            let combined = ResourceSlot {
-                                stage: Stage::Fragment,
-                                kind: ResourceKind::CombinedTextureSampler(c),
-                                index: texture,
-                            };
-                            assert_eq!(combined.separate_texture_of(), None);
-                            pairs.push((combined, s));
-                        }
-                        assert_eq!(
-                            ResourceSlot::separate_texture(Stage::Fragment, 1 << 28, c),
-                            None
-                        );
-                        assert_eq!(
-                            ResourceSlot::separate_texture(Stage::Fragment, u32::MAX, c),
-                            None
-                        );
+                    let c = CombinedSampler::new(sampler, compare, integer);
+                    assert_eq!(
+                        ResourceSlot::separate_sampler(Stage::Fragment, c).separate_sampler_use(),
+                        Some(c)
+                    );
+                    for texture in [0, 1, 127, (1 << 28) - 1] {
+                        let s = ResourceSlot::separate_texture(Stage::Fragment, texture, c)
+                            .expect("a slot the index holds");
+                        assert_eq!(s.separate_texture_of(), Some((texture, c)));
+                        let combined = ResourceSlot {
+                            stage: Stage::Fragment,
+                            kind: ResourceKind::CombinedTextureSampler(c),
+                            index: texture,
+                        };
+                        assert_eq!(combined.separate_texture_of(), None);
+                        pairs.push((combined, s));
                     }
+                    assert_eq!(
+                        ResourceSlot::separate_texture(Stage::Fragment, 1 << 28, c),
+                        None
+                    );
+                    assert_eq!(
+                        ResourceSlot::separate_texture(Stage::Fragment, u32::MAX, c),
+                        None
+                    );
                 }
             }
         }

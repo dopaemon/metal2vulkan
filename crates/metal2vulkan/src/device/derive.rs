@@ -348,16 +348,14 @@ fn derive_fields(
         ),
         // The device's measured value, keyed on its identity as the workarounds are, or the floor.
         function_storage: function_storage::of(desc),
-        // The measured deviations, one per pipeline kind. Unmeasured, a MoltenVK driver's route is unknown, since
-        // it hands the gradients to Metal by some route; another driver's is Vulkan's rule.
+        // The measured deviations, one per pipeline kind; unmeasured, Vulkan's rule, the device's
+        // own reading of the gradients handed to it.
         cube_gradients: {
-            let route = |measured: &[(DriverDeviation, CubeGradientRoute)]| match (
-                measured.iter().find(|(deviation, _)| deviates(*deviation)),
-                desc.driver_id,
-            ) {
-                (Some(&(_, route)), _) => route,
-                (None, Some(vk::DriverId::MOLTENVK)) => CubeGradientRoute::Unmeasured,
-                (None, _) => CubeGradientRoute::Vulkan,
+            let route = |measured: &[(DriverDeviation, CubeGradientRoute)]| {
+                measured
+                    .iter()
+                    .find(|(deviation, _)| deviates(*deviation))
+                    .map_or(CubeGradientRoute::Vulkan, |&(_, route)| route)
             };
             CubeGradients {
                 graphics: route(&[(

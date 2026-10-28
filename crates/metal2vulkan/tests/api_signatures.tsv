@@ -3956,7 +3956,6 @@ field	metal2vulkan::metal::format::YCbCrFormat.packed	pub packed: bool
 field	metal2vulkan::metal::format::YCbCrFormat.reads	pub reads: YCbCrReads
 field	metal2vulkan::metal::format::YCbCrFormat.subsampling	pub subsampling: ChromaSubsampling
 field	metal2vulkan::metal::sampler::SamplerUse.compare	pub compare: bool
-field	metal2vulkan::metal::sampler::SamplerUse.cube_gradient	pub cube_gradient: bool
 field	metal2vulkan::metal::sampler::SamplerUse.integer_texture	pub integer_texture: bool
 field	metal2vulkan::metal::state::DepthBias.clamp	pub clamp: f32
 field	metal2vulkan::metal::state::DepthBias.constant_factor	pub constant_factor: f32
@@ -4022,7 +4021,6 @@ field	metal2vulkan::pipeline::ColorGroup.group	pub group: u32
 field	metal2vulkan::pipeline::ColorGroup.present	pub present: Vec<u32>
 field	metal2vulkan::pipeline::ColorGroup.width	pub width: u32
 field	metal2vulkan::pipeline::CombinedSampler.compare	pub compare: bool
-field	metal2vulkan::pipeline::CombinedSampler.cube_gradient	pub cube_gradient: bool
 field	metal2vulkan::pipeline::CombinedSampler.integer	pub integer: bool
 field	metal2vulkan::pipeline::CombinedSampler.sampler	pub sampler: SamplerRef
 field	metal2vulkan::pipeline::CommandWrites.operations	pub operations: u32
@@ -8878,7 +8876,6 @@ method	metal2vulkan::metal::sampler::AddressModeMap::mode	pub fn mode(&self, fro
 method	metal2vulkan::metal::sampler::AddressModeMap::sampler	pub fn sampler(&self, mut desc: SamplerDescriptor) -> SamplerDescriptor
 method	metal2vulkan::metal::sampler::AddressModeMap::with	pub fn with(mut self, from: SamplerAddressMode, to: SamplerAddressMode) -> AddressModeMap
 method	metal2vulkan::metal::sampler::SamplerUse::new	pub fn new(compare: bool, integer_texture: bool) -> SamplerUse
-method	metal2vulkan::metal::sampler::SamplerUse::with_cube_gradient	pub fn with_cube_gradient(self, cube_gradient: bool) -> SamplerUse
 method	metal2vulkan::metal::sampler::SamplerWord::exact_fetch	pub fn exact_fetch(plane: u8, integer: bool) -> u32
 method	metal2vulkan::metal::sampler::SamplerWord::of	pub fn of(desc: &SamplerDescriptor) -> SamplerWord
 method	metal2vulkan::pipeline::AliasView::new	pub fn new(image_format: vk::Format) -> AliasView
@@ -8899,7 +8896,6 @@ method	metal2vulkan::pipeline::CombinedSampler::from_heap_index	pub fn from_heap
 method	metal2vulkan::pipeline::CombinedSampler::heap_index	pub fn heap_index(&self) -> u32
 method	metal2vulkan::pipeline::CombinedSampler::new	pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler
 method	metal2vulkan::pipeline::CombinedSampler::sampler_use	pub fn sampler_use(&self) -> crate::metal::sampler::SamplerUse
-method	metal2vulkan::pipeline::CombinedSampler::with_cube_gradient	pub fn with_cube_gradient(self, cube_gradient: bool) -> CombinedSampler
 method	metal2vulkan::pipeline::CommandWrites::is_empty	pub const fn is_empty(self) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may	pub const fn may(self, bits: u32) -> bool
 method	metal2vulkan::pipeline::CommandWrites::may_draw_primitive_type	pub const fn may_draw_primitive_type(self, raw: u32) -> bool
@@ -12154,7 +12150,7 @@ variant	metal2vulkan::bind::RewriteSource::Indirect	Indirect { arguments: Indire
 variant	metal2vulkan::bind::RewriteSource::IndirectVertices	IndirectVertices { arguments: IndirectRef }
 variant	metal2vulkan::bind::SamplerSource::Immutable	Immutable
 variant	metal2vulkan::bind::SamplerSource::Neutral	Neutral(NeutralResource)
-variant	metal2vulkan::bind::SamplerSource::Slot	Slot { slot: SlotRef, compare: bool, integer: bool, cube_gradient: bool, opaque_black: OpaqueBlackBorder }
+variant	metal2vulkan::bind::SamplerSource::Slot	Slot { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
 variant	metal2vulkan::bind::ShadowMergeRead::B8G8R8A8Unorm	B8G8R8A8Unorm
 variant	metal2vulkan::bind::ShadowMergeRead::R8G8B8A8Unorm	R8G8B8A8Unorm
 variant	metal2vulkan::bind::ShadowMergeRead::Words	Words(ShadowTexelView)
@@ -12199,7 +12195,7 @@ variant	metal2vulkan::bind::UsedClass::Buffer	Buffer
 variant	metal2vulkan::bind::UsedClass::Heap	Heap
 variant	metal2vulkan::bind::UsedClass::Texture	Texture(TextureShape)
 variant	metal2vulkan::bind::WriteSource::AccelerationStructure	AccelerationStructure { slot: SlotRef, level: AccelerationStructureLevel }
-variant	metal2vulkan::bind::WriteSource::ArgumentSampler	ArgumentSampler { index: u32, compare: bool, integer: bool, cube_gradient: bool }
+variant	metal2vulkan::bind::WriteSource::ArgumentSampler	ArgumentSampler { index: u32, compare: bool, integer: bool }
 variant	metal2vulkan::bind::WriteSource::ArgumentTable	ArgumentTable { stage: Stage, bytes_len: u32 }
 variant	metal2vulkan::bind::WriteSource::Attachment	Attachment { color_index: u32 }
 variant	metal2vulkan::bind::WriteSource::Buffer	Buffer { slot: SlotRef }
@@ -12219,7 +12215,7 @@ variant	metal2vulkan::bind::WriteSource::MeshRecords	MeshRecords
 variant	metal2vulkan::bind::WriteSource::MeshWork	MeshWork
 variant	metal2vulkan::bind::WriteSource::Neutral	Neutral(NeutralResource)
 variant	metal2vulkan::bind::WriteSource::PatchIndices	PatchIndices { min_bytes: u32 }
-variant	metal2vulkan::bind::WriteSource::Sampler	Sampler { slot: SlotRef, compare: bool, integer: bool, cube_gradient: bool, opaque_black: OpaqueBlackBorder }
+variant	metal2vulkan::bind::WriteSource::Sampler	Sampler { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
 variant	metal2vulkan::bind::WriteSource::ShadowStencil	ShadowStencil
 variant	metal2vulkan::bind::WriteSource::SnapshotTexels	SnapshotTexels { slot: u32 }
 variant	metal2vulkan::bind::WriteSource::StencilStandIn	StencilStandIn
@@ -13389,7 +13385,7 @@ variant	metal2vulkan::pipeline::FactorLane::Output	Output(u8)
 variant	metal2vulkan::pipeline::FactorLane::Zero	Zero
 variant	metal2vulkan::pipeline::HandleClass::FunctionTable	FunctionTable
 variant	metal2vulkan::pipeline::HandleClass::Image	Image(ImageHandleClass)
-variant	metal2vulkan::pipeline::HandleClass::Sampler	Sampler { compare: bool, integer: bool, cube_gradient: bool }
+variant	metal2vulkan::pipeline::HandleClass::Sampler	Sampler { compare: bool, integer: bool }
 variant	metal2vulkan::pipeline::ImageAccess::Sampled	Sampled
 variant	metal2vulkan::pipeline::ImageAccess::Storage	Storage
 variant	metal2vulkan::pipeline::ImageDim::Buffer	Buffer

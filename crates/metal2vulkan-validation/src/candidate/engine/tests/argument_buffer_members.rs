@@ -736,8 +736,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
                 index,
                 compare,
                 integer,
-                cube_gradient,
-            } => Some((write.array_element, index, compare, integer, cube_gradient)),
+            } => Some((write.array_element, index, compare, integer)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -745,7 +744,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
     assert_eq!(
         elements,
         (1..32)
-            .map(|e| (e, e - 1, false, false, false))
+            .map(|e| (e, e - 1, false, false))
             .collect::<Vec<_>>()
     );
     assert!(plan.descriptors.iter().any(|write| write.array_element == 0

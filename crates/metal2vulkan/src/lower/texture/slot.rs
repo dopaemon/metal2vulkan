@@ -216,10 +216,6 @@ pub struct SlotPlan {
     /// linear sample reads the bound format's channels from it (`RuntimeFact::TexelFormat`).
     /// Implied by `half_format`.
     pub texel_format: bool,
-    /// An access with a `half` result converts a value of the slot that may be filtered
-    /// (`half::TexelLanes::Filtered`), whose packed class takes the routine's `OTHER` arm: where
-    /// none does, the arm runs only for an unmeasured class without a packed field.
-    pub half_filtered: bool,
     /// A `half` conversion of the slot on a device that samples through Metal's own texture unit
     /// notes the bound format where its class is unmeasured there
     /// (`TexelFormat::unmeasured_on_metal_sampler`): the slot declares its `UnmeasuredTexels`
@@ -265,7 +261,6 @@ impl SlotPlan {
             sparse_writes: false,
             half_format: false,
             texel_format: false,
-            half_filtered: false,
             unmeasured: false,
             swizzle: false,
             constant_lanes: false,

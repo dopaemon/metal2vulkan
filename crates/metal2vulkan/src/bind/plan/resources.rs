@@ -95,7 +95,7 @@ pub(crate) fn bind_error(e: Error) -> BindError {
 
 /// The `VkSampler` of the sampler bound at a plan's `WriteSource::Sampler`,
 /// `WriteSource::ArgumentSampler` or `SamplerSource::Slot`: `metal::sampler::vk_sampler` for the
-/// write's use (its `compare`, `integer` and `cube_gradient`) on `device`, its opaque-black border
+/// write's use (its `compare` and `integer`) on `device`, its opaque-black border
 /// made as the write says (`opaque_black`, transparent black, or opaque black with the view's
 /// mapping in `border_components`), and, when the sampler reads an image of `image_format` (a
 /// combined write's view format), the format's linear-filtering and min/max features the
@@ -1285,7 +1285,6 @@ impl ResourcePlanner<'_> {
             slot,
             compare,
             integer: use_.integer_texture,
-            cube_gradient: use_.cube_gradient,
             opaque_black,
         })
     }
@@ -1414,13 +1413,11 @@ impl ResourcePlanner<'_> {
                 slot,
                 compare,
                 integer,
-                cube_gradient,
                 opaque_black,
             } => WriteSource::Sampler {
                 slot,
                 compare,
                 integer,
-                cube_gradient,
                 opaque_black,
             },
             SamplerSource::Neutral(n) => WriteSource::Neutral(n),

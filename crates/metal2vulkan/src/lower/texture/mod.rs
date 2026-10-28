@@ -168,7 +168,7 @@ use crate::error::{DriverDeviation, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith::{FloatFmt, Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::sampler::Sampling;
-use crate::lower::select::{both, FamilyPlans, NoteClause, NoteOn, NoteTest, Plan, SelectCx};
+use crate::lower::select::{FamilyPlans, NoteClause, NoteOn, NoteTest, Plan, SelectCx};
 use crate::lower::strategy::FamilyStrategy;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{SampledType, SlotClass, SlotRef};
@@ -891,10 +891,6 @@ pub struct TexturePlan {
     /// The guard conditions of the slice writes every invocation shares (`cooperative`): each
     /// one's branch is taken by every invocation, so its condition is emitted as `true`.
     pub cooperative: BTreeSet<ValueId>,
-    /// Which families the module's `half` routine tells apart ([`half_families`]): every
-    /// measured one, or on a device that samples through Metal's own texture unit only those
-    /// whose `half` is not Metal's `float` texel rounded to nearest even.
-    pub half_families: half::HalfFamilies,
     /// The heap operations the function selects (texture and sampling): each masks its handle
     /// where the handle-table search carries flags in it (`AccessPlan::lookup`).
     pub heap_uses: u32,
@@ -976,8 +972,8 @@ pub struct Declared {
     /// The module's routine of that conversion ([`half::define`]), defined once where a slot
     /// takes it.
     pub half_routine: Option<FuncId>,
-    /// The `PlainHalfTexels` specialization constant of each slot of those on a device whose
-    /// routine tells apart Metal's sampler's families alone (`half::HalfFamilies::MetalSampler`).
+    /// The `PlainHalfTexels` specialization constant of each of those slots: whether the bound
+    /// class converts by the plain arm (`half` module docs).
     pub plain_half: BTreeMap<u32, SValue>,
     /// The `TextureSwizzle` specialization constant of each texture buffer slot whose reads
     /// apply the bound texture buffer's swizzle, and of each storage slot of
@@ -1195,9 +1191,9 @@ pub fn declare(
             )?;
         }
         if s.half_format && d.half_routine.is_none() {
-            d.half_routine = Some(half::define(mb, plan.families.texture.half_families)?);
+            d.half_routine = Some(half::define(mb)?);
         }
-        if s.half_format && half::takes_plain_arm(plan.families.texture.half_families) {
+        if s.half_format {
             let b = mb.ty(SType::Bool)?;
             let c = mb.spec(
                 crate::pipeline::sym::SpecKey::PlainHalfTexels(s.slot),
@@ -1282,7 +1278,7 @@ pub fn declare(
         d.heap_classes = Some(declare_heap_classes(mb)?);
     }
     if plan.families.texture.heap_half && d.half_routine.is_none() {
-        d.half_routine = Some(half::define(mb, plan.families.texture.half_families)?);
+        d.half_routine = Some(half::define(mb)?);
     }
     Ok(d)
 }
@@ -1490,34 +1486,33 @@ pub enum OneTexel {
     Heap(ValueId),
 }
 
-/// A read, gather, or sample of `image`, of shape `shape`, with a `half` result, which reads one
-/// texel where `one` says. On a slot of a color texture, a texture buffer's included (Metal reads a
-/// texture buffer's texels as a texture's, measured on the P2a probe), it converts the texels by
-/// the bound format's class (`half`), which the slot's `TexelFormat` specialization gives
-/// (`RuntimeFact::TexelFormat`); a heap color texture's sample or gather by the class its handle
-/// carries (its caller asks the routine), whose `OTHER` arm no specialization rules out; a heap
-/// element's read and a depth texture's are rounded exactly (`narrow::round_texel`). The module
-/// notes each heap and depth access as `PrecisionNote::HalfTexelConversion`: a format whose
-/// conversion is not measured takes that rounding of the device's `f32` texel, which Metal's
-/// conversion may not be. A slot's access notes it where its class names no measured family
-/// ([`unmeasured_class`]), the conversion's `OTHER` arm, and, where the access reads one texel, no
-/// packed field either: through a runtime sampler slot, where its word filters.
-/// On a device that samples through Metal's own texture unit, an 8-bit sRGB format's class is
-/// Metal's too ([`unconverted_class`]); where that device also rounds to `half` as Metal does
-/// ([`half_families`]), every measured class's is, so the access notes it where the bound format's
-/// class is unmeasured there, as the slot's `UnmeasuredTexels` specialization states, whatever the
-/// access and its sampler.
+/// A read, gather, or sample of `image`, of shape `shape`, with a `half` result, a sample where
+/// `sample` (a sample's and a pixel fetch's form: not a read's or a gather's). Its `half` is the
+/// device's `f32` texel rounded to nearest even (`narrow::round_texel`) on every device, recorded
+/// as `PrecisionNote::HalfTexelConversion` where Metal's `half` result may differ from it.
 ///
-/// Where the access's texel is the device's (`device`, [`device_texels`]), it is rounded exactly as
-/// a heap element's, and noted alike.
+/// Where the device's texel is its own (`device`, [`device_texels`]: off Metal's own texture unit)
+/// the access records the note outright, a heap element's and a depth texture's too. On a device
+/// that samples through Metal's own texture unit (MoltenVK on Apple's GPU, whose `f32` texel is
+/// Metal's `float` result), a slot's color texture converts through the module's routine (`half`),
+/// which keeps a YCbCr field's ties away from zero on the grid `8192`, by the bound format's class
+/// (its `TexelFormat` specialization, `RuntimeFact::TexelFormat`); a heap color texture's sample or
+/// gather by the class its handle carries (its caller asks the routine). The note holds there
+/// where the bound class's `half` is not that `float` rounded to nearest even: a class measured in
+/// none of the families (the slot's `UnmeasuredTexels` specialization), a 16-bit normalized grid
+/// (`BicubicTexels::WIDE16`: three steps of each round twice), and a sample of a 32-bit float
+/// texel (`BicubicTexels::LINEAR`: Metal rounds toward zero, saturating), tests of the bound
+/// format the runtime announces at a draw or dispatch binding such a texture. A heap color
+/// texture's and a depth texture's access records it outright.
 pub(crate) fn half_texels(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
     shape: ImageShape,
-    one: OneTexel,
+    sample: bool,
     device: bool,
     m: &mut Meter,
 ) -> Result<(), Error> {
+    use crate::metal::bicubic::BicubicTexels as B;
     let index = match image {
         ImageRef::Slot(index) if !shape.depth && !device => index,
         _ => {
@@ -1525,43 +1520,22 @@ pub(crate) fn half_texels(
             return Ok(());
         }
     };
-    let families = half_families(cx);
-    cx.families.texture.half_families = families;
-    let when = match families {
-        half::HalfFamilies::MetalSampler => {
-            // The routine's `OTHER` arm is Metal's `half` of every measured class's texel: the
-            // note holds where the bound format's class is unmeasured there. The module requires
-            // the device's sampler to be Metal's.
-            cx.families.sampler.metal_sampler = true;
-            if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-                s.unmeasured = true;
-            }
-            vec![[NoteTest::equal(NoteOn::Unmeasured(index), 1, 1)].into()]
-        }
-        half::HalfFamilies::Every => {
-            let unmeasured = [unconverted_class(cx, index)];
-            let unpacked: NoteClause = [NoteTest::equal(
-                NoteOn::Texel(index),
-                crate::metal::texel_format::TexelFormat::PACKED_MASK,
-                0,
-            )]
-            .into();
-            match one {
-                OneTexel::Always => both(&unmeasured, &[unpacked]),
-                OneTexel::Word(n) => {
-                    let mut either = vec![unpacked];
-                    either.extend(crate::lower::sampler::linear::word_filters(n));
-                    both(&unmeasured, &either)
-                }
-                OneTexel::Never | OneTexel::Heap(_) => unmeasured.to_vec(),
-            }
-        }
-    };
+    // The module requires the device's sampler to be Metal's.
+    cx.families.sampler.metal_sampler = true;
+    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
+        s.unmeasured = true;
+    }
+    let mut when = vec![
+        [NoteTest::equal(NoteOn::Unmeasured(index), 1, 1)].into(),
+        [NoteTest::differ(NoteOn::Bound(index), B::WIDE16, 0)].into(),
+    ];
+    if sample {
+        when.push([NoteTest::differ(NoteOn::Bound(index), B::LINEAR, 0)].into());
+    }
     cx.note_when(PrecisionNote::HalfTexelConversion, when, m)?;
     let slot = slot_of(cx, index)?.slot;
     if let Some(s) = cx.families.texture.slots.get_mut(&index) {
         s.half_format = true;
-        s.half_filtered |= one != OneTexel::Always;
     }
     cx.facts
         .insert(crate::pipeline::facts::RuntimeFact::TexelFormat { slot });
@@ -1625,73 +1599,6 @@ pub(crate) fn device_texels(cx: &SelectCx<'_>) -> bool {
         .enabled
         .properties
         .contains(&crate::device::requirements::VkProperty::MetalSampler)
-}
-
-/// The families the module's `half` routine tells apart (`half::HalfFamilies`): on a device whose
-/// texel is Metal's `float` result of the access (`VkProperty::MetalSampler`) and whose rounding to
-/// nearest even is Metal's (`QuantizeForm::Device`, `Converted` and `Controlled`), only those whose
-/// `half` is not that texel rounded to nearest even ([`half::HalfFamilies::MetalSampler`]);
-/// elsewhere every measured one. A function of the profile alone, so every access of a function
-/// agrees.
-pub(crate) fn half_families(cx: &SelectCx<'_>) -> half::HalfFamilies {
-    use crate::spirv::builder::QuantizeForm;
-    let metal = cx
-        .profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    let rounds = matches!(
-        crate::lower::arith::narrow::quantize_form(cx.profile),
-        QuantizeForm::Device | QuantizeForm::Converted | QuantizeForm::Controlled
-    );
-    match metal && rounds {
-        true => half::HalfFamilies::MetalSampler,
-        false => half::HalfFamilies::Every,
-    }
-}
-
-/// The clause of texture slot `index` bound in a format whose class names no measured family: its
-/// `TexelFormat` specialization holds none of `LINEAR`, `HALF`, and `EXACT`, the value on which the
-/// conversion routine and the emulated filters take the device's arm.
-pub(crate) fn unmeasured_class(index: u32) -> NoteClause {
-    use crate::metal::bicubic::BicubicTexels as B;
-    [NoteTest::equal(
-        NoteOn::Texel(index),
-        B::LINEAR | B::HALF | B::EXACT,
-        0,
-    )]
-    .into()
-}
-
-/// The clause of texture slot `index` where its `half` conversion may not be Metal's
-/// ([`half_texels`]): [`unmeasured_class`], and on a device that samples through Metal's own
-/// texture unit (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU) also no `SRGB` bit, the
-/// module requiring the property there. That device's `f32` texel of an 8-bit sRGB format, its
-/// own decode, is Metal's `float` value: a step on `1/4095` (a color channel's table step, or a
-/// linear sum rounded onto its grid), `1/4080` (alpha's linear sum), or `1/255` (alpha's code),
-/// rounded to nearest even (`metal::texel_format`). The conversion's `OTHER` arm rounds that to
-/// `half` to nearest even, which is the step's own rounding to `half`, Metal's `half` value: on
-/// those grids no step lies near enough a tie between halves for the `f32` rounding to move it
-/// across (`metals_srgb_float_steps_round_to_their_half_steps`).
-fn unconverted_class(cx: &mut SelectCx<'_>, index: u32) -> NoteClause {
-    use crate::metal::bicubic::BicubicTexels as B;
-    let metal = cx
-        .profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&crate::device::requirements::VkProperty::MetalSampler);
-    if !metal {
-        return unmeasured_class(index);
-    }
-    cx.families.sampler.metal_sampler = true;
-    [NoteTest::equal(
-        NoteOn::Texel(index),
-        B::LINEAR | B::HALF | B::EXACT | B::SRGB,
-        0,
-    )]
-    .into()
 }
 
 /// The address-mode map constexpr sampler `words` samples texture slot `index` under: the map
@@ -2115,7 +2022,13 @@ pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 /// may reach a half-float image ([`may_store_half`]), which the device converts whole. Its rounding
 /// of each channel to `half` (Metal rounds toward zero, a finite value past 65504 to 65504) is
 /// Metal's where the profile takes `DriverDeviation::MetalHalfStorageWrites` (the module requires
-/// its property), else the device's (`PrecisionNote::DeviceColorConversion`). Its NaN is Metal's
+/// its property), else the device's (`PrecisionNote::DeviceColorConversion`). A write of an
+/// integer texel into a texture of the float class (`cross`, `emit::cross_write`), which Metal
+/// stores rounded to nearest even onto a half-float or small-float channel, records the note
+/// wherever it may reach one, the device's conversion rounding as it rounds a `float` write
+/// (toward zero on every measured driver: within one unit in the last place of the channel's
+/// Metal value, a finite value past 65504 stored as 65504 where Metal's `half` is the infinity).
+/// Its NaN is Metal's
 /// `0x7e00` where the profile takes `DriverDeviation::MetalHalfStorageNans` (the module requires its
 /// property), else the device's encoding of it (`PrecisionNote::DeviceNanEncoding`). A write that
 /// may reach a packed small float image ([`small_float_storage`]) stores its NaN as the device
@@ -2126,7 +2039,7 @@ pub const HEAP_CLASS_CENSUS: &str = "sampler.heap.texel_class";
 pub(super) fn half_storage_facts(
     cx: &mut SelectCx<'_>,
     image: ImageRef,
-    class: StorageImageClass,
+    (class, cross): (StorageImageClass, bool),
     m: &mut Meter,
 ) -> Result<(), Error> {
     use crate::device::requirements::VkProperty;
@@ -2135,9 +2048,10 @@ pub(super) fn half_storage_facts(
         _ => Vec::new(),
     };
     if !half.is_empty() {
-        if cx
-            .profile
-            .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
+        if !cross
+            && cx
+                .profile
+                .takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites)
         {
             cx.families
                 .texture
@@ -2159,6 +2073,9 @@ pub(super) fn half_storage_facts(
         }
     }
     let small = small_float_storage(cx, image)?;
+    if cross {
+        cx.note_when(PrecisionNote::DeviceColorConversion, small.clone(), m)?;
+    }
     cx.note_when(PrecisionNote::DeviceNanEncoding, small, m)
 }
 
@@ -3011,7 +2928,7 @@ fn select_read_as(
     // An extended-range texel is decoded exactly to `f32`, which a `half` result rounds to
     // nearest even, as Metal answers. A read is one texel.
     if texel.conv == TexelConv::F16 && !exact && extended.is_none() {
-        half_texels(cx, image, shape, OneTexel::Always, device_texels(cx), m)?;
+        half_texels(cx, image, shape, false, device_texels(cx), m)?;
         half_texel_nans(cx, image, shape, m)?;
     }
     if texel.conv == TexelConv::F32 && !exact && extended.is_none() {
@@ -3257,7 +3174,7 @@ fn select_write(
     // Its alpha in red where the class is `A8Unorm`'s and the device holds such a texture so.
     let heap_alpha_red = heap_alpha_in_red(cx, image, shape, texel.conv);
     if texel.conv == TexelConv::F32 {
-        half_storage_facts(cx, image, class, m)?;
+        half_storage_facts(cx, image, (class, cross.is_some()), m)?;
     }
     if texel.conv == TexelConv::F16 && extended.is_none() {
         half_write_nans(cx, image)?;

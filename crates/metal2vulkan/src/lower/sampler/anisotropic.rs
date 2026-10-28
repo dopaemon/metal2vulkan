@@ -105,11 +105,7 @@
 //! sampler slot whose word states anisotropy, on a device without `samplerAnisotropy`: every
 //! Vulkan sampler is isotropic there (`metal::sampler::device_anisotropy`), so the emulation goes
 //! where that feature's refusal was, the device's own sampling unchanged where the feature is. A
-//! cube's also on a device that samples through Metal's own sampler where its stage's
-//! cube-gradient route is not measured (`CubeGradientRoute::Unmeasured`): its explicit levels are
-//! Metal's own, which no route alters, so the emulation goes where the refusal of an anisotropic
-//! sampler was. A runtime
-//! slot's degree is its `SpecKey::SamplerAnisotropy` specialization; where its word states no
+//! runtime slot's degree is its `SpecKey::SamplerAnisotropy` specialization; where its word states no
 //! anisotropy, the sample is the plain one. Elsewhere (a cube's implicit level, a 3D texture, a
 //! comparison, an observed residency, an argument buffer's sampler) the device filters, recorded
 //! as `PrecisionNote::DeviceAnisotropicFilter` where the sampler's anisotropy is known (on Metal's
@@ -131,7 +127,6 @@
 use crate::air::abi::{Coordinates, MipFilter};
 use crate::air::intrinsics::{ImageDim, ImageShape};
 use crate::budget::Meter;
-use crate::device::profile::CubeGradientRoute;
 use crate::error::Error;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{NoteOn, NoteTest, SelectCx};
@@ -311,7 +306,7 @@ pub(super) fn select(
     cx: &mut SelectCx<'_>,
     op: &SampleOp,
     (sampler, image, shape): (Option<SamplerRef>, ImageRef, ImageShape),
-    (integer, observed, other_class, swizzled, answered): (bool, bool, bool, bool, bool),
+    (integer, observed, other_class, swizzled): (bool, bool, bool, bool),
     use_: SamplerUse,
     m: &mut Meter,
 ) -> Result<Option<Anisotropic>, Error> {
@@ -330,14 +325,8 @@ pub(super) fn select(
     if integer || !derived {
         return Ok(None);
     }
-    // A cube's explicit gradients through a route the device's description does not state take
-    // the emulation on a device that samples through Metal's own sampler too: its explicit
-    // levels are Metal's, whatever the route.
     let cube = matches!(lod, Lod::CubeGrad(..));
-    let unmeasured =
-        cube && cx.profile.fields().cube_gradients.route(cx.stage) == CubeGradientRoute::Unmeasured;
-    let native = !unmeasured;
-    if native && anisotropy {
+    if anisotropy {
         cx.families.sampler.device_sampling = true;
         if let Some(SamplerRef::Constexpr(words)) = sampler {
             if own_not_mipmapped(words, use_, cx.profile)? {
@@ -350,18 +339,10 @@ pub(super) fn select(
     let (degree, mip, device) = match sampler {
         Some(SamplerRef::Constexpr(words)) => {
             let state = super::constexpr::state_of(words)?;
-            // An isotropic sampler's cube takes Metal's level where no exact path of its own
-            // answers the sample, on a device whose own sampler does not answer it.
-            let isotropic = state.max_anisotropy <= 1;
-            if (isotropic && (native || !cube || answered))
-                || state.coordinates == Coordinates::Pixel
-            {
+            if state.max_anisotropy <= 1 || state.coordinates == Coordinates::Pixel {
                 return Ok(None);
             }
-            let la = match isotropic {
-                true => 0,
-                false => state.max_anisotropy.next_power_of_two().trailing_zeros(),
-            };
+            let la = state.max_anisotropy.next_power_of_two().trailing_zeros();
             let device = super::constexpr::constexpr_desc(words, use_, cx.profile)?
                 .max_anisotropy
                 .is_some();
@@ -399,8 +380,6 @@ pub(super) fn select(
         false => PrecisionNote::DeviceAnisotropicFilter,
     };
     match degree {
-        // An isotropic sampler's cube: Metal's level, each level the device's filter.
-        Degree::Const(0) => {}
         Degree::Const(_) => {
             cx.precision.insert(note);
         }
@@ -773,16 +752,7 @@ fn emulate(
         Degree::Const(la) => 1 << la.min(MOST_LOG as u32),
         Degree::Slot(_) => MOST_TAPS,
     };
-    // An isotropic sampler's (a cube's): one tap, at Metal's level alone.
-    let isotropic = a.degree == Degree::Const(0);
-    filtered(
-        cx,
-        fb,
-        (source, lanes),
-        &at,
-        (la, mip, minified),
-        (most, isotropic),
-    )
+    filtered(cx, fb, (source, lanes), &at, (la, mip, minified), most)
 }
 
 /// What a sample's emulation reads, taken in the sample's own position.
@@ -927,7 +897,7 @@ fn word_minified_level(
 }
 
 /// The emulation's sum of the device's texels of `source` (its coordinate of `lanes` plane lanes):
-/// the footprint, then up to `most` taps; an `isotropic` sampler's level alone and its one tap.
+/// the footprint, then up to `most` taps.
 /// `minified` is the level handed for level 0 where Metal minifies under a nearest mip filter or
 /// none ([`minified_level`]).
 fn filtered(
@@ -936,7 +906,7 @@ fn filtered(
     src: (Source, u8),
     at: &At,
     (la, mip, minified): (SValue, SValue, SValue),
-    (most, isotropic): (u32, bool),
+    most: u32,
 ) -> BResult<SValue> {
     let f = float(fb)?;
     let v2 = fb.module().ty(SType::Vector { elem: f, len: 2 })?;
@@ -944,7 +914,7 @@ fn filtered(
     let texels = fb.convert(ConvOp::ConvertUToF, plane, v2)?;
     let gx = fb.binary(BinOp::FMul, at.grads.0, texels)?;
     let gy = fb.binary(BinOp::FMul, at.grads.1, texels)?;
-    let foot = footprint(fb, (gx, gy), (la, mip), at.levels, isotropic)?;
+    let foot = footprint(fb, (gx, gy), (la, mip), at.levels)?;
     let levels = read_levels(fb, &foot, at, (mip, minified))?;
     // The taps' weights: `floor(256 / n)` each, the remainder one each to the middle taps.
     let n = foot.n;
@@ -1032,14 +1002,12 @@ struct Footprint {
 }
 
 /// Metal's footprint of gradients `gx`, `gy` (level-0 texels) through a sampler of degree `2^la`
-/// (`i32`) and mip filter code `mip` (`u32`) on a texture of `levels` (`u32`) levels; an
-/// `isotropic` sampler's level is its major axis's alone (`la` 0), its one tap at the centre.
+/// (`i32`) and mip filter code `mip` (`u32`) on a texture of `levels` (`u32`) levels.
 fn footprint(
     fb: &mut FunctionBuilder<'_>,
     (gx, gy): (SValue, SValue),
     (la, mip): (SValue, SValue),
     levels: SValue,
-    isotropic: bool,
 ) -> BResult<Footprint> {
     let f = float(fb)?;
     let i = int(fb)?;
@@ -1067,25 +1035,6 @@ fn footprint(
     let fifteen = i32c(fb, 15)?;
     let zi = i32c(fb, 0)?;
     let one = i32c(fb, 1)?;
-    // An isotropic sampler's level: its major axis's (an isotropic cube's measured on the Apple
-    // M3 Max under macOS 27, `emit::cube_footprint`'s `Length` form, which hands Metal the major
-    // axis alone, reading as Metal's own gradients on every lane).
-    if isotropic {
-        let raw = fb.binary(BinOp::ShiftRightArithmetic, vmaj, fifteen)?;
-        let last = fb.convert(ConvOp::Bitcast, levels, i)?;
-        let last = fb.binary(BinOp::ISub, last, one)?;
-        let last = fb.glsl(GlslOp::SMax, &[last, zi])?;
-        let full = i32c(fb, 256)?;
-        let top = fb.binary(BinOp::IMul, last, full)?;
-        let lambda = fb.glsl(GlslOp::SClamp, &[raw, zi, top])?;
-        return Ok(Footprint {
-            lambda,
-            raw,
-            n: one,
-            u,
-            s0: zf,
-        });
-    }
     // The determinant of the gradients, each component's mantissa truncated to 12 bits, rounded
     // as written (no contraction).
     let component = |fb: &mut FunctionBuilder<'_>, v: SValue, c: u32| -> BResult<SValue> {

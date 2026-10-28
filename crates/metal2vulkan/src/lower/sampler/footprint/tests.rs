@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use crate::spv::ImageFormat;
 
-use super::{counted, Footprint, Kind, Probe, Site};
+use super::{counted, Footprint, Kind, Site};
 use crate::bind::{SparseTileMap, TileMapping};
 use crate::memory::views::{View, ViewKind};
 use crate::metal::TextureType;
@@ -74,20 +74,16 @@ fn element(f: &mut FunctionBuilder<'_>, g: GlobalId, i: Value) -> BResult<Value>
     f.access_chain(base, &[zero, i])
 }
 
-/// Where a kernel reads a texel's residency: texture 0's sparse fetches, or a tile map in buffer 2
-/// with tiles of the given texels (x, y, z), made from the image's unmapped texels, which must be
-/// whole tiles; the image itself is then resident everywhere, so only the map can answer.
+/// Where a kernel reads a texel's residency: a tile map in buffer 2 with tiles of the given texels
+/// (x, y, z), made from the image's unmapped texels, which must be whole tiles; the image itself is
+/// then resident everywhere, so only the map can answer.
 #[derive(Clone, Copy, Debug)]
-enum Arm {
-    Sparse,
-    Tiled([u32; 3]),
-}
+struct Arm([u32; 3]);
 
 /// A kernel whose invocation `i` reads `vec4` probe `i` of buffer 0 (the coordinate in its first
 /// `axes` lanes; the layer, as a float, in lane 3 of an array) and writes the word of `fp` at it,
-/// through texture 0's sparse fetches or, where `tiled`, buffer 2's tile map, to `uint` element
-/// `i` of buffer 1.
-fn kernel(fp: Footprint, dim: Dim, arrayed: bool, tiled: bool) -> BResult<TypedModule> {
+/// through buffer 2's tile map, to `uint` element `i` of buffer 1.
+fn kernel(fp: Footprint, dim: Dim, arrayed: bool) -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
     let f32_ = b.ty(Type::Float { width: 32 })?;
     let u32_ = b.ty(Type::Int {
@@ -109,15 +105,11 @@ fn kernel(fp: Footprint, dim: Dim, arrayed: bool, tiled: bool) -> BResult<TypedM
     let texture = b.resource(combined(), StorageClass::UniformConstant, sampled)?;
     let probes = storage_buffer(&mut b, 0, vec4, 16)?;
     let words = storage_buffer(&mut b, 1, u32_, 4)?;
-    let probe = if tiled {
-        let map = storage_buffer(&mut b, 2, u32_, 4)?;
-        Probe::Tiled(View {
-            global: map,
-            kind: ViewKind::Storage,
-            u32_ty: u32_,
-        })
-    } else {
-        Probe::Sparse
+    let map = storage_buffer(&mut b, 2, u32_, 4)?;
+    let map = View {
+        global: map,
+        kind: ViewKind::Storage,
+        u32_ty: u32_,
     };
     let id = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
     let void = b.ty(Type::Void)?;
@@ -142,7 +134,7 @@ fn kernel(fp: Footprint, dim: Dim, arrayed: bool, tiled: bool) -> BResult<TypedM
         lanes,
         layer,
     };
-    let word = counted(&mut f, fp, probe, site)?.word;
+    let word = counted(&mut f, fp, map, site)?;
     let out = element(&mut f, words, i)?;
     f.store(out, word, MemAccess::default())?;
     f.ret(None)?;
@@ -234,7 +226,7 @@ fn words(
     probes: &[[f32; 4]],
     arm: Arm,
 ) -> Vec<u32> {
-    let m = kernel(fp, dim, arrayed, matches!(arm, Arm::Tiled(_))).expect("kernel");
+    let m = kernel(fp, dim, arrayed).expect("kernel");
     let bytes: Vec<u8> = probes
         .iter()
         .flat_map(|p| p.iter().flat_map(|x| x.to_le_bytes()))
@@ -252,14 +244,13 @@ fn words(
             bytes: vec![0xAB; probes.len() * 4],
         },
     ];
-    if let Arm::Tiled(tile) = arm {
-        buffers.push(Buffer {
-            slot: Some(slot(ResourceKind::Buffer, 2)),
-            address: None,
-            bytes: tile_map(dim, arrayed, &img, tile).to_bytes(),
-        });
-        img.unmapped.clear();
-    }
+    let Arm(tile) = arm;
+    buffers.push(Buffer {
+        slot: Some(slot(ResourceKind::Buffer, 2)),
+        address: None,
+        bytes: tile_map(dim, arrayed, &img, tile).to_bytes(),
+    });
+    img.unmapped.clear();
     let res = Resources {
         buffers,
         ..Resources::default()
@@ -426,9 +417,7 @@ const MIDDLE_384: &[Reading] = &[
 ];
 
 fn check(width: u32, mapped: std::ops::Range<u32>, border: bool, readings: &[Reading]) {
-    for arm in [Arm::Sparse, Arm::Tiled([64, 64, 1])] {
-        check_arm(width, mapped.clone(), border, readings, arm);
-    }
+    check_arm(width, mapped, border, readings, Arm([64, 64, 1]));
 }
 
 fn check_arm(
@@ -550,10 +539,7 @@ const VOLUME: &[(Kind, [u32; 3], bool)] = &[
 #[test]
 fn the_footprint_word_answers_metal_along_a_volumes_depth() {
     let mut seen = 0;
-    for (arm, kind) in [Arm::Sparse, Arm::Tiled([64, 64, 1])]
-        .into_iter()
-        .flat_map(|arm| [(arm, L), (arm, N)])
-    {
+    for (arm, kind) in [(Arm([64, 64, 1]), L), (Arm([64, 64, 1]), N)] {
         let rows: Vec<_> = VOLUME.iter().filter(|r| r.0 == kind).collect();
         let probes: Vec<[f32; 4]> = rows
             .iter()
@@ -569,7 +555,7 @@ fn the_footprint_word_answers_metal_along_a_volumes_depth() {
         }
         seen += got.len();
     }
-    assert_eq!(seen, 2 * VOLUME.len());
+    assert_eq!(seen, VOLUME.len());
 }
 
 /// The rule on one axis of `n` texels: the texels counted at `u`, and whether each is inside.
@@ -613,14 +599,8 @@ fn the_footprint_word_applies_the_rule_on_every_axis() {
     let mut runs = 0;
     // The tile maps' tiles are whole runs of the unmapped texels: 8x8x1 for the 3D texture's
     // slices, 1x8x1 for the array's columns.
-    let arms = [
-        (Arm::Sparse, Arm::Sparse),
-        (Arm::Tiled([8, 8, 1]), Arm::Tiled([1, 8, 1])),
-    ];
-    for ((volume, array), border) in arms
-        .into_iter()
-        .flat_map(|arms| [(arms, true), (arms, false)])
-    {
+    let (volume, array) = (Arm([8, 8, 1]), Arm([1, 8, 1]));
+    for border in [true, false] {
         for kind in [L, N] {
             let probes: Vec<[f32; 4]> = sweep.iter().map(|&w| [0.5, 0.25, w, 0.0]).collect();
             let img = image(Dim::D3, [16, 16, 16], 1, |_, _, z, _| {

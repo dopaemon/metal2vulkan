@@ -6,9 +6,9 @@
 //! `residencyNonResidentStrict` reads any value. A sampler's access whose residency the function
 //! reads there, and every read or access through a sampler whose residency it does not read, sets
 //! the lanes Metal reads as constants (a channel the format lacks, through the texture's swizzle)
-//! from the slot's `SpecKey::ConstantLanes`, and a pixel fetch, a nearest sample, or a gather of
-//! Metal's footprint whose residency the function reads, naming its texels, reads zero for each
-//! of them the tile map says is unmapped. The CPU interpreter fetches but does not sample, so a
+//! from the slot's `SpecKey::ConstantLanes`, and a pixel fetch whose residency the function reads,
+//! naming its texel, reads zero where its residency says it is unmapped; a sample's and a gather's
+//! are the device's own sparse access. The CPU interpreter fetches but does not sample, so a
 //! read and a pixel sampler's fetch run here and the sample and gather are checked by their facts,
 //! notes and specializations.
 
@@ -382,7 +382,6 @@ fn a_pixel_fetch_reads_metals_value_of_an_unmapped_texel() {
                     sampler: SamplerRef::Constexpr([PIXEL_NEAREST, 0]),
                     compare: false,
                     integer: false,
-                    cube_gradient: false,
                 }),
                 index: 0,
             };
@@ -440,37 +439,22 @@ fn a_pixel_fetch_reads_metals_value_of_an_unmapped_texel() {
     assert!(legs.iter().all(|n| *n > 0), "legs {legs:?}");
 }
 
-/// A nearest sample and a gather of Metal's footprint, and a linear sample, through clamp-to-zero
-/// constexpr samplers whose residency the function reads, each answered from the slot's tile map on
-/// every profile. Where the profile's sparse textures are sparse images the stage states
-/// `ConstantLanes` and specializes on it, and only the linear sample, whose lanes that are no
-/// constants the device filters, notes `SparseResidency`; elsewhere neither.
+/// A nearest sample, a gather and a linear sample through clamp-to-zero constexpr samplers whose
+/// residency the function reads. Where the profile's sparse textures are sparse images
+/// (`shaderResourceResidency`), each is the device's own sparse access, its word the device's
+/// residency code: the slot takes the sparse arm and no tile map, the stage states
+/// `ConstantLanes` and specializes on it, and notes `SparseResidency`. Elsewhere the slot's tile
+/// map answers each by Metal's footprint, noting nothing.
 #[test]
-fn a_nearest_sample_and_a_gather_note_nothing_a_filtered_sample_notes_its_lanes() {
+fn a_sparse_device_answers_a_samples_residency_itself() {
     let cases = [
-        (
-            "nearest",
-            kernel(NEAREST_ZERO, &sample("%uv"), SAMPLE_DECL),
-            false,
-        ),
-        (
-            "gather_x",
-            kernel(NEAREST_ZERO, &gather(0), GATHER_DECL),
-            false,
-        ),
-        (
-            "gather_w",
-            kernel(NEAREST_ZERO, &gather(3), GATHER_DECL),
-            false,
-        ),
-        (
-            "linear",
-            kernel(LINEAR_ZERO, &sample("%uv"), SAMPLE_DECL),
-            true,
-        ),
+        ("nearest", kernel(NEAREST_ZERO, &sample("%uv"), SAMPLE_DECL)),
+        ("gather_x", kernel(NEAREST_ZERO, &gather(0), GATHER_DECL)),
+        ("gather_w", kernel(NEAREST_ZERO, &gather(3), GATHER_DECL)),
+        ("linear", kernel(LINEAR_ZERO, &sample("%uv"), SAMPLE_DECL)),
     ];
     let mut legs = [0; 2];
-    for (name, text, filtered) in cases {
+    for (name, text) in cases {
         let Some(bc) = assemble(name, &text) else {
             return;
         };
@@ -484,7 +468,7 @@ fn a_nearest_sample_and_a_gather_note_nothing_a_filtered_sample_notes_its_lanes(
             assert_eq!(a.facts.contains(&fact), images, "{what}");
             assert_eq!(
                 a.precision.contains(&PrecisionNote::SparseResidency),
-                images && filtered,
+                images,
                 "{what}"
             );
             let keys = a.interface.read_keys();
@@ -496,10 +480,11 @@ fn a_nearest_sample_and_a_gather_note_nothing_a_filtered_sample_notes_its_lanes(
             assert!(
                 a.facts.contains(&RuntimeFact::SparseTexture {
                     slot: texture_slot(0),
-                    sparse_arm: false,
-                    tile_map: true,
+                    sparse_arm: images,
+                    tile_map: !images,
                 }),
-                "{what}"
+                "{what}: {:?}",
+                a.facts
             );
             legs[usize::from(images)] += 1;
         }
@@ -614,7 +599,6 @@ fn an_access_that_does_not_read_its_residency_reads_metals_constant_lanes() {
                         sampler: SamplerRef::Constexpr([PIXEL_NEAREST, 0]),
                         compare: false,
                         integer: false,
-                        cube_gradient: false,
                     }),
                     index: 0,
                 }

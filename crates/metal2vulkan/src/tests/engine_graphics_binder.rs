@@ -2093,14 +2093,15 @@ fn out_of_bounds_alpha_follows_the_bound_format() {
 
 /// `a2_sparse_status` observes the residency of a sample and a gather of texture 0 through a
 /// nearest, clamp-to-edge constexpr sampler, and of a read of texture 1. Each slot states
-/// `RuntimeFact::SparseTexture`. On every device, with `shaderResourceResidency` or without, both
-/// slots have the tile-map arm, slot 0's sample and gather through Metal's footprint: each slot's
-/// `SparseTexture` specialization, which the plan sets from the bound texture's `sparse`
-/// (`MTLTexture.isSparse`), and a `ResourceKind::TileMap` binding the plan writes as the slot's
-/// `WriteSource::TileMap` (read by the kernel) for a sparse texture and as the zero buffer
-/// otherwise.
+/// `RuntimeFact::SparseTexture`, its `SparseTexture` specialization, which the plan sets from the
+/// bound texture's `sparse` (`MTLTexture.isSparse`). Slot 1's read has the tile-map arm on every
+/// device, and so has slot 0 where the device has no `shaderResourceResidency`, its sample and
+/// gather through Metal's footprint: a `ResourceKind::TileMap` binding the plan writes as the
+/// slot's `WriteSource::TileMap` (read by the kernel) for a sparse texture and as the zero buffer
+/// otherwise. Where the device has residency, slot 0's sample and gather are the device's sparse
+/// accesses (the sparse arm), with no tile map.
 #[test]
-fn a_sparse_texture_is_answered_from_its_tile_map_on_every_device() {
+fn a_sparse_texture_is_answered_from_its_tile_map_where_the_device_has_no_residency() {
     use crate::device::requirements::VkFeature;
     use crate::pipeline::facts::RuntimeFact;
     let Some(bc) = fixture("a2_sparse_status") else {
@@ -2124,11 +2125,11 @@ fn a_sparse_texture_is_answered_from_its_tile_map_on_every_device() {
             .features
             .contains(&VkFeature::ShaderResourceResidency);
         let slots = [0, 1].map(|i| slot(Stage::Kernel, SlotClass::Texture, i));
-        for s in slots {
+        for (s, sampled) in slots.into_iter().zip([true, false]) {
             let fact = RuntimeFact::SparseTexture {
                 slot: s,
-                sparse_arm: false,
-                tile_map: true,
+                sparse_arm: sampled && residency,
+                tile_map: !(sampled && residency),
             };
             assert!(
                 p.dependencies.iter().any(|d| d.fact == fact),
@@ -2173,12 +2174,16 @@ fn a_sparse_texture_is_answered_from_its_tile_map_on_every_device() {
             "{stem}"
         );
         // Each sparse slot's tile map bound and read.
-        assert_eq!(tile_maps(&plan), [slots[0]], "{stem}");
+        let mapped: &[SlotRef] = match residency {
+            true => &slots[1..],
+            false => &slots,
+        };
+        assert_eq!(tile_maps(&plan), mapped[..mapped.len() - 1], "{stem}");
         let both = p
             .plan(&dev, &state(true, true).shape())
             .unwrap_or_else(|e| panic!("{stem}: sparse slots: {e}"));
-        assert_eq!(tile_maps(&both), slots, "{stem}");
-        for s in slots {
+        assert_eq!(tile_maps(&both), mapped, "{stem}");
+        for &s in mapped {
             assert!(
                 both.uses
                     .iter()
@@ -2213,12 +2218,13 @@ fn opcodes(words: &[u32]) -> BTreeSet<u32> {
 
 /// `sps2_residency_probes` observes the residency of nearest and linear samples and a gather
 /// through clamp-to-zero constexpr samplers at level 0, every one inside Metal's measured footprint
-/// rule. On every device the module answers them from the texels Metal counts, through the tile map
-/// of both slots, which bind a sparse texture: no sparse access. `PrecisionNote::SparseResidency`
-/// stays only where the device has residency: there a sparse texture is a sparse image, whose
-/// blocks that hold no mapped tile a filtered sample reads as the device does.
+/// rule. Where the device has no `shaderResourceResidency` the module answers them from the texels
+/// Metal counts, through the tile map of both slots, which bind a sparse texture: no sparse
+/// access, and no note. Where it has, each is the device's sparse access, its residency the
+/// device's, recorded as `PrecisionNote::SparseResidency`, and the sampled slot has no tile map;
+/// the slot read alone keeps its own.
 #[test]
-fn a_sample_with_metals_footprint_is_answered_on_every_device() {
+fn a_sample_with_metals_footprint_is_answered_where_the_device_has_no_residency() {
     use crate::device::requirements::VkFeature;
     use crate::pipeline::artifact::PrecisionNote;
     use crate::pipeline::facts::RuntimeFact;
@@ -2243,11 +2249,12 @@ fn a_sample_with_metals_footprint_is_answered_on_every_device() {
             .enabled
             .features
             .contains(&VkFeature::ShaderResourceResidency);
-        for i in [0, 1] {
+        // Slot 1 is read alone, from its tile map on every device.
+        for (i, sampled) in [(0, true), (1, false)] {
             let fact = RuntimeFact::SparseTexture {
                 slot: slot(Stage::Kernel, SlotClass::Texture, i),
-                sparse_arm: false,
-                tile_map: true,
+                sparse_arm: sampled && residency,
+                tile_map: !(sampled && residency),
             };
             assert!(
                 p.dependencies.iter().any(|d| d.fact == fact),
@@ -2255,9 +2262,14 @@ fn a_sample_with_metals_footprint_is_answered_on_every_device() {
             );
         }
         let ops = opcodes(&p.stage.spirv);
-        assert!(!ops.contains(&SPARSE_SAMPLE_EXPLICIT_LOD), "{stem}");
-        assert!(!ops.contains(&SPARSE_GATHER), "{stem}");
-        assert!(!ops.contains(&SPARSE_FETCH), "{stem}");
+        assert_eq!(
+            ops.contains(&SPARSE_SAMPLE_EXPLICIT_LOD),
+            residency,
+            "{stem}"
+        );
+        assert_eq!(ops.contains(&SPARSE_GATHER), residency, "{stem}");
+        // The sampled slot's read through its sparse arm: one texel's residency, exact.
+        assert_eq!(ops.contains(&SPARSE_FETCH), residency, "{stem}");
         assert_eq!(
             p.stage
                 .precision_notes

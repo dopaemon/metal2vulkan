@@ -169,7 +169,7 @@ pub enum HeapSource {
 
 /// Every heap array class of `profile`, sorted and distinct: the image classes the core can declare
 /// there, then the sampler classes of every use (with comparison or without, of an integer texture
-/// or not, for a cube's explicit gradients or not).
+/// or not).
 pub fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass> {
     let mut out: Vec<HandleClass> = image_classes(profile)
         .into_iter()
@@ -177,13 +177,7 @@ pub fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass> {
         .collect();
     for compare in [false, true] {
         for integer in [false, true] {
-            for cube_gradient in [false, true] {
-                out.push(HandleClass::Sampler {
-                    compare,
-                    integer,
-                    cube_gradient,
-                });
-            }
+            out.push(HandleClass::Sampler { compare, integer });
         }
     }
     out.sort();
@@ -1146,14 +1140,10 @@ impl<'a> HeapPlanner<'a> {
         }
         let image = match class {
             HandleClass::Image(image) => image,
-            // The array's `VkSampler`s are made for its use: the comparison, the texel class, and
-            // a cube's explicit gradients in the isotropic form, which makes a listed anisotropic
-            // state isotropic.
-            HandleClass::Sampler {
-                compare,
-                integer,
-                cube_gradient,
-            } => return self.sampler_array(set, b, (compare, integer, cube_gradient)),
+            // The array's `VkSampler`s are made for its use: the comparison and the texel class.
+            HandleClass::Sampler { compare, integer } => {
+                return self.sampler_array(set, b, (compare, integer))
+            }
             HandleClass::FunctionTable => return self.function_table_array(set, b),
         };
         let expected = if image.access == ImageAccess::Storage {
@@ -1269,14 +1259,14 @@ impl<'a> HeapPlanner<'a> {
         })
     }
 
-    /// The writes of the sampler array `b` of set `set` for the use (`compare`, `integer`,
-    /// `cube_gradient`): element 0 the use's neutral sampler, element `i + 1` argument sampler `i`
-    /// made for the use, through the class's entries.
+    /// The writes of the sampler array `b` of set `set` for the use (`compare`, `integer`):
+    /// element 0 the use's neutral sampler, element `i + 1` argument sampler `i` made for the use,
+    /// through the class's entries.
     fn sampler_array(
         &self,
         set: u32,
         b: &DescriptorBinding,
-        (compare, integer, cube_gradient): (bool, bool, bool),
+        (compare, integer): (bool, bool),
     ) -> Result<Vec<DescriptorWrite>, BindError> {
         if b.ty != vk::DescriptorType::SAMPLER {
             return Err(internal(format!(
@@ -1307,7 +1297,6 @@ impl<'a> HeapPlanner<'a> {
                     index: element - 1,
                     compare,
                     integer,
-                    cube_gradient,
                 },
             ));
         }

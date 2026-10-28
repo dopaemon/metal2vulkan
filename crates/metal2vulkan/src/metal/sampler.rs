@@ -105,31 +105,14 @@ pub struct SamplerUse {
     /// The sampled texture has an integer format: border colors are then `INT_*`, and every
     /// filter is nearest.
     pub integer_texture: bool,
-    /// The shader samples a cube with explicit gradients through this use in the form a route
-    /// the device's description does not state takes, Metal's isotropic footprint (the major
-    /// axis alone), through a sampler that may be anisotropic: a runtime sampler's, or an
-    /// anisotropic constexpr one's. Its Vulkan sampler is isotropic ([`vk_sampler`]), so the
-    /// device filters that footprint (`PrecisionNote::CubeGradientFootprint`) where the function
-    /// does not emulate Metal's anisotropic filter, whose taps read explicit levels.
-    pub cube_gradient: bool,
 }
 
 impl SamplerUse {
-    /// A use with the given comparison and texture numeric type, without explicit cube
-    /// gradients.
+    /// A use with the given comparison and texture numeric type.
     pub fn new(compare: bool, integer_texture: bool) -> SamplerUse {
         SamplerUse {
             compare,
             integer_texture,
-            cube_gradient: false,
-        }
-    }
-
-    /// This use, sampling a cube with explicit gradients or not.
-    pub fn with_cube_gradient(self, cube_gradient: bool) -> SamplerUse {
-        SamplerUse {
-            cube_gradient,
-            ..self
         }
     }
 }
@@ -214,17 +197,6 @@ pub(crate) fn query_min_level(desc: &SamplerDescriptor) -> u32 {
     }
 }
 
-/// Whether a sampler `desc` used as `use_` takes its level clamp on Metal's grid, so that a level
-/// on that grid handed to it reads Metal's level and weight: a sampler of a texture whose texels
-/// are filtered (not an integer one), with a nearest or linear mip filter, one filter for
-/// minification and magnification (so the level's sign chooses nothing), and no anisotropy.
-pub(crate) fn clamps_on_grid(desc: &SamplerDescriptor, use_: SamplerUse) -> bool {
-    !use_.integer_texture
-        && desc.mip_filter != SamplerMipFilter::NotMipmapped
-        && desc.min_filter == desc.mag_filter
-        && desc.max_anisotropy <= 1
-}
-
 /// Whether a sampler of `shape` (the descriptor's facts, [`SamplerDescriptor::shape`]) used as
 /// `use_` can be a Vulkan sampler on `profile`. The binder's plan checks the bound shape with this
 /// at plan time for the binding's use; [`vk_sampler`] checks its descriptor with it, so the two
@@ -268,16 +240,14 @@ pub fn check_sampler(
 /// [`check_sampler`] for a sampler an argument buffer lists, which a function reads without
 /// knowing its state: anisotropy above 1 without `samplerAnisotropy` is refused too, since such a
 /// function neither emulates Metal's anisotropic filter through it nor records the isotropic
-/// filter its Vulkan sampler takes there (`lower::sampler::anisotropic`'s reach), but on a use with
-/// explicit cube gradients, whose sampler is isotropic on every device
-/// ([`SamplerUse::cube_gradient`]).
+/// filter its Vulkan sampler takes there (`lower::sampler::anisotropic`'s reach).
 pub(crate) fn check_argument_sampler(
     shape: &SamplerShape,
     use_: SamplerUse,
     profile: &DeviceProfile,
 ) -> Result<(), Error> {
     check_sampler(shape, use_, profile)?;
-    if shape.anisotropic && !use_.cube_gradient && !profile.fields().images.sampler_anisotropy {
+    if shape.anisotropic && !profile.fields().images.sampler_anisotropy {
         return Err(Unsupported::needs(
             Feature::SamplerAnisotropy,
             Capability::Feature(VkFeature::SamplerAnisotropy),
@@ -325,19 +295,11 @@ pub(crate) fn vk_filtering(
 /// filters its clamp is `[0, 0]`, where that sampler reads Metal's `NotMipmapped`. With filters
 /// that differ there, no clamp reads Metal's answer (`docs/FAST-PATHS.md`, known gaps).
 ///
-/// Its level clamp is Metal's on Metal's level grid for a texture whose texels it filters, with a
-/// mip filter. Under a nearest mip filter each bound is the level the filter reads at it (Metal
-/// truncates the level's fraction onto sixty-fourths and reads the next level past one half); under
-/// a linear one each bound is truncated onto sixty-fourths. Metal's rule is monotone in the level,
-/// so a level clamped into these bounds reads what Metal reads of the level clamped into the
-/// descriptor's. A fragment function's `calculate_clamped_lod` answers the level so clamped for
-/// every sampler, whatever its filters and anisotropy (on an M4), so the bounds are on the grid for
-/// every such sampler, with one exception where the min and mag filters differ or the sampler is
-/// anisotropic (`clamps_on_grid` false): a bound above 0 whose grid value is 0 stays as given,
-/// since Vulkan reads the mag filter at a clamped level of 0 where Metal reads the min filter at a
-/// level above 0. Every sample keeps the device's level, so the bounds on the grid are expected to
-/// read closer to Metal's level, unmeasured. An integer texture's sampler
-/// keeps the descriptor's clamp, its lower bound at least 0.
+/// Its level clamp is the descriptor's, its lower bound at least 0: the device clamps its own level
+/// into it and selects and blends levels at its own precision (`PrecisionNote::DeviceSampling` off
+/// Metal's own sampler). Metal truncates the clamped level's fraction onto sixty-fourths and reads
+/// a nearest mip filter's next level past one half; MoltenVK hands the clamp to Metal's sampler,
+/// which does so itself.
 ///
 /// Refusals are [`check_sampler`]'s, for the descriptor's shape and the use.
 pub fn vk_sampler(
@@ -380,18 +342,6 @@ pub fn vk_sampler(
     } else {
         vk::SamplerMipmapMode::LINEAR
     };
-    // The clamp is Metal's on its level grid: a nearest mip filter's bounds are the levels it reads
-    // at them, a linear one's are truncated onto sixty-fourths. Where the filters differ or the
-    // sampler is anisotropic (`clamps_on_grid` false), a bound above 0 whose grid value is 0 stays
-    // as given, so the device's level stays above 0 and keeps Metal's minification filter there.
-    let grid = clamps_on_grid(desc, use_);
-    let on_grid = |bound: f32, level: f32| {
-        if !grid && bound > 0.0 && level <= 0.0 {
-            bound
-        } else {
-            level
-        }
-    };
     // Metal's own sampler (MoltenVK) handed anisotropy reads a sampler without a mip filter whose
     // filters agree as Metal's `NotMipmapped` at the clamp `[0, 0]`, whatever the descriptor's
     // clamps, and otherwise at none it takes: a bound of a sixty-fourth or more (`0.25` included)
@@ -414,20 +364,8 @@ pub fn vk_sampler(
             let (min_lod, max_lod) = not_mipmapped_lods(lo, hi);
             (vk::SamplerMipmapMode::NEAREST, min_lod, max_lod)
         }
-        SamplerMipFilter::Nearest if use_.integer_texture => {
-            (vk::SamplerMipmapMode::NEAREST, lo.max(0.0), hi)
-        }
-        SamplerMipFilter::Nearest => (
-            vk::SamplerMipmapMode::NEAREST,
-            on_grid(lo, nearest_level(lo) as f32),
-            on_grid(hi, nearest_level(hi) as f32),
-        ),
-        SamplerMipFilter::Linear if use_.integer_texture => (linear_mip, lo.max(0.0), hi),
-        SamplerMipFilter::Linear => (
-            linear_mip,
-            on_grid(lo, level_on_grid(lo)),
-            on_grid(hi, level_on_grid(hi)),
-        ),
+        SamplerMipFilter::Nearest => (vk::SamplerMipmapMode::NEAREST, lo.max(0.0), hi),
+        SamplerMipFilter::Linear => (linear_mip, lo.max(0.0), hi),
     };
     let filter = |f| {
         if use_.integer_texture {
@@ -461,9 +399,8 @@ pub fn vk_sampler(
 /// Anisotropy is a quality bound in both APIs; Vulkan requires it within the limit. It is a
 /// filter, so an integer texture has none. A sampler with a nearest min or mag filter is handed
 /// its degree too: Vulkan leaves the anisotropic scheme to the implementation (ANV's filters a
-/// nearest one linearly). A use with explicit cube gradients in the isotropic form
-/// ([`SamplerUse::cube_gradient`]) is handed none, and so is every sampler on a device without
-/// `samplerAnisotropy`, where the emulation's taps read the isotropic sampler
+/// nearest one linearly). A sampler on a device without `samplerAnisotropy` is handed none, where
+/// the emulation's taps read the isotropic sampler
 /// (`VUID-VkSamplerCreateInfo-anisotropyEnable-01070`: "If the samplerAnisotropy feature is not
 /// enabled, anisotropyEnable must be VK_FALSE").
 pub(crate) fn device_anisotropy(
@@ -471,10 +408,7 @@ pub(crate) fn device_anisotropy(
     use_: SamplerUse,
     profile: &DeviceProfile,
 ) -> bool {
-    desc.max_anisotropy > 1
-        && profile.fields().images.sampler_anisotropy
-        && !use_.cube_gradient
-        && !use_.integer_texture
+    desc.max_anisotropy > 1 && profile.fields().images.sampler_anisotropy && !use_.integer_texture
 }
 
 /// [`device_anisotropy`] of an anisotropic sampler under `use_` on `profile`, by the filters a
@@ -1629,15 +1563,13 @@ mod tests {
         assert_eq!(s.max_anisotropy, None, "isotropic without the feature");
         let s = vk_sampler(&aniso, SamplerUse::default(), all.profile()).unwrap();
         assert_eq!(s.max_anisotropy, Some(16.0), "clamped to the device limit");
-        // An argument buffer's sampler needs the feature, but for a cube's explicit gradients.
+        // An argument buffer's sampler needs the feature.
         let shape = aniso.shape();
         let err = check_argument_sampler(&shape, SamplerUse::default(), none.profile());
         assert_eq!(
             feature(err.unwrap_err()),
             needs(VkFeature::SamplerAnisotropy)
         );
-        let gradients = SamplerUse::default().with_cube_gradient(true);
-        assert!(check_argument_sampler(&shape, gradients, none.profile()).is_ok());
         assert!(check_argument_sampler(&shape, SamplerUse::default(), all.profile()).is_ok());
         for (p, compare) in [(&none, false), (&none, true), (&all, false), (&all, true)] {
             let s = vk_sampler(&minmax, SamplerUse::new(compare, false), p.profile()).unwrap();
@@ -2212,13 +2144,10 @@ mod tests {
         );
     }
 
-    /// A sampler's word holds the levels a nearest mip filter reads at its clamp (the default
-    /// clamp's are the word 0's), and a sampler taking one filter both ways, isotropic, of a
-    /// filtered texture, takes its clamp on Metal's grid: a nearest mip filter's those levels, a
-    /// linear one's the bounds truncated onto sixty-fourths. Every other sampler keeps its clamp as
-    /// given.
+    /// A sampler's word holds the levels a nearest mip filter reads at its clamp on Metal's grid
+    /// (the default clamp's are the word 0's).
     #[test]
-    fn a_samplers_clamp_is_metals_on_its_level_grid() {
+    fn a_samplers_word_holds_metals_levels_on_its_grid() {
         let levels = SamplerWord::LEVEL_MIN | SamplerWord::LEVEL_MAX;
         assert_eq!(SamplerWord::of(&metal_default()).0 & levels, 0);
         let below_33 = (33.0f32 / 64.0).next_down();
@@ -2242,7 +2171,6 @@ mod tests {
         assert_eq!(level_on_grid(below_33), 0.5);
         assert_eq!(level_on_grid(f32::MAX), f32::MAX);
 
-        let dev = device(&[VkFeature::SamplerAnisotropy], &[]);
         let mut d = metal_default();
         d.mip_filter = SamplerMipFilter::Nearest;
         d.lod_min_clamp = 0.6;
@@ -2253,81 +2181,51 @@ mod tests {
             LAST_WORD_LEVEL - ((w >> SamplerWord::LEVEL_MAX_SHIFT) & 0xf),
             3
         );
+    }
+
+    /// The device is handed the descriptor's level clamp, its lower bound at least 0, whatever the
+    /// mip filter, the filters, the anisotropy and the use: it clamps and selects its own level.
+    #[test]
+    fn a_samplers_clamp_is_the_descriptors() {
+        let dev = device(&[VkFeature::SamplerAnisotropy], &[]);
         let lods = |d: &SamplerDescriptor, use_| {
             let s = vk_sampler(d, use_, dev.profile()).unwrap();
             (s.min_lod, s.max_lod)
         };
-        assert_eq!(lods(&d, SamplerUse::default()), (1.0, 3.0));
-        d.mip_filter = SamplerMipFilter::Linear;
-        assert_eq!(lods(&d, SamplerUse::default()), (38.0 / 64.0, 172.0 / 64.0));
-        // Both filters linear alike; and with a comparison.
-        d.min_filter = SamplerMinMagFilter::Linear;
-        d.mag_filter = SamplerMinMagFilter::Linear;
-        assert_eq!(
-            lods(&d, SamplerUse::new(true, false)),
-            (38.0 / 64.0, 172.0 / 64.0)
-        );
-        // An integer texture's sampler keeps the clamp as given.
-        assert_eq!(lods(&d, SamplerUse::new(false, true)), (0.6, 2.7));
-        // Filters that differ, and anisotropy, take the grid too: Metal's fragment
-        // `calculate_clamped_lod` answers the level clamped on it through every sampler.
-        d.mag_filter = SamplerMinMagFilter::Nearest;
-        assert!(!clamps_on_grid(&d, SamplerUse::default()));
-        assert_eq!(lods(&d, SamplerUse::default()), (38.0 / 64.0, 172.0 / 64.0));
-        d.min_filter = SamplerMinMagFilter::Nearest;
-        d.max_anisotropy = 4;
-        assert_eq!(lods(&d, SamplerUse::default()), (38.0 / 64.0, 172.0 / 64.0));
-        d.mip_filter = SamplerMipFilter::Nearest;
-        d.lod_min_clamp = 2.505;
-        d.lod_max_clamp = f32::MAX;
-        assert_eq!(
-            lods(&d, SamplerUse::default()),
-            (2.0, LAST_WORD_LEVEL as f32)
-        );
-        assert!(!clamps_on_grid(&metal_default(), SamplerUse::default()));
-    }
-
-    /// Where the min and mag filters differ or the sampler is anisotropic, a bound above 0 whose
-    /// grid value is 0 stays as given, so the device's level stays above 0 (Vulkan's minification)
-    /// exactly where Metal's is; every other bound is on Metal's grid.
-    #[test]
-    fn a_bound_off_the_grid_keeps_metals_filter_choice() {
-        let dev = device(&[VkFeature::SamplerAnisotropy], &[]);
-        for (minf, magf, aniso) in [
-            (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Nearest, 1),
-            (SamplerMinMagFilter::Nearest, SamplerMinMagFilter::Linear, 1),
-            (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Linear, 4),
-        ] {
-            for (mip, lo, hi, min_lod, max_lod) in [
-                (SamplerMipFilter::Linear, 0.01, f32::MAX, 0.01, f32::MAX),
-                (SamplerMipFilter::Linear, 0.01, 0.012, 0.01, 0.012),
+        for mip in [SamplerMipFilter::Nearest, SamplerMipFilter::Linear] {
+            for (minf, magf, aniso) in [
                 (
-                    SamplerMipFilter::Linear,
-                    1.3,
-                    2.7,
-                    83.0 / 64.0,
-                    172.0 / 64.0,
+                    SamplerMinMagFilter::Nearest,
+                    SamplerMinMagFilter::Nearest,
+                    1,
                 ),
-                (SamplerMipFilter::Linear, 0.0, 0.3, 0.0, 19.0 / 64.0),
-                (SamplerMipFilter::Nearest, 0.3, 0.4, 0.3, 0.4),
-                (SamplerMipFilter::Nearest, 0.3, 2.7, 0.3, 3.0),
-                (SamplerMipFilter::Nearest, 2.5, 2.5, 2.0, 2.0),
-                (SamplerMipFilter::Nearest, 0.0, 0.5, 0.0, 0.5),
+                (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Linear, 1),
+                (SamplerMinMagFilter::Linear, SamplerMinMagFilter::Nearest, 1),
+                (
+                    SamplerMinMagFilter::Nearest,
+                    SamplerMinMagFilter::Nearest,
+                    4,
+                ),
             ] {
-                let mut d = metal_default();
-                (d.min_filter, d.mag_filter, d.max_anisotropy) = (minf, magf, aniso);
-                (d.mip_filter, d.lod_min_clamp, d.lod_max_clamp) = (mip, lo, hi);
-                let s = vk_sampler(&d, SamplerUse::default(), dev.profile()).unwrap();
-                let what = format!("{minf:?}/{magf:?} x{aniso} {mip:?} [{lo}, {hi}]");
-                assert_eq!((s.min_lod, s.max_lod), (min_lod, max_lod), "{what}");
-                // The device's level at a level `l`: minification exactly where Metal's is.
-                for l in [-1.0f32, 0.0, 0.005, 0.25, 0.5, 1.0, 3.0] {
-                    let device = l.clamp(s.min_lod, s.max_lod) > 0.0;
-                    let metal = l.max(lo).min(hi) > 0.0;
-                    assert_eq!(device, metal, "{what} at {l}");
+                for (lo, hi) in [(0.6, 2.7), (0.01, 0.012), (2.505, f32::MAX), (0.0, 0.3)] {
+                    let mut d = metal_default();
+                    (d.min_filter, d.mag_filter, d.max_anisotropy) = (minf, magf, aniso);
+                    (d.mip_filter, d.lod_min_clamp, d.lod_max_clamp) = (mip, lo, hi);
+                    let what = format!("{minf:?}/{magf:?} x{aniso} {mip:?} [{lo}, {hi}]");
+                    for use_ in [
+                        SamplerUse::default(),
+                        SamplerUse::new(true, false),
+                        SamplerUse::new(false, true),
+                    ] {
+                        assert_eq!(lods(&d, use_), (lo, hi), "{what} {use_:?}");
+                    }
                 }
             }
         }
+        let mut d = metal_default();
+        d.mip_filter = SamplerMipFilter::Linear;
+        d.lod_min_clamp = -1.0;
+        assert_eq!(lods(&d, SamplerUse::default()).0, 0.0);
     }
 
     #[test]
@@ -2403,9 +2301,8 @@ mod tests {
     /// (`lower::sampler::anisotropic`'s `minified_level`): a runtime sampler's by the filters its
     /// word states (`device_anisotropy_by_filters`), which must be `vk_sampler`'s own flag
     /// (`anisotropyEnable`, `max_anisotropy` set) for every sampler a word of those filters
-    /// states, on every committed profile, for every use the emulation reaches (no comparison, no
-    /// integer texture, with or without explicit cube gradients in the isotropic form), whatever
-    /// the sampler's other fields.
+    /// states, on every committed profile, for the use the emulation reaches (no comparison, no
+    /// integer texture), whatever the sampler's other fields.
     #[test]
     fn the_word_filters_state_the_device_samplers_anisotropy() {
         use SamplerMinMagFilter as F;
@@ -2415,8 +2312,8 @@ mod tests {
             desc.features.insert(VkFeature::SamplerAnisotropy);
             desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
             let dev = Device::new(desc, DevicePolicy::default()).unwrap();
-            for cube_gradient in [false, true] {
-                let use_ = SamplerUse::new(false, false).with_cube_gradient(cube_gradient);
+            {
+                let use_ = SamplerUse::new(false, false);
                 let (linear, nearest) = device_anisotropy_by_filters(use_, dev.profile());
                 for (min, mag) in [
                     (F::Nearest, F::Nearest),

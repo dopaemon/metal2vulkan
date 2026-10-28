@@ -2236,9 +2236,8 @@ fn a_heap_texture_samples_through_a_runtime_sampler() {
 
 /// A cube's explicit gradients through a sampler loaded from an argument buffer: the sample takes
 /// Metal's footprint as a slot's does (`PrecisionNote::CubeGradientFootprint`), the isotropic or
-/// the anisotropic form by its table entry's word, through the set-1 sampler array of its own use.
-/// Every committed profile's route is measured, so the class carries no cube-gradient bit and the
-/// plan takes an anisotropic listed sampler for it (`engine_heap_binder`). On a driver that
+/// the anisotropic form by its table entry's word, through the set-1 sampler array of its own use,
+/// and the plan takes an anisotropic listed sampler for it (`engine_heap_binder`). On a driver that
 /// hands a compute pipeline's cube gradients to Metal's `gradientcube` (`CubeGradientRoute::Metal`)
 /// the kernel hands Metal's own, exactly, through any sampler: no note. Every profile with the
 /// sampled heap compiles it and passes L3; it was `ArgumentBufferTextures NotImplemented` before.
@@ -2309,7 +2308,6 @@ declare { <4 x float>, i8 } @air.sample_texture_cube_grad.v4f32(ptr addrspace(1)
             vec![HandleClass::Sampler {
                 compare: false,
                 integer: false,
-                cube_gradient: false,
             }],
             "{stem}"
         );
@@ -4215,20 +4213,14 @@ fn argument_samplers_fixture() -> Option<Vec<u8>> {
     }
 }
 
-/// The sampler uses `(compare, integer)` of the set-1 sampler arrays a module declares; none of
-/// the fixture's entries samples a cube with explicit gradients.
+/// The sampler uses `(compare, integer)` of the set-1 sampler arrays a module declares.
 fn sampler_arrays(a: &FunctionArtifact) -> Vec<(bool, bool)> {
     let mut out: Vec<(bool, bool)> = a
         .interface
         .descriptors
         .iter()
         .filter_map(|d| match d.slot.kind {
-            ResourceKind::Heap(HandleClass::Sampler {
-                compare,
-                integer,
-                cube_gradient,
-            }) => {
-                assert!(!cube_gradient, "a cube-gradient sampler array");
+            ResourceKind::Heap(HandleClass::Sampler { compare, integer }) => {
                 Some((compare, integer))
             }
             _ => None,

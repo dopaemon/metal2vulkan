@@ -1116,7 +1116,6 @@ mod bind_serde_round_trips {
                         class: crate::pipeline::sym::HandleClass::Sampler {
                             compare: false,
                             integer: false,
-                            cube_gradient: false,
                         },
                         element: 5,
                         source: HeapSource::Used(3),

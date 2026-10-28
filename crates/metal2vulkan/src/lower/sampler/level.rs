@@ -44,11 +44,11 @@
 //!
 //! **A runtime or argument buffer's sampler** holds its clamp as `f32`s, not `half`s (Apple M4 on
 //! macOS 27.0.1: all 37,080 lanes of `level(x)` and a kernel's `bias(x)` through eighteen clamps,
-//! nearest and linear filters and mip filters). The function does not know the clamp; the
-//! `VkSampler` holds it on Metal's grid instead where the sampler takes one filter both ways and no
-//! anisotropy (`metal::sampler::clamps_on_grid`): the level a nearest mip filter reads at each
-//! bound, or the bound truncated onto sixty-fourths under a linear one. The function reads a
-//! nearest mip filter's level within the levels the word's clamp leaves ([`word_level`]).
+//! nearest and linear filters and mip filters). The function reads a nearest mip filter's level
+//! within the levels the word's clamp leaves ([`word_level`]), and a linear one's from the
+//! clamp's minimum on Metal's grid (`SpecKey::SamplerMinLevel`). A sample the device makes is
+//! clamped by the device into the `VkSampler`'s clamp, the descriptor's
+//! (`metal::sampler::vk_sampler`).
 
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::texel_round::{self, HalfRounding};

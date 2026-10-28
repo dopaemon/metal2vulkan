@@ -24,7 +24,6 @@ use crate::air::abi::{Filter, MipFilter, SamplerState};
 use crate::error::Error;
 use crate::lower::select::{any_of, NoteClause, NoteOn, NoteTest, SelectCx};
 use crate::lower::texture::{ImageRef, TexelConv, TexelForm};
-use crate::metal::sampler::SamplerWord;
 use crate::metal::texel_format::{PackedTexels, TexelFormat};
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::SamplerRef;
@@ -109,22 +108,6 @@ pub(super) fn metal_filtered_ycbcr(cx: &SelectCx<'_>, image: ImageRef) -> Option
             .map(|p| NoteTest::equal(NoteOn::Bound(index), TexelFormat::PACKED_MASK, p.class().0)),
         )
     })
-}
-
-/// Where runtime sampler slot `n`'s word states a sampler that filters: a linear minification or
-/// magnification filter, a linear mip filter, or anisotropy, any of which [`unfiltered`]'s single
-/// texel of one level excludes.
-pub(crate) fn word_filters(n: u32) -> Vec<NoteClause> {
-    let on = NoteOn::Sampler(n);
-    any_of(
-        [
-            SamplerWord::MIN_LINEAR,
-            SamplerWord::MAG_LINEAR,
-            2 << SamplerWord::MIP_FILTER_SHIFT,
-            SamplerWord::ANISOTROPIC,
-        ]
-        .map(|bit| NoteTest::differ(on, bit, 0)),
-    )
 }
 
 /// Whether a sample through sampler `s` reads one texel of one level, its value unfiltered:

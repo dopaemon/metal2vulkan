@@ -18,19 +18,20 @@
 //!
 //! A clamp-to-edge axis reads the texel clamped into the level, which counts; a clamp-to-zero or
 //! clamp-to-border axis's texel outside the level is the border, which is no texel (Metal answers
-//! resident across it; fd292944 measured both modes). [`of`] states where the rule decides the footprint: a constexpr normalized sampler, no
-//! comparison or anisotropy (a lowered sampler's reduction is the weighted average), one filter for
-//! minification and magnification, clamp addressing, level 0 (the sampler not mipmapped, or a
-//! level-0 sample whose sampler neither biases nor clamps the level), and no texel offset.
-//! Elsewhere (a runtime sampler, mip levels, repeat or mirrored addressing, an offset, none of them
-//! measured) the footprint is the device's, as before.
+//! resident across it; fd292944 measured both modes). [`of`] states where the rule decides the
+//! footprint: a constexpr normalized sampler, no comparison or anisotropy (a lowered sampler's
+//! reduction is the weighted average), one filter for minification and magnification, clamp
+//! addressing, level 0 (the sampler not mipmapped, or a level-0 sample whose sampler neither
+//! biases nor clamps the level), and no texel offset. Elsewhere (a runtime sampler, mip levels,
+//! repeat or mirrored addressing, an offset, none of them measured) no tile map answers the
+//! access. The rule is the residency of a device without residency code of its own (no
+//! `shaderResourceResidency`), whose slot's tile map answers it; a device with it answers a
+//! sample's or gather's residency itself (its `OpImageSparse*` word,
+//! `PrecisionNote::SparseResidency`), and selection asks for no rule there.
 //!
 //! [`word`] emits the status word of such an access: the residency of each counted texel at
-//! level 0, through the slot's sparse arm (`OpImageSparseFetch` of the texel) or its tile map,
-//! under the slot's `SparseTexture` specialization, and the residency of each texel; the sample
-//! itself is the device's plain sample. Where the bound texture is a sparse image, a nearest
-//! sample's or a gather's texel that is not resident then reads zero, Metal's unmapped value,
-//! before the slot's constant lanes are set (`emit::unmapped_value`).
+//! level 0, through the slot's tile map, under the slot's `SparseTexture` specialization, and the
+//! residency of each texel; the sample itself is the device's plain sample.
 
 use crate::air::abi::SamplerState;
 use crate::air::abi::{AddressMode, Coordinates, Filter, MipFilter};
@@ -43,7 +44,7 @@ use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value as SValue;
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, GlslOp, ImageOperands, ImageQuery, Type as SType, UnOp,
+    BinOp, ConstBits, Constant, ConvOp, GlslOp, ImageQuery, Type as SType, UnOp,
 };
 
 use super::{Lod, SampleOp};
@@ -139,14 +140,6 @@ pub fn of(
         _ => return None,
     };
     Some(Footprint { kind, axes, border })
-}
-
-/// Where an access reads a texel's residency: the slot's sparse arm (the combined binding's
-/// variable, a fetch of the texel), or its tile map.
-#[derive(Clone, Copy, Debug)]
-pub enum Probe {
-    Sparse,
-    Tiled(View),
 }
 
 /// Whether an axis's `i0 + 1` is in the footprint.
@@ -289,85 +282,43 @@ pub struct Site {
     pub layer: Option<SValue>,
 }
 
-/// The status word of a sample or gather and the residency of its texels ([`counted`]).
-pub struct Counted {
-    /// The status word (a `u32`): 1 where a texel Metal counts is not resident, else 0.
-    pub word: SValue,
-    /// Per texel of the footprint, in [`Footprint::texels`]' order, whether it is resident as
-    /// far as the word goes (a `bool`): a texel that does not count (its weight 0, or the
-    /// border) is.
-    pub resident: Vec<SValue>,
-}
-
-impl Footprint {
-    /// The texels of the footprint, each a combination of each axis's texels: bit `a` of a
-    /// combination picks axis `a`'s `i0 + 1` over its `i0`. A nearest filter reads combination 0
-    /// alone; a linear filter and a gather read every one, a 2D gather's taps `x`, `y`, `z` and
-    /// `w` (`(i0, j0 + 1)`, `(i0 + 1, j0 + 1)`, `(i0 + 1, j0)`, `(i0, j0)`) its combinations 2,
-    /// 3, 1 and 0 ([`GATHER_TEXELS`]).
-    pub fn texels(&self) -> usize {
-        match self.kind {
-            Kind::Nearest => 1,
-            Kind::Linear | Kind::Gather => 1 << self.axes,
-        }
-    }
-}
-
-/// The combination ([`Footprint::texels`]) of each tap of a 2D gather, in its lanes' order.
-pub const GATHER_TEXELS: [usize; 4] = [2, 3, 1, 0];
-
 /// The status word of a sample or gather with footprint `fp` at `site`, on a slot whose
-/// `SparseTexture` specialization is `spec`, and the residency of each of its texels:
-/// [`counted`]'s where the bound texture is sparse, and 0 and every texel resident where it is
-/// not.
+/// `SparseTexture` specialization is `spec` and whose tile map is `map`: [`counted`]'s where the
+/// bound texture is sparse, and 0 where it is not.
 pub fn word(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     fp: Footprint,
     spec: SValue,
-    probe: Probe,
+    map: View,
     site: Site,
-) -> BResult<Counted> {
-    let n = fp.texels();
+) -> BResult<SValue> {
     let sparse: ArmFn<'_, ()> = Box::new(move |fb, _| {
-        let c = counted(fb, fp, probe, site)?;
-        Ok(ArmEnd::FallThrough(
-            std::iter::once(c.word).chain(c.resident).collect(),
-        ))
+        let word = counted(fb, fp, map, site)?;
+        Ok(ArmEnd::FallThrough(vec![word]))
     });
     let plain: ArmFn<'_, ()> = Box::new(move |fb, _| {
         let word = u32_const(fb, 0)?;
-        let b = fb.module().ty(SType::Bool)?;
-        let yes = fb.module().constant(Constant::Scalar {
-            ty: b,
-            bits: ConstBits(1),
-        })?;
-        let yes = fb.module().const_value(yes)?;
-        Ok(ArmEnd::FallThrough(
-            std::iter::once(word)
-                .chain(std::iter::repeat_n(yes, n))
-                .collect(),
-        ))
+        Ok(ArmEnd::FallThrough(vec![word]))
     });
     let Merged(merged) = fb.if_(&mut (), spec, sparse, Some(plain))?;
-    match merged.split_first() {
-        Some((&word, resident)) if resident.len() == n => Ok(Counted {
-            word,
-            resident: resident.to_vec(),
-        }),
-        _ => Err(cx.fail("a footprint arm without its word and texels")),
+    match merged[..] {
+        [word] => Ok(word),
+        _ => Err(cx.fail("a footprint arm without its word")),
     }
 }
 
 /// The status word (a `u32`) of a sample or gather of a sparse texture with footprint `fp` at
-/// `site`: 1 where a texel Metal counts is not resident at level 0, read through `probe`, else 0;
-/// and the residency of each texel of the footprint ([`Counted::resident`]).
+/// `site`: 1 where a texel Metal counts is not resident at level 0, read through tile map `map`,
+/// else 0. The footprint's texels are each a combination of each axis's texels: bit `a` of a
+/// combination picks axis `a`'s `i0 + 1` over its `i0`; a nearest filter reads combination 0
+/// alone, a linear filter and a gather every one.
 pub fn counted(
     fb: &mut FunctionBuilder<'_>,
     fp: Footprint,
-    probe: Probe,
+    map: View,
     site: Site,
-) -> BResult<Counted> {
+) -> BResult<SValue> {
     let Site {
         binding,
         coord,
@@ -396,16 +347,13 @@ pub fn counted(
     };
     // Each axis's texels, once: `i0`, and `i0 + 1` where the footprint has it, each clamped into
     // the level, with whether it counts (its weight is not 0, and it is not the border).
-    let tiles = match probe {
-        Probe::Tiled(map) => Some(TileLevel::new(fb, map, zero, slice.unwrap_or(zero))?),
-        Probe::Sparse => None,
-    };
+    let tiles = TileLevel::new(fb, map, zero, slice.unwrap_or(zero))?;
     let mut picks: Vec<Vec<Pick>> = Vec::with_capacity(axes.len());
     for (a, ax) in axes.iter().enumerate() {
         let border = fp.border.get(a).copied().unwrap_or(false);
         let mut both = Vec::with_capacity(2);
         let (t, inside) = texel(fb, ax.i0, ax.size, border)?;
-        both.push(pick(fb, tiles.as_ref(), a, t, inside)?);
+        both.push(pick(fb, &tiles, a, t, inside)?);
         if !matches!(ax.second, Second::No) {
             let one = i32_const(fb, 1)?;
             let i = fb.binary(BinOp::IAdd, ax.i0, one)?;
@@ -417,19 +365,18 @@ pub fn counted(
                 (Second::If(weighed), None) => Some(weighed),
                 (_, inside) => inside,
             };
-            both.push(pick(fb, tiles.as_ref(), a, t, counts)?);
+            both.push(pick(fb, &tiles, a, t, counts)?);
         }
         picks.push(both);
     }
     // A 2D texture's tiles are in its one z tile.
-    let tz = match &tiles {
-        Some(l) if picks.len() < 3 => Some(l.tile(fb, 2, zero)?),
-        _ => None,
+    let tz = match picks.len() < 3 {
+        true => Some(tiles.tile(fb, 2, zero)?),
+        false => None,
     };
     // Every combination of each axis's texels (bit `a` of `combo` picks axis `a`'s second); a
     // combination that picks a second an axis lacks is not in the footprint.
     let mut all: Option<SValue> = None;
-    let mut resident_texels = Vec::with_capacity(fp.texels());
     for combo in 0..(1usize << picks.len()) {
         let chosen: Option<Vec<Pick>> = picks
             .iter()
@@ -445,33 +392,11 @@ pub fn counted(
                 counts = Some(and(fb, counts, c)?);
             }
         }
-        let resident = match (&tiles, probe) {
-            (Some(l), _) => {
-                let mut at = [tz.unwrap_or(zero); 3];
-                for (slot, p) in at.iter_mut().zip(&chosen) {
-                    *slot = p.tile.unwrap_or(zero);
-                }
-                l.mapped(fb, at)?
-            }
-            (None, _) => {
-                let u = fb.module().ty(SType::Int {
-                    width: 32,
-                    signed: false,
-                })?;
-                let mut parts: Vec<SValue> = chosen.iter().map(|p| p.texel).collect();
-                parts.extend(slice);
-                let n = u8::try_from(parts.len()).unwrap_or(u8::MAX);
-                let ty = fb.module().ty(SType::Vector { elem: u, len: n })?;
-                let at = fb.composite_construct(ty, &parts)?;
-                let ops = ImageOperands {
-                    lod: Some(zero),
-                    ..ImageOperands::default()
-                };
-                let r = fb.sparse_fetch(img, at, &ops)?;
-                let code = fb.composite_extract(r, &[0])?;
-                fb.texels_resident(code)?
-            }
-        };
+        let mut at = [tz.unwrap_or(zero); 3];
+        for (slot, p) in at.iter_mut().zip(&chosen) {
+            *slot = p.tile;
+        }
+        let resident = tiles.mapped(fb, at)?;
         // A texel that does not count is resident as far as the word goes.
         let ok = match counts {
             Some(c) => {
@@ -481,43 +406,32 @@ pub fn counted(
             None => resident,
         };
         all = Some(and(fb, all, ok)?);
-        resident_texels.push(ok);
     }
     // Combination 0 (every axis's `i0`) is always in the footprint, so `all` is set.
     let one = u32_const(fb, 1)?;
-    let word = match all {
-        Some(all) => fb.select(all, zero, one)?,
-        None => zero,
-    };
-    Ok(Counted {
-        word,
-        resident: resident_texels,
-    })
+    match all {
+        Some(all) => fb.select(all, zero, one),
+        None => Ok(zero),
+    }
 }
 
-/// One texel of an axis of the footprint: its coordinate clamped into the level, its tile under a
-/// tile map, and whether it counts (`None`: always).
+/// One texel of an axis of the footprint: its tile in the tile map, and whether it counts
+/// (`None`: always).
 #[derive(Clone, Copy)]
 struct Pick {
-    texel: SValue,
-    tile: Option<SValue>,
+    tile: SValue,
     counts: Option<SValue>,
 }
 
 fn pick(
     fb: &mut FunctionBuilder<'_>,
-    tiles: Option<&TileLevel>,
+    tiles: &TileLevel,
     axis: usize,
     texel: SValue,
     counts: Option<SValue>,
 ) -> BResult<Pick> {
-    let tile = match tiles {
-        Some(l) => Some(l.tile(fb, axis, texel)?),
-        None => None,
-    };
     Ok(Pick {
-        texel,
-        tile,
+        tile: tiles.tile(fb, axis, texel)?,
         counts,
     })
 }
