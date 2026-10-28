@@ -13,7 +13,7 @@
 //! samples through views a pass makes for itself, and no pass is kept.
 
 use super::buffer_with;
-use super::resolves::{color_pass, lane, quiet, Lane, FULL, MASKED};
+use super::resolves::{color_pass, lane, quiet, twin_resolved, Lane, FULL, MASKED};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_runtime::{BlitOption, ClearColor, StoreAction, Texture, WorkCounts};
 
@@ -37,17 +37,23 @@ fn resolve(lane: &Lane, msaa: &Texture, target: &Texture, clear: f64) -> WorkCou
     lane.device.work_counts()
 }
 
-/// Whether every texel of `target` is Metal's resolve into the twin of samples 0 and 1 white over
-/// a clear to `clear` (0 or 1): each color channel's codes decoded, averaged in linear space and
+/// Hold every texel of `target` to Metal's resolve into the twin of samples 0 and 1 white over a
+/// clear to `clear` (0 or 1): each color channel's codes decoded, averaged in linear space and
 /// encoded again, alpha's averaged as the linear channel it is (`bcbcbc80` over a clear to zero),
-/// and white where every sample is.
-fn resolved(lane: &Lane, target: &Texture, clear: f64) -> bool {
+/// and white where every sample is. The decode and encode are the device's own, so each color
+/// channel is held within the codes `device-rounded-resolve` states (`resolves.rs`'s
+/// `twin_resolved`).
+fn resolved(lane: &Lane, target: &Texture, clear: f64, what: &str) {
     let texel: [u8; 4] = match clear == 0.0 {
         true => [0xbc, 0xbc, 0xbc, 0x80],
         false => [0xff; 4],
     };
-    let texels = lane.read(target, (0, 0), 4, BlitOption::None);
-    texels.as_chunks::<4>().0.iter().all(|t| *t == texel)
+    twin_resolved(
+        &lane.read(target, (0, 0), 4, BlitOption::None),
+        texel,
+        true,
+        what,
+    );
 }
 
 #[test]
@@ -57,14 +63,14 @@ fn a_pass_of_the_same_views_takes_the_kept_resolve_objects_and_a_new_texture_s_m
     let msaa = lane.msaa(RGBA8);
     let before = lane.device.work_counts();
     let first = resolve(&lane, &msaa, &target, 0.0);
-    assert!(resolved(&lane, &target, 0.0), "the first pass");
+    resolved(&lane, &target, 0.0, "the first pass");
     assert_eq!(
         first.color_resolve_passes_made - before.color_resolve_passes_made,
         1,
         "the twin's resolve is the crate-owned one on every device"
     );
     let second = resolve(&lane, &msaa, &target, 1.0);
-    assert!(resolved(&lane, &target, 1.0), "the second pass");
+    resolved(&lane, &target, 1.0, "the second pass");
     let kept = second.color_resolve_passes_kept - first.color_resolve_passes_kept;
     let made = second.color_resolve_passes_made - first.color_resolve_passes_made;
     assert_eq!(kept + made, 1);
@@ -79,7 +85,7 @@ fn a_pass_of_the_same_views_takes_the_kept_resolve_objects_and_a_new_texture_s_m
     drop(msaa);
     let msaa = lane.msaa(RGBA8);
     let third = resolve(&lane, &msaa, &target, 0.0);
-    assert!(resolved(&lane, &target, 0.0), "the new texture's pass");
+    resolved(&lane, &target, 0.0, "the new texture's pass");
     assert_eq!(
         (
             third.color_resolve_passes_made - second.color_resolve_passes_made,

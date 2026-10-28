@@ -1576,7 +1576,7 @@ fn a_resolve_into_the_srgb_twin_resolves_in_the_resolve_texture_s_encoding() {
 /// decode and encode are the device's own (`bind::ColorResolveFormat::device_srgb`), each color
 /// channel within the two codes `device-rounded-resolve` states and the alpha exactly. A texel
 /// apart from Metal's is printed.
-fn twin_resolved(got: &[u8], texel: [u8; 4], srgb: bool, what: &str) {
+pub(super) fn twin_resolved(got: &[u8], texel: [u8; 4], srgb: bool, what: &str) {
     let codes = |c: usize| if srgb && c < 3 { 2 } else { 0 };
     let within = got.chunks(4).all(|t| {
         t.iter()
