@@ -1413,7 +1413,7 @@
         "scheduler_sleeps": 9,
         "scheduler_wakes_commit": 6,
         "scheduler_wakes_host": 4,
-        "shader_modules_made": 9,
+        "shader_modules_made": 10,
         "shader_modules_shared": 30,
         "slot_returns": 6,
         "spare_command_pools_taken": 12,
@@ -1436,11 +1436,18 @@
         "addressable_buffers_made": 2,
         "arena_pools_made": 3,
         "argument_samplers_taken": 8,
+        "batches_held_past_a_look": 0,
         "device_memory_allocated": 1342177280,
+        "heads_held_for_host_steps": 0,
+        "new_buffer_bytes_cleared": 3416,
         "owned_kernel_spirv_bytes": 7928,
         "owned_kernels_made": 1,
         "pooled_memory_blocks_made": 4,
+        "queues_sharing_a_vk_queue": 0,
         "render_passes_made": 3
+      },
+      "ceilings": {
+        "shader_modules_made": 10
       },
       "per_state": {
         "pipelines": 27,
