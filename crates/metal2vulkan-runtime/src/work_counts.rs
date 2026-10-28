@@ -2111,10 +2111,10 @@ impl Counters {
 
     /// An encoder planned `copy`, a copy in of a shadowed texture: its texels
     /// (`shadow::ShadowCopy::texels_copied_in`) counted by why it is made
-    /// (`shadow::ShadowCopy::cause`, a change of the truth by its reason), by what holds the truth (`shadow::Backing`), apart where
-    /// the truth is an IOSurface's plane under a texture of at least [`LARGE_SURFACE_TEXELS`]
-    /// texels, and apart where the shadow is an image's, copied image to image. Nothing for any
-    /// other step.
+    /// (`shadow::ShadowCopy::cause`, a change of the truth by its reason), by what holds the truth
+    /// (`shadow::Backing`), apart where the truth is an IOSurface's plane under a texture of at
+    /// least [`LARGE_SURFACE_TEXELS`](crate::shadow::LARGE_SURFACE_TEXELS) texels, and apart where
+    /// the shadow is an image's, copied image to image. Nothing for any other step.
     pub(crate) fn shadow_copy_in_planned<M>(&self, copy: &ShadowCopy<M>) {
         let Some(cause) = copy.cause else {
             return;

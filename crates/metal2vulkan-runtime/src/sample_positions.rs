@@ -174,9 +174,10 @@ pub(super) enum PositionRefusal {
 }
 
 /// The error `refusal` reports out of `call`: the caller's as Metal's own stop (`Invalid`), the
-/// device's as the Vulkan property it lacks (`Unsupported`, [`Needs::AnyOf`]), and the runtime's
-/// as its typed gap. A device gap is never an `Invalid`: that would tell a consumer it passed bad
-/// arguments where the truth is that this GPU cannot do it.
+/// device's as the Vulkan property it lacks (`Unsupported`,
+/// [`Needs::AnyOf`](metal2vulkan::error::Needs::AnyOf)), and the runtime's as its typed gap. A
+/// device gap is never an `Invalid`: that would tell a consumer it passed bad arguments where the
+/// truth is that this GPU cannot do it.
 fn refusal_error(call: &'static str, refusal: PositionRefusal) -> Error {
     match refusal {
         PositionRefusal::Outside { index } => {

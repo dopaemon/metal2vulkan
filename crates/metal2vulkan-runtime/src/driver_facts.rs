@@ -21,7 +21,8 @@ impl super::Device {
     }
 }
 
-/// [`Device::inform`] through `sink`, else on stderr, where the device is ending.
+/// [`Device::inform`](crate::Device::inform) through `sink`, else on stderr, where the device is
+/// ending.
 pub(crate) fn inform_through(sink: Option<&MessageSink>, id_name: &str, text: String) {
     match sink {
         Some(sink) => sink.deliver(&informational(id_name, text)),

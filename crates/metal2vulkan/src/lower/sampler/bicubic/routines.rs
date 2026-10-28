@@ -879,8 +879,8 @@ fn define_exact_plane(mb: &mut ModuleBuilder) -> BResult<FuncId> {
     finish(fb, r)
 }
 
-/// `fn(t0, t1, k, flags, half) -> vec4` (module docs, [`Line::exact`], and [`Span::exact`] where
-/// `packed` names a packed normalized format's grids): the step
+/// `fn(t0, t1, k, flags, half) -> vec4` (module docs, [`Line::exact`]; `packed` names a packed
+/// normalized format's grids): the step
 /// `⌊(c₀ · (256 - k) + c₁ · k + 128) / 256⌋`, below `2^25` in magnitude before the shift.
 fn define_exact_line(mb: &mut ModuleBuilder, packed: Packed, calls: Calls) -> BResult<FuncId> {
     let t = types(mb)?;
@@ -2268,7 +2268,7 @@ fn define_cubic_plane(mb: &mut ModuleBuilder) -> BResult<FuncId> {
 }
 
 /// `fn(t0, t1, k, flags, half) -> vec4` (module docs, [`Line::float`]): a 32-bit float or half
-/// format's sum through Metal's linear accumulator ([`accumulate`], under [`Span`]'s weights),
+/// format's sum through Metal's linear accumulator ([`accumulate`], under the line's weights),
 /// every other format's bilinear in `f32` operations; non-finite taps of nonzero weight decide
 /// the result as IEEE arithmetic would (measured for a 32-bit float format, inferred for a half
 /// one).

@@ -392,7 +392,8 @@ impl Eq for ComputePipelineState {}
 static DIRECT_ARGUMENTS_FROM_AIR: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-/// Count one fall back to the made descriptor's AIR ([`DIRECT_ARGUMENTS_FROM_AIR`]).
+/// Count one fall back to the made descriptor's AIR (`DIRECT_ARGUMENTS_FROM_AIR`, in the device
+/// tests' builds).
 fn note_direct_arguments_from_air() {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     DIRECT_ARGUMENTS_FROM_AIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

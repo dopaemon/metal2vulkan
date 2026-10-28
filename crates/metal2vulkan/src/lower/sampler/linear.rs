@@ -1,7 +1,7 @@
 //! What the device-sampled filters share with the emulated ones the device has no form for
 //! (`extended`, `heap_raw`, `in_place`, `bicubic`): the census words of a filter's footprint and
 //! of a runtime sampler's word, the rule of an axis whose two taps read one texel ([`merged`]), the samplers
-//! that read one texel of one level ([`unfiltered`], [`word_filters`]), and the note of a filtered
+//! that read one texel of one level ([`unfiltered`]), and the note of a filtered
 //! sample that Metal's own sampler answers otherwise than Metal filters the format bound there
 //! ([`filter_note`]).
 //!
@@ -45,7 +45,7 @@ pub(super) const WORD_WORDS: u32 = 448;
 /// test.
 pub(super) const WORD_TAP_WORDS: u32 = 160;
 
-/// [`Linear::words`] of a 2D sample.
+/// The census words of a linear 2D sample's emulation.
 pub(super) const PLANE_WORDS: u32 = 576;
 
 /// The note of sample `op` of `image` through `sampler` (`None`: an argument buffer's) with

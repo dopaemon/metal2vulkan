@@ -68,7 +68,7 @@ pub struct DeviceProfile {
 impl DeviceProfile {
     /// The profile of `fields`, with its fingerprint derived (the only way to build one): the
     /// fingerprint is a function of the fields, so holding them together is what keeps it true of
-    /// them. An edit goes through [`edit`](Self::edit).
+    /// them. A test's edit goes through `edit`, which only the crate's tests build.
     pub(crate) fn of(fields: ProfileFields) -> DeviceProfile {
         let fingerprint = fingerprint_of(&fields);
         DeviceProfile {

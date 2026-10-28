@@ -52,7 +52,7 @@
 //!   (`ycbcr-filter-not-exact`): Vulkan states the reconstruction's weights and the model's
 //!   matrices, and leaves each step's precision at least the format's and the clamp of the result
 //!   into `[0, 1]` the implementation's ("An implementation may clamp the R′G′B′ results of these
-//!   conversions to the range [0,1]."). Measured at every texel of random planes
+//!   conversions to the range \[0,1\]."). Measured at every texel of random planes
 //!   (`tests/ycbcr_device.rs`, and the validation crate's YCbCr lanes) on lavapipe (Mesa 26.0.8,
 //!   LLVM 21.1.8), which converts only the 8-bit 4:4:4 layout here (its 4:2:0 and 4:2:2
 //!   conversions site the chroma cosited alone, and its 10-bit ones read words,

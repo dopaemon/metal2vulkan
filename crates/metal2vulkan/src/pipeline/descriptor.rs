@@ -996,9 +996,9 @@ impl StageInputDescriptor {
     /// difference between two descriptors their fetches read apart.
     ///
     /// Everything the attributes `read` names fetch is kept as it stands, so every
-    /// [`StageInFetch::of`] of such an attribute answers what it answered: the canonical form of
-    /// a constant step, and of an index type no kept layout steps through, is
-    /// [`canonical`](Self::canonical)'s to write.
+    /// [`StageInFetch::of`](crate::pipeline::stage_io::StageInFetch::of) of such an attribute
+    /// answers what it answered: the canonical form of a constant step, and of an index type no
+    /// kept layout steps through, is [`canonical`](Self::canonical)'s to write.
     ///
     /// This is not a check: an attribute `read` names that the descriptor lacks stays absent, and
     /// the compile refuses it where Metal's pipeline creation stops
