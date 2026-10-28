@@ -1073,9 +1073,11 @@ fn with_color_writes(
     inputs
 }
 
-/// Every channel of an `RGBA8Unorm` attachment.
+/// Every channel of an `RGBA8Unorm` attachment: the device's (`ChannelWrite::Device`), since no
+/// device's lowering tells Metal's 8-bit unorm rule from the device's conversion of it
+/// (`LoweringInputs::color_writes`).
 const UNORM8: [Option<metal2vulkan::pipeline::ChannelWrite>; 4] =
-    [Some(metal2vulkan::pipeline::ChannelWrite::Unorm { bits: 8 }); 4];
+    [Some(metal2vulkan::pipeline::ChannelWrite::Device); 4];
 
 /// Owned fixture `stem` as bitcode, or `None` (skipped visibly) without `llvm-as`. Assembling is
 /// test infrastructure; everything after it uses the public surface.

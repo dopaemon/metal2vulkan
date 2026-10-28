@@ -42,6 +42,16 @@
 //! that the two agree: where it reports anything it reports one answer per creation, and where it
 //! reports a hit at all it reports one for every sibling.
 //!
+//! **Where the device links its render pipelines from graphics pipeline libraries** (lavapipe,
+//! RADV, ANV, NVIDIA: `VK_EXT_graphics_pipeline_library` with fast linking,
+//! `pipeline/libraries.rs`), no sibling makes a pipeline through a cache at all: its
+//! pre-rasterization and fragment shader libraries are the first creation's, found by their
+//! parts' content, and the only library it makes is its fragment output's, the part blend state
+//! names, which holds no shader and takes no cache. So there the run asserts the same claim on
+//! that route: every sibling links its own pipeline, makes exactly one library, and makes no
+//! library of shaders, so nothing of its stages is converted or compiled again; and no making
+//! asks for a cache, so none is shared.
+//!
 //! The device takes a shader cache directory of its own, empty, so no run reads a record an
 //! earlier run stored.
 //!
@@ -72,6 +82,8 @@ const FACTORS: [BlendFactor; 8] = [
 
 /// Every sibling render creation of one function pair is handed the cache the first creation made
 /// for their shared record: blend state names no record of its own, so nothing is converted again.
+/// Where the device links from libraries, every sibling links from the first creation's libraries
+/// of shaders instead, and takes no cache.
 #[test]
 fn every_sibling_render_creation_takes_the_first_s_driver_cache() {
     let scratch = Scratch::new("driver-pipeline-compile");
@@ -96,6 +108,7 @@ fn every_sibling_render_creation_takes_the_first_s_driver_cache() {
         .unwrap();
     let shared_before = device.shared().shader_cache.caches_shared();
     let before = device.shader_cache_statistics();
+    let counts_before = device.work_counts();
     let mut kept = Vec::with_capacity(RUN as usize);
     for i in 0..RUN {
         kept.push(
@@ -112,6 +125,26 @@ fn every_sibling_render_creation_takes_the_first_s_driver_cache() {
         "DRIVER-PIPELINE-COMPILE: {shared} of {RUN} siblings took the first's cache, \
          {hits} hits and {misses} misses reported"
     );
+    if device.shared().libraries.is_some() {
+        let counts = device.work_counts();
+        let made = |of: fn(&crate::WorkCounts) -> u64| of(&counts) - of(&counts_before);
+        let linked = made(|c| c.pipelines_linked);
+        let libraries = made(|c| c.pipeline_libraries_made);
+        let fragment_shaders = made(|c| c.fragment_shader_libraries_made);
+        println!(
+            "DRIVER-PIPELINE-COMPILE: linked from libraries: {linked} pipelines linked, \
+             {libraries} libraries made, {fragment_shaders} of a fragment shader"
+        );
+        assert_eq!(
+            (linked, libraries, fragment_shaders, shared),
+            (RUN, RUN, 0, 0),
+            "every one of {RUN} sibling creations must link its own pipeline from the first \
+             creation's libraries of shaders, making its fragment output's library alone, which \
+             takes no cache: {linked} linked, {libraries} libraries made, {fragment_shaders} of a \
+             fragment shader, {shared} caches handed over"
+        );
+        return;
+    }
     assert_eq!(
         shared, RUN,
         "every one of {RUN} sibling creations must be handed the `VkPipelineCache` the first \

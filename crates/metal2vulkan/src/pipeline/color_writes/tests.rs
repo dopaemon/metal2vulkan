@@ -77,3 +77,72 @@ fn a_blended_32_bit_float_channel_is_the_devices() {
         "no committed profile blends on the device"
     );
 }
+
+/// A fragment function's map is the same over a sweep of blend states of an `RGBA8Unorm`
+/// attachment -- no blend, one and zero, source-over -- on every committed profile: Metal's unorm
+/// rule, which the attachment takes where it stores the output as written, is one the lowering
+/// tells from the device's conversion nowhere (no profile is measured to store an 8-bit unorm
+/// code as Metal does), so it is named the device's ([`lowered`]) and the sweep compiles the
+/// function once. Whether the attachment takes Metal's rule still follows its blend
+/// ([`takes_metal_rule`]), which link reads for the blend of one and zero. A 16-bit unorm
+/// attachment on a profile measured to store its codes as Metal does keeps Metal's rule where it
+/// stores the output as written: there the lowering reads it.
+#[test]
+fn a_blend_sweep_of_a_rule_the_device_converts_compiles_under_one_map() {
+    let mut converted = 0;
+    let mut norm16 = 0;
+    for (stem, dev) in crate::metal::format::tests::committed_devices() {
+        let p = dev.profile();
+        let metal = p
+            .fields()
+            .enabled
+            .properties
+            .contains(&VkProperty::MetalColorWrites);
+        let rounding = (false, TextureWriteRoundingMode::TowardZero);
+        let sweep = |pf| {
+            [None, Some(false), Some(true)].map(|blend| {
+                let colors = [Some(attachment(pf, blend))];
+                (
+                    color_writes([0], &colors, rounding, p),
+                    takes_metal_rule(0, &colors, rounding, p),
+                )
+            })
+        };
+        let [unblended, one_zero, over] = sweep(PixelFormat::RGBA8Unorm);
+        assert_eq!(unblended.0, over.0, "{stem}: unblended and source-over");
+        assert_eq!(one_zero.0, over.0, "{stem}: one and zero and source-over");
+        match metal {
+            true => assert!(over.0.is_empty(), "{stem}: {:?}", over.0),
+            false => {
+                assert_eq!(
+                    over.0.get(&0),
+                    Some(&[Some(ChannelWrite::Device); 4]),
+                    "{stem}"
+                );
+                converted += 1;
+            }
+        }
+        assert_eq!(
+            [unblended.1, one_zero.1, over.1],
+            [!metal, !metal, false],
+            "{stem}: the attachment takes Metal's rule where it stores the output as written"
+        );
+        if p.takes_driver_deviation(DriverDeviation::MetalNorm16ColorWrites) {
+            let [unblended, one_zero, over] = sweep(PixelFormat::RGBA16Unorm);
+            let unorm16 = Some(&[Some(ChannelWrite::Unorm { bits: 16 }); 4]);
+            assert_eq!(unblended.0.get(&0), unorm16, "{stem}");
+            assert_eq!(one_zero.0.get(&0), unorm16, "{stem}");
+            assert_eq!(
+                over.0.get(&0),
+                Some(&[Some(ChannelWrite::Device); 4]),
+                "{stem}"
+            );
+            norm16 += 1;
+        }
+    }
+    assert!(converted > 0, "no committed profile converts on the device");
+    assert!(
+        norm16 > 0,
+        "no committed profile stores 16-bit unorm codes as Metal does"
+    );
+}

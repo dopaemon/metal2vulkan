@@ -339,7 +339,11 @@ pub struct LoweringInputs {
     /// alpha alpha-to-coverage reads, or a format whose conversion Metal was not measured with),
     /// recorded alike; and a half-float channel's rule under
     /// `TextureWriteRoundingMode::NearestEven`, which the function rounds itself. On a device that
-    /// stores Metal's codes (`VkProperty::MetalColorWrites`) only the half-float channels.
+    /// stores Metal's codes (`VkProperty::MetalColorWrites`) only the half-float channels. A rule
+    /// of Metal's the function's lowering on the device does not tell from the device's
+    /// conversion (an 8-bit unorm channel's on a device not measured to store it as Metal does,
+    /// say) is named [`ChannelWrite::Device`], so pipelines that differ only there, as a blend
+    /// sweep over one fragment function does, compile it once.
     /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage from the
     /// pipeline's color attachments, blend states and alpha-to-coverage, and a fragment compiled
     /// on its own for such a pipeline compiles under the same map: link refuses one compiled under

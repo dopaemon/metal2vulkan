@@ -386,20 +386,24 @@ pub fn graphics_state(
                         });
                     }
                     // Metal's blend of one and zero stores the output as written, as no blend
-                    // does, so an attachment whose format converts the output (its channels
-                    // take a rule of Metal's, `StageIo::color_writes`), or one the function
-                    // rounds, takes no Vulkan blend there, nor the
-                    // format's blend support. But not a 16-bit float attachment's from a module
-                    // without fast math, whose blend Metal computes keeping the destination's
-                    // product by zero: that one blends, announced (`color_writes::keeps_zero`).
+                    // does, so an attachment the function writes whose format converts the
+                    // output (its channels take a rule of Metal's in this pipeline,
+                    // `color_writes::takes_metal_rule`, whatever the function's map holds of it
+                    // once its lowering read it), or one the function rounds, takes no Vulkan
+                    // blend there, nor the format's blend support. But not a 16-bit float
+                    // attachment's from a module without fast math, whose blend Metal computes
+                    // keeping the destination's product by zero: that one blends, announced
+                    // (`color_writes::keeps_zero`).
                     let stored = fs.is_some_and(|f| {
                         let color = index as u32;
                         f.io.rounded_colors.contains(&color)
-                            || f.io.color_writes.get(&color).is_some_and(|rules| {
-                                rules.iter().flatten().any(|r| {
-                                    *r != crate::pipeline::lower_inputs::ChannelWrite::Device
-                                })
-                            })
+                            || (written.contains(&color)
+                                && color_writes::takes_metal_rule(
+                                    color,
+                                    &r.color_attachments,
+                                    (r.alpha_to_coverage, r.texture_write_rounding_mode),
+                                    p,
+                                ))
                     });
                     let keeps_zero =
                         fs.is_some_and(|f| color_writes::keeps_zero(&f.io, index as u32, a));

@@ -361,9 +361,11 @@ fn aspect_round_trip(
 /// (`DriverFact::FragmentDepthKeepsDepth16Codes`) must run the copy rather than refuse it. Before
 /// the draws existed this refused `MultisampledBufferCopy` at the copy in on every such device.
 ///
-/// A device that makes no such texture, or renders no 2 samples (lavapipe), prints its case and
-/// carries on; one whose codes the draws are not measured to keep refuses, honestly, and is
-/// printed too.
+/// A shape of a sample count the device answers `supportsTextureSampleCount:` no for (2 on
+/// lavapipe, whose limits list 1, 4 and 8 samples alone) prints its case and is left out of the
+/// shapes that must run: the device makes no such texture, as Metal makes none where it answers
+/// no. A count it answers yes for must make the texture. One whose codes the draws are not
+/// measured to keep refuses, honestly, and is printed too.
 #[test]
 fn every_16_bit_depth_code_survives_a_multisampled_buffer_round_trip() {
     let scratch = Scratch::new();
@@ -380,6 +382,15 @@ fn every_16_bit_depth_code_survives_a_multisampled_buffer_round_trip() {
         .contains(&metal2vulkan::device::DriverFact::FragmentDepthKeepsDepth16Codes);
     // 65536 samples each run: 128 x 128 at 4 samples and 128 x 256 at 2, one code a sample.
     let shapes = [(4u64, 128u64, 128u64), (2, 128, 256)];
+    let takes = |samples| {
+        (device.properties())
+            .supports_texture_sample_count(samples)
+            .unwrap_or(false)
+    };
+    let taken = shapes
+        .iter()
+        .filter(|(samples, ..)| takes(*samples))
+        .count();
     let mut ran = 0;
     for (samples, width, height) in shapes {
         // Code `i` in sample `i`, little-endian, by the layout the copy implements.
@@ -407,6 +418,10 @@ fn every_16_bit_depth_code_survives_a_multisampled_buffer_round_trip() {
             }
         );
         if outcome == Outcome::NoTexture {
+            assert!(
+                !takes(samples),
+                "Depth16Unorm n={samples}: no texture at a sample count the device takes"
+            );
             continue;
         }
         // A driver measured to keep every code must copy it, not refuse it.
@@ -418,14 +433,17 @@ fn every_16_bit_depth_code_survives_a_multisampled_buffer_round_trip() {
             ran += 1;
         }
     }
-    // Where the draws are the route and the driver keeps every code, both shapes must have run:
-    // a vacuous pass would otherwise look the same as a working copy.
+    // Where the draws are the route and the driver keeps every code, every shape of a sample
+    // count the device takes must have run, and the device takes one: a vacuous pass would
+    // otherwise look the same as a working copy.
     assert!(
-        !(by_draws && keeps) || ran == shapes.len(),
-        "{ran} of {} shapes ran by draws",
+        !(by_draws && keeps) || (taken > 0 && ran == taken),
+        "{ran} of the {taken} shapes of sample counts the device takes ran by draws"
+    );
+    println!(
+        "CASES ran {ran} of {}, {taken} of them of counts the device takes",
         shapes.len()
     );
-    println!("CASES ran {ran} of {}", shapes.len());
 }
 
 /// A multisampled `Stencil8` texture's bytes survive the same round trip, at both sample counts:

@@ -155,12 +155,15 @@ fn a_safe_one_zero_blend_of_a_sixteen_bit_float_attachment_blends() {
 
 /// A fragment function links only under the color writes its pipeline gives the attachments it
 /// writes. On lavapipe and RADV a `float4` output to an `RGBA8Unorm` attachment takes the unorm
-/// rule, blended with (one, zero) too; under another blend, and for alpha-to-coverage's alpha, the
-/// channel is the device's; an `RGBA16Float` attachment takes the half-float rule, and an
-/// `RGBA32Float` one no entry. A fragment compiled for one attachment's map links into a pipeline
-/// of that map alone: compiled for another format, or without the map, it is
-/// `NeedsInput(ColorWrites)`. On MoltenVK, which converts as Metal does, the map names only the
-/// half-float channels, blended or not.
+/// rule, blended with (one, zero) too (`color_writes::takes_metal_rule`); under another blend, and
+/// for alpha-to-coverage's alpha, the channel is the device's. The map names the unorm rule the
+/// device's all the same, since the lowering stores and notes the two alike, so the four
+/// pipelines give one map and a fragment compiled for one links into the others. An
+/// `RGBA16Float` attachment takes the half-float rule, and an `RGBA32Float` one no entry; an
+/// `RGBA16Unorm` one Metal's 16-bit rule where the profile stores those codes as Metal does, else
+/// the device's. A fragment compiled for one map links into a pipeline of that map alone:
+/// compiled for another, or without the map, it is `NeedsInput(ColorWrites)`. On MoltenVK, which
+/// converts as Metal does, the map names only the half-float channels, blended or not.
 #[test]
 fn color_writes_are_the_pipelines() {
     use crate::error::RuntimeInput;
@@ -176,7 +179,6 @@ fn color_writes_are_the_pipelines() {
         r.alpha_to_coverage = coverage;
         LinkInputs::Render(Box::new(r))
     };
-    let unorm8 = Some(C::Unorm { bits: 8 });
     let plain = render(
         ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm),
         false,
@@ -213,39 +215,66 @@ fn color_writes_are_the_pipelines() {
             ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm),
             true,
         );
-        for (inputs, want) in [
-            (&plain, Some([unorm8; 4])),
-            (&render(replace, false), Some([unorm8; 4])),
-            (&render(blend, false), Some([device; 4])),
-            (&coverage, Some([unorm8, unorm8, unorm8, device])),
-            (&half_float, Some([half; 4])),
-            (&float, None),
+        let replaced = render(replace, false);
+        let blended = render(blend, false);
+        let takes = |inputs: &LinkInputs| match inputs {
+            LinkInputs::Render(r) => crate::pipeline::color_writes::takes_metal_rule(
+                0,
+                &r.color_attachments,
+                (r.alpha_to_coverage, r.texture_write_rounding_mode),
+                &p,
+            ),
+            _ => unreachable!(),
+        };
+        for (inputs, want, metal) in [
+            (&plain, Some([device; 4]), true),
+            (&replaced, Some([device; 4]), true),
+            (&blended, Some([device; 4]), false),
+            (&coverage, Some([device; 4]), true),
+            (&half_float, Some([half; 4]), true),
+            (&float, None, false),
         ] {
             assert_eq!(writes(inputs).get(&0).copied(), want, "{stem}");
+            assert_eq!(takes(inputs), metal, "{stem}");
             link(&[&va, &fa], inputs, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         }
         let needs = Err(Error::NeedsInput(RuntimeInput::ColorWrites));
-        // Compiled for one attachment's map, linked into another's pipeline.
+        // Compiled for one attachment's map, linked into the pipelines of that map and of
+        // another's.
         let for_plain = compiled_for(&fa, &plain, &p);
-        crate::pipeline::link::link(&[&va, &for_plain], &plain, &p)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        for inputs in [&half_float, &coverage] {
-            assert_eq!(
-                crate::pipeline::link::link(&[&va, &for_plain], inputs, &p).map(|_| ()),
-                needs,
-                "{stem}"
-            );
+        for inputs in [&plain, &replaced, &blended, &coverage] {
+            crate::pipeline::link::link(&[&va, &for_plain], inputs, &p)
+                .unwrap_or_else(|e| panic!("{stem}: {e}"));
         }
+        assert_eq!(
+            crate::pipeline::link::link(&[&va, &for_plain], &half_float, &p).map(|_| ()),
+            needs,
+            "{stem}"
+        );
         // Compiled without the map, and for another format.
         assert_eq!(
             crate::pipeline::link::link(&[&va, &fa], &plain, &p).map(|_| ()),
             needs,
             "{stem}"
         );
+        let norm16 =
+            p.takes_driver_deviation(crate::error::DriverDeviation::MetalNorm16ColorWrites);
+        let wide_rule = match norm16 {
+            true => Some(C::Unorm { bits: 16 }),
+            false => device,
+        };
+        assert_eq!(
+            writes(&wide).get(&0).copied(),
+            Some([wide_rule; 4]),
+            "{stem}"
+        );
         let for_wide = compiled_for(&fa, &wide, &p);
         assert_eq!(
             crate::pipeline::link::link(&[&va, &for_wide], &plain, &p).map(|_| ()),
-            needs,
+            match norm16 {
+                true => needs.clone(),
+                false => Ok(()),
+            },
             "{stem}"
         );
         assert_eq!(

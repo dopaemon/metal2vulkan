@@ -215,16 +215,36 @@ fn draws_share_the_devices_one_zero_buffer() {
 /// Sixty-four draws of one pipeline with one set of bindings bind their descriptor set **once**:
 /// every draw's set is now the same one, which the encoder's set cache answers, where a fresh
 /// zero region a draw made each draw's set differ and cost a rebind.
+///
+/// Where the variant pushes its set 0 (`pipeline::objects::pushes_set_zero`: lavapipe, and any
+/// device of Vulkan 1.4 or `VK_KHR_push_descriptor` whose set 0 a push descriptor set layout
+/// holds), each of the draws records with it pushed and none binds a set: the first draw's push
+/// carries its writes, and every later draw's carries none, since set 0 holds them already
+/// (`render/bound.rs`), so the 64 draws record **one** push. Either way set 0 is recorded once.
 #[test]
 fn draws_that_share_the_zero_buffer_bind_their_set_once() {
     let (_, before, after) = drawn(64);
-    let binds = after.commands_replayed.cmd_bind_descriptor_sets
-        - before.commands_replayed.cmd_bind_descriptor_sets;
-    let draws = after.commands_replayed.cmd_draw - before.commands_replayed.cmd_draw;
+    let replayed = |of: fn(&crate::CommandsReplayed) -> u64| {
+        of(&after.commands_replayed) - of(&before.commands_replayed)
+    };
+    let binds = replayed(|c| c.cmd_bind_descriptor_sets);
+    let pushes = replayed(|c| c.cmd_push_descriptor_set);
+    let draws = replayed(|c| c.cmd_draw);
+    let pushing = after.draws_pushing_set_zero - before.draws_pushing_set_zero;
+    println!("NEUTRAL-ZEROS: 64 draws, {pushing} pushing set 0: {binds} binds, {pushes} pushes");
+    assert!(
+        pushing == 0 || pushing == 64,
+        "{pushing} of 64 draws of one variant pushed set 0: its variant pushes for all or none"
+    );
+    let want = match pushing {
+        0 => (1, 0, 64),
+        _ => (0, 1, 64),
+    };
     assert_eq!(
-        (binds, draws),
-        (1, 64),
-        "64 draws recorded {binds} descriptor-set binds and {draws} draws"
+        (binds, pushes, draws),
+        want,
+        "64 draws, {pushing} of them pushing set 0, recorded {binds} descriptor-set binds, \
+         {pushes} pushes and {draws} draws"
     );
 }
 
@@ -374,7 +394,9 @@ fn a_written_slots_neutral_is_not_shared() {
 ///
 /// # Why it costs no set
 ///
-/// The sink's binding is one storage buffer of one descriptor that the stage uses through one
+/// Where the variant pushes its set 0 (`pipeline::objects::pushes_set_zero`: lavapipe), each
+/// dispatch pushes its writes and no dispatch allocates a set at all. Elsewhere the sink's binding
+/// is one storage buffer of one descriptor that the stage uses through one
 /// variable where its dropped stores need no narrow or 16-byte unit view, so the variant makes it
 /// dynamic (`pipeline::objects::dynamic_bindings`): each dispatch's region is given as its
 /// dynamic offset and the descriptors written are the same, so every dispatch after the first
@@ -401,13 +423,16 @@ fn a_store_sinks_region_is_a_dispatchs_whole_cost() {
             arena,
             after.new_buffer_bytes_cleared - before.new_buffer_bytes_cleared,
             after.object_churn.vk_buffers_made - before.object_churn.vk_buffers_made,
-            after.set_zero_sets_reused - before.set_zero_sets_reused,
+            (
+                after.set_zero_sets_reused - before.set_zero_sets_reused,
+                after.dispatches_pushing_set_zero - before.dispatches_pushing_set_zero,
+            ),
         )
     };
     let (arena_1, _, _, _) = run(1);
     let (arena_2, _, _, _) = run(2);
-    let (arena_8, cleared_8, buffers_8, reused_8) = run(8);
-    let (arena_16, cleared_16, buffers_16, reused_16) = run(16);
+    let (arena_8, cleared_8, buffers_8, (reused_8, pushed_8)) = run(8);
+    let (arena_16, cleared_16, buffers_16, (reused_16, pushed_16)) = run(16);
     // One region a dispatch: whatever a region costs (a chunk's alignment, the module docs), eight
     // further dispatches cost eight of them.
     let one = arena_2 - arena_1;
@@ -446,13 +471,29 @@ fn a_store_sinks_region_is_a_dispatchs_whole_cost() {
          took: a region clears the bytes its data does not cover and no others, so the figure is \
          neither nothing nor more than the region"
     );
-    // And no descriptor set: the sink's binding is dynamic, so the set is written once and bound
-    // again with each region's offset.
+    // And no descriptor set: where the variant pushes set 0, every dispatch pushes its writes and
+    // none allocates a set; elsewhere the sink's binding is dynamic, so the set is written once
+    // and bound again with each region's offset.
+    println!(
+        "NEUTRAL-ZEROS: 8 and 16 dispatches pushed set 0 {pushed_8} and {pushed_16} times, \
+         reused their predecessor's {reused_8} and {reused_16} times"
+    );
+    let pushing = match (pushed_8, pushed_16) {
+        (0, 0) => false,
+        (8, 16) => true,
+        _ => panic!(
+            "8 and 16 dispatches of one variant pushed set 0 {pushed_8} and {pushed_16} times: \
+             its variant pushes for all or none"
+        ),
+    };
     assert_eq!(
         (reused_8, reused_16),
-        (7, 15),
-        "8 and 16 dispatches reused their predecessor's set 0 {reused_8} and {reused_16} times, \
-         not all but the first: a dispatch whose sink moved its descriptor allocates and writes a \
-         set of its own"
+        match pushing {
+            true => (0, 0),
+            false => (7, 15),
+        },
+        "8 and 16 dispatches (pushing set 0: {pushing}) reused their predecessor's set 0 \
+         {reused_8} and {reused_16} times, not all but the first where they bind a set: a \
+         dispatch whose sink moved its descriptor allocates and writes a set of its own"
     );
 }

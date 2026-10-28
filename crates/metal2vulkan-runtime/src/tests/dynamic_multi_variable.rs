@@ -108,6 +108,13 @@ fn device_with(cache: &Path, pushing: Pushing, messages: Option<MessageSink>) ->
     Device::system_default_with(&options).unwrap()
 }
 
+/// `encoders_plain`'s buffer slots, `[[buffer(0)]]` to `[[buffer(24)]]`, every one written: each
+/// run binds them all, so its store sink is the one binding whose descriptor a dispatch writes of
+/// its own. A written slot left unbound takes a region of its own at every dispatch as well
+/// (`neutral_zeros_shared`), whose descriptor then differs from its predecessor's whatever the
+/// sink's binding is, and no dispatch could bind its predecessor's set.
+const PLAIN_SLOTS: u32 = 25;
+
 /// What a run of `entry` answered: the bytes of each bound buffer, what its variant chose for set
 /// 0, and the counter steps.
 struct Ran {
@@ -243,7 +250,7 @@ fn a_four_variable_kernel_runs_and_its_set_follows_the_variants_choice() {
         let ran = run(
             "reflection/encoders.ll",
             "encoders_plain",
-            8,
+            PLAIN_SLOTS,
             4096,
             4,
             dispatches,
@@ -349,7 +356,7 @@ fn a_four_variable_kernel_without_the_push_command_follows_its_budget() {
         let ran = run(
             "reflection/encoders.ll",
             "encoders_plain",
-            8,
+            PLAIN_SLOTS,
             4096,
             4,
             dispatches,

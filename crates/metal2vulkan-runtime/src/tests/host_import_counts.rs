@@ -11,6 +11,12 @@
 //! pages (`host_rebind_imports_made`, `host_rebind_imports_covered`), and as unlisted until a
 //! command buffer that uses it commits (`host_imports_rebound_unlisted`).
 //!
+//! A test that makes a texture over a buffer's host pages first settles the device's check of the
+//! first move in place (`in_place_check.rs`), where its policy takes such textures in place
+//! (lavapipe): the first such texture starts the check on a thread of its own, whose own no-copy
+//! buffers and textures over them are live imports, read apart for a texture, while it runs, and
+//! so would move the gauges under the test's reads.
+//!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. A device that imports no host memory
 //! says so and passes.
@@ -24,6 +30,22 @@ use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+
+/// [`device`], its check of the first move in place settled where it runs one, and the imports
+/// the check read apart gone before the test reads a gauge (the module docs): a device made just
+/// now reads none apart of its own.
+fn settled_device(cache: &std::path::Path) -> Device {
+    let device = device(cache);
+    let settled = device.settle_in_place_checks(std::time::Duration::from_secs(120));
+    println!(
+        "IMPORT-COUNTS: the in-place check settled: {settled}, {} classes checked",
+        device.work_counts().in_place_checks_run
+    );
+    until("the in-place check's imports went", || {
+        device.work_counts().host_imports_read_apart == 0
+    });
+    device
+}
 
 /// The two counts and the live imports.
 fn counts(device: &Device) -> (u64, u64, u64) {
@@ -127,7 +149,7 @@ fn plus(base: [u64; 6], reason: usize, by: u64) -> [u64; 6] {
 fn each_read_apart_counts_for_its_reason_once_and_each_import_for_its_keeping() {
     let scratch = Scratch::new("import-reasons");
     let hosts = [Host::new(), Host::new(), Host::new(), Host::new()];
-    let device = device(&scratch.0);
+    let device = settled_device(&scratch.0);
     let runs = Arc::new(AtomicUsize::new(0));
     let before = device.work_counts();
     let Some(a) = over_host(&device, &hosts[0], &runs) else {
@@ -237,7 +259,7 @@ fn copies_read_none_apart(device: &Device, buffer: &Buffer, texture: &Texture, r
 fn copies_between_a_buffer_and_a_texture_never_read_apart() {
     let scratch = Scratch::new("import-texture-copies");
     let host = Host::new();
-    let device = device(&scratch.0);
+    let device = settled_device(&scratch.0);
     let runs = Arc::new(AtomicUsize::new(0));
     let Some(buffer) = over_host(&device, &host, &runs) else {
         return;

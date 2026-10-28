@@ -13,6 +13,14 @@
 //! (`PrecisionNote::DeviceColorConversion`); it rounds none of them. On MoltenVK the map keeps the
 //! half-float channels alone, which record the device's NaN encoding of a `half` output.
 //!
+//! The map names each rule as the function's lowering on the profile tells it apart
+//! ([`lowered`]): a rule whose channel the device's conversion stores and notes alike, Metal's
+//! rule or not (an 8-bit unorm channel's on lavapipe, say), is [`ChannelWrite::Device`]. So a
+//! fragment function linked into pipelines that differ there alone -- a sweep of blend states,
+//! one of them of factors one and zero -- compiles under one map, once. Whether a pipeline's
+//! attachment takes a rule of Metal's at all, which decides its blend of one and zero
+//! (`link::graphics`), is the pipeline's own ([`takes_metal_rule`]).
+//!
 //! Under `TextureWriteRoundingMode::NearestEven` (Apple's `textureWriteRoundingMode` 2) Metal
 //! rounds a render state's half-float channels to nearest even ([`HALF_NEAREST`]), the mode the
 //! pipeline asks for, which MoltenVK's conversion (toward zero, Metal's default) does not give: the
@@ -42,7 +50,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
-use crate::error::{Error, RuntimeInput};
+use crate::error::{DriverDeviation, Error, RuntimeInput};
 use crate::library::FunctionArtifact;
 use crate::metal;
 use crate::metal::format::{color_output_components, write_conversion, WriteConversion};
@@ -60,41 +68,99 @@ use crate::pipeline::stage_io::IoRole;
 /// The color writes of a fragment function writing the attachments `written` (dual-source index
 /// 0) of a pipeline whose color attachments are `colors` (alpha-to-coverage on where
 /// `alpha_to_coverage`, its half-float channels rounding by `rounding`) on profile `p` (the
-/// module docs): each channel's rule. Where the device stores Metal's codes itself
+/// module docs): each channel's rule as the function's lowering on `p` tells it apart
+/// ([`lowered`]), so pipelines whose rules differ only where the lowering does not compile the
+/// function under one map. Where the device stores Metal's codes itself
 /// (`VkProperty::MetalColorWrites`) the map keeps only the half-float channels
 /// ([`metal_stored`]), whose `half` NaN the function's `float` output does not carry.
 pub(crate) fn color_writes(
     written: impl IntoIterator<Item = u32>,
     colors: &[Option<ColorAttachmentDescriptor>],
-    (alpha_to_coverage, rounding): (bool, TextureWriteRoundingMode),
+    rounding: (bool, TextureWriteRoundingMode),
     p: &DeviceProfile,
 ) -> BTreeMap<u32, [Option<ChannelWrite>; 4]> {
-    let metal = metal_color_writes(p);
-    let mut out = BTreeMap::new();
-    for attachment in written {
-        let Some(c) = colors.get(attachment as usize).copied().flatten() else {
-            continue;
-        };
-        // A word attachment's output is the word the function encodes (`word_colors`).
-        if word_color(attachment, &c, alpha_to_coverage, p).is_some() {
-            continue;
-        }
-        let coverage_alpha = attachment == 0 && alpha_to_coverage;
-        let write = match metal {
-            true => metal_stored(&c),
-            false => attachment_write(&c, coverage_alpha),
-        };
-        let write = match rounding {
-            TextureWriteRoundingMode::NearestEven => {
-                write.map(|w| nearest_even(w, &c, coverage_alpha))
-            }
-            _ => write,
-        };
-        if let Some(write) = write {
-            out.insert(attachment, write);
-        }
+    written
+        .into_iter()
+        .filter_map(|attachment| {
+            let rules = metal_rules(attachment, colors, rounding, p)?;
+            Some((
+                attachment,
+                rules.map(|rule| rule.map(|rule| lowered(rule, p))),
+            ))
+        })
+        .collect()
+}
+
+/// Whether attachment `attachment` of a pipeline whose color attachments are `colors`
+/// (alpha-to-coverage on where `alpha_to_coverage`, rounding by `rounding`) on `p` takes a rule of
+/// Metal's for some channel of the fragment function's output ([`metal_rules`]): its format
+/// converts the output and the pipeline stores the output as written there (no blend, or one of
+/// factors one and zero), or the profile keeps a half-float channel's rule. Link then gives a
+/// blend of one and zero no Vulkan blend (`link::graphics`), whatever the function's map holds
+/// once [`lowered`].
+pub(crate) fn takes_metal_rule(
+    attachment: u32,
+    colors: &[Option<ColorAttachmentDescriptor>],
+    rounding: (bool, TextureWriteRoundingMode),
+    p: &DeviceProfile,
+) -> bool {
+    metal_rules(attachment, colors, rounding, p)
+        .is_some_and(|rules| rules.iter().flatten().any(|r| *r != ChannelWrite::Device))
+}
+
+/// Each channel's rule of Metal's for a fragment function's output to attachment `attachment`
+/// of a pipeline whose color attachments are `colors` (alpha-to-coverage on where
+/// `alpha_to_coverage`, rounding by `rounding`) on `p`, before [`lowered`]: `None` where the
+/// attachment is absent, a word attachment (whose output is the word the function encodes,
+/// `word_colors`), or takes no rule.
+fn metal_rules(
+    attachment: u32,
+    colors: &[Option<ColorAttachmentDescriptor>],
+    (alpha_to_coverage, rounding): (bool, TextureWriteRoundingMode),
+    p: &DeviceProfile,
+) -> Option<[Option<ChannelWrite>; 4]> {
+    let c = colors.get(attachment as usize).copied().flatten()?;
+    if word_color(attachment, &c, alpha_to_coverage, p).is_some() {
+        return None;
     }
-    out
+    let coverage_alpha = attachment == 0 && alpha_to_coverage;
+    let write = match metal_color_writes(p) {
+        true => metal_stored(&c),
+        false => attachment_write(&c, coverage_alpha),
+    };
+    match rounding {
+        TextureWriteRoundingMode::NearestEven => write.map(|w| nearest_even(w, &c, coverage_alpha)),
+        _ => write,
+    }
+}
+
+/// `rule` as the fragment function's lowering on `p` tells it apart
+/// (`lower::stage_io::color_write`): [`ChannelWrite::Device`] for a rule the device's conversion
+/// stores whatever the output and however the function writes it, which records
+/// `PrecisionNote::DeviceColorConversion` as `Device` does and emits the same words; the rule
+/// itself where the lowering reads it. It reads a half-float channel's (whose `half` output is
+/// exact, and whose NaN it notes), one rounded to nearest even or after a blend of other factors,
+/// a small float's where the profile takes `DriverDeviation::MetalSmallFloatColorWrites`, and an
+/// unblended 16-bit unorm or snorm one's where it takes `DriverDeviation::MetalNorm16ColorWrites`.
+/// Every other rule (an 8- or 10-bit unorm or snorm, an sRGB, a blended 16-bit snorm, a small
+/// float on a profile not measured to store it as Metal does) is the device's.
+fn lowered(rule: ChannelWrite, p: &DeviceProfile) -> ChannelWrite {
+    let takes = |d| p.takes_driver_deviation(d);
+    match rule {
+        _ if half_float(rule) => rule,
+        ChannelWrite::FloatNearestEven { .. } | ChannelWrite::BlendedNearestEven { .. } => rule,
+        ChannelWrite::FloatTowardZero { .. }
+            if takes(DriverDeviation::MetalSmallFloatColorWrites) =>
+        {
+            rule
+        }
+        ChannelWrite::Unorm { bits: 16 }
+        | ChannelWrite::Snorm {
+            bits: 16,
+            blended: false,
+        } if takes(DriverDeviation::MetalNorm16ColorWrites) => rule,
+        _ => ChannelWrite::Device,
+    }
 }
 
 /// Whether profile `p`'s device stores Metal's codes itself (`VkProperty::MetalColorWrites`).
