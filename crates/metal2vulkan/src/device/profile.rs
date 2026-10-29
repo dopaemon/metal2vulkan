@@ -367,7 +367,30 @@ impl DeviceProfile {
     /// The rendering streams into the hash: every compile takes the fingerprint for its key, and a
     /// materialized rendering of a profile with a format table is tens of kilobytes that no
     /// input-scaled ledger charge accounts for.
+    ///
+    /// Every compile takes it, and rendering a profile with a format table cost a twentieth of a
+    /// pipeline's translation, so the last few profiles' fingerprints are kept and found again by
+    /// equality of the fields, which is a structural comparison and holds under any mutation.
     pub fn fingerprint(&self) -> Hash256 {
+        static KEPT: std::sync::Mutex<Vec<(ProfileFields, Hash256)>> =
+            std::sync::Mutex::new(Vec::new());
+        {
+            let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some((_, h)) = kept.iter().find(|(f, _)| *f == self.fields) {
+                return *h;
+            }
+        }
+        let h = self.render_fingerprint();
+        let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if kept.len() >= 4 {
+            kept.remove(0);
+        }
+        kept.push((self.fields.clone(), h));
+        h
+    }
+
+    /// [`DeviceProfile::fingerprint`], rendered.
+    fn render_fingerprint(&self) -> Hash256 {
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
         struct Hashing(Sha256);

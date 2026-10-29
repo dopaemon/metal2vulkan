@@ -62,6 +62,7 @@ pub struct DeviceOptions {
     /// The policy each device's compile device is made with, and whose
     /// `recommended_enables` each device enables.
     pub policy: DevicePolicy,
+    pub refuse_rebinds: bool,
     /// Instance layers to enable, in order (the first is nearest the application). A layer that
     /// is not installed fails creation.
     pub layers: Vec<CString>,
@@ -1363,6 +1364,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         announce_each,
         metal_level,
         record_executions,
+        refuse_rebinds,
     } = a;
     *policy == b.policy
         && *layers == b.layers

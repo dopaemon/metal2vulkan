@@ -1,4 +1,4 @@
-//! Pointers loaded from fields of constant globals.
+//! Values loaded from fields of constant globals.
 //!
 //! A constant global whose initializer is known once function constants are bound and the static
 //! initializers have run may hold pointers: a program-scope `constexpr sampler` taken by value is
@@ -9,18 +9,28 @@
 //! constant and threadgroup spaces, so such a module was refused, under the values that made the
 //! select one global.
 //!
+//! The same holds for every other first-class field. An uber-shader takes its whole configuration
+//! as one struct of function constants that a static initializer copies into an internal
+//! `constant` global (QuartzCore's `fc_fragment_shader_config`, read field by field after a
+//! function-constant `select` between it and a buffer). SCCP folds that select to the global but
+//! not the field loads, so every branch the configuration decides survived: QuartzCore's
+//! `fixed_frag` became about 46000 SPIR-V instructions where its specialized form is a few
+//! hundred, and the driver compiled each such pipeline for about a second. Metal's compiler
+//! specializes these reads away, so a module that reads them is translated as Metal compiles it.
+//!
 //! This pass reads such a load as the initializer's constant at the field: a non-volatile,
-//! non-atomic load of a pointer whose address is a field of a constant global at constant indices
-//! (a `getelementptr` instruction or constant expression over the global's own value type, its
-//! first index 0), where the field's type is the load's. A copy LLVM made through an integer (a
-//! load of the field as an integer of the pointer's size, then `inttoptr` to the field's type)
-//! reads the same constant at its `inttoptr`. The global is never written (it is `constant`, and
-//! initialized by no one else), so every run reads that constant: the address of the sampler
-//! state, which the sampler family reads as the sampler it names. Only pointers are read this
-//! way: a load of any other type from a constant global is lowered from the global's form (its
-//! typed private copy, or the constant blob), and reading it here would change those modules
-//! without changing what they compute. SCCP then runs again over a body this pass changed, so
-//! what the constants decide (an aggregate of them, a phi of them, a member of either) folds too.
+//! non-atomic load of a scalar, vector or pointer whose address is a field of a constant global at
+//! constant indices (a `getelementptr` instruction or constant expression over the global's own
+//! value type, its first index 0), where the field's type is the load's. A copy LLVM made through
+//! an integer (a load of a pointer field as an integer of the pointer's size, then `inttoptr` to
+//! the field's type) reads the same constant at its `inttoptr`. The global is never written (it
+//! is `constant`, and initialized by no one else), so every run reads that constant: for a
+//! pointer, the address of the sampler state, which the sampler family reads as the sampler it
+//! names. An aggregate load, a load of another type than the field's, and a field the initializer
+//! leaves `undef` (an unsupplied constant's) are left to the global's lowered form. SCCP then runs
+//! again over a body this pass changed, so what the constants decide (a branch, an aggregate of
+//! them, a phi of them, a member of either) folds too, and the two alternate until a round folds
+//! nothing: a decided branch can expose a further select of the global.
 
 use crate::budget::Meter;
 use crate::error::Error;
@@ -29,9 +39,9 @@ use crate::ir::{InstId, InstKind, ModuleParts, Type, TypeId, Value};
 
 use super::rewrite::{apply, scoped, BodyEdit};
 
-/// Read every load of a pointer from a field of a constant global in `body`, and every
-/// `inttoptr` of such a field's integer copy, as the field's constant (module docs), and say
-/// whether there was one. Returns `body` itself when there is none.
+/// Read every first-class load from a field of a constant global in `body`, and every `inttoptr`
+/// of a pointer field's integer copy, as the field's constant (module docs), and say whether there
+/// was one. Returns `body` itself when there is none.
 pub(super) fn fold(
     body: Body,
     parts: &mut ModuleParts,
@@ -61,8 +71,8 @@ pub(super) fn fold(
     }
 }
 
-/// Each instruction of `body` that reads a pointer field of a constant global (module docs), with
-/// the field's constant.
+/// Each instruction of `body` that reads a first-class field of a constant global (module docs),
+/// with the field's constant.
 fn find(
     body: &Body,
     parts: &mut ModuleParts,
@@ -71,24 +81,27 @@ fn find(
 ) -> Result<(), Error> {
     for (id, inst) in body.insts.iter() {
         m.tick(1)?;
-        let Some(space) = parts.types.ptr_space(inst.ty) else {
-            continue;
-        };
-        if !matches!(parts.types.get(inst.ty), Some(Type::Ptr { .. })) {
-            continue;
-        }
+        let first_class = parts
+            .types
+            .get(inst.ty)
+            .is_some_and(|t| t.is_sized() && !t.is_aggregate());
+        let pointer = matches!(parts.types.get(inst.ty), Some(Type::Ptr { .. }));
         let ptr = match inst.kind {
             InstKind::Load {
                 ptr,
                 volatile: false,
                 atomic: None,
                 ..
-            } => ptr,
+            } if first_class => ptr,
             // `inttoptr` of an integer load of the pointer's size: a copy through an integer.
             InstKind::Cast {
                 op: CastOp::IntToPtr,
                 v: Value::Inst(l),
-            } => match body.insts.get(l).map(|l| (&l.kind, l.ty)) {
+            } if pointer => {
+                let Some(space) = parts.types.ptr_space(inst.ty) else {
+                    continue;
+                };
+                match body.insts.get(l).map(|l| (&l.kind, l.ty)) {
                 Some((
                     &InstKind::Load {
                         ptr,
@@ -104,7 +117,8 @@ fn find(
                     ptr
                 }
                 _ => continue,
-            },
+                }
+            }
             _ => continue,
         };
         let Some((g, path)) = field_address(body, parts, ptr) else {

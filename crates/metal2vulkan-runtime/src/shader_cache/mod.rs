@@ -282,6 +282,106 @@ impl CacheSetup {
     }
 }
 
+/// Disk access for entry-point priming, before any exit hook is registered.
+/// Deliberately no worker, exit-guard section, or ordinary driver::make call.
+/// Priming keeps its raw call/cleanup ordering and records every entry point.
+pub(super) struct PrimingCache {
+    store: Store,
+    identity: driver::Identity,
+    name: String,
+    loaded: Option<Vec<u8>>,
+}
+
+impl CacheSetup {
+    pub(super) fn priming(
+        &self,
+        properties: &vk::PhysicalDeviceProperties,
+        profile: Hash256,
+        settings: Hash256,
+        key: Hash256,
+        sink: Option<MessageSink>,
+    ) -> PrimingCache {
+        let identity = driver::Identity::of(properties);
+        let name = Records {
+            identity,
+            settings,
+            profile,
+        }
+        .name(Making::new("device-entry-point-priming").digest(&key));
+        PrimingCache {
+            store: Store::new(self.directory.clone(), sink),
+            identity,
+            name,
+            loaded: None,
+        }
+    }
+}
+
+impl PrimingCache {
+    /// The caller owns the raw cache and primes/releases its entry points.
+    /// No exit_guard::called/enter may happen here, before priming is finished.
+    pub(super) unsafe fn open(
+        &mut self,
+        raw: &ash::Device,
+        word: &crate::loader_word::LoaderWord,
+    ) -> Result<vk::PipelineCache, vk::Result> {
+        let seed = match self.store.load_content(&self.name, |bytes| {
+            let data = driver::open(&self.identity, &bytes)?;
+            Some(bytes[data].to_vec())
+        }) {
+            Lookup::Hit(bytes) => Some(bytes),
+            _ => None,
+        };
+        if let Some(bytes) = seed {
+            let info = vk::PipelineCacheCreateInfo::default().initial_data(&bytes);
+            // SAFETY: the caller owns the live device and the info's bytes outlive the call.
+            if let Ok(cache) = unsafe {
+                word.restore();
+                raw.create_pipeline_cache(&info, None)
+            } {
+                self.loaded = Some(bytes);
+                return Ok(cache);
+            }
+        }
+        // Invalid/absent/refused data is never treated as a successful load.
+        // SAFETY: as above; the empty create info outlives the call.
+        unsafe {
+            word.restore();
+            raw.create_pipeline_cache(&vk::PipelineCacheCreateInfo::default(), None)
+        }
+    }
+
+    /// Called after all priming (including graphics/generated helpers) succeeds,
+    /// before its raw cache is destroyed and before exit-hook registration.
+    pub(super) unsafe fn keep(
+        &self,
+        raw: &ash::Device,
+        word: &crate::loader_word::LoaderWord,
+        cache: vk::PipelineCache,
+    ) {
+        // SAFETY: priming owns the live device/cache and every making has returned.
+        let Ok(data) = (unsafe {
+            word.restore();
+            raw.get_pipeline_cache_data(cache)
+        }) else {
+            return;
+        };
+        if self.loaded.as_deref() == Some(data.as_slice()) {
+            return;
+        }
+        if self.identity.check_vulkan_header(&data).is_err() {
+            return;
+        }
+        if self
+            .store
+            .write_record(&self.name, &driver::seal(&self.identity, &data))
+            .is_err()
+        {
+            self.store.write_failed();
+        }
+    }
+}
+
 /// One device's shader cache: its memo, its view of the directory, what names its makings'
 /// records, and the cache thread.
 pub(super) struct ShaderCache {

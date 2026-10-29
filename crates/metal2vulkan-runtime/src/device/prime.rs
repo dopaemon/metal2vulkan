@@ -74,9 +74,11 @@ use crate::generated_commands::{
 use crate::loader_word::LoaderWord;
 use crate::memory;
 use crate::release::{self, Generated, Released};
+use crate::shader_cache::PrimingCache;
 use crate::sharing::Sharing;
 use crate::tracker::Barrier;
 use ash::vk;
+use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 
 use super::functions::Vk;
@@ -288,12 +290,22 @@ fn specialization() -> vk::SpecializationInfo<'static> {
 
 /// What the device primed has: a queue family that writes timestamps, device addresses,
 /// `VK_EXT_device_generated_commands`, and sparse binding on its queues.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Has {
     pub(crate) timestamps: bool,
     pub(crate) device_addresses: bool,
     pub(crate) generated_commands: bool,
     pub(crate) sparse_binding: bool,
+}
+
+/// Identity includes every byte of the helper implementation, enabled compile
+/// profile (in Records), instance settings, driver identity, and these choices.
+/// No pointer/handle or host path enters the persistent key.
+pub(super) fn cache_key(has: Has, queue_family: u32) -> metal2vulkan::cache::Hash256 {
+    crate::shader_cache::driver::Making::new("entry-point-priming-v1")
+        .digest(&Sha256::digest(include_bytes!("prime.rs")).into())
+        .text(&(has, queue_family))
+        .finish()
 }
 
 /// Prime `device` of `physical`, made from `instance`, whose queues are `queues`, the first of
@@ -317,6 +329,7 @@ pub(super) unsafe fn prime(
     sharing: Sharing<'_>,
     has: Has,
     generated: Option<&Commands>,
+    mut disk: PrimingCache,
 ) -> Result<(), Error> {
     let mut primer = Primer {
         device,
@@ -326,6 +339,8 @@ pub(super) unsafe fn prime(
         memory: unsafe { instance.get_physical_device_memory_properties(physical) },
         calls: 0,
         held: Vec::new(),
+        disk: &mut disk,
+        pipeline_cache: vk::PipelineCache::null(),
     };
     // SAFETY: the caller's.
     let primed = unsafe {
@@ -343,6 +358,10 @@ pub(super) unsafe fn prime(
     unsafe {
         let _ = device.device_wait_idle();
         primer.made(Call::DeviceWaitIdle);
+        if primed.is_ok() && primer.pipeline_cache != vk::PipelineCache::null() {
+            primer.disk.keep(device, loader_word, primer.pipeline_cache);
+            primer.made(Call::GetPipelineCacheData);
+        }
         while let Some(release) = primer.held.pop() {
             let call = release(device);
             primer.made(call);
@@ -407,6 +426,8 @@ struct Primer<'a> {
     calls: u128,
     /// What was made, released last first.
     held: Vec<Release>,
+    disk: &'a mut PrimingCache,
+    pipeline_cache: vk::PipelineCache,
 }
 
 impl Primer<'_> {
@@ -680,7 +701,7 @@ impl Primer<'_> {
                 .layout(layout)
                 .push_next(&mut flags);
             let pipeline = device
-                .create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
+                .create_compute_pipelines(self.pipeline_cache, &[info], None)
                 .map_err(|(_, error)| vulkan(error))?[0];
             self.hold(pipeline);
             let pipelines = ExecutionSetPipelineInfo::new(pipeline, 1);
@@ -953,9 +974,8 @@ impl Primer<'_> {
             let module = device.create_shader_module(&info, None).map_err(vulkan)?;
             self.made(Call::CreateShaderModule);
             self.hold(module);
-            let cache = device
-                .create_pipeline_cache(&vk::PipelineCacheCreateInfo::default(), None)
-                .map_err(vulkan)?;
+            let cache = self.disk.open(device, self.loader_word).map_err(vulkan)?;
+            self.pipeline_cache = cache;
             self.made(Call::CreatePipelineCache);
             self.hold(cache);
             let specialization = specialization();

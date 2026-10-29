@@ -1366,7 +1366,7 @@ fn struct_dag_kernel(depth: u32, constant: bool) -> String {
     let read = if constant {
         types +=
             &format!("@g = internal addrspace(2) constant %e{depth} zeroinitializer, align 4\n");
-        "  %x = load i32, ptr %a, align 4\n  %y = load i32, ptr addrspace(2) @g, align 4\n  %v0 = add i32 %x, %y"
+        "  %x = load i32, ptr %a, align 4\n  %y = load volatile i32, ptr addrspace(2) @g, align 4\n  %v0 = add i32 %x, %y"
     } else {
         "  %v0 = load i32, ptr %a, align 4"
     };
@@ -1437,7 +1437,8 @@ fn a_struct_dag_is_planned_in_linear_work() {
 }
 
 /// A struct DAG within the function's room is typed, and keeps its values: `a`'s two words read
-/// back what was stored, and `@g` (all zero) adds nothing. At 14 levels `@g` (planned first) takes
+/// back what was stored, and `@g` (all zero, read volatile so it
+/// stays in memory) adds nothing. At 14 levels `@g` (planned first) takes
 /// the room and `a` has its place in the private arena; at 15 levels neither fits, so `@g` is in
 /// the constant blob too. Each passes L3, and the values are the same typed (3 levels) and untyped
 /// (15 levels). The CPU interpreter walks a struct type's every path to lay it out, so it does not
@@ -1501,6 +1502,7 @@ fn a_struct_dag_keeps_its_values_typed_or_untyped() {
 /// `%e13`) and `%big`'s `32,767 + extra`: with 17 extra members exactly `alloca::MAX_UNSHARED`
 /// (65,536), with 18 one more. With `constant`, `%big` is the type of `@g`, a closed constant whose
 /// DAG halves are zero and whose extra member `i` is `i + 1`, and `v0 = t + @g.2`, `v1 = @g.18`;
+/// (volatile reads, so the constant-load fold leaves `@g` in memory and the layout is what is tested);
 /// otherwise of the alloca `a`, which stores `t` at byte 0 and 7 in member 2 (byte 65,536) and
 /// reads them back as `v0` and `v1`.
 fn room_kernel(extra: u32, constant: bool) -> String {
@@ -1518,10 +1520,10 @@ fn room_kernel(extra: u32, constant: bool) -> String {
             "@g = internal addrspace(2) constant %big {{ %e13 zeroinitializer, %e13 zeroinitializer{ints} }}, align 4\n"
         );
         r#"  %p2 = getelementptr inbounds %big, ptr addrspace(2) @g, i32 0, i32 2
-  %g2 = load i32, ptr addrspace(2) %p2, align 4
+  %g2 = load volatile i32, ptr addrspace(2) %p2, align 4
   %v0 = add i32 %t, %g2
   %q = getelementptr inbounds %big, ptr addrspace(2) @g, i32 0, i32 18
-  %v1 = load i32, ptr addrspace(2) %q, align 4"#
+  %v1 = load volatile i32, ptr addrspace(2) %q, align 4"#
             .to_string()
     } else {
         r#"  %a = alloca %big, align 4

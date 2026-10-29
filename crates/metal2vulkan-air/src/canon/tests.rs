@@ -1658,7 +1658,18 @@ fn a_deeply_nested_written_global_is_rebuilt_on_a_small_stack() {
         static_init(&mut m, "init", |f| store(f, five, gaddr));
         let fty = m.fn_ty(void, &[dev]);
         let mut f = m.define("k", fty);
-        let v = load(&mut f, i32t, gaddr);
+        // A volatile read keeps the global: a plain one now reads the rebuilt initializer's leaf
+        // as its constant, and the unused global is pruned.
+        let v = f.push(
+            i32t,
+            InstKind::Load {
+                ptr: gaddr,
+                align: Align::from_bytes(4),
+                volatile: true,
+                atomic: None,
+                range: None,
+            },
+        );
         store(&mut f, v, arg(0));
         f.ret(None);
         let k = f.finish();
@@ -2359,9 +2370,12 @@ fn a_pointer_loaded_from_a_constant_globals_field_is_the_fields_constant() {
             assert!(text.contains(kept) && !text.contains(gone), "{text}");
         }
     }
-    // A field of any other type is left to the memory plan: its load stays.
-    let text = body_text(&picked_field(Some(1), 1).unwrap());
-    assert!(text.contains("getelementptr"), "{text}");
+    // A field of any other first-class type reads the same way: the picked struct's own `i64`.
+    for (flag, kept, gone) in [(1, "333", "444"), (0, "444", "333")] {
+        let text = body_text(&picked_field(Some(flag), 1).unwrap());
+        assert!(!text.contains("getelementptr") && !text.contains("load"), "{text}");
+        assert!(text.contains(kept) && !text.contains(gone), "{text}");
+    }
     // Unsupplied, the select stays undecided, as before.
     assert_eq!(
         picked_field(None, 0).unwrap_err(),

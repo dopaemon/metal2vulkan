@@ -9166,6 +9166,11 @@ impl Recording<'_> {
     /// recorded into it bound (each recorded through it). With a pair, the pass is one
     /// `render_target` made, of no views (`snapshot::Pair::record`).
     unsafe fn record(&self, bound: &mut Bound) -> u64 {
+        // A draw whose pipeline could not be created (the compile was refused) has a null pipeline; binding it crashes the driver
+        // (int-170: tu_CmdBindPipeline in the render server). The draw is dropped instead, and nothing is recorded for it.
+        if self.pipeline == vk::Pipeline::null() {
+            return 0;
+        }
         let (raw, cb) = (self.raw, self.command_buffer);
         let dynamic = |state| self.dynamic.contains(&state);
         bound.follow(cb);

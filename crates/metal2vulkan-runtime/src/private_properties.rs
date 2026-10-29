@@ -419,6 +419,7 @@ impl PrivateFlag {
 /// The index of `level`'s answer in a measured pair.
 fn at(level: MetalLevel) -> usize {
     match level {
+        MetalLevel::IOS16_6_1 => unreachable!("iOS has no measured macOS properties row"),
         MetalLevel::MacOS26_7 => 0,
         MetalLevel::MacOS27_0_1 => 1,
     }
@@ -432,17 +433,20 @@ const MEASURED_PRIMITIVE_TYPES: [u64; 2] = [9, 9];
 impl MetalLevel {
     /// Metal's measured answer for `property` at the level, on its Apple GPU (the module docs).
     pub fn private_count(self, property: PrivateCount) -> u64 {
+        if self == MetalLevel::IOS16_6_1 { return 0; }
         property.measured().1[at(self)]
     }
 
     /// Metal's measured answer for `property` at the level, on its Apple GPU (the module docs).
     pub fn private_flag(self, property: PrivateFlag) -> bool {
+        if self == MetalLevel::IOS16_6_1 { return false; }
         property.measured().1[at(self)]
     }
 
     /// `supportsPrimitiveType:` (Apple SPI) as the level's release answers it on its Apple GPU:
     /// yes for raw 0 to 8, Metal's five public primitive types and four private ones.
     pub fn supports_primitive_type(self, raw: u64) -> bool {
+        if self == MetalLevel::IOS16_6_1 { return raw < 5; }
         raw < MEASURED_PRIMITIVE_TYPES[at(self)]
     }
 }

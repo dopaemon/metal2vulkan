@@ -31,6 +31,9 @@ use std::fmt;
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MetalLevel {
+    /// iOS16.6.1 build20G81. Format metadata comes from the guest's actual
+    /// exported Metal routine, not a measured newer macOS/Apple GPU row.
+    IOS16_6_1,
     /// macOS 26.7 (build 25G229), measured on an Apple M3 Max (EVs XRR2-pfi1-m3 and
     /// XRR2-pla1-m3).
     MacOS26_7,
@@ -147,6 +150,18 @@ const MACOS_27_0_1: Row = Row {
     mipmaps: MipmapRule::Filter,
 };
 
+// No claim about an Apple heap's compressed/tiled layout on Adreno. Those
+// optional paths remain unsupported until an actual iOS contract is supplied.
+const IOS_16_6_1: Row = Row {
+    macos: "iOS16.6.1/20G81",
+    version: [16, 6, 1],
+    unknown: &THREE_CHANNEL,
+    heap_blocks: HeapBlocks { bc: None, etc: None, astc: None, gpu_rows: GpuRows::Own },
+    compressed_blits: false,
+    no_texture_stack_alignment: 128,
+    mipmaps: MipmapRule::Filter,
+};
+
 impl MetalLevel {
     /// Every level, oldest first.
     pub const ALL: [MetalLevel; 2] = [MetalLevel::MacOS26_7, MetalLevel::MacOS27_0_1];
@@ -157,6 +172,7 @@ impl MetalLevel {
     /// The level's row of the table.
     const fn row(self) -> &'static Row {
         match self {
+            MetalLevel::IOS16_6_1 => &IOS_16_6_1,
             MetalLevel::MacOS26_7 => &MACOS_26_7,
             MetalLevel::MacOS27_0_1 => &MACOS_27_0_1,
         }
@@ -170,6 +186,9 @@ impl MetalLevel {
     /// Whether the release's texture descriptor takes `pf` (`setPixelFormat:` stops the process
     /// on a value it does not know, "not a valid MTLPixelFormat"). `Invalid` is known.
     pub fn knows(self, pf: PixelFormat) -> bool {
+        if self == MetalLevel::IOS16_6_1 {
+            return pf == PixelFormat::Invalid || self.describes(pf);
+        }
         !self.row().unknown.contains(&pf)
     }
 
@@ -246,6 +265,7 @@ impl MetalLevel {
 impl fmt::Display for MetalLevel {
     /// `macOS 26.7`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if *self == MetalLevel::IOS16_6_1 { return f.write_str("iOS16.6.1/20G81"); }
         write!(f, "macOS {}", self.macos())
     }
 }

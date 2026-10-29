@@ -1050,6 +1050,21 @@ impl Device {
         // SAFETY: the device is live, of `physical`, and enables timeline semaphores, and
         // `bufferDeviceAddress` where `device_address` says so; `queues` holds at least one of
         // its queues, which nothing uses yet.
+        let priming_has = prime::Has {
+            timestamps: timestamp_bits > 0,
+            device_addresses: device_address,
+            generated_commands: generated_commands.is_some(),
+            sparse_binding: sparse.binds(),
+        };
+        // Raw disk/cache I/O only: starting the ordinary guarded cache or its
+        // worker before priming would change the destructor ordering it protects.
+        let priming_cache = cache.priming(
+            &unsafe { instance.raw.get_physical_device_properties(physical) },
+            compile.profile_fingerprint(),
+            instance.settings,
+            prime::cache_key(priming_has, queue_family),
+            instance.sink().cloned(),
+        );
         if let Err(error) = unsafe {
             prime::prime(
                 &instance.raw,
@@ -1059,13 +1074,9 @@ impl Device {
                 queue_family,
                 &queues,
                 Sharing::new(&queue_families),
-                prime::Has {
-                    timestamps: timestamp_bits > 0,
-                    device_addresses: device_address,
-                    generated_commands: generated_commands.is_some(),
-                    sparse_binding: sparse.binds(),
-                },
+                priming_has,
                 generated_commands.as_ref(),
+                priming_cache,
             )
         } {
             scheduler.stop();

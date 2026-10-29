@@ -2092,7 +2092,25 @@ impl Device {
         // What an image over the texels may hold beside them: the bytes between padded rows too
         // where the texture only reads, by the policy (`linear_plan::holding`); else why none may.
         let policy = self.compile_device().policy().padded_reads;
-        let holds = holding(&texels.layout, usage, policy);
+        let mut holds = holding(&texels.layout, usage, policy);
+        // Pong's uncompressed single-plane 8-bit IOSurfaces own the bytes
+        // between rows. They are not arbitrary buffers with unrelated data
+        // in their padding. Permit the native driver to render directly into
+        // those pages instead of synchronously copying a shadow every frame.
+        // The image's exact pitch, span, alignment and memory type are still
+        // checked by alias_image/aliases before it can be bound. Other planes,
+        // formats and caller buffers retain the original shadow policy.
+        let native_surface = texels.surface_row_padding
+            && matches!(texels.buffer.caller_memory(), Some(CallerMemory::HostPages))
+            && matches!(layout.pixel_format, PixelFormat::BGRA8Unorm | PixelFormat::BGRA8UnormSRGB
+                | PixelFormat::RGBA8Unorm | PixelFormat::RGBA8UnormSRGB)
+            && texels.layout.slices == 1
+            && texels.layout.row_pitch >= texels.layout.row_bytes
+            && std::env::var_os("PONG_IOSURFACE_PADDING").as_deref()
+                == Some(std::ffi::OsStr::new("1"));
+        if holds.is_err() && native_surface {
+            holds = Ok(Holds::Padding);
+        }
         // Over bytes detached from their pages (`detach.rs`) no image aliases them: the texture
         // is their shadow, which presents a stand-in until they lie in pages again.
         let detached = texels.buffer.detached();
@@ -3594,7 +3612,8 @@ impl Device {
     /// its storage mode: a heap texture's in memory of its own where its bytes in the heap are no
     /// layout of its texels (`texture/heap.rs`, `AliasRoute::Lossless`), as a heap's textures hold
     /// what their bytes held; and the shadow of a texture over a buffer whose copy in writes every
-    /// texel of every aspect before any command reads it (`storage_over_buffer`).
+    /// texel of every aspect before any command reads it (`storage_over_buffer`, and a two-plane
+    /// texture's over a surface's planes, `texture/surface_two_planes.rs`).
     fn new_image_as_it_lies(
         &self,
         plan: ImagePlan,

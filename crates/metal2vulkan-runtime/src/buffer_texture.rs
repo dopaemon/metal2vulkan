@@ -78,6 +78,8 @@ pub(super) struct Texels {
     /// The bytes of one texel.
     texel_bytes: u64,
     pub(super) allow_gpu_optimized_contents: bool,
+    // Pong native IOSurface: unplanar color rows own their padding.
+    pub(super) surface_row_padding: bool,
     /// The texture's resource options, its hazard tracking mode resolved, as `resourceOptions`
     /// reports them: the buffer's, which Metal's texture over a buffer takes, but an IOSurface
     /// plane's descriptor's (`Buffer::new_texture_with_iosurface_plane`). Its hazard tracking
@@ -672,8 +674,9 @@ impl Buffer {
             let texels = Texels::texture_buffer(self.clone(), placed.gpu, texel_bytes, descriptor)?;
             Ok(texels.texture(descriptor, &layout, IdUse::Program(descriptor.placement)))
         } else {
-            let texels =
+            let mut texels =
                 Texels::placed(self.clone(), placed, texel_bytes, descriptor).with_options(options);
+            texels.surface_row_padding = matches!(form, BufferTextureCall::IoSurfacePlane { planar: false });
             let id_use = IdUse::Program(descriptor.placement);
             let texture = self
                 .device()
@@ -1068,6 +1071,7 @@ impl Texels {
             shader: placed,
             texel_bytes,
             allow_gpu_optimized_contents: descriptor.allow_gpu_optimized_contents,
+            surface_row_padding: false,
             options: buffer.resource_options(),
             views,
             staged: None,

@@ -490,6 +490,7 @@ pub fn specialize_dynamic(
     let emap = erase::erase_consts(&mut parts.consts, m)?;
     erase::erase_globals(parts.globals.values_mut(), &emap);
     erase_functions(&mut parts, &emap, m)?;
+    prune_entry(&mut parts, func, &fcs, &name, m)?;
     // The entry block always runs: a value use there of an unsupplied constant is SCCP's first
     // refusal, known before the inlined body is built.
     let entry_refusal = |consts: &ConstTable, m: &mut Meter| {
@@ -573,11 +574,17 @@ pub fn specialize_dynamic(
     };
     body.release(m);
     let body = solved;
-    // A pointer loaded from a field of a constant global is the field's constant: a `constexpr
-    // sampler` that SCCP's folded select picked is its sampler state. SCCP runs again over a body
-    // that changed, to fold what those constants decide.
-    let (body, folded) = const_loads::fold(body, &mut parts, m)?;
-    let body = if folded {
+    // A value loaded from a field of a constant global is the field's constant: a `constexpr
+    // sampler` that SCCP's folded select picked is its sampler state, and an uber-shader's
+    // configuration struct of function constants is its members. SCCP runs again over a body that
+    // changed, to fold what those constants decide; the two alternate until a round folds nothing.
+    let mut body = body;
+    loop {
+        let (next, folded) = const_loads::fold(body, &mut parts, m)?;
+        if !folded {
+            body = next;
+            break;
+        }
         let solved = {
             let mut cx = sccp::Context {
                 folder: fold::Folder {
@@ -589,13 +596,11 @@ pub fn specialize_dynamic(
                 fcs: &fcs,
                 name: name.clone(),
             };
-            sccp::run(&body, &mut cx, m)?
+            sccp::run(&next, &mut cx, m)?
         };
-        body.release(m);
-        solved
-    } else {
-        body
-    };
+        next.release(m);
+        body = solved;
+    }
     matmul2d::refuse_left(&body, &parts, &ep.stage, &name, m)?;
     post_check(&body, &parts, &stubs, &name, &control_points(ep), m)?;
     // A branch's short arms that Metal's backend speculates, where a group operation in them
@@ -801,6 +806,70 @@ fn erased_entry(
 }
 
 /// Erase every defined function's body in place, one at a time, each body replaced freed.
+/// The entry's own blocks that its function constants leave unreachable, and its loads from
+/// fields of constant globals (`const_loads`), folded before the entry is inlined, so the inliner
+/// copies no callee only a dead block calls. An uber-shader's entry is most of the module and
+/// branches on the constants into every effect it has: QuartzCore's `fixed_frag` entries inlined
+/// 15,700 instructions of which SCCP kept 300, and building, solving and rebuilding the rest was
+/// most of a specialization.
+///
+/// Its calls are opaque here, so what it proves unreachable is unreachable whatever they return,
+/// and the SCCP after inlining reaches the fixed point it reached over the whole body. It runs
+/// only when every declared constant is supplied: an unsupplied constant's taint refuses a use
+/// that only inlining shows is dead (a call argument the callee never reads). Any other refusal
+/// here (a branch on `undef` that a call's constant result would have made dead) leaves the entry
+/// as it was, for the SCCP after inlining to judge; a budget, cancellation or limit is final.
+fn prune_entry(
+    parts: &mut ModuleParts,
+    func: FuncId,
+    fcs: &HashMap<GlobalId, sccp::FcState>,
+    name: &DiagName,
+    m: &mut Meter,
+) -> Result<(), Error> {
+    if fcs.is_empty() || fcs.values().any(|s| !s.supplied) {
+        return Ok(());
+    }
+    let Some(entry) = parts.funcs.get_mut(func).and_then(|f| f.body.take()) else {
+        return Ok(());
+    };
+    let solve = |body: &Body, parts: &mut ModuleParts, m: &mut Meter| {
+        let mut cx = sccp::Context {
+            folder: fold::Folder {
+                types: &parts.types,
+                consts: &mut parts.consts,
+                held: 0,
+            },
+            globals: &parts.globals,
+            fcs,
+            name: name.clone(),
+        };
+        sccp::run(body, &mut cx, m)
+    };
+    let pruned = solve(&entry, parts, m).and_then(|mut body| loop {
+        let (next, folded) = const_loads::fold(body, parts, m)?;
+        if !folded {
+            return Ok(next);
+        }
+        let solved = solve(&next, parts, m);
+        next.release(m);
+        body = solved?;
+    });
+    let kept = match pruned {
+        Ok(body) => {
+            entry.release(m);
+            body
+        }
+        Err(e @ (Error::Budget(_) | Error::Cancelled | Error::LimitExceeded(_))) => return Err(e),
+        Err(_) => entry,
+    };
+    parts
+        .funcs
+        .get_mut(func)
+        .ok_or_else(|| invariant("entry out of range"))?
+        .body = Some(kept);
+    Ok(())
+}
+
 fn erase_functions(
     parts: &mut ModuleParts,
     emap: &[crate::ir::ConstId],

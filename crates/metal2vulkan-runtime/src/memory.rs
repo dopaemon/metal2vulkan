@@ -373,6 +373,14 @@ impl<T> Pool<T> {
         }
         self.blocks[index].take().map(|block| block.payload)
     }
+    /// Return only unreferenced pooled blocks; placements of submitted work
+    /// retain their ranges, so they can never be trimmed here.
+    fn trim_empty(&mut self) -> impl Iterator<Item = T> + '_ {
+        self.blocks.iter_mut().filter_map(|slot| {
+            let empty = slot.as_ref().is_some_and(|b| !b.dedicated && b.ranges.is_empty());
+            if empty { slot.take().map(|b| b.payload) } else { None }
+        })
+    }
 
     /// Every block's payload, emptying the pool.
     pub(super) fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
@@ -958,6 +966,17 @@ impl Memory {
         }
     }
 
+    /// Under allocation pressure give back warm blocks that hold no live
+    /// resource. Never wait for or evict a placed/submitted allocation.
+    fn trim_empty_blocks(&mut self, device: &ash::Device) {
+        for pool in &mut self.pools {
+            for block in pool.trim_empty() {
+                // SAFETY: no placement (including command-held resources)
+                // remains in this block; the pool removed it atomically.
+                unsafe { block.release(device) };
+            }
+        }
+    }
     /// Give pooled block `block` of memory type `type_index` a buffer of addresses where it has
     /// none: over its whole size, which it takes since the block is of a type such a buffer
     /// takes ([`allocate_addressed`]); refused (an invariant) where the buffer would
