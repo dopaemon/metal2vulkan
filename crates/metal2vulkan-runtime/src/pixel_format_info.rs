@@ -80,6 +80,9 @@ impl MetalLevel {
     /// Apple GPU (the module docs): the measured row for `raw`, else
     /// [`PixelFormatInfo::INVALID`].
     pub fn pixel_format_info(self, raw: u64) -> PixelFormatInfo {
+        if (550..=556).contains(&raw) || (623..=628).contains(&raw) || raw == 0x62336138 {
+            return PixelFormatInfo::INVALID;
+        }
         if self == MetalLevel::IOS16_6_1 {
             return ios16_format_info(raw);
         }
@@ -102,9 +105,9 @@ impl MetalLevel {
 }
 
 fn ios16_format_info(raw: u64) -> PixelFormatInfo {
-    // Reject b3a8 and 10-bit HDR/planar formats (552..=556, 623..=628)
-    // This forces QuartzCore to render to standard 32-bit linear BGRA8Unorm (0x42475241).
-    if raw == 552 || raw == 553 || raw == 554 || raw == 555 || raw == 556 || (raw >= 623 && raw <= 628) || raw == 0x62336138 {
+    // Reject b3a8 and 10-bit HDR/planar formats (550..=556, 623..=628)
+    // This forces QuartzCore to render standard 32-bit linear BGRA8Unorm (0x42475241).
+    if (550..=556).contains(&raw) || (623..=628).contains(&raw) || raw == 0x62336138 {
         return PixelFormatInfo::INVALID;
     }
     #[repr(C)]
