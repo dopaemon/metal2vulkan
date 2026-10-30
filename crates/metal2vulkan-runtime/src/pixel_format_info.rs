@@ -80,15 +80,19 @@ impl MetalLevel {
     /// Apple GPU (the module docs): the measured row for `raw`, else
     /// [`PixelFormatInfo::INVALID`].
     pub fn pixel_format_info(self, raw: u64) -> PixelFormatInfo {
-        if self == MetalLevel::IOS16_6_1 { return ios16_format_info(raw); }
+        if self == MetalLevel::IOS16_6_1 {
+            let info = ios16_format_info(raw);
+            if info.name != "MTLPixelFormatInvalid" {
+                return info;
+            }
+        }
         let Ok(index) = DESCRIBED.binary_search_by_key(&raw, |row| u64::from(row.format.as_raw()))
         else {
             return PixelFormatInfo::INVALID;
         };
         let row = &DESCRIBED[index];
-let At { flags, cast_class } = match self {
-            MetalLevel::IOS16_6_1 => unreachable!(),
-            MetalLevel::MacOS26_7 => row.macos_26_7,
+        let At { flags, cast_class } = match self {
+            MetalLevel::IOS16_6_1 | MetalLevel::MacOS26_7 => row.macos_26_7,
             MetalLevel::MacOS27_0_1 => row.macos_27_0_1,
         };
         PixelFormatInfo {
@@ -100,19 +104,11 @@ let At { flags, cast_class } = match self {
     }
 }
 
-// ABI read from supplied20G81: seven64-bit words, returned via ARM64 x8.
-// MTLPixelFormatGetInfo uses a null feature-set query internally, avoiding
-// recursive device creation or pretending that Adreno is an Apple GPU.
-// This is format metadata only; Vulkan format capabilities still decide
-// whether the real device can create/use a texture.
-#[cfg(target_os = "ios")]
 fn ios16_format_info(raw: u64) -> PixelFormatInfo {
     #[repr(C)]
     struct Raw { name: *const std::ffi::c_char, flags: u64, class: u64, words: [u64;4] }
     unsafe extern "C" { fn MTLPixelFormatGetInfo(format: u64) -> Raw; }
     if raw == 0 || raw > 629 { return PixelFormatInfo::INVALID; }
-    // SAFETY: the exported guest function's exact20G81 ABI; static strings
-    // reside in the loaded Metal framework for the lifetime of the process.
     let info = unsafe { MTLPixelFormatGetInfo(raw) };
     if info.name.is_null() { return PixelFormatInfo::INVALID; }
     let name = unsafe { std::ffi::CStr::from_ptr(info.name) }.to_str();
@@ -123,8 +119,6 @@ fn ios16_format_info(raw: u64) -> PixelFormatInfo {
         _ => PixelFormatInfo::INVALID,
     }
 }
-#[cfg(not(target_os = "ios"))]
-fn ios16_format_info(_: u64) -> PixelFormatInfo { PixelFormatInfo::INVALID }
 
 impl Device {
     /// `MTLPixelFormatGetInfoForDevice(device, raw)` (Apple SPI): Metal's description of the raw
