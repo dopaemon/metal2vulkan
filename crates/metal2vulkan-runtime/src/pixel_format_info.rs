@@ -80,9 +80,6 @@ impl MetalLevel {
     /// Apple GPU (the module docs): the measured row for `raw`, else
     /// [`PixelFormatInfo::INVALID`].
     pub fn pixel_format_info(self, raw: u64) -> PixelFormatInfo {
-        if (550..=556).contains(&raw) || (623..=628).contains(&raw) || raw == 0x62336138 {
-            return PixelFormatInfo::INVALID;
-        }
         if self == MetalLevel::IOS16_6_1 {
             return ios16_format_info(raw);
         }
@@ -105,11 +102,6 @@ impl MetalLevel {
 }
 
 fn ios16_format_info(raw: u64) -> PixelFormatInfo {
-    // Reject b3a8 and 10-bit HDR/planar formats (550..=556, 623..=628)
-    // This forces QuartzCore to render standard 32-bit linear BGRA8Unorm (0x42475241).
-    if (550..=556).contains(&raw) || (623..=628).contains(&raw) || raw == 0x62336138 {
-        return PixelFormatInfo::INVALID;
-    }
     #[repr(C)]
     struct Raw { name: *const std::ffi::c_char, flags: u64, class: u64, words: [u64;4] }
     unsafe extern "C" { fn MTLPixelFormatGetInfo(format: u64) -> Raw; }
